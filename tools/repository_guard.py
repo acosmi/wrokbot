@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY = json.loads((ROOT / 'tools/repository-policy.json').read_text())
 
 
-def git(*args, root=ROOT):
+def git(*args, root=None):
     return subprocess.check_output(['git', *args], cwd=root)
 
 
@@ -46,7 +46,7 @@ def content_reason(path, data):
     return None
 
 
-def entries(ref=None, root=ROOT):
+def entries(ref=None, root=None):
     if ref is None:
         records = git('ls-files', '--stage', '-z', root=root).split(b'\0')
     else:
@@ -62,7 +62,7 @@ def entries(ref=None, root=ROOT):
         yield mode, oid, raw_path.decode('utf-8')
 
 
-def inspect(ref=None, root=ROOT, seen=None):
+def inspect(ref=None, root=None, seen=None):
     seen = set() if seen is None else seen
     files = []
     for mode, oid, path in entries(ref, root):
@@ -105,7 +105,7 @@ def scan(files):
             raise RuntimeError('Gitleaks rejected the candidate; run a redacted local scan to inspect')
 
 
-def check_history(refs, root=ROOT):
+def check_history(refs, root=None):
     if not refs:
         raise RuntimeError('No commit references to verify')
     commits = git('rev-list', *refs, root=root).decode().splitlines()
@@ -123,9 +123,9 @@ def main():
     args = parser.parse_args()
     if args.command == 'install':
         current = subprocess.run(['git', 'config', '--local', '--get', 'core.hooksPath'], cwd=ROOT, capture_output=True, text=True)
-        if current.returncode == 0 and current.stdout.strip() != '.githooks':
+        if current.returncode == 0 and current.stdout.strip() not in ('.githooks', str(ROOT / '.githooks')):
             raise RuntimeError('Existing custom hooksPath must be reviewed before replacement')
-        subprocess.run(['git', 'config', '--local', 'core.hooksPath', '.githooks'], cwd=ROOT, check=True)
+        subprocess.run(['git', 'config', '--local', 'core.hooksPath', str(ROOT / '.githooks')], cwd=ROOT, check=True)
         print('Publication hooks installed')
     elif args.command == 'staged':
         files = inspect()

@@ -58,6 +58,22 @@ class PublicationGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'symlink'):
                 guard.inspect(root=root)
 
+    def test_absolute_hook_blocks_legacy_history_from_another_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init(root)
+            (root / 'docs').mkdir()
+            (root / 'docs/notes.md').write_text('private')
+            self.run_git(root, 'add', 'docs/notes.md')
+            self.run_git(root, 'commit', '-qm', 'local history')
+            oid = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root).decode().strip()
+            hook = Path(__file__).resolve().parents[1] / '.githooks/pre-push'
+            result = subprocess.run([str(hook), 'origin', 'https://github.com/acosmi/wrokbot.git'],
+                                    cwd=root, input=f'refs/heads/main {oid} refs/heads/main {"0" * 40}\n',
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('docs/notes.md', result.stderr)
+
     @staticmethod
     def run_git(root, *args):
         subprocess.run(['git', *args], cwd=root, check=True, capture_output=True)

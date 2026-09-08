@@ -2,8 +2,6 @@
   <img src="crates/openbot-ui/assets/brand/wrok-bot-motion.gif" width="160" height="160" alt="Wrok Bot 动态 Logo">
 </p>
 
-<p align="center"><a href=".github/assets/wrok-bot-logo-1024.gif">1024 高清动态 Logo</a></p>
-
 <h1 align="center">Wrok Bot</h1>
 
 <p align="center">AI 工作台 · 智能体协作 · 浏览器与电脑操作</p>
