@@ -1,0 +1,43 @@
+export type PermissionFact = { title: string, purpose: string, state: string }
+
+function label(state: string): string {
+  if (state == 'authorized') return '已允许'
+  if (state == 'denied') return '未允许'
+  if (state == 'not determined') return '尚未申请'
+  if (state == 'config error') return '当前版本未配置'
+  return '无法读取'
+}
+
+// Only observes OS facts. It never requests permissions, mutates remote grants or fakes a toggle.
+export function readPermissionFacts(): PermissionFact[] {
+  // #ifdef APP || MP-WEIXIN
+  const setting = uni.getAppAuthorizeSetting()
+  return [
+    { title: '相机', purpose: '主动扫码绑定或拍照时使用', state: label(setting.cameraAuthorized) },
+    { title: '麦克风', purpose: '主动使用语音输入时使用', state: label(setting.microphoneAuthorized) },
+    { title: '照片', purpose: '主动选择附件时使用', state: label(setting.albumAuthorized) },
+    { title: '通知', purpose: '接收任务和审批提醒', state: label(setting.notificationAuthorized) }
+  ]
+  // #endif
+  // #ifdef WEB
+  return [{ title: '手机系统权限', purpose: '请在 App 或微信客户端中查看', state: '浏览器预览不支持' }]
+  // #endif
+}
+
+export function permissionScope(): string {
+  // #ifdef MP-WEIXIN
+  return '这里是微信宿主的系统权限；小程序 scope 和订阅授权另行读取，不混作本应用全部权限。'
+  // #endif
+  // #ifndef MP-WEIXIN
+  return '系统权限与远端电脑控制权限独立。未启用的功能不申请权限。'
+  // #endif
+}
+
+export function openPermissionSettings(onFailure: () => void) {
+  // #ifdef APP || MP-WEIXIN
+  uni.openAppAuthorizeSetting({ fail: (_) => { onFailure() } })
+  // #endif
+  // #ifdef WEB
+  onFailure()
+  // #endif
+}

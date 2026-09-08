@@ -1,0 +1,95 @@
+{
+  "roots": [
+    ".cargo",
+    ".gitattributes",
+    ".githooks",
+    ".github",
+    ".gitignore",
+    ".gitleaks.toml",
+    "Cargo.lock",
+    "Cargo.toml",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "apps",
+    "crates",
+    "deny.toml",
+    "examples",
+    "fixtures",
+    "provenance",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+    "supply-chain",
+    "test-support",
+    "tools"
+  ],
+  "blocked_components": [
+    ".local-private",
+    "grok-bot",
+    "docs",
+    "parity",
+    "inventory",
+    "artifacts",
+    ".serena",
+    ".playwright-mcp",
+    ".codex",
+    ".claude",
+    ".agents",
+    "node_modules",
+    "target",
+    "target-xtask",
+    "dist",
+    "unpackage",
+    "__pycache__"
+  ],
+  "blocked_paths": [
+    "apps/wrok-bot-mobile/contracts.md",
+    "crates/openbot-testkit/src/xtask/grok_inventory.rs"
+  ],
+  "blocked_names": "(^\\.env(?!\\.(example|sample)$)|^(CLAUDE|AGENTS|.*HANDOFF.*)\\.md$|\\.(pem|key|p12|pfx|keystore|jks|mobileprovision|log|sqlite3?|db|bak|zip|tar|tgz|pyc)$|\\.tar\\.gz$|^id_(rsa|ed25519)$|^credentials\\.json$|^\\.DS_Store$)",
+  "document_extensions": [
+    ".md",
+    ".txt",
+    ".rst",
+    ".doc",
+    ".docx",
+    ".pdf",
+    ".rtf",
+    ".ppt",
+    ".pptx",
+    ".xlsx"
+  ],
+  "documents": [
+    "README.md",
+    "apps/wrok-bot-mobile/README.md",
+    "crates/openbot-ui/assets/fonts/LICENSE.txt",
+    "crates/openbot-ui/assets/notices/markdown/README.txt",
+    "crates/openbot-ui/assets/notices/markdown/SublimeText_PowerShell_LICENSE.txt",
+    "crates/openbot-ui/assets/notices/markdown/guille_sublime-kotlin_LICENSE.md",
+    "crates/openbot-ui/design/markdown/PROVENANCE.md",
+    "crates/openbot-ui/locales/GLOSSARY.md",
+    "crates/openbot-windows-sandbox/SECURITY.md",
+    "fixtures/README.md",
+    "fixtures/agui/schema-0.0.57/README.md",
+    "fixtures/db/README.md",
+    "fixtures/provider/README.md",
+    "supply-chain/README.md",
+    "tools/electron-v43.3.0.SHASUMS256.txt"
+  ],
+  "private_content": "实施方案|研究方案|修订计划|外派任务|(?:BACKEND_HANDOFF|FRONTEND_HANDOFF|CLAUDE)\\.md|docs/\\d{4}-\\d{2}-\\d{2}|/Users/fushihua",
+  "content_rule_sources": [
+    ".gitignore",
+    "tools/repository-policy.json",
+    "tools/repository_guard.py",
+    "tools/test_repository_guard.py"
+  ],
+  "max_file_bytes": 5242880,
+  "push_urls": [
+    "https://github.com/acosmi/wrokbot.git",
+    "https://github.com/acosmi/wrokbot",
+    "git@github.com:acosmi/wrokbot.git"
+  ],
+  "file_size_limits": {
+    "crates/openbot-ui/assets/brand/wrok-bot-logo-1024.gif": 31457280
+  }
+}

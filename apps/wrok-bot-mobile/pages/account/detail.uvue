@@ -1,0 +1,19 @@
+<template>
+  <scroll-view class="full-scroll" direction="vertical"><view class="page-content"><view v-if="section != null"><text class="eyebrow">我的账户</text><text class="page-title">{{section!.title}}</text><StateNotice :title="section!.status" :description="section!.description"/>
+    <view v-if="section!.key == 'permissions'"><text class="body-copy">{{permissionScope()}}</text><button class="button-reset secondary-button" @click="refreshPermissions">查看当前系统权限</button><view v-for="fact in facts" :key="fact.title" class="fact-row"><view class="row-copy"><text class="row-title">{{fact.title}}</text><text class="row-subtitle">{{fact.purpose}}</text></view><text class="fact-state">{{fact.state}}</text></view><button v-if="facts.length > 0" class="secondary-button" @click="openSettings">前往系统权限设置</button><text v-if="permissionError" class="body-copy">无法打开系统设置，请从设备设置中查看本应用权限。</text></view>
+    <view v-if="section!.key == 'agreements'"><text class="body-copy">客户端实现基线 0.1.0 · uni-app x</text><text class="body-copy">正式协议正文与 SDK 清单将在发布前提供；这里不要求你同意缺失的文本。</text></view>
+    </view><StateNotice v-else title="页面不存在" description="请返回账户中心选择需要查看的内容。"/>
+  </view></scroll-view>
+</template>
+<script setup lang="uts">
+import { ref } from 'vue'
+import StateNotice from '../../components/StateNotice.uvue'
+import { accountSection, AccountSection } from '../../core/account.uts'
+import { PermissionFact, readPermissionFacts, permissionScope, openPermissionSettings } from '../../platform/permissions.uts'
+const section = ref<AccountSection | null>(null)
+const facts = ref<PermissionFact[]>([])
+const permissionError = ref(false)
+onLoad((options) => { section.value = accountSection(options['section'] ?? '') })
+function refreshPermissions() { try { facts.value = readPermissionFacts(); permissionError.value = false } catch (_) { facts.value = []; permissionError.value = true } }
+function openSettings() { openPermissionSettings(() => { permissionError.value = true }) }
+</script>

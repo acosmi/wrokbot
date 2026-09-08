@@ -1,0 +1,18 @@
+// Closed display categories; unsupported is distinct from a successful empty collection.
+export type AccountSection = { key: string, title: string, subtitle: string, description: string, status: string }
+
+export const accountSections: AccountSection[] = [
+  { key: 'profile', title: '个人资料', subtitle: '头像、昵称与登录方式', description: '资料由当前工作空间的身份服务提供。已具备资料读取接口，资料修改尚未开放。', status: '需要登录' },
+  { key: 'usage', title: '用量与额度', subtitle: '了解每一次任务的使用情况', description: '累计用量服务尚未接通。现有单次任务成本上限是预算控制，不代表已用额度、账单或账户余额。', status: '尚未接通' },
+  { key: 'benefits', title: '权益与可用能力', subtitle: '模型、工具与设备能力', description: '以当前工作空间实际授予的能力和额度为准。暂不提供没有来源的订阅套餐、到期日或绑定数量。', status: '尚未接通' },
+  { key: 'security', title: '登录设备与安全', subtitle: '管理登录会话和访问', description: '登录本账号的手机与绑定的执行设备分别管理。跨设备会话列表和撤销访问服务尚未接通。', status: '尚未接通' },
+  { key: 'permissions', title: '手机权限', subtitle: '仅在需要时开启', description: '查看此手机的系统授权。相机用于主动扫码、麦克风用于语音输入、照片和文件用于主动上传；这些能力未启用时不申请权限。远程电脑控制权限独立管理。', status: '本机设置' },
+  { key: 'appearance', title: '外观与语言', subtitle: '跟随系统，保持舒适', description: '复用中英文与浅色、深色、跟随系统的设置。减少动态效果和字号适配按系统能力提供。', status: '准备接入' },
+  { key: 'privacy', title: '隐私与数据', subtitle: '聊天、记忆和本机缓存', description: '清理本机缓存不删除工作空间数据。账户导出、删除与注销必须由后端完成身份复核并返回真实受理结果。', status: '尚未接通' },
+  { key: 'agreements', title: '协议与关于', subtitle: '透明了解数据与服务', description: '用户协议、隐私政策、第三方 SDK、开源许可与版本信息会分别列出。正式协议与同意记录尚未接通，不能把浏览页面当作同意。', status: '准备接入' }
+]
+
+export function accountSection(key: string): AccountSection | null {
+  for (const item of accountSections) { if (item.key == key) return item }
+  return null
+}

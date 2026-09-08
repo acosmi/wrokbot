@@ -1,0 +1,115 @@
+[package]
+name = "openbot-testkit"
+description = "golden trace、fault injection、fake provider、xtask（v3 §5.1）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# xtask 刻意不是额外 workspace crate（v3 §5.1 只允许四个理由建 crate，xtask 一个都不满足）。
+# 它是本 crate 的 bin target，靠 `required-features` 与库面隔离：
+#   - 不开 `xtask` feature 时，`cargo build --workspace` 完全不编译它，六个依赖一个都不进图；
+#   - `.cargo/config.toml` 的 alias `cargo xtask` 显式开这个 feature。
+[[bin]]
+name = "xtask"
+path = "src/bin/xtask.rs"
+required-features = ["xtask"]
+
+[features]
+xtask = [
+    "dep:serde",
+    "dep:serde_yaml",
+    "dep:serde_json",
+    "dep:anyhow",
+    "dep:regex",
+    "dep:walkdir",
+    "dep:toml",
+    "dep:flate2",
+    "dep:tar",
+    "dep:zip",
+    "dep:plist",
+    "dep:sha2",
+    "dep:oxc_allocator",
+    "dep:oxc_ast",
+    "dep:oxc_ast_visit",
+    "dep:oxc_parser",
+    "dep:oxc_span",
+    "dep:openbot-windows-sandbox",
+    "dep:image",
+]
+
+[dependencies]
+# 版本钉在 workspace 根的 [workspace.dependencies]，由本机 `cargo add` 解析出的真实版本写入。
+anyhow = { workspace = true, optional = true }
+# oxc 全家桶 —— 只服务 `xtask test-inventory`（v3 §24 G0 / G8 的 AST 级 test inventory）。
+# 同样受 `required-features = ["xtask"]` 隔离：`cargo build --workspace` 一个都不编译。
+oxc_allocator = { workspace = true, optional = true }
+oxc_ast = { workspace = true, optional = true }
+oxc_ast_visit = { workspace = true, optional = true }
+oxc_parser = { workspace = true, optional = true }
+oxc_span = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+serde_yaml = { workspace = true, optional = true }
+walkdir = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+plist = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+# `cargo xtask golden` only. This crate never enters a product dependency graph.
+image = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# `engine bundle` writes and re-reads the official ElectronAsar/Integrity PE resource through the
+# same sole audited Win32 boundary as Engine process confinement; xtask itself stays unsafe-free.
+openbot-windows-sandbox = { workspace = true, optional = true }
+
+# ---------------------------------------------------------------------------
+# dev-dependencies —— 只服务 `tests/transport_parity.rs`（v3 §24 G1 判据第 2 条：
+# 「ApplicationService 经 Axum/Tauri 结果一致」）。
+#
+# 全部只在 dev 侧：本 crate 的**库面与 `xtask` bin 都不依赖任何业务 crate**，
+# `cargo build --workspace` 一个都不进图。这条边界是刻意的 —— testkit 一旦被业务 crate
+# 反向依赖，「测试也必须穿过 ApplicationService」（§5.2 把"测试"与 Axum、Tauri、迁移工具
+# 并列）就失去了强制力。
+# ---------------------------------------------------------------------------
+[dev-dependencies]
+# 被测对象：唯一业务入口，以及 transport 必须穿过的那个 trait。
+openbot-application.workspace = true
+openbot-domain.workspace = true
+# `AuthContext::for_test` 只在 contracts 的 `testkit` feature 下存在（默认关）。
+openbot-contracts = { workspace = true, features = ["testkit"] }
+# in-process 腿（§13.2 的 typed in-process transport）。
+openbot-desktop = { workspace = true, features = ["tauri-host"] }
+# Axum 腿。`testkit` 打开 `auth::FixedAuthResolver` —— 一个"恒定放行成某个身份"的
+# `AuthResolver` 就是后门，所以它默认不在生产 feature 图里。
+openbot-server = { workspace = true, features = ["testkit"] }
+openbot-agent.workspace = true
+openbot-infra = { workspace = true, features = ["server-sso"] }
+deadpool-postgres.workspace = true
+
+# 在测试里实现 `ChannelReader`（`#[async_trait]` 的 trait）。
+async-trait.workspace = true
+# 内存里跑 router：`Router` / `Body` / `middleware::from_fn`。HTTP 类型走 `axum::http`
+# 的再导出，不另引 `http`。
+axum.workspace = true
+# 把 Axum 腿的响应体**反序列化回** typed 值。方向只有这一个 —— 绝不把 in-process 的
+# typed 结果序列化成 JSON 去凑 HTTP 的文本（§13.2「typed in-process，不复制 JSON-RPC」）。
+serde_json.workspace = true
+# 夹具里 `ChannelSummary` 的 RFC 3339 时间戳（`datetime!`）。
+time.workspace = true
+# `#[tokio::test]`。
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+# `ServiceExt::oneshot` —— 内存里打 router，不监听端口。它在 `util` feature 下，
+# 而 workspace 根给 `tower` 开的是 `timeout` / `limit`。feature 是可加的：这里追加
+# `util` 不改根 `Cargo.toml`，也不影响任何生产依赖图。
+tower = { workspace = true, features = ["util"] }

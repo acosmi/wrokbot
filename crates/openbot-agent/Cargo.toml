@@ -1,0 +1,29 @@
+[package]
+name = "openbot-agent"
+description = "built-in loop、AG-UI、tool runtime、MCP、connectors（v3 §5.1）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Agent 不能直调 repository/executor；所有调用都穿过唯一 application service。
+openbot-application.workspace = true
+openbot-contracts.workspace = true
+openbot-domain.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+getrandom.workspace = true
+metrics.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+openbot-contracts = { workspace = true, features = ["testkit"] }
+time.workspace = true

@@ -1,0 +1,5 @@
+<template><view class="state-notice"><text class="state-title">{{title}}</text><text class="state-description">{{description}}</text></view></template>
+<script setup lang="uts">
+defineOptions({ styleIsolation: 'app' })
+defineProps<{ title: string, description: string }>()
+</script>

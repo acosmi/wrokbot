@@ -1,0 +1,29 @@
+{
+  "name": "Wrok Bot",
+  "appid": "__UNI__B1E0A96",
+  "description": "同一账号下的 Wrok Bot 远程工作控制台",
+  "versionName": "0.1.0",
+  "versionCode": 1,
+  "vueVersion": "3",
+  "uni-app-x": {
+    "vapor": true,
+    "styleIsolationVersion": "2"
+  },
+  "app": {
+    "defaultAppTheme": "auto",
+    "initPrivacyAuthorization": "disagree"
+  },
+  "app-android": {},
+  "app-ios": {},
+  "app-harmony": {},
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": true
+    },
+    "usingComponents": true
+  },
+  "uniStatistics": {
+    "enable": false
+  }
+}

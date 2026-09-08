@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Source: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d examples/fintech/knowledge.yaml
+# Modified: compatibility input only; Rust does not create a local customer document index.
+sources:
+  - type: google-drive
+    roots: [Policies, Compliance]
+  - type: microsoft-onedrive
+    roots: [Risk, Operations]

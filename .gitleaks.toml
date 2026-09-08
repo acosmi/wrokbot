@@ -1,0 +1,24 @@
+title = "Wrok Bot secret scanning"
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact deterministic test fixture line"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)crates/openbot\-desktop/src/desktop_local_bootstrap\.rs$''']
+regexes = ['''^\s*let\ secret\ =\ "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";\s*$''']
+
+[[allowlists]]
+description = "Exact deterministic test fixture line"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)crates/openbot\-infra/src/net/safe_http\.rs$''']
+regexes = ['''^\s*//\ key\ \ =030f6b90183f789c7b9c51fc57622f3e8d35e06e0a608f91c467c9e91877cea8\s*$''']
+
+[[allowlists]]
+description = "Exact deterministic test fixture line"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)crates/openbot\-infra/tests/scoped_egress\.rs$''']
+regexes = ['''^\s*socket\.write_all\(format!\("GET\ http://target\.test:\{port\}/ws\ HTTP/1\.1\\r\\nHost:\ target\.test:\{port\}\\r\\nProxy\-Authorization:\ \{\}\\r\\nConnection:\ Upgrade\\r\\nUpgrade:\ websocket\\r\\nSec\-WebSocket\-Key:\ dGhlIHNhbXBsZSBub25jZQ==\\r\\nSec\-WebSocket\-Version:\ 13\\r\\n\\r\\n",auth\(\&binding\)\)\.as_bytes\(\)\)\.await\.unwrap\(\);\s*$''']

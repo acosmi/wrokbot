@@ -1,0 +1,155 @@
+[package]
+name = "openbot-desktop"
+description = "Tauri、window ACL、in-process、sidecar/update（v3 §5.1）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "wrok-bot"
+path = "src/bin/wrok-bot.rs"
+required-features = ["desktop-launcher"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# 打开本 crate 的测试固定身份（`testing` 模块），并连带打开 contracts 的同名 feature ——
+# `AuthContext::for_test` 就住在那后面。默认关：G1 的 Desktop **没有**任何真实认证，
+# 而“默认放行的构造器”正是那种会在 G2 之前被顺手接进生产路径的东西。
+testkit = ["openbot-contracts/testkit"]
+# Real Tauri custom-protocol adapter. Kept opt-in until a reviewed external product identity and
+# tauri.conf capability set are available; the adapter itself is production code, not a fake host.
+tauri-host = ["dep:http", "dep:serde", "dep:serde_json", "dep:sys-locale", "dep:tauri"]
+# Release-side PostgreSQL provenance, full bundle-tree verification and single-instance start lock.
+# This does not spawn PostgreSQL or provide an OS key-store adapter yet.
+postgres-sidecar = ["dep:getrandom", "dep:serde", "dep:serde_json", "dep:sha2"]
+# Shared current-user generic-secret platform boundary for PG and application Vault formats.
+os-key-store = [
+    "dep:openbot-domain",
+    "dep:openbot-windows-sandbox",
+    "dep:security-framework",
+    "dep:security-framework-sys",
+]
+postgres-key-store = [
+    "postgres-sidecar",
+    "os-key-store",
+]
+# Verified process lifecycle through SCRAM-authenticated readiness and graceful pg_ctl shutdown.
+postgres-supervisor = ["postgres-key-store", "dep:tokio-postgres"]
+# Compose the verified child with the shared Batch79 PostgreSQL bootstrap. Infra defaults are
+# intentionally disabled: Desktop Local does not ship Server SAML/xmlsec/OpenSSL.
+desktop-local-bootstrap = ["postgres-supervisor", "dep:openbot-infra"]
+# Per-instance Desktop application master key and derived Vault/audit/assertion material. Loading is
+# only reachable from a running data-plane owner that still holds the sidecar start lock.
+desktop-vault = [
+    "desktop-local-bootstrap",
+    "os-key-store",
+    "openbot-infra/desktop-local-vault",
+]
+# Full supported-host background composition. This intentionally enables Infra network/runtime
+# adapters without enabling Server SSO/xmlsec/OpenSSL, and still requires reviewed release inputs.
+desktop-local-runtime = [
+    "dep:wrok-bot-macos-local-auth",
+    "desktop-vault",
+    "tauri-host",
+    "dep:openbot-agent",
+    "dep:url",
+    "openbot-infra/server-runtime",
+]
+# Reviewed macOS product entry; does not change the default typed library graph.
+desktop-launcher = ["desktop-local-runtime", "dep:tauri-build"]
+
+[dependencies]
+# 唯一业务入口。transport 只穿过它，不实现任何业务规则（v3 §5.2）。
+openbot-application.workspace = true
+# Full Desktop Local runtime owns a built-in Agent host from the same reviewed Agent/Infra
+# primitives as Server, behind the explicit feature so the default typed graph stays minimal.
+openbot-agent = { workspace = true, optional = true }
+# AuthContext / AppCommand / AppReply / AppEvent / AppError / ID newtype / Transport label。
+openbot-contracts.workspace = true
+# SecretBytes is enabled only for the explicit PostgreSQL OS-key-store feature.
+openbot-domain = { workspace = true, optional = true }
+# Only the explicit Desktop Local composition feature crosses into PostgreSQL adapters. The
+# Server-only SSO default is disabled so supported Windows Desktop builds never acquire xmlsec.
+openbot-infra = { workspace = true, optional = true, features = ["desktop-local"] }
+
+# `AppEventStream` 是 `Pin<Box<dyn Stream<Item = AppEvent> + Send>>`；把它抽干需要 `Stream`
+# trait 本身。只依赖 `futures-core`（trait 定义），不拉 `futures-util`。
+futures-core.workspace = true
+
+# 有界队列（`mpsc`）、取消广播（`watch`）、command 并发预算（`Semaphore`）、
+# 关停 deadline（`time::sleep`）、事件泵（`task::JoinHandle`）。
+tokio = { workspace = true, features = ["process"] }
+
+# `PublishRejected` / `OpenSessionError` / `SequenceError` 的错误分层。
+thiserror.workspace = true
+
+# v3 §16.4：丢弃 / 合并 / 断开都必须留痕。tracing 是全链真源；**只依赖 facade**，
+# 库不替二进制决定日志去向。
+tracing.workspace = true
+
+# Desktop-local preference storage implements the shared async application port. No JSON codec is
+# introduced: the file format is a closed three-line host format and in-process commands stay typed.
+async-trait.workspace = true
+
+# Both optional host features need closed manifest/wire decoding. Keeping them optional preserves
+# the default codec-free typed in-process graph; PostgreSQL bundle verification itself is portable
+# and therefore cannot live in the macOS/Windows Tauri target block below.
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
+tokio-postgres = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+# GUI first source §10.1 has Desktop goldens only for macOS arm64 and Windows x64. Linux is the
+# Server/Web capture platform, not a Desktop release, so GTK/WebKitGTK must not enter the Linux
+# Server graph merely because the workspace has an opt-in Tauri feature. These OS WebView
+# dependencies are used exclusively by tauri_host.rs, so that framing edge stays target-scoped.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+http = { workspace = true, optional = true }
+sys-locale = { workspace = true, optional = true }
+tauri = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wrok-bot-macos-local-auth = { workspace = true, optional = true }
+security-framework = { workspace = true, optional = true }
+security-framework-sys = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+tauri-build = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+openbot-windows-sandbox = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
+# Enables only Tauri's dependency-free MockRuntime module for native lifecycle tests. Production
+# still receives `tauri` exclusively through the opt-in `tauri-host` feature above.
+tauri = { workspace = true, features = ["test"] }
+
+# ---------------------------------------------------------------------------
+# 刻意**没有**的依赖，每一条都是一次裁决：
+#
+# - 默认 typed in-process 路径不开 Tauri / `serde` / `serde_json`；codec 只属于显式
+#   `tauri-host` WebView HTTP framing 或 `postgres-sidecar` release manifest。`transport` 测试扫
+#   生产模块源码与 optional feature 声明，防止 codec 渗进 typed lane。
+# - `tokio-util`：只为一个 `CancellationToken` 引一棵新依赖树。它此刻虽在 `Cargo.lock`
+#   里，但那是 `tokio-postgres` 的实现细节，不是本 crate 可以依赖的事实。等价语义由
+#   `cancel::CancellationToken`（`tokio::sync::watch`）承担。
+# ---------------------------------------------------------------------------
+
+[dev-dependencies]
+# `AuthContext::for_test` 只在 contracts 的 `testkit` feature 下存在。dev 侧打开它不影响
+# 生产构建：dev-dependencies 不进 `cargo build` 的依赖图。
+openbot-contracts = { workspace = true, features = ["testkit"] }
+
+# 测试里另实现 `ApplicationService` / `ChannelReader`；生产只实现 UI preference storage port。
+
+# `ChannelSummary` 里的 RFC 3339 时间戳（测试用的内存 port 要造真行）。
+# 生产侧不需要 —— 本 crate 不解释任何 DTO 内容。
+time.workspace = true
+uuid.workspace = true

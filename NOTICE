@@ -1,0 +1,907 @@
+NOTICE —— 第三方组件声明
+================================================================================
+
+本文件是 `acosmi/wrokbot`（内部代号 `openbot-rs`）分发时必须随包的第三方声明。
+
+- 本仓第一方新代码的许可见仓根 **LICENSE**（专有、闭源、保留一切权利；
+  仓库 public 只是可见性，不是开源许可）。
+- 本文件只声明**第三方**组件；它们各自按原始条款授权，LICENSE 的「保留一切权利」
+  不适用于、也不能收紧它们。
+- 机器可读的完整来源登记（固定 commit、SHA-256、purl、逐条取证记录）在
+  `provenance/sources.spdx.json`（SPDX 2.3，57 个 package）。**那份是真源**，
+  本文件是它面向发行包的人类可读投影；两者不一致时以 SPDX 文件与实际取证为准，
+  并同 PR 修订本文件。
+
+## 本文件的诚实边界（务必先读）
+
+本文件包含已收录的第三方许可文本，以及发行时仍需核对的声明项：
+
+1. **已嵌入正文**的许可证：本轮拿到了原件、逐字读出、可复算 SHA-256。
+2. **声明位（待补全）**：本轮没有取到全文，或该组件此刻尚未真正进入发行包。
+   这些位置写明「随包时必须补全」与**具体的补全条件**，
+   一律**不写**任何未经核对的许可证正文——伪造的许可证正文比缺失更糟，
+   因为它会让下游以为义务已经履行。
+
+第 7 节是待补全项的汇总清单，可直接当发布前检查表用。
+
+
+================================================================================
+1. OpenBot（CopilotKit/openbot）—— MIT
+================================================================================
+
+本项目是 OpenBot 的逐语言 Rust 重写，按衍生实现治理。
+
+  来源仓库   : https://github.com/CopilotKit/openbot
+  固定 commit: 891df72f1827454d8b353d108fe5dd2313b7e30d
+  许可证     : MIT
+  取证       : 上游只读克隆的 LICENSE，SHA-256
+               f758c9848289ffecfcf65d1a6b078ccc96f53148c4e773f24b817dbc83e80b55
+               同 commit 无 NOTICE 文件（HTTP 404）。
+
+以下为该 LICENSE 文件全文，逐字取自上述 commit：
+
+    MIT License
+
+    Copyright (c) 2026 CopilotKit
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+================================================================================
+2. Inter 字体 —— SIL Open Font License 1.1
+================================================================================
+
+UI 字体，随包交付两个 woff2（GUI 设计系统文档 §4.3）。
+
+  来源       : https://github.com/rsms/inter/releases/tag/v4.1
+  版本       : 4.1
+  分发件     : Inter-4.1.zip
+               SHA-256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e
+  随包文件   : web/InterVariable.woff2         352,240 B
+               SHA-256 693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3
+               web/InterVariable-Italic.woff2  387,976 B
+               SHA-256 e564f652916db6c139570fefb9524a77c4d48f30c92928de9db19b6b5c7a262a
+  许可证     : OFL-1.1
+  取证       : zip 内 LICENSE.txt（4,380 B），SHA-256
+               262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a
+
+OFL-1.1 的两条硬约束在本项目的用法下均满足，但改变用法时必须重新评估：
+  - Reserved Font Name：不得以保留字体名发布修改版；本项目不改造字体文件。
+  - 不得单独售卖字体本身；随软件打包分发是允许的。
+
+以下为 Inter-4.1.zip 内 LICENSE.txt 全文，逐字读出：
+
+    Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+
+    This Font Software is licensed under the SIL Open Font License, Version 1.1.
+    This license is copied below, and is also available with a FAQ at:
+    http://scripts.sil.org/OFL
+
+    -----------------------------------------------------------
+    SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+    -----------------------------------------------------------
+
+    PREAMBLE
+    The goals of the Open Font License (OFL) are to stimulate worldwide
+    development of collaborative font projects, to support the font creation
+    efforts of academic and linguistic communities, and to provide a free and
+    open framework in which fonts may be shared and improved in partnership
+    with others.
+
+    The OFL allows the licensed fonts to be used, studied, modified and
+    redistributed freely as long as they are not sold by themselves. The
+    fonts, including any derivative works, can be bundled, embedded,
+    redistributed and/or sold with any software provided that any reserved
+    names are not used by derivative works. The fonts and derivatives,
+    however, cannot be released under any other type of license. The
+    requirement for fonts to remain under this license does not apply
+    to any document created using the fonts or their derivatives.
+
+    DEFINITIONS
+    "Font Software" refers to the set of files released by the Copyright
+    Holder(s) under this license and clearly marked as such. This may
+    include source files, build scripts and documentation.
+
+    "Reserved Font Name" refers to any names specified as such after the
+    copyright statement(s).
+
+    "Original Version" refers to the collection of Font Software components as
+    distributed by the Copyright Holder(s).
+
+    "Modified Version" refers to any derivative made by adding to, deleting,
+    or substituting -- in part or in whole -- any of the components of the
+    Original Version, by changing formats or by porting the Font Software to a
+    new environment.
+
+    "Author" refers to any designer, engineer, programmer, technical
+    writer or other person who contributed to the Font Software.
+
+    PERMISSION AND CONDITIONS
+    Permission is hereby granted, free of charge, to any person obtaining
+    a copy of the Font Software, to use, study, copy, merge, embed, modify,
+    redistribute, and sell modified and unmodified copies of the Font
+    Software, subject to the following conditions:
+
+    1) Neither the Font Software nor any of its individual components,
+    in Original or Modified Versions, may be sold by itself.
+
+    2) Original or Modified Versions of the Font Software may be bundled,
+    redistributed and/or sold with any software, provided that each copy
+    contains the above copyright notice and this license. These can be
+    included either as stand-alone text files, human-readable headers or
+    in the appropriate machine-readable metadata fields within text or
+    binary files as long as those fields can be easily viewed by the user.
+
+    3) No Modified Version of the Font Software may use the Reserved Font
+    Name(s) unless explicit written permission is granted by the corresponding
+    Copyright Holder. This restriction only applies to the primary font name as
+    presented to the users.
+
+    4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+    Software shall not be used to promote, endorse or advertise any
+    Modified Version, except to acknowledge the contribution(s) of the
+    Copyright Holder(s) and the Author(s) or with their explicit written
+    permission.
+
+    5) The Font Software, modified or unmodified, in part or in whole,
+    must be distributed entirely under this license, and must not be
+    distributed under any other license. The requirement for fonts to
+    remain under this license does not apply to any document created
+    using the Font Software.
+
+    TERMINATION
+    This license becomes null and void if any of the above conditions are
+    not met.
+
+    DISCLAIMER
+    THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+    OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+    COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+    INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+    DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+    OTHER DEALINGS IN THE FONT SOFTWARE.
+
+================================================================================
+3. Lucide 图标 —— ISC，其中源自 Feather 的图标另受 MIT
+================================================================================
+
+图标集，只随包 allowlist 内实际用到的 SVG（GUI 设计系统文档 §4.6.1）。
+
+  来源       : https://github.com/lucide-icons/lucide/releases/tag/1.33.0
+  版本       : 1.33.0
+  分发件     : lucide-icons-1.33.0.zip（1,320,159 B）
+               SHA-256 53831c8def65621f88cae315cdb38ac70db1d937062df35c93546efb00260a98
+  许可证     : ISC AND MIT
+  取证       : 该 zip **内部没有任何许可证文件**（遍历 3,553 个成员，文件名含
+               `licen` 的为 0；正向对照：同一段代码在 Inter-4.1.zip 上命中
+               LICENSE.txt）。正文改从仓库同 tag 的 LICENSE 取回，3,208 B，
+               SHA-256 b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57
+
+⚠️ 这份 LICENSE **不是单一 ISC**。正文后半段点名 110 个源自 Feather 项目的图标，
+   这批图标另受 MIT（Copyright (c) 2013-present Cole Bemis）约束。
+   只声明 ISC 会漏掉一半义务。随包 allowlist 一旦命中其中任一图标名，
+   下面的 MIT 段就是必须项，不是可选项。
+
+以下为 lucide-icons/lucide @ 1.33.0 的 LICENSE 全文，逐字取回：
+
+    ISC License
+
+    Copyright (c) 2026 Lucide Icons and Contributors
+
+    Permission to use, copy, modify, and/or distribute this software for any
+    purpose with or without fee is hereby granted, provided that the above
+    copyright notice and this permission notice appear in all copies.
+
+    THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+    WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+    ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+    ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+    ---
+
+    The following Lucide icons are derived from the Feather project:
+
+    airplay, alert-circle, alert-octagon, alert-triangle, aperture, arrow-down-circle, arrow-down-left, arrow-down-right, arrow-down, arrow-left-circle, arrow-left, arrow-right-circle, arrow-right, arrow-up-circle, arrow-up-left, arrow-up-right, arrow-up, at-sign, calendar, cast, check, chevron-down, chevron-left, chevron-right, chevron-up, chevrons-down, chevrons-left, chevrons-right, chevrons-up, circle, clipboard, clock, code, columns, command, compass, corner-down-left, corner-down-right, corner-left-down, corner-left-up, corner-right-down, corner-right-up, corner-up-left, corner-up-right, crosshair, database, divide-circle, divide-square, dollar-sign, download, external-link, feather, frown, hash, headphones, help-circle, info, italic, key, layout, life-buoy, link-2, link, loader, lock, log-in, log-out, maximize, meh, minimize, minimize-2, minus-circle, minus-square, minus, monitor, moon, more-horizontal, more-vertical, move, music, navigation-2, navigation, octagon, pause-circle, percent, plus-circle, plus-square, plus, power, radio, rss, search, server, share, shopping-bag, sidebar, smartphone, smile, square, table-2, tablet, target, terminal, trash-2, trash, triangle, tv, type, upload, x-circle, x-octagon, x-square, x, zoom-in, zoom-out
+
+    The MIT License (MIT) (for the icons listed above)
+
+    Copyright (c) 2013-present Cole Bemis
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+================================================================================
+4. Apache-2.0 来源
+================================================================================
+
+以下来源为 Apache License 2.0。**当前状态：研究快照，尚未复制任何文件进本仓**
+。
+一旦复制或改造其中任一文件，Apache-2.0 §4 的四项义务同时生效：
+  (a) 随附许可证副本；(b) 显著标注被修改的文件；(c) 保留源作品中的版权、专利、
+  商标与归属声明；(d) 若源作品含 NOTICE 文件，则其中的归属声明必须在衍生作品的
+  NOTICE 中重现。
+另加 v3 §23.1 的加严要求：保留 SPDX 标识与**来源 commit**，写明显著修改声明。
+
+
+--------------------------------------------------------------------------------
+4.1 OpenAI Codex
+--------------------------------------------------------------------------------
+
+  来源仓库   : https://github.com/openai/codex
+  固定 commit: 4f39251a010a8bd7d692d25fb33832ff06f1635a
+  许可证     : Apache-2.0（同 commit 的 LICENSE 首三行为 Apache License /
+               Version 2.0, January 2004）
+  NOTICE     : **存在**（HTTP 200，242 B，SHA-256
+               9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915）
+
+  这是本轮四个上游里**唯一**带 NOTICE 的（其余三个同一条探测均 404），
+  所以 v3 §23.1 条 2 说的「适用 NOTICE」在这里有具体落点。
+  以下为该 NOTICE 全文，逐字取回，一旦复用 Codex 任一文件即须原样随包：
+
+    OpenAI Codex
+    Copyright 2025 OpenAI
+
+    This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
+    Copyright (c) 2016-2022 Florian Dehau
+    Copyright (c) 2023-2025 The Ratatui Developers
+
+  注意其中的 Ratatui 段落是**传递性**义务：Codex 自身派生自 Ratatui（MIT），
+  复用 Codex 代码即同时继承该声明，不得只保留 OpenAI 那两行。
+
+--------------------------------------------------------------------------------
+4.2 xAI Grok Build
+--------------------------------------------------------------------------------
+
+  来源仓库   : https://github.com/xai-org/grok-build
+  固定 commit: 19d42e35c07a9c9244f03f6df0c4c353f970d4f9
+  许可证     : Apache-2.0
+  版权行     : Copyright 2023-2026 SpaceXAI
+               （同 commit 的 LICENSE 第一行逐字如此。权利人字面是 **SpaceXAI**，
+                 不是 xAI；声明里不得写成 xAI。）
+  NOTICE     : **不存在**（同 commit 的 NOTICE 与 NOTICES 均 HTTP 404；
+               正向对照：同一条探测在 openai/codex 上返回 200）
+
+  ⚠️ v3 §23.1 条 3：Grok Build 第一方代码是 Apache-2.0，但**部分工具来自
+     Codex / OpenCode**，必须回溯原始来源与第三方声明，不能只记 xAI。
+     上游既然没有 NOTICE，这份回溯**无处可抄，只能由本项目自己做**。
+     复用任一文件前，须逐文件确认它是 xAI 第一方还是搬运自 Codex/OpenCode，
+     并把原始版权与许可写进本节。
+
+--------------------------------------------------------------------------------
+4.3 rmcp（modelcontextprotocol/rust-sdk）
+--------------------------------------------------------------------------------
+
+  来源仓库   : https://github.com/modelcontextprotocol/rust-sdk
+  固定 commit: 4a738b9dd99eaca418b614afa433a0cbdaf8d056（发布版 rmcp 3.1.4）
+  crates.io  : `.version.license` = Apache-2.0
+  NOTICE     : 不存在（HTTP 404）
+
+  ⚠️ 该 commit 的 LICENSE **不是一份许可证全文**，而是一段许可迁移声明，原文要点：
+     MCP 项目正从 MIT 迁移到 Apache-2.0；新代码与规范贡献按 Apache-2.0；
+     文档（不含规范）按 CC-BY-4.0；**尚未同意重新授权的原作者的贡献仍为 MIT**。
+     所以整仓不存在单一许可证，SPDX 里本条 licenseConcluded = NOASSERTION。
+     这正是 v3 §23.1 条 4 说的「不能给整个仓库套一个猜测」。
+     作为 crate 依赖使用时按 crates.io 声明的 Apache-2.0 处理；
+     **复制其中任何源码文件之前**必须逐文件判定该文件此刻的实际许可。
+
+--------------------------------------------------------------------------------
+4.3A jsonschema 0.51.0 —— MIT
+--------------------------------------------------------------------------------
+
+  用途       : MCP vendor input-schema validation（production dependency）
+  crates.io  : jsonschema 0.51.0
+  Cargo 摘要 : 152999731bfbe0bb82d561550be73b0c31a9827d6ebe3fe96ad47563703b5328
+  许可证     : MIT
+  版权行     : Copyright (c) 2020-2026 Dmitry Dygalo
+  取证       : crate LICENSE 1,075 B，SHA-256
+               117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038
+
+  许可证全文与本文件 §1 收录的标准 MIT 条款相同；分发时须保留上述版权行与 MIT 条款。
+  Production 关闭该 crate 默认的 HTTP/file resolver features，并显式选择线性 regex engine；
+  这两项是安全配置，不改变 MIT 许可义务。
+
+--------------------------------------------------------------------------------
+4.3B OpenAI .NET Responses recorded test trace —— MIT
+--------------------------------------------------------------------------------
+
+  来源仓库   : https://github.com/openai/openai-dotnet
+  固定 commit: 19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5
+  源记录     : tests/SessionRecords/ResponsesToolTests/FunctionToolStreamingWorks.json
+  源字节     : 13,211 B；Git blob SHA-1
+               3272bc4116a32b4472d21f68b41ce23ce363c02c；SHA-256
+               ff7fadb3baabc1fd1fc482fe9ec28ba93d5a899b961cce73bf19f8d9c1fe20b8
+  本仓文件   : fixtures/provider/openai-responses-function-tool-stream.sse
+  派生       : `Entries[0].ResponseBody` 36段按顺序逐字节拼接，9,070 B；SHA-256
+               fe38a7a044f8de33d441d0c9bf426e1291b1401bb9099ef419f62651b50d2927
+  许可证     : MIT
+  版权行     : Copyright (c) 2024 OpenAI (https://openai.com)
+
+  源record已将Authorization、Date、组织/项目/request id等字段置为`Sanitized`。本仓只保存
+  response body；RequestHeaders、RequestBody、Variables、prompt、API key、账号/项目标识和客户数据
+  均不复制。许可证全文与本文件§1收录的标准MIT条款相同；分发该测试fixture时须同时保留上述
+  OpenAI版权行和MIT条款。
+
+--------------------------------------------------------------------------------
+4.3C Anthropic Go/PHP Messages recorded test traces —— MIT
+--------------------------------------------------------------------------------
+
+  Go来源仓库 : https://github.com/anthropics/anthropic-sdk-go
+  固定 commit: e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33
+  源记录     : toolrunner/testdata/cassettes/tool_runner_streaming_all.yaml
+  源字节     : 10,980 B；Git blob SHA-1
+               2085d5a9d2bb3b97992e74206a35fb0c92253ecb；SHA-256
+               a523fe3e4db93da6e1b8f715e151d448bc9cc2231bae603d5357f2f6583140fe
+  本仓文件   : fixtures/provider/anthropic-messages-tool-use-stream.sse
+  派生       : interactions[0].response.body literal scalar逐字节提取，3,489 B；
+               SHA-256 9e75e3423449cfda1266e73327f43949fa0318b68a1d17293d4d06fe7ecbd783
+
+  PHP来源仓库: https://github.com/anthropics/anthropic-sdk-php
+  固定 commit: 93aa419595dceeb7062292e09406b4e2a63b96e1
+  源记录     : fixtures/ga/thinking.txt
+  源字节     : 1,609 B；Git blob SHA-1
+               b6d1f6575606504542fd59bf55b8ef6cbeaa7731；SHA-256
+               70366a8b43b634eb1bc1e4e1fabbc7c14a8d182cca7561402ff40c07594652ef
+  本仓文件   : fixtures/provider/anthropic-messages-thinking-stream.sse
+  派生       : 固定raw HTTP response首个LF-LF之后的response body逐字节提取，1,415 B；
+               SHA-256 d5cf8f848dd95e809110c93c7531d3689331f52a92f0722211ca5c71bbff23d8
+
+  许可证     : MIT
+  版权行     : Copyright 2023 Anthropic, PBC.
+
+  Go资产由官方go-vcr recording/replay测试发布；PHP资产由官方README明确声明为verbatim captured
+  raw HTTP streaming response并经正式streaming entrypoint回放。本仓只保存response body；请求正文、
+  Authorization/API key、organization/request/rate-limit header、账号/客户标识和客户数据均不复制。
+  保留的message/tool-use ID与公开示例signature只作不可信trace correlation/协议测试，不授予authority，
+  不是credential或secret。许可证全文与本文件§1收录的标准MIT条款相同；分发上述fixture时须同时保留
+  Anthropic版权行和MIT条款。
+
+--------------------------------------------------------------------------------
+4.4 binaryen / wasm-opt（构建期工具，不进发行物）
+--------------------------------------------------------------------------------
+
+  来源       : https://github.com/WebAssembly/binaryen/releases/tag/version_132
+  许可证     : Apache-2.0（同 tag 的 LICENSE 首三行为 Apache License Version 2.0）
+
+  仅在构建期使用，不随发行包分发，因此不产生 §4(d) 的随包义务；
+  它属于 v3 §16.3 供应链条目，摘要与 URL 见 `tools/pins.toml`。
+  若将来把 wasm-opt 二进制放进发行包，本节须升级为完整的 Apache-2.0 随包声明。
+
+--------------------------------------------------------------------------------
+4.5 Apache License 2.0 全文
+--------------------------------------------------------------------------------
+
+W-7b 的 xmlsec backend 使 OpenSSL 进入 Server 运行时闭包。以下全文逐字取自
+OpenSSL 3.6.3 `LICENSE.txt`（10,175 B），SHA-256
+`7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a`：
+
+                                     Apache License
+                               Version 2.0, January 2004
+                            https://www.apache.org/licenses/
+
+       TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+       1. Definitions.
+
+          "License" shall mean the terms and conditions for use, reproduction,
+          and distribution as defined by Sections 1 through 9 of this document.
+
+          "Licensor" shall mean the copyright owner or entity authorized by
+          the copyright owner that is granting the License.
+
+          "Legal Entity" shall mean the union of the acting entity and all
+          other entities that control, are controlled by, or are under common
+          control with that entity. For the purposes of this definition,
+          "control" means (i) the power, direct or indirect, to cause the
+          direction or management of such entity, whether by contract or
+          otherwise, or (ii) ownership of fifty percent (50%) or more of the
+          outstanding shares, or (iii) beneficial ownership of such entity.
+
+          "You" (or "Your") shall mean an individual or Legal Entity
+          exercising permissions granted by this License.
+
+          "Source" form shall mean the preferred form for making modifications,
+          including but not limited to software source code, documentation
+          source, and configuration files.
+
+          "Object" form shall mean any form resulting from mechanical
+          transformation or translation of a Source form, including but
+          not limited to compiled object code, generated documentation,
+          and conversions to other media types.
+
+          "Work" shall mean the work of authorship, whether in Source or
+          Object form, made available under the License, as indicated by a
+          copyright notice that is included in or attached to the work
+          (an example is provided in the Appendix below).
+
+          "Derivative Works" shall mean any work, whether in Source or Object
+          form, that is based on (or derived from) the Work and for which the
+          editorial revisions, annotations, elaborations, or other modifications
+          represent, as a whole, an original work of authorship. For the purposes
+          of this License, Derivative Works shall not include works that remain
+          separable from, or merely link (or bind by name) to the interfaces of,
+          the Work and Derivative Works thereof.
+
+          "Contribution" shall mean any work of authorship, including
+          the original version of the Work and any modifications or additions
+          to that Work or Derivative Works, that is intentionally submitted
+          to Licensor for inclusion in the Work by the copyright owner
+          or by an individual or Legal Entity authorized to submit on behalf of
+          the copyright owner. For the purposes of this definition, "submitted"
+          means any form of electronic, verbal, or written communication sent
+          to the Licensor or its representatives, including but not limited to
+          communication on electronic mailing lists, source code control systems,
+          and issue tracking systems that are managed by, or on behalf of, the
+          Licensor for the purpose of discussing and improving the Work, but
+          excluding communication that is conspicuously marked or otherwise
+          designated in writing by the copyright owner as "Not a Contribution."
+
+          "Contributor" shall mean Licensor and any individual or Legal Entity
+          on behalf of whom a Contribution has been received by Licensor and
+          subsequently incorporated within the Work.
+
+       2. Grant of Copyright License. Subject to the terms and conditions of
+          this License, each Contributor hereby grants to You a perpetual,
+          worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+          copyright license to reproduce, prepare Derivative Works of,
+          publicly display, publicly perform, sublicense, and distribute the
+          Work and such Derivative Works in Source or Object form.
+
+       3. Grant of Patent License. Subject to the terms and conditions of
+          this License, each Contributor hereby grants to You a perpetual,
+          worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+          (except as stated in this section) patent license to make, have made,
+          use, offer to sell, sell, import, and otherwise transfer the Work,
+          where such license applies only to those patent claims licensable
+          by such Contributor that are necessarily infringed by their
+          Contribution(s) alone or by combination of their Contribution(s)
+          with the Work to which such Contribution(s) was submitted. If You
+          institute patent litigation against any entity (including a
+          cross-claim or counterclaim in a lawsuit) alleging that the Work
+          or a Contribution incorporated within the Work constitutes direct
+          or contributory patent infringement, then any patent licenses
+          granted to You under this License for that Work shall terminate
+          as of the date such litigation is filed.
+
+       4. Redistribution. You may reproduce and distribute copies of the
+          Work or Derivative Works thereof in any medium, with or without
+          modifications, and in Source or Object form, provided that You
+          meet the following conditions:
+
+          (a) You must give any other recipients of the Work or
+              Derivative Works a copy of this License; and
+
+          (b) You must cause any modified files to carry prominent notices
+              stating that You changed the files; and
+
+          (c) You must retain, in the Source form of any Derivative Works
+              that You distribute, all copyright, patent, trademark, and
+              attribution notices from the Source form of the Work,
+              excluding those notices that do not pertain to any part of
+              the Derivative Works; and
+
+          (d) If the Work includes a "NOTICE" text file as part of its
+              distribution, then any Derivative Works that You distribute must
+              include a readable copy of the attribution notices contained
+              within such NOTICE file, excluding those notices that do not
+              pertain to any part of the Derivative Works, in at least one
+              of the following places: within a NOTICE text file distributed
+              as part of the Derivative Works; within the Source form or
+              documentation, if provided along with the Derivative Works; or,
+              within a display generated by the Derivative Works, if and
+              wherever such third-party notices normally appear. The contents
+              of the NOTICE file are for informational purposes only and
+              do not modify the License. You may add Your own attribution
+              notices within Derivative Works that You distribute, alongside
+              or as an addendum to the NOTICE text from the Work, provided
+              that such additional attribution notices cannot be construed
+              as modifying the License.
+
+          You may add Your own copyright statement to Your modifications and
+          may provide additional or different license terms and conditions
+          for use, reproduction, or distribution of Your modifications, or
+          for any such Derivative Works as a whole, provided Your use,
+          reproduction, and distribution of the Work otherwise complies with
+          the conditions stated in this License.
+
+       5. Submission of Contributions. Unless You explicitly state otherwise,
+          any Contribution intentionally submitted for inclusion in the Work
+          by You to the Licensor shall be under the terms and conditions of
+          this License, without any additional terms or conditions.
+          Notwithstanding the above, nothing herein shall supersede or modify
+          the terms of any separate license agreement you may have executed
+          with Licensor regarding such Contributions.
+
+       6. Trademarks. This License does not grant permission to use the trade
+          names, trademarks, service marks, or product names of the Licensor,
+          except as required for reasonable and customary use in describing the
+          origin of the Work and reproducing the content of the NOTICE file.
+
+       7. Disclaimer of Warranty. Unless required by applicable law or
+          agreed to in writing, Licensor provides the Work (and each
+          Contributor provides its Contributions) on an "AS IS" BASIS,
+          WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+          implied, including, without limitation, any warranties or conditions
+          of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+          PARTICULAR PURPOSE. You are solely responsible for determining the
+          appropriateness of using or redistributing the Work and assume any
+          risks associated with Your exercise of permissions under this License.
+
+       8. Limitation of Liability. In no event and under no legal theory,
+          whether in tort (including negligence), contract, or otherwise,
+          unless required by applicable law (such as deliberate and grossly
+          negligent acts) or agreed to in writing, shall any Contributor be
+          liable to You for damages, including any direct, indirect, special,
+          incidental, or consequential damages of any character arising as a
+          result of this License or out of the use or inability to use the
+          Work (including but not limited to damages for loss of goodwill,
+          work stoppage, computer failure or malfunction, or any and all
+          other commercial damages or losses), even if such Contributor
+          has been advised of the possibility of such damages.
+
+       9. Accepting Warranty or Additional Liability. While redistributing
+          the Work or Derivative Works thereof, You may choose to offer,
+          and charge a fee for, acceptance of support, warranty, indemnity,
+          or other liability obligations and/or rights consistent with this
+          License. However, in accepting such obligations, You may act only
+          on Your own behalf and on Your sole responsibility, not on behalf
+          of any other Contributor, and only if You agree to indemnify,
+          defend, and hold each Contributor harmless for any liability
+          incurred by, or claims asserted against, such Contributor by reason
+          of your accepting any such warranty or additional liability.
+
+       END OF TERMS AND CONDITIONS
+
+================================================================================
+5. Electron / Chromium / Node.js / FFmpeg 随包 notices
+================================================================================
+
+  Electron   : 43.3.0，MIT
+               版权行（同 tag 的 LICENSE 前两行，逐字）：
+                 Copyright (c) Electron contributors
+                 Copyright (c) 2013-2020 GitHub Inc.
+  Chromium   : 150.0.7871.212，顶层 LICENSE 为三条款 BSD，
+               首行 `// Copyright 2015 The Chromium Authors`
+  Node.js    : 24.18.1
+  取证       : GitHub API `/repos/electron/electron/releases/tags/v43.3.0`
+               published_at 2026-08-04T18:52:37Z；release body 内两行逐字为
+               `Updated Chromium to 150.0.7871.212.` 与
+               `Updated Node.js to v24.18.1.`
+               —— v3 §1.2 写的 Chromium 版本由此独立复现，Node 版本是本轮新增事实。
+
+  ⚠️ **Electron 自身的 MIT 远不是全部。** Chromium 发行包内含数百个第三方组件，
+     各自许可不同；顶层那一条 BSD 只覆盖 Chromium 自己的代码。
+     v3 §23.1 条 5 要求的是「随其发行包的第三方 notices **原样交付**」，
+     指的是 Chromium 自带的 credits 文件与 Node / FFmpeg 各自的声明整份随包，
+     不能用上面这几行版权行顶替。
+
+  状态：**待补全**。含 Electron 的发行包仍需核对完整第三方声明。
+  补全条件：
+    1. 打包腿真正产出带 Electron 的发行物；
+    2. 从**实际随包的那份 Electron 构建产物内部**取出 LICENSES.chromium.html
+       （或等价 credits 文件）与 Node / FFmpeg 声明，记录路径与 SHA-256；
+    3. 原样收进发行包（可以是独立文件，但必须可从本 NOTICE 索引到），
+       并在本节写明文件名与摘要。
+  注意：必须取自**随包的那一份构建**，不是从上游网站另下一份——版本一旦不同，
+        第三方组件集合就不同，声明会失真。
+
+================================================================================
+6. Steel Browser / CDP 参考代码
+================================================================================
+
+  状态：**待补全，且当前无任何已复用文件。**
+
+  v3 §23.1 条 6 只说「分别按其 Apache/BSD 等固定来源处理」，**没有钉死任何
+  仓库、commit 或许可证**；v3 §26 的一手来源清单里也只有 CDP 的在线文档链接
+  （chromedevtools.github.io），没有 Steel Browser 的源码仓地址。
+  本轮**未对该项做任何取证**——既没有仓库可探，也没有文件被复用。
+
+  补全条件：
+    1. 先在一次 delta audit 里把来源钉死：仓库、固定 commit、许可证、权利人；
+    2. 把该来源登记进 `provenance/sources.spdx.json`；
+    3. 复用任一文件时按其许可补齐本节声明（BSD 类需保留版权与免责声明全文，
+       Apache 类同第 4 节的四项义务）。
+在第 1 步完成之前，任何「参考 Steel Browser 实现」的改动都不得合入。
+
+================================================================================
+6A. webpki-roots —— CDLA-Permissive-2.0
+================================================================================
+
+HTTP safe dialer 的锁定 Mozilla TLS 根证书数据（W-7 TLS delta audit）。
+
+  来源       : https://github.com/rustls/webpki-roots
+  crate      : webpki-roots 1.0.9
+  Cargo 摘要 : Cargo.lock 中该版本的 registry checksum（发行 SBOM 从 lock 机械生成）
+  许可证     : CDLA-Permissive-2.0
+  取证       : crates.io 包内 LICENSE（2,371 B），SHA-256
+               e271993808fec50ab29350b39539cdec611a9103f827e0aa26d61da70e2d33f8
+
+该协议第 2.1 条要求：分享数据（含修改版）时，必须随数据提供协议文本。以下为包内 LICENSE
+全文，逐字取自上述精确版本：
+
+    # Community Data License Agreement - Permissive - Version 2.0
+
+    This is the Community Data License Agreement - Permissive, Version
+    2.0 (the "agreement"). Data Provider(s) and Data Recipient(s) agree
+    as follows:
+
+    ## 1. Provision of the Data
+
+    1.1. A Data Recipient may use, modify, and share the Data made
+    available by Data Provider(s) under this agreement if that Data
+    Recipient follows the terms of this agreement.
+
+    1.2. This agreement does not impose any restriction on a Data
+    Recipient's use, modification, or sharing of any portions of the
+    Data that are in the public domain or that may be used, modified,
+    or shared under any other legal exception or limitation.
+
+    ## 2. Conditions for Sharing Data
+
+    2.1. A Data Recipient may share Data, with or without modifications, so
+    long as the Data Recipient makes available the text of this agreement
+    with the shared Data.
+
+    ## 3. No Restrictions on Results
+
+    3.1. This agreement does not impose any restriction or obligations
+    with respect to the use, modification, or sharing of Results.
+
+    ## 4. No Warranty; Limitation of Liability
+
+    4.1. All Data Recipients receive the Data subject to the following
+    terms:
+
+    THE DATA IS PROVIDED ON AN "AS IS" BASIS, WITHOUT REPRESENTATIONS,
+    WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED
+    INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OR CONDITIONS OF TITLE,
+    NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+
+    NO DATA PROVIDER SHALL HAVE ANY LIABILITY FOR ANY DIRECT, INDIRECT,
+    INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING
+    WITHOUT LIMITATION LOST PROFITS), HOWEVER CAUSED AND ON ANY THEORY OF
+    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE DATA OR RESULTS,
+    EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+    ## 5. Definitions
+
+    5.1. "Data" means the material received by a Data Recipient under
+    this agreement.
+
+    5.2. "Data Provider" means any person who is the source of Data
+    provided under this agreement and in reliance on a Data Recipient's
+    agreement to its terms.
+
+    5.3. "Data Recipient" means any person who receives Data directly
+    or indirectly from a Data Provider and agrees to the terms of this
+    agreement.
+
+    5.4. "Results" means any outcome obtained by computational analysis
+    of Data, including for example machine learning models and models'
+    insights.
+
+================================================================================
+6B. SAML / XMLDSig 原生闭包 —— samael、xmlsec、libxml2、OpenSSL
+================================================================================
+
+W-7b 固定 `samael 0.0.22` + xmlsec feature。运行时闭包与原件摘要：
+
+  samael 0.0.22  : MIT；crate LICENSE 1,070 B，SHA-256
+                   0544f2095045dd6f52fff94000333399cd4fe2dcd6a50659a0a55e4d2b543334
+  xmlsec 1.3.12  : MIT；Copyright 7,333 B，SHA-256
+                   a6d217151f3d423e06639c075bad8e442ea1936828d3a660105122ef78ecd96d
+  libxml2 2.15.3 : MIT；Copyright 1,314 B，SHA-256
+                   5d4873884a890122a4b9b20ad56ac6f7da1d796a5bfcf04a427970ac96217626
+  OpenSSL 3.6.3 : Apache-2.0；原件与全文见 §4.5。
+
+samael 原件：
+
+    MIT License
+
+    Copyright (c) 2020 Nathan Jaremko
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+libxml2 原件：
+
+    Except where otherwise noted in the source code (e.g. the files dict.c and
+    list.c, which are covered by a similar licence but with different Copyright
+    notices) all the files are:
+
+     Copyright (C) 1998-2012 Daniel Veillard.  All Rights Reserved.
+     Copyright (C) The Libxml2 Contributors.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is fur-
+    nished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FIT-
+    NESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+xmlsec/xmlsec-openssl 原件中与本闭包相关的一节：
+
+    ------------------------------------------------------------------------------
+    xmlsec, xmlsec-openssl, xmlsec-gnutls, xmlsec-gcrypt libraries
+    ------------------------------------------------------------------------------
+
+    Copyright (C) 2002-2026 Aleksey Sanin <aleksey@aleksey.com>. All Rights Reserved.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is fur-
+    nished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FIT-
+    NESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+    ALEKSEY SANIN BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+    IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CON-
+    NECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+    Except as contained in this notice, the name of Aleksey Sanin shall not
+    be used in advertising or otherwise to promote the sale, use or other deal-
+    ings in this Software without prior written authorization from him.
+
+================================================================================
+7. 待补全清单（发布前检查表）
+================================================================================
+
+| # | 项目 | 当前状态 | 解除条件 |
+|---|---|---|---|
+| 7.1 | Apache-2.0 许可证全文（§4.5） | **已闭合** | W-7b 从 OpenSSL 3.6.3 原件逐字嵌入 |
+| 7.2 | Grok Build 的 Codex/OpenCode 来源回溯（§4.2） | 未做 | 上游无 NOTICE，须逐文件自行回溯并写进 §4.2 |
+| 7.3 | rmcp 逐文件许可判定（§4.3） | 未做 | 复制其任一源码文件之前完成；仅作 crate 依赖时不触发 |
+| 7.4 | Chromium / Node / FFmpeg credits（§5） | 未取 | 打包腿产出发行物后，从随包构建内部取出并原样交付 |
+| 7.5 | Steel Browser / CDP 来源钉版（§6） | 未定 | delta audit 钉死仓库+commit+许可证并登记进 SPDX |
+| 7.6 | AG-UI 版权行权利人 | 不完整 | 见下方说明 |
+| 7.7 | Node.js 许可证 | 未取证 | 见下方说明 |
+
+7.6 AG-UI 版权行不完整
+  ag-ui-protocol/ag-ui @ e42bdbedc27cdf982ed9b5de904215acd73a17fb 的 LICENSE 是
+  标准 MIT，但版权行逐字为 `Copyright (c) 2025` —— **只有年份，没有权利人姓名**。
+  该原文没有指定姓名，不得自行用package作者名补成版权人。协议fixture已保存
+  0.0.57版本的官方schema资料，根MIT原文逐字保留于下方§10及fixture目录。
+  版权归属文字的进一步确认仍为G8事项，不因协议fixture通过而标为完成。
+
+7.7 Node.js 许可证未取证
+  本轮只从 Electron release body 确认了版本号 24.18.1，**没有**拉取 Node 的
+  LICENSE，因此 SPDX 中该 package 的 license 与 copyright 字段均为 NOASSERTION。
+  解除条件同 §5：从随包的那份 Electron 构建内部取出 Node 的声明。
+
+
+================================================================================
+8. 已登记但不随包的来源
+================================================================================
+
+下列组件已在 `provenance/sources.spdx.json` 登记，但**不进本项目的发行包**，
+因此不在本文件产生随包声明义务。列在这里是为了让「NOTICE 里没有它」这件事
+是一条有据可查的裁决，而不是一次遗漏：
+
+  - PostgreSQL 17（PostgreSQL 许可）：外部数据库服务，由部署方自行安装。
+  - Rust 工具链 1.94.1（Apache-2.0 OR MIT）：构建期。
+  - Tailwind CSS standalone CLI 4.3.3（MIT）：构建期，见 `tools/pins.toml`。
+  - trunk 0.21.14（MIT OR Apache-2.0）：构建期。
+  - binaryen / wasm-opt version_132（Apache-2.0）：构建期，另见 §4.4。
+  - wasm-bindgen CLI：构建期；版本随 `Cargo.lock`，当前 lock 中尚无该包。
+
+  ⚠️ Rust **依赖 crate**（tauri / leptos 生态 / cel / openidconnect / samael /
+     pulldown-cmark / syntect / sys-locale / image / xcap / rmcp 等）是另一回事：
+     它们会被静态链接进发行物，**必须**随包声明。本文件不手工逐条列出一般 crate；
+     当前 Cargo.lock 已包含业务依赖，`webpki-roots` 因新增数据许可与逐字随附义务在 §6A
+     单独展开，其余由发行 SBOM 从 lock 机械生成。
+     补全条件：依赖真正进入 lock 后，由 v3 §16.3 的 SBOM 步骤（CycloneDX/SPDX）
+     从 lock 机器生成完整依赖声明并附于发行包；本文件届时改为索引那份生成结果，
+     而不是手工维护一张会漂移的表。
+
+================================================================================
+维护规则
+================================================================================
+
+1. 本文件与 `provenance/sources.spdx.json` 必须同 PR 修订。SPDX 是真源，
+   本文件是投影。
+2. 新增任何第三方来源，必须同时：登记进 SPDX（含固定版本/commit + 校验和 +
+   取证记录）、在本文件加声明位或正文、更新第 7 节清单。
+3. 任何「待补全」项都必须写出**可判定的解除条件**。写不出解除条件的待补全项，
+   等于永远不会被补全。
+4. 禁止在本文件中写入未经本轮实际取回的许可证正文。缺就是缺，写清楚缺什么。
+5. 本仓 public：本文件不得出现内部路径、私有 URL、凭据或真账号样本。
+
+================================================================================
+10. AG-UI 0.0.57 官方schema资料
+================================================================================
+
+来源：ag-ui-protocol/ag-ui @ 54f13419055b4d0f442c71e1efab18b310982ce1。
+仅保留用于离线协议fixture的六份官方文件，文件清单与逐字节摘要在
+fixtures/agui/official-event-family.provenance.json；不作为TypeScript/Node生产依赖。
+本地package-manifest.json只是上游package.json的原始字节改名，不参与构建。
+下列为同commit的LICENSE原文。版权行缺少姓名的进一步确认仍见§7.6，不自行补造。
+
+MIT License
+
+Copyright (c) 2025
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

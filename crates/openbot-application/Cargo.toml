@@ -1,0 +1,66 @@
+[package]
+name = "openbot-application"
+description = "所有 use case 的唯一入口（v3 §5.1 / §5.2）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# 输入类型（ID / AuthContext / AppCommand / AppReply / AppError / 关联字段）。
+openbot-contracts.workspace = true
+# §8.1 的类型状态机、metadata、policy/approval 与 commit_state 都是纯领域类型；application
+# 负责按固定顺序编排它们，不在 port 实现里另造第二条管线。
+openbot-domain.workspace = true
+
+# §5.2 的两个方法是 `async fn` 且必须对象安全（transport 持有 `dyn ApplicationService`），
+# edition 2024 的 AFIT 仍不给对象安全，所以走 `async_trait`。
+async-trait.workspace = true
+
+# `PortError` 的错误分层。
+thiserror.workspace = true
+
+# 游标载荷（`{recency, id}`）的编解码。
+serde = { workspace = true }
+serde_json.workspace = true
+# Tenant Package 五份 YAML 的纯解析/校验；文件 I/O 留在 infra。版本已由 xtask 台账解析钉住，
+# 本批只增加 application 的直接依赖边，不新增 package/许可面。
+serde_yaml.workspace = true
+sha2.workspace = true
+
+# 排序键 `coalesce(last_message_at, created_at)` 的类型，以及游标里的 RFC 3339 时间戳。
+time.workspace = true
+url.workspace = true
+
+# 心跳订阅的节拍源（`tokio::time::Interval`）。
+tokio.workspace = true
+
+# v3 §16.4：tracing 是全链真源。**只依赖 facade，不依赖 subscriber** —— 库把 subscriber
+# 拉进生产依赖图等于替二进制决定日志去向，而 §16.4 把 exporter 的开关交给管理员配置。
+tracing.workspace = true
+
+# ---------------------------------------------------------------------------
+# 下面两条**不走 `[workspace.dependencies]`**，需要reviewer复核后上收到仓根（见交付报告）。
+# 两者此刻都已经在 `Cargo.lock` 的依赖图里（`futures-core` 经 tokio-util ← tokio-postgres，
+# `base64` 经 postgres-protocol ← tokio-postgres），所以直接依赖它们**不新增任何 crate**、
+# 不新增下载、不新增许可面（两者均 `MIT OR Apache-2.0`，命中 deny.toml 白名单）。
+# 版本号逐字等于 `Cargo.lock` 里已解析出的版本，不是猜的。
+# ---------------------------------------------------------------------------
+
+# `AppEventStream` 的 `Stream` trait。选型理由见 `service::AppEventStream` 的类型文档。
+futures-core.workspace = true
+
+# 游标的不透明包装：`base64url(JSON)`。选型理由见 `cursor` 模块文档。
+base64.workspace = true
+
+[dev-dependencies]
+# `AuthContext::for_test` 只在 `testkit` feature 下存在（contracts 默认关，生产 feature 图
+# 里拿不到它）。这里只在 dev 侧打开：feature 是可加的，生产构建不受影响。
+openbot-contracts = { workspace = true, features = ["testkit"] }
+
+# span 捕获层。**只在 dev 侧** —— 见上面 `tracing` 那条的理由。
+tracing-subscriber.workspace = true

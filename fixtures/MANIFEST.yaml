@@ -1,0 +1,741 @@
+schema: fixtures
+schema_version: 1
+upstream_commit: 891df72f1827454d8b353d108fe5dd2313b7e30d
+generated_by: manual
+recount:
+- command: python3 -c "import yaml,io;d=yaml.safe_load(io.open('fixtures/MANIFEST.yaml',encoding='utf-8'));print(len(d['entries']))"
+  cwd: repo
+  expect: 60
+- command: python3 -c "import yaml,io;d=yaml.safe_load(io.open('fixtures/MANIFEST.yaml',encoding='utf-8'));print(sum(1
+    for e in d['entries'] if e['status']=='todo'))"
+  cwd: repo
+  expect: 20
+- command: python3 -c "import yaml,io;d=yaml.safe_load(io.open('fixtures/MANIFEST.yaml',encoding='utf-8'));print(sum(1
+    for e in d['entries'] if e['status']=='done'))"
+  cwd: repo
+  expect: 40
+- command: python3 -c "import yaml,io;d=yaml.safe_load(io.open('fixtures/MANIFEST.yaml',encoding='utf-8'));e=d['entries'];assert
+    all(('done_evidence' in x)==(x['status']=='done') for x in e);print('ok')"
+  cwd: repo
+  expect: ok
+- command: python3 -c "import yaml,io;d=yaml.safe_load(io.open('fixtures/MANIFEST.yaml',encoding='utf-8'));t=[x['test_id']
+    for x in d['entries']];print(len(t),len(set(t)))"
+  cwd: repo
+  expect: 60 60
+- command: python3 -c "import yaml,io;d=yaml.safe_load(io.open('fixtures/MANIFEST.yaml',encoding='utf-8'));print(sum(1
+    for e in d['entries'] if e['label']=='parity'),sum(1 for e in d['entries'] if e['label']=='新增'),sum(1 for e
+    in d['entries'] if e['label']=='替代'))"
+  cwd: repo
+  expect: 10 50 0
+entries:
+- id: policy-cel-corpus
+  upstream: server/src/computer/policy.ts::POLICY_FUNCTIONS
+  label: parity
+  target: fixtures/policy/cel-corpus.json -> openbot_domain::policy::cel
+  owner: openbot-domain
+  test_id: T-FIX-0001
+  migration_rule: 'preserve: 表达式、context 与结果类别逐条保留；Rust 引擎注册同名同签名同大小写语义的 contains / matches 两个全局函数'
+  status: done
+  evidence: node gen-corpus.mjs（cel-js@0.8.2 实测 69 条），jq '.entries | length' fixtures/policy/cel-corpus.json =>
+    69
+  done_evidence: fixtures/policy/cel-corpus.json；69 条 entry 的 result_class 与 engine_raw 全部由 cel-js@0.8.2 实跑产出（true
+    35 / false 15 / error 19），非手写；6 条 measured_findings 各带正向对照
+- id: ui-seed
+  upstream: app/src/routes
+  label: parity
+  target: fixtures/ui/seed.json -> openbot_testkit::fake::ApplicationService
+  owner: openbot-testkit
+  test_id: T-FIX-0002
+  migration_rule: 'n/a: 新造的确定性数据集，不是上游数据的迁移'
+  status: done
+  evidence: grep -rhoE 'createFileRoute\(\s*$|createFileRoute\("[^"]*"' app/src/routes | wc -l => 30（减 4 个纯布局 route
+    = 26 页），jq '.pages_covered | length' fixtures/ui/seed.json => 27
+  done_evidence: fixtures/ui/seed.json；25 张实体表共 95 行 + native 段 10 条消息 + runtime_views；pages_covered 27 条逐页标 label
+    与 seed_keys
+- id: ui-golden-manifest
+  upstream: '-'
+  label: 新增
+  target: fixtures/ui/golden/MANIFEST.toml -> openbot_testkit::golden
+  owner: openbot-testkit
+  test_id: T-FIX-0003
+  migration_rule: 'n/a: 上游没有视觉 oracle'
+  status: done
+  evidence: python3 -c "import tomllib,pathlib;d=tomllib.loads(...);print(sum(m['count'] for m in d['matrix']))"
+    => 245；len(d['matrix']) => 4；fonts bytes sum => 740216
+  done_evidence: fixtures/ui/golden/MANIFEST.toml v2；seed-derived exact 245-path inventory、4条matrix、3条bundle预算（CSS
+    128KiB/120KiB warning）、mask清单为空；openbot-testkit RGBA core=18/0/0，xtask PNG/manifest/diff gate=7/0/0；check-manifest实得matrix245/masks0/ready=false，formal
+    inventory对空目录/仅数量对但错名及verify对TBD provenance均保持红
+- id: db-schema-0012
+  upstream: server/drizzle/0000_schema.sql .. server/drizzle/0012_truncate_is_not_a_way_around_append_only.sql
+  label: parity
+  target: fixtures/db/schema-0012.json -> openbot_infra::db::baseline
+  owner: openbot-infra
+  test_id: T-FIX-0027
+  migration_rule: 'preserve: Rust baseline 建出的库必须与走完 13 条 migration 的库 schema 事实逐字段相等；兼容期只允许 expand（v3 §14.3）'
+  status: done
+  evidence: PostgreSQL 17.11 实跑 baseline_0012.sql 成功；pg_catalog 实测 28 表 / 204 列（153 列 NOT NULL）/ 59 约束 / 44 索引 /
+    2 触发器 / 4 enum / 1 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0012.json（2233 行，sort_keys 规范化）；与 PostgreSQL 17.11 活库提取结果逐字节规范化相等；表名集合与 parity/tables.yaml
+    的 28 条上游表条目双向差集为空
+- id: db-schema-0013
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0013.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0029
+  migration_rule: 'n/a: Rust-owned expand-only 0013 的 post-migration schema 事实；不改写上游 0012 oracle'
+  status: done
+  evidence: PostgreSQL 17.11 上 baseline_0012.sql → native_0013.sql → schema_facts.sql 实跑；31 表 / 248 列 / 93 约束 /
+    53 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0013.json（2786 行，sort_keys 规范化）；真库测试 post_0013_fixture_is_exact_and_every_0012_object_survives
+    逐字段相等并逐对象证明 0012 是 0013 子集
+- id: db-schema-0014
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0014.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0030
+  migration_rule: 'n/a: W-3 前置的 expand-only user auth generation；旧 NULL 按 generation 0 读取'
+  status: done
+  evidence: PostgreSQL 17.11 上 0013 → native_0014.sql → schema_facts.sql 实跑；31 表 / 249 列 / 94 约束 / 53 索引 / 4 触发器
+  done_evidence: fixtures/db/schema-0014.json（2798 行，sort_keys 规范化）；post_0014_is_exact_expand_only_and_null_legacy_generation_is_zero_floor
+    逐字段相等，users 只追加一个 nullable bigint；双 replica 实得 Applied + AlreadyApplied
+- id: db-schema-0015
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0015.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0031
+  migration_rule: 'n/a: W-4 session 签发代际；旧 Better Auth session 统一重新登录'
+  status: done
+  evidence: PostgreSQL 17.11 上 0014 → native_0015.sql → schema_facts.sql 实跑；31 表 / 250 列 / 95 约束 / 53 索引 / 4 触发器
+  done_evidence: fixtures/db/schema-0015.json（sort_keys 规范化）；post_0015_is_exact_expand_only_and_legacy_sessions_remain_unclaimed
+    逐旧列相等，sessions 只追加一个 nullable bigint；双 replica 实得 Applied + AlreadyApplied
+- id: db-schema-0016
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0016.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0032
+  migration_rule: 'n/a: G3 native thread/realtime/memory 十表的 expand-only post-migration 事实'
+  status: done
+  evidence: PostgreSQL 17.11 上 baseline_0012.sql → native_0013..0016.sql → schema_facts.sql 实跑；41 表 / 351 列 / 268
+    NOT NULL / 181 约束 / 80 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0016.json（4195 行，SHA-256 3a9ca0e2292e25171785c526047c279291c1671a357195b603efa2b998616877）；native_0016
+    PG17/SCRAM 3/0/0，post fixture 逐字段相等、0015 每个旧列保留、双 replica Applied+AlreadyApplied
+- id: db-schema-0017
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0017.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0033
+  migration_rule: 'n/a: G4 RMCP catalog generation/stale grant 与跨 replica tool sequence 的 expand-only post-migration
+    事实'
+  status: done
+  evidence: PostgreSQL 17.11 SCRAM 上 baseline_0012.sql → native_0013..0017.sql → schema_facts.sql 由 guarded test
+    机械生成；41 表 / 366 列 / 268 NOT NULL / 197 约束 / 80 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0017.json（4340 行，SHA-256 c2e85542c72a623ad7b0b3f8dc165317dfbcb91119b19a7d836ac7b711607000）；native_0017
+    PG17/SCRAM 2/0/0，逐旧列证明 0016 子集、legacy NULL 保留、partial/invalid projection 被具名 CHECK 拒绝
+- id: db-schema-0018
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0018.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0034
+  migration_rule: 'n/a: G4 MCP deployment credential generation 进入 server/grant identity 的 expand-only post-migration
+    事实'
+  status: done
+  evidence: PostgreSQL 17.11 SCRAM 上 baseline_0012.sql → native_0013..0018.sql → schema_facts.sql 由 guarded test
+    机械生成；41 表 / 368 列 / 268 NOT NULL / 199 约束 / 80 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0018.json（4364 行，SHA-256 3226eefb20d536c206b5d75522a77f6f82981f820fd5a414086871c21be75ebe）；native_0018
+    PG17/SCRAM 2/0/0，逐旧列证明 0017 子集、legacy NULL 保留、server/grant 负 generation 被具名 CHECK 拒绝
+- id: db-schema-0019
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0019.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0035
+  migration_rule: 'n/a: G4 MCP/Google Drive 封闭 vendor transport identity 的 expand-only post-migration 事实'
+  status: done
+  evidence: PostgreSQL 17.11 SCRAM 上 baseline_0012.sql → native_0013..0019.sql → schema_facts.sql 由 guarded test
+    机械生成；41 表 / 369 列 / 268 NOT NULL / 200 约束 / 80 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0019.json（4376 行，SHA-256 8e0170ca5893c86d7131c01f62a93ea84caf371bfae2fe6d2e4f4edd8060d4d1）；native_0019
+    PG17/SCRAM 2/0/0，逐旧列证明 0018 子集、legacy NULL 保留并读取为 MCP、未审查 transport 被具名 CHECK 拒绝
+- id: db-schema-0020
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0020.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0036
+  migration_rule: 'n/a: G4 durable human approval 与 tool decision approval identity 的 expand-only post-migration
+    事实'
+  status: done
+  evidence: PostgreSQL 17.11 SCRAM 上 baseline_0012.sql → native_0013..0020.sql → schema_facts.sql 由 guarded test
+    机械生成；42 表 / 398 列 / 291 NOT NULL / 217 约束 / 85 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0020.json（4694 行，SHA-256 2ccf7193c936d140837dcc9d271e1520fd6924e902920ed97549b81f1a6f3ffe）；native_0020
+    PG17/SCRAM 2/0/0，逐旧列证明 0019 子集、pending/resolved shape/effect/class/generation/time/FK 负例与 actor cascade
+- id: db-schema-0021
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0021.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0037
+  migration_rule: 'n/a: G6 actor/deployment/tenant scoped UI theme/locale preference 的 expand-only post-migration
+    事实'
+  status: done
+  evidence: PostgreSQL 17.11 SCRAM 上 baseline_0012.sql → native_0013..0021.sql → schema_facts.sql 由 guarded test
+    机械生成；43 表 / 404 列 / 295 NOT NULL / 222 约束 / 86 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0021.json（4775 行，SHA-256 fab4e148cb4f847e2f7079eae95b158ff7d4d0ed740ca2007fbb2de8ab7e3531）；native_0021
+    PG17/SCRAM 2/0/0，逐旧列证明 0020 子集、并发 partial merge、三维 scope 隔离、closed CHECK 与 actor cascade
+- id: db-schema-0022
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0022.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0038
+  migration_rule: 'n/a: G3 actor/tenant scoped runtime memory-write control 的 expand-only post-migration 事实'
+  status: done
+  evidence: PostgreSQL 17.11 SCRAM 上 baseline_0012.sql → native_0013..0022.sql → schema_facts.sql 由 guarded test
+    机械生成；44 表 / 408 列 / 299 NOT NULL / 225 约束 / 87 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0022.json（4832行，SHA-256 f7dfda29296bb67f08bfa1c514b376a14dd403eb2f87ced26569d19614c5ee25）；regeneration开启与关闭各1/0/0，逐旧列证明0021子集，native
+    ledger恰10；PG memory control 3/0/0覆盖默认enabled、GUI/tool/correct写拒绝、forbid/delete不受阻、重启等价持久化、跨tenant隔离与重新启用。
+- id: db-schema-0023
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0023.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0039
+  migration_rule: 'n/a: G6 compiled useHumanInTheLoop durable state 的 expand-only post-migration 事实'
+  status: done
+  evidence: PostgreSQL 17.11 SCRAM 上 baseline_0012.sql → native_0013..0023.sql → schema_facts.sql 由 guarded test
+    机械生成；45 表 / 428 列 / 316 NOT NULL / 243 约束 / 91 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0023.json（5088行，SHA-256 489c0ac781baf4efc12e4a23bd28a1d37a716b54a996fcbe7737dc7acb376e5b）；regeneration开启与关闭各1/0/0，逐旧列证明0022子集，native
+    ledger恰11；PG human decision1/0/0覆盖request/list/answer/wait/replay/conflict/expiry/generation cancel与双audit rollback。
+- id: db-schema-0024
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0024.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0040
+  migration_rule: 'n/a: G4 run-wide normalized provider token accounting 的 expand-only post-migration 事实'
+  status: done
+  evidence: PostgreSQL 17.11 本机隔离实例上 baseline_0012.sql → native_0013..0024.sql → schema_facts.sql 机械生成；45 表 / 437
+    列 / 320 NOT NULL / 246 约束 / 91 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0024.json（5166行，SHA-256 349ff3f9573ee97cd588d717ea107d3b3ed1c5cf677ff75dc637b4e104de1031）；regeneration开启与关闭各1/0/0，逐旧列证明0023子集，native
+    ledger恰12；PG usage 1/0/0覆盖跨sampling累加、exact replay、异值/跳号/cap漂移 conflict、超预算sampling仍如实记账并返回稳定BudgetExceeded、failed/run_token_budget_exceeded与terminal
+    lease拒绝。
+- id: db-schema-0025
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0025.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0041
+  migration_rule: 'n/a: G4 operator-attested maximum provider rate snapshot 与 exact run cost upper bound 的 expand-only
+    post-migration 事实'
+  status: done
+  evidence: PostgreSQL 17.11 本机隔离实例上 baseline_0012.sql → native_0013..0025.sql → schema_facts.sql 机械生成；45 表 / 447
+    列 / 320 NOT NULL / 247 约束 / 91 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0025.json（5241行，SHA-256 f72fe00b7bf2690786d7810bfa0d9481da0ea325a6f896ff56f152a14d8094cc）；regeneration开启与关闭各1/0/0，逐旧列证明0024子集，native
+    ledger恰13；PG usage/cost覆盖currency+maximum-rate snapshot exact replay、异值漂移conflict、跨sampling上界余数carry、超限仍记账及无rate时保持NULL/unpriced。
+- id: db-schema-0026
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0026.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0042
+  migration_rule: 'n/a: G4 actor-scoped currency-bound per-run cost cap 与 immutable run snapshot 的 expand-only post-migration
+    事实'
+  status: done
+  evidence: PostgreSQL 17.11 本机隔离实例上 baseline_0012.sql → native_0013..0026.sql → schema_facts.sql 机械生成；46 表 / 455
+    列 / 326 NOT NULL / 253 约束 / 92 索引 / 4 触发器 / 4 enum / 1 public 函数 / 0 extension
+  done_evidence: fixtures/db/schema-0026.json（5341行，SHA-256 ad5375da9abc5d03f1fa9587f5efda3e76e2cb89edf470e3bc4650a58670ba2c）；regeneration开启与关闭各1/0/0，逐旧列证明0025子集，native
+    ledger恰14；PG runtime 2/0/0覆盖actor三轴隔离、full replace/delete、run创建冻结、偏好后改不漂移、cap/rate币种拒绝、cost overage与exact replay。
+- id: db-schema-0027
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0027.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0043
+  migration_rule: 'n/a: G4 AG-UI reasoning 只保留到 run terminal 的具名隐私数据回填；schema 本身不变'
+  status: done
+  evidence: PostgreSQL 17.11 本机隔离实例上 baseline_0012.sql → native_0013..0027.sql → schema_facts.sql 机械生成；与0026逐字节相同，仍为46表/455列/326
+    NOT NULL/253约束/92索引/4触发器/4 enum/1 public函数/0 extension
+  done_evidence: fixtures/db/schema-0027.json（5341行，SHA-256 ad5375da9abc5d03f1fa9587f5efda3e76e2cb89edf470e3bc4650a58670ba2c）；regeneration开启与关闭各1/0/0，native
+    ledger恰15；PG数据证据覆盖四种历史终态reasoning固定无内容marker、active run原值保留、text/事件身份/sequence/terminal/time逐项不变与账本exact replay。
+- id: db-schema-0028
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0028.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0044
+  migration_rule: 'n/a: G4 AG-UI interrupt/resume actor-scoped durable state与terminal scrub的expand-only post-migration事实'
+  status: done
+  evidence: PostgreSQL 17.11本机隔离实例上baseline_0012.sql → native_0013..0028.sql → schema_facts.sql机械生成；47表/477列/342
+    NOT NULL/268约束/97索引/4触发器/4 enum/1 public函数/0 extension
+  done_evidence: fixtures/db/schema-0028.json（5600行，SHA-256 7c6c2351a113423357705e67412679fede1dcdde59cfe19dc77ef8cd2e6d4a2f）；regeneration开启与关闭各1/0/0，逐旧列证明0027子集，native
+    ledger恰16；PG coordinator与SafeDialer纵向证明actor隔离、exact resume lineage、audit-before-second-request及terminal descriptor/response
+    scrub。
+- id: db-schema-0029
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/schema-0029.json -> openbot_infra::db::native
+  owner: openbot-infra
+  test_id: T-FIX-0045
+  migration_rule: 'n/a: custom MCP private-egress exact CIDR authority的expand-only post-migration事实'
+  status: done
+  evidence: PostgreSQL 17.11本机隔离实例上baseline_0012.sql → native_0013..0029.sql → schema_facts.sql机械生成；47表/478列/342
+    NOT NULL/269约束/97索引/4触发器/4 enum/1 public函数/0 extension
+  done_evidence: fixtures/db/schema-0029.json（5612行/162098字节，SHA-256 c661463f04f2bd38c308191697b6f84625fb091c8089e1fc7b1e42a453e7e4dc）；regeneration开启与关闭各1/0/0，逐旧列证明0028子集，native
+    ledger恰17；first-party携CIDR由数据库约束拒绝。真实TLS RMCP+PG纵向证明默认loopback拒绝、显式127.0.0.1/32成功、CIDR/credential变化使旧grant suspended、旧credential退役，删除server/tool/grant与新credential退役同事务且四次configuration.changed均有row_hash。
+- id: provider-openai-responses-recorded-trace
+  upstream: openai/openai-dotnet@19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5::ResponsesToolTests/FunctionToolStreamingWorks
+  label: 新增
+  target: fixtures/provider/openai-responses-function-tool-stream.sse -> openbot_infra::provider::openai
+  owner: openbot-infra
+  test_id: T-FIX-0046
+  migration_rule: 'n/a: v4 §24 G4 provider gate 的 OpenAI Responses 官方 recorded vendor trace'
+  status: done
+  evidence: OpenAI官方openai-dotnet固定commit 19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5的RecordedTest session record；原JSON
+    13211 bytes、git blob 3272bc4116a32b4472d21f68b41ce23ce363c02c、SHA-256 ff7fadb3baabc1fd1fc482fe9ec28ba93d5a899b961cce73bf19f8d9c1fe20b8；Entries[0].ResponseBody
+    36段逐字节拼接为9070 bytes
+  done_evidence: fixture SHA-256 fe38a7a044f8de33d441d0c9bf426e1291b1401bb9099ef419f62651b50d2927且与官方ResponseBody逐字节cmp相等；production
+    OpenAiProvider→SafeDialer→chunked SSE integration=1/0/0，整块/非规则/逐字节分块normalized events一致，12段tool args、usage=85/13/98、唯一Completed、坏body
+    canary不泄漏；provider unit=7/0/0（含done改名/索引漂移/全程无name三条fail-closed回归）
+- id: mcp-run-protocol-cancellation
+  upstream: '-'
+  label: 新增
+  target: fixtures/mcp/rmcp-run-cancellation.json -> openbot_agent::runtime + openbot_infra::mcp
+  owner: openbot-agent
+  test_id: T-FIX-0047
+  migration_rule: 'n/a: v4 §7.4/§9.1 Rust-owned run cancellation向RMCP tools/list与tools/call传播的协议级安全闭包'
+  status: done
+  evidence: closed fixture固定MCP Streamable HTTP四态：信号已存在时socket=0；2026-07-28 fresh tools/list与tools/call取消均关闭exact
+    request response stream且notifications/cancelled POST=0；自动降级2025-11-25时tools/call发送带exact requestId的notifications/cancelled；post-send
+    call始终按unknown进入reconciliation
+  done_evidence: fixture=1111 bytes/SHA-256 ec9644f41e8b0773e0983efa52179eef1e32387b2bbd0ec69101afd4874e6b56；Application
+    cancellation registry=1/0/0；Agent user/deadline cooperative stop=2/0/0且child stopped先于reconciliation terminal；RMCP非PG=8/0/3
+    ignored，PG17.11 SCRAM+official RMCP server完整=11/0/0。modern list/call均协作停止且protocol=2026-07-28、notification POST=0；legacy
+    fallback记录protocol=2025-11-25、reason=run_cancelled与非空requestId；call取消后tool_attempt=reconciliation_required/unknown/mcp_cancelled_after_call，mcp.call_failed=1、success=0、registry残留0；pre-cancel
+    socket accept=0
+- id: browser-runtime-budget
+  upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/browser-eviction.ts+profiles.ts
+  label: 新增
+  target: fixtures/computer/browser-runtime-budget.json -> openbot_computer::browser::eviction + openbot_computer::manager
+  owner: openbot-computer
+  test_id: T-FIX-0048
+  migration_rule: 'preserve: fixed LRU/idle behavior + strengthen with full ComputerSecurityScope, generation fencing,
+    active-lease refusal and owned-driver retirement'
+  status: done
+  evidence: closed fixture固定max=8、idle=1800000ms与七类runtime case；13条固定上游selector测试逐项相等，manager另证同scope并发冷启动1次、非活动LRU实际close、all-leased
+    effect前busy、idle inclusive且跳过lease、generation/stale/collision、launch rollback、shutdown
+  done_evidence: fixture=1579 bytes/SHA-256 1dc491809ec8f7b84919349f492cfbff955ce034923ccc4b15858aea5c6e53ce；openbot-computer=43/0/2
+    ignored，其中selector=15/0/0、manager=10/0/0；all-target/all-feature locked Clippy -D warnings与fmt绿。BrowserInstance按完整ComputerSecurityScope
+    digest+ComputerId+generation绑定，driver handle由manager独占；cap/idle只选leases=0项，全部在用时computer_runtime_busy且extra
+    launch=0；launch失败恢复预留victim；Display/Debug只出stable code不出driver canary
+- id: browser-cdp-input-plan
+  upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/screencast.ts
+  label: 新增
+  target: fixtures/computer/cdp-input-plan.json -> openbot_computer::browser::cdp_input
+  owner: openbot-computer
+  test_id: T-FIX-0049
+  migration_rule: 'preserve: fixed BrowserInput→CDP parameter mapping, including all 17 named virtual-key codes
+    and unknown multi-UTF-16 fallback 0'
+  status: done
+  evidence: 固定上游screencast.ts=6906 bytes、Git blob 9bc27c11fc1b4cd296f7fc9df412aea0bedbbb22、SHA-256 be79bde5007f03f37e3b99a1ef1388ba672d684ba32ec2b9090c417f9f47f566；VIRTUAL_KEY_CODES逐项17条且包含空格→32，未知多UTF-16单元键返回0
+  done_evidence: fixtures/computer/cdp-input-plan.json=1315 bytes/SHA-256 e6cf14b947d86cd2bc458adc27b75272b619cc90c4f41558c0a3b1438424463f，与openbot-computer
+    cdp_input 11条单测机械join；move/down/up/wheel、keyDown/rawKeyDown/keyUp、17键表、single-unit uppercase首UTF-16 unit、unknown
+    multi-unit=0、insertText与SecretInsert ordinary-plan拒绝均通过；完整openbot-computer lib=54/0/0
+- id: browser-engine-input-wire-v2
+  upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/screencast.ts
+  label: 新增
+  target: fixtures/computer/engine-input-wire-v2.json -> openbot_computer::engine::EngineProcess::apply_human_input
+  owner: openbot-computer
+  test_id: T-FIX-0050
+  migration_rule: 'preserve: execute the closed BrowserInput CDP plan behind fresh HumanLease authority; version
+    the incompatible engine wire and strengthen with exact frame/effect evidence'
+  status: done
+  evidence: protocol/release epoch 2生成hash ef213bb4d8f9f66b0854ef4feb9a7718de5bae139348320ed3fe8f6641b9bdf6；macOS
+    arm64官方Electron zip=122102881 bytes/SHA-256 ee939d1564d83d61032b3b3cb23af4e46005a4900c91f0695f7ed793f0ce6e83；bundle
+    ASAR=22819 bytes/header SHA-256 cb289d04fc42ba59622590c0f699933d3b55c4361a39ae92670a056c105a5063/fuses=000011001
+  done_evidence: fixture=1764 bytes/SHA-256 f8529f5950f0482e2cb3388899bcab86143dac50475499fe3bcf20808d8a9810；BrowserComputer与SandboxedComponent两真实Seatbelt
+    Electron role include-ignored=2/0/0：fresh non-Clone receipt后逐项执行mouseMoved/Pressed/Released、wheel、keyDown/rawKeyDown/keyUp、insertText；operation-bound
+    input ACK与独立frame channel分离，hover/active/text/Backspace/scroll截图SHA变化，unknown F1 code0成功。cross-scope、expiry
+    exact边界与SecretInsert ordinary path均frame0且后续session继续；主/后代TCP LISTEN0，shutdown PID/profile lock0。fixture自身default
+    test=1/0/0
+- id: screen-hub-ticket-core-v1
+  upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/index.ts::serve.websocket
+  label: 新增
+  target: fixtures/computer/screen-hub-ticket-core-v1.json -> openbot_computer::screen::ScreenHub
+  owner: openbot-computer
+  test_id: T-FIX-0051
+  migration_rule: 'preserve: latest screen stream and human viewer behavior; replace the shared JSON/base64 socket
+    with actor-scoped generation-bound tickets and a shared binary latest-frame core'
+  status: done
+  evidence: v4 §12.2–§12.4/§12.6；ScreenHub只接受EngineProcess一次性EngineScreenSource；ticket用OS CSPRNG 16 bytes、固定30秒、仅存SHA-256
+    digest，绑定tenant/actor/auth generation/stream/origin与Desktop window generation；viewer binary不含scope/computer/tab/ticket/CDP
+    session
+  done_evidence: fixture=2368 bytes/SHA-256 8559fec9d7442990a0e416a09c2b5e86d54799559c6ba39902c94b3d36f4c83f；openbot-computer
+    screen单测=2/0/0；macOS arm64官方Electron 43.3.0 BrowserComputer与SandboxedComponent两真实Seatbelt role各接同一ScreenHub双viewer，include-ignored
+    conformance role=2/0/0：两viewer下一帧sequence相等且Arc同一分配，错误actor发票拒绝、错误binding不烧票、ticket replay拒绝、auth generation推进后双viewer关闭；sole
+    source二次领取拒绝；viewer cap含pending ticket
+- id: screen-coordinate-input-journey-v1
+  upstream: ChromeDevTools/devtools-frontend@036dd84bc4fdfb0fd4be2a5ddb3fe37ef24939cd:front_end/panels/screencast/InputModel.ts+ScreencastView.ts
+  label: 新增
+  target: fixtures/computer/screen-coordinate-input-journey-v1.json -> openbot_computer::screen::coordinates
+  owner: openbot-computer
+  test_id: T-FIX-0052
+  migration_rule: 'n/a: v4 §12.5/§12.6 adds a fail-closed viewer canvas/DPI/zoom/scroll coordinate boundary and
+    requires completed-IME plus down-move-up journeys'
+  status: done
+  evidence: Chrome DevTools Protocol官方定义：screencast deviceWidth/Height为DIP、pageScale独立、scrollOffset为CSS px；dispatchMouseEvent点/轮滚为viewport
+    CSS px；Input.insertText明确覆盖emoji keyboard或IME。官方DevTools commit 036dd84b的InputModel blob cfa97617/3982 bytes仅以screenZoom转换Input坐标/轮滚，ScreencastView
+    blob 978df09a/38774 bytes只在DOM hit-test把viewport除pageScale再加scroll。Rust contain映射据此拒letterbox/坏比例/非finite/零尺寸，携exact
+    frame sequence并分开viewport/document坐标
+  done_evidence: fixture=2707 bytes/SHA-256 8a03fd6842ed19466519fb3f3f264253c8a43f9b3d1fdbd885f88c4b802714ef；coordinate
+    pure=4/0/0；macOS arm64 BrowserComputer与SandboxedComponent两真实Seatbelt Electron role均把640x500 canvas内140x184映到viewport80x168并命中button，依次执行mousePressed→mouseMoved→mouseReleased
+    exact ACK；日本語🔐走Input.insertText且frame变化，viewer wheel200映射CDP CSS delta400后scrollY增加；最终两role received=ack=69、drop均>=37
+- id: server-screen-websocket-v1
+  upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/index.ts::serve.websocket
+  label: 新增
+  target: fixtures/computer/server-screen-websocket-v1.json -> openbot_server::http::screen + openbot_computer::screen::ScreenSessionService
+  owner: openbot-server
+  test_id: T-FIX-0053
+  migration_rule: 'preserve: authenticated latest screen stream; replace shared JSON/base64 socket with same-origin
+    binary WebSocket and ApplicationService-issued one-time subprotocol ticket'
+  status: done
+  evidence: v4 §12.2–§12.4；POST /api/screen/sessions在trusted Origin/body前置后只接computer/generation/tab，binding由Rust
+    header构造；GET /api/screen拒query并要求base+ticket恰两项，upgrade只选择base。ScreenHub在101前消费ticket，binary只出OBSCRN01，client
+    Text/Binary以1008关闭
+  done_evidence: 纠正fixture帧上限为contracts单源8MiB+68，现1969 bytes/SHA-256 7f9f021c17e097aaf91e35f389282bbe4d0a5f8df39e21450efc48101535cf0e；原证据；Server
+    screen unit=4/0/0：错误Origin先于坏JSON、protocol缺失/多余/query、base-only response、ticket replay、binary latest、client
+    input1008、generation close1008；Computer port=1/0/0；macOS真实受管Electron Browser role经authenticated pipe→ScreenHub→ApplicationService
+    ticket→Axum TCP WebSocket收到sequence一致的OBSCRN01+JPEG，1/0/0并bounded shutdown
+- id: db-seed-0012
+  upstream: '-'
+  label: 新增
+  target: fixtures/db/seed-0012.sql -> openbot_infra::db::tables
+  owner: openbot-infra
+  test_id: T-FIX-0028
+  migration_rule: 'n/a: 上游没有对抗性数据集，这是为验证类型映射保真而新造的'
+  status: done
+  evidence: psql -v ON_ERROR_STOP=1 应用到由 13 条 migration 建成的库，28 张表各 6 行共 168 行全部落库；集成测试 every_seeded_row_decodes_through_its_row_struct
+    与 adversarial_values_survive_the_round_trip_intact 对真库跑绿
+  done_evidence: fixtures/db/seed-0012.sql（171 行 INSERT，外键拓扑序）；生成器带覆盖率断言，7 个值池 + 4 个 enum 的每一项都至少出现一次，缺一即判红
+- id: ui-golden-web-en
+  upstream: '-'
+  label: 新增
+  target: fixtures/ui/golden/web/*.png
+  owner: openbot-testkit
+  test_id: T-FIX-0004
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §10.1 表格与 fixtures/ui/golden/MANIFEST.toml::matrix[web-en]
+- id: ui-golden-web-zh-cn
+  upstream: '-'
+  label: 新增
+  target: fixtures/ui/golden/web/*.zh-CN.light.1440x900.png
+  owner: openbot-testkit
+  test_id: T-FIX-0005
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §8.4（首版 locale 只有 en 与 zh-CN）与 fixtures/ui/golden/MANIFEST.toml::matrix[web-zh-CN]
+- id: ui-golden-desktop-macos-arm64
+  upstream: '-'
+  label: 新增
+  target: fixtures/ui/golden/macos-arm64/*.png
+  owner: openbot-testkit
+  test_id: T-FIX-0006
+  migration_rule: n/a
+  status: todo
+  evidence: fixtures/ui/golden/MANIFEST.toml::matrix[desktop-macos-arm64]（xcap 0.9.8 捕获窗口）
+- id: ui-golden-desktop-windows-x64
+  upstream: '-'
+  label: 新增
+  target: fixtures/ui/golden/windows-x64/*.png
+  owner: openbot-testkit
+  test_id: T-FIX-0007
+  migration_rule: n/a
+  status: todo
+  evidence: fixtures/ui/golden/MANIFEST.toml::matrix[desktop-windows-x64]
+- id: golden-container-digest-freeze
+  upstream: '-'
+  label: 新增
+  target: fixtures/ui/golden/MANIFEST.toml::image.digest
+  owner: openbot-testkit
+  test_id: T-FIX-0008
+  migration_rule: n/a
+  status: todo
+  evidence: fixtures/ui/golden/MANIFEST.toml::image（digest = "TBD"，digest_status = "placeholder"）
+- id: policy-cel-rust-oracle-diff
+  upstream: server/src/computer/policy.ts::evaluateActionPolicy
+  label: parity
+  target: openbot_domain::policy::cel（golden 对照测试）
+  owner: openbot-domain
+  test_id: T-FIX-0009
+  migration_rule: 'preserve: 结果类别（true/false/error）任一不同即在迁移报告高亮并要求管理员逐条确认'
+  status: done
+  done_evidence: crates/openbot-domain/tests/cel_corpus_parity.rs（`cargo test -p openbot-domain --test cel_corpus_parity`
+    = 6 passed）。 69 条逐条在 Rust cel 0.14.3 上求值，判据不是"全部相同"而是"分歧集合恰好等于 DIVERGENCE_LEDGER 这张写死的 6 条台账" —— `assert_eq!`
+    于两个 BTreeMap 上是双向集合相等，多一条（既有规则语义悄悄翻转）与少一条（cel 改了行为）都判红； 另有 `assert_eq!(evaluated, 69)` 防跳过。6 条分歧全是 oracle=error
+    → Rust 非 error，其中 deny 侧放宽 2 条、 allow 侧放宽 4 条，由 preflight 逐条给出两侧后果（`preflight_flags_every_ledger_row_with_its_direction`）。
+    Rust 侧实测值不回写 corpus 的 candidate 段：那会让 fixture 同时是 oracle 与被测方；台账落在测试源码里， 改行为必须改台账，而改台账要过 review。
+  evidence: fixtures/policy/cel-corpus.json::candidate（cel 0.14.3，Rust 侧实测值缺位）
+- id: agui-official-event-family
+  upstream: '-'
+  label: 新增
+  target: fixtures/agui/official-event-family.jsonl -> openbot_agent::agui::AguiDecoder
+  owner: openbot-agent
+  test_id: T-FIX-0010
+  migration_rule: 'n/a: official AG-UI schema corpus; third-party wire stays in Agent decoder, not domain/contracts'
+  status: done
+  evidence: cargo test -p openbot-agent --test agui_official_fixture --locked；official Git tree/blob + registry
+    source metadata check
+  done_evidence: ': fixed @ag-ui/core0.0.57 schema source54f13419…，六个官方文件Git blob/bytes/SHA逐项复核；fixture39行/33type/三scenario，4426B/SHA256
+    6c13dad31a54a85a7c38b2d8e7623b9799a31d546eb0502d58000244708ec5ab。官方EventType/fixture/Rust三向集合相等，公共AguiDecoder
+    lifecycle与variant/encoder回放5/0/0、Agent57/0/0，Clippy/fmt/shim gate绿；exact source inventory/regular files/byte
+    count/hash均校验。'
+- id: agui-malformed-and-drift
+  upstream: '-'
+  label: 新增
+  target: fixtures/agui/malformed-and-drift.jsonl -> openbot_agent::agui
+  owner: openbot-agent
+  test_id: T-FIX-0011
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.2「skeleton/late field/unknown event/rotating item ID」
+- id: agui-transport-interruption-resume
+  upstream: '-'
+  label: 新增
+  target: fixtures/agui/transport-interruption.jsonl -> openbot_agent::agui
+  owner: openbot-agent
+  test_id: T-FIX-0012
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.2「SSE/WS interruption、resume、429、401、timeout、cancel race」与 §4.3 条 6（reconnect
+    必须携带 last cursor）
+- id: provider-skeleton-stream
+  upstream: '-'
+  label: 新增
+  target: fixtures/provider/skeleton.jsonl -> openbot_infra::provider
+  owner: openbot-infra
+  test_id: T-FIX-0013
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.2「skeleton/late field/unknown event/rotating item ID」
+- id: provider-partial-json-and-utf8-split
+  upstream: '-'
+  label: 新增
+  target: fixtures/provider/partial-json-utf8-split.jsonl -> openbot_infra::provider
+  owner: openbot-infra
+  test_id: T-FIX-0014
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.2「interleaved parallel tool calls、partial JSON、UTF-8 split」
+- id: provider-interleaved-parallel-tool-calls
+  upstream: '-'
+  label: 新增
+  target: fixtures/provider/interleaved-tool-calls.jsonl -> openbot_infra::provider
+  owner: openbot-infra
+  test_id: T-FIX-0015
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.2「interleaved parallel tool calls」
+- id: provider-error-and-cancel-race
+  upstream: '-'
+  label: 新增
+  target: fixtures/provider/error-and-cancel-race.jsonl -> openbot_infra::provider
+  owner: openbot-infra
+  test_id: T-FIX-0016
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.2「429、401、timeout、cancel race」与 §7.4（Retry、Cancel、Budget 与 Commit）
+- id: provider-commit-divergence
+  upstream: '-'
+  label: 新增
+  target: fixtures/provider/commit-divergence.jsonl -> openbot_application
+  owner: openbot-application
+  test_id: T-FIX-0017
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.2「provider complete 但本地未 commit、本地 commit 但 UI 未收到」
+- id: mcp-rmcp-conformance
+  upstream: server/src/plugins/store.ts
+  label: parity
+  target: fixtures/mcp/rmcp-conformance/*.json -> openbot_agent::mcp
+  owner: openbot-agent
+  test_id: T-FIX-0018
+  migration_rule: 'preserve: 上游已连的 MCP 服务器与工具目录语义原样保留'
+  status: todo
+  evidence: repository contract §21.3「RMCP 官方与产品相关 client conformance 100%，无 expected-failure baseline」与 §9.1（RMCP
+    3.1.4 client、MCP 2026-07-28 协议）
+- id: mcp-catalog-generation-drift
+  upstream: server/src/plugins/store.ts
+  label: parity
+  target: fixtures/mcp/catalog-drift.json -> openbot_agent::mcp
+  owner: openbot-agent
+  test_id: T-FIX-0019
+  migration_rule: 'preserve: catalog generation 与 stale grant 的语义见 v3 §9.3'
+  status: todo
+  evidence: repository contract §21.3「catalog generation、withdraw/reappear、schema hash/effect change」
+- id: mcp-oauth-2-1-pkce
+  upstream: '-'
+  label: 新增
+  target: fixtures/mcp/oauth-pkce/*.json -> openbot_agent::mcp::oauth
+  owner: openbot-agent
+  test_id: T-FIX-0020
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.3「HTTP redirect、OAuth state/PKCE/mix-up/resource、refresh rotation」与 §9.4
+- id: mcp-hostile-payloads
+  upstream: '-'
+  label: 新增
+  target: fixtures/mcp/hostile-payloads.json -> openbot_agent::mcp
+  owner: openbot-agent
+  test_id: T-FIX-0021
+  migration_rule: n/a
+  status: todo
+  evidence: repository contract §21.3「malicious huge schema/result、tool name collision、unknown content type」
+- id: browser-operation-closed-enum
+  upstream: agent-computer/src/control.ts
+  label: parity
+  target: fixtures/browser/operations.json -> openbot_computer::browser
+  owner: openbot-computer
+  test_id: T-FIX-0022
+  migration_rule: 'preserve: BrowserOperation 的 R1 成员与固定 commit 的 agent-computer 浏览器面一一对应'
+  status: todo
+  evidence: repository contract §11.2（封闭 enum，且明确没有 download / upload）
+- id: browser-stale-ref-rejection
+  upstream: server/src/computer/gateway.ts::resolve
+  label: parity
+  target: fixtures/browser/stale-ref.json -> openbot_computer::browser
+  owner: openbot-computer
+  test_id: T-FIX-0023
+  migration_rule: 'preserve: 上游 resolve() 在 stored.snapshotId !== snapshotId 时返回 undefined'
+  status: todo
+  evidence: server/src/computer/gateway.ts::resolve（读实：!ref || !stored || stored.snapshotId !== snapshotId 时返回 undefined）与
+    server/src/computer/snapshot-store.ts::snapshotId
+- id: browser-refused-side-effects
+  upstream: '-'
+  label: 新增
+  target: fixtures/browser/refused-side-effects.json -> openbot_computer::browser
+  owner: openbot-computer
+  test_id: T-FIX-0024
+  migration_rule: 'n/a: 上游没有这两条规范化事件，是本项目新增的 fail-closed 面'
+  status: todo
+  evidence: repository contract §11.2（Chromium 自发下载由 engine 默认取消并上报 download_refused；JS dialog 默认 dismiss 并上报）
+- id: browser-screencast-frame-contract
+  upstream: agent-computer/src/screencast.ts
+  label: parity
+  target: fixtures/computer/screencast-backpressure-v3.json -> openbot_computer::engine::ScreenIngress
+  owner: openbot-computer
+  test_id: T-FIX-0025
+  migration_rule: 'preserve: frame contract 见 v3 §12.3'
+  status: done
+  done_evidence: fixture=1608 bytes/SHA-256 54316ced6567cafad83cf08d3f1cd33d28fc3b50ab880ae53102411ba44f0dee； protocol-v3
+    macOS arm64 Browser/Component两真实Seatbelt role formal Page.startScreencast/stop/FrameAck通过；frame header v2逐字段含timestamp/device
+    size+scale/page scale/scroll/CDP session；Rust size-one watch buffer入队后才发frame_ack。多次400ms慢消费者实跑received=ack均成立（49..52帧）、drop=37..40；fixture只钉相等/下界，不钉调度相关精确帧数。stop首次+exact
+    replay均通过，TCP listener/PID/profile lock全0。
+  evidence: repository contract §12.3（Frame contract）与 §21.5（1280×800/10 fps loopback p95≤200 ms、每 viewer ≤1 pending
+    frame）
+- id: upstream-baseline-test-results
+  upstream: server/tests
+  label: parity
+  target: fixtures/upstream-baseline/README.md + 原始输出归档
+  owner: openbot-testkit
+  test_id: T-FIX-0026
+  migration_rule: 'n/a: 归档，不迁移'
+  status: todo
+  evidence: repository contract §24 G0「上游基线测试原始结果归档」
+- id: screen-delivery-budget
+  upstream: '-'
+  label: 新增
+  target: fixtures/computer/screen-delivery-budget-v1.json -> openbot_server::http::screen
+  owner: openbot-server
+  test_id: T-FIX-0054
+  migration_rule: 'n/a: v4 per-viewer bandwidth, idle and bounded writer; fixed host defaults added by R189'
+  status: done
+  evidence: cargo test -p openbot-server --lib --locked；cargo test -p openbot-server --test screen_engine_conformance
+    --locked -- --ignored --nocapture
+  done_evidence: fixture=1301 bytes/SHA-256 2e7a844fc68e559c9b789e4dd8c7d8940819165fb096a3f59740281e26ea9ad2；Server
+    lib233/0/0、screen11/0/0。真实TCP覆盖带宽/control flood关闭、active slot409及断线释放、静态画面matching Pong续期/持续outgoing不续期；macOS真实Engine以生产10秒Ping/30秒idle实跑1/0/0（49.92秒），随后显式stop/shutdown。整数纳秒byte
+    budget无round-up；pending write future超时为failure。
+- id: screen-demand-lifecycle
+  upstream: '-'
+  label: 新增
+  target: fixtures/computer/screen-demand-lifecycle-v4.json -> openbot_computer::screen::engine_owner
+  owner: openbot-computer
+  test_id: T-FIX-0055
+  migration_rule: 'n/a: v4 §12.6 last-viewer stop requires a Rust-owned engine lifecycle preserving the document'
+  status: done
+  evidence: cargo test -p openbot-computer --test engine_conformance --locked -- --include-ignored --nocapture；cargo
+    test -p openbot-server --test screen_engine_conformance --locked -- --ignored --nocapture
+  done_evidence: fixture=1411 bytes/SHA-256 2a510ef64d7710c878c6181a5d726d607fb8d94a138d74ff261b8e1a3439598d；protocol/epoch4，595/600
+    LOC shim。macOS双role真实last-viewer pause<2秒、paused received=ack=4且250ms不增长、相同renderer与scroll400恢复；queued stale
+    epoch在pipe前拒绝，current ControlService guard持有到input ACK。真实Server默认heartbeat/idle→owner自动pause纵切1/0/0（48.21秒）；Hub两个新负向锁定pending不算viewer、detach不等旧handle、旧source/owner不能清除同key替代stream。
+- id: provider-anthropic-messages-recorded-traces
+  upstream: '-'
+  label: 新增
+  target: fixtures/provider/anthropic-messages-tool-use-stream.sse + anthropic-messages-thinking-stream.sse -> openbot_infra::provider::anthropic
+  owner: openbot-infra
+  test_id: T-FIX-0056
+  migration_rule: 'n/a: v4 §24 G4 Anthropic 官方发布的 recorded/captured response-body 证据'
+  status: done
+  evidence: Go SDK e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33 的 go-vcr cassette：source 10980 bytes/blob 2085d5a9d2bb3b97992e74206a35fb0c92253ecb；PHP
+    SDK 93aa419595dceeb7062292e09406b4e2a63b96e1 的 shared accumulator raw HTTP：source 1609 bytes/blob b6d1f6575606504542fd59bf55b8ef6cbeaa7731。独立抓取、核commit时间/LICENSE和逐字节提取。
+  done_evidence: tool body 3489 bytes/SHA-256 9e75e3423449cfda1266e73327f43949fa0318b68a1d17293d4d06fe7ecbd783；thinking
+    body 1415 bytes/SHA-256 d5cf8f848dd95e809110c93c7531d3689331f52a92f0722211ca5c71bbff23d8；两份cmp完全相等。当前基线production
+    AnthropicProvider→SafeDialer→真实loopback chunked SSE 3/0/0：每份whole/irregular/bytewise等价、text/tool/thinking/usage和唯一terminal，negative
+    mutation错误正文不回显。provider units32/0/0、Infra all-target/all-feature Clippy、fmt及三trace guard绿。NOTICE/SPDX一对一登记。
+- id: scoped-egress-gateway-substrate
+  upstream: '-'
+  label: 新增
+  target: fixtures/computer/scoped-egress-v1.json -> openbot_infra::net::scope_gateway
+  owner: openbot-infra
+  test_id: T-FIX-0057
+  migration_rule: 'n/a: v4 §10.5 Rust-owned network gateway substrate; production ComputerManager/Engine/namespace
+    assembly is separate'
+  status: done
+  evidence: cargo test -p openbot-infra --test scoped_egress --locked：macOS真实loopback HTTP/CONNECT/WebSocket/TLS、认证前DNS0、deny/空allow/host/port/private拒绝、resolver
+    port覆盖、逐连接fresh DNS、header清理与不自动redirect/retry、IPv6、实际body/tunnel预算、共享rate、idle/lifetime/cancel/Drop
+  done_evidence: fixture=3310 bytes/SHA-256 adfe8295ecb2435bb4a8bc68a8c74926a5033e6b5fdb70b52d8703afd1987928；15/0/0，原safe_http14/0/0、provider32/0/0、官方recorded4/0/0；Infra
+    all-target/all-feature Clippy与唯一出网guard绿。IPv6测试先失败，改typed URL host后实际::1可达且DNS0。HTTP/CONNECT/WS完全经过SafeDialer私有ProxyHop；无第二DNS/connect/HTTP
+    client调用面。
+- id: engine-child-environment-isolation
+  upstream: '-'
+  label: 新增
+  target: fixtures/computer/engine-child-environment-v1.json -> openbot_computer::engine + openbot_windows_sandbox
+  owner: openbot-computer
+  test_id: T-FIX-0058
+  migration_rule: 'n/a: v4 §11.2/§11.3 Engine must not receive host provider/DB credentials or arbitrary environment'
+  status: done
+  evidence: 真实macOS两角色子测试：父进程canary正向成立，修复前main/renderer四处true；env_clear与authority路径封闭环境后四处false，原input/frame/sandbox/stop/cleanup旅程同时通过。Windows只读OS目录API+固定九键UTF-16
+    block，portable unit与target check。
+  done_evidence: fixture1933 bytes/SHA-256 b2b10ef609b0c5b8f007749f3a7bcb40e2769fb40c21f96ede78afa569b327d0；真实canary测试1/0/0（内部两完整role），Computer
+    lib67、fixture5、Windows portable4均0失败；双crate Clippy与Windows/Linux target check通过。不打印原始环境；Windows删除vars_os枚举，新增Win32读取API仅位于唯一unsafe
+    crate。
+- id: macos-engine-main-direct-read-boundary
+  upstream: '-'
+  label: 新增
+  target: fixtures/computer/macos-engine-main-read-v1.json -> openbot_computer::engine::process::sandbox_profile
+  owner: openbot-computer
+  test_id: T-FIX-0059
+  migration_rule: 'n/a: v4 §10.1/§10.3/§17.2 direct Engine main filesystem read confinement'
+  status: done
+  evidence: 同一production SBPL generator的macOS native cat/ls/ln探针，仅读任务自建文件；自身read/list/link正向成立，旧规则sibling/symlink/DataVolume三处可读，收紧后再证邻接枚举与跨scope
+    hardlink也拒绝。真实两role Engine同时回归。
+  done_evidence: fixture1790 bytes/SHA-256 3f2e5ef49c8c37eb231fefad8879c69a17dd3f33f30e80c499d89276958958b6；native
+    policy1/0/0，五负向均false且scope正向成立；真实Engine父测试1/0/0（内部Browser/Component完整input/frame/sandbox/env/stop/cleanup）。本机macOS26.5.2/25F84，dyld依赖literal
+    /作为openat锚点；不放行 / 或 /System 的整棵内容子树。Computer Clippy与Windows/Linux check绿，跨平台只compile。
+- id: macos-engine-main-exact-outbound-pipes
+  upstream: '-'
+  label: 新增
+  target: fixtures/computer/macos-engine-main-network-v1.json -> openbot_computer::engine::process::sandbox_profile
+  owner: openbot-computer
+  test_id: T-FIX-0060
+  migration_rule: 'n/a: v4 §10.5/§11.2 exact Engine-main control/frame UDS network authority'
+  status: done
+  evidence: 生产SBPL生成器+本仓Rust子测试实际connect；control/frame正向成立，各负向端点另有同一unconfined client正向。旧规则可连额外runtime socket/邻接scope
+    socket/其他loopback端口，改literal两管道后均被拒绝。
+  done_evidence: fixture1242 bytes/SHA-256 0b4e9b9de8da622272684998778551df3997ccd4fff6ef9165548ebb26468f4d；native
+    policy1/0/0，3错误端点connected=false且两正确pipe可连；真实Engine两role完整conformance父测试1/0/0。无任意UnixSocket/localhost放行；唯一出网guard仅新增末尾cfg(test)中的一个数字TCP探针，production
+    client集合不扩张。

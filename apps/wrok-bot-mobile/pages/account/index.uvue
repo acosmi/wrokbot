@@ -1,0 +1,13 @@
+<template>
+  <scroll-view class="full-scroll" direction="vertical"><view class="page-content"><text class="eyebrow">你的 Wrok Bot</text><text class="page-title">我的账户</text><text class="page-subtitle">同一个账号，连接每一处工作。</text><view class="account-person"><view class="account-avatar"><text>W</text></view><view><text class="device-name">尚未登录</text><text class="device-description">远程账号服务正在接入</text></view></view>
+    <TapRow class="account-row" @activate="openDevices" label="绑定的 Wrok Bot"><view><text class="row-title">绑定的 Wrok Bot</text><text class="row-subtitle">工作电脑与服务器，多台设备统一管理</text></view><text class="chevron">›</text></TapRow>
+    <TapRow v-for="section in accountSections" :key="section.key" class="account-row" @activate="openSection(section.key)" :label="section.title"><view class="row-copy"><text class="row-title">{{section.title}}</text><text class="row-subtitle">{{section.subtitle}}</text></view><text class="chevron">›</text></TapRow>
+    <button class="button-reset secondary-button" :disabled="true">退出当前账户</button><text class="footnote">登录后按当前会话的实际能力提供退出。</text>
+  </view></scroll-view>
+</template>
+<script setup lang="uts">
+import TapRow from '../../components/TapRow.uvue'
+import { accountSections } from '../../core/account.uts'
+function openSection(key: string) { uni.navigateTo({ url: '/pages/account/detail?section=' + key }) }
+function openDevices() { uni.navigateTo({ url: '/pages/devices/index' }) }
+</script>

@@ -1,0 +1,41 @@
+{
+  "schema": "openbot-screen-delivery-budget-v1",
+  "label": "新增",
+  "firstSource": "v4 section 12.4, 12.6, R189",
+  "serverDefaults": {
+    "imageBytesPerSecond": 8388608,
+    "imageBurstBytes": 8388676,
+    "inboundControlBurst": 20,
+    "inboundControlPerSecond": 10,
+    "pingIntervalMs": 10000,
+    "idleMs": 30000,
+    "writeTimeoutMs": 1000,
+    "closeTimeoutMs": 100,
+    "writeBufferBytes": 0,
+    "maxWriteBufferBytes": 8389700
+  },
+  "invariants": {
+    "onlyCurrentPongRenewsIdle": true,
+    "pongSingleUse": true,
+    "outgoingFramesRenewIdle": false,
+    "controlFloodCloses": true,
+    "imageBudgetOverflowCloses": true,
+    "disconnectReleasesViewerPermit": true,
+    "firstFrameRetainedAfterSend": false,
+    "limitsFromRenderer": false
+  },
+  "evidenceBoundary": {
+    "serverTcpBandwidthAndControlLimit": true,
+    "serverTcpIdleAndMatchingPong": true,
+    "realMacosEngineDefaultHeartbeatAndIdle": true,
+    "stalledWriteFutureDeadline": true,
+    "kernelSendBufferSaturation": false,
+    "productionManagerAttachesEngineSource": false,
+    "lastViewerStopsScreencastWithinTwoSeconds": false,
+    "productionAuthInvalidationHook": false,
+    "desktopLoopback": false,
+    "fpsAndCaptureToPaintLatency": false,
+    "windowsRuntime": false,
+    "linuxRunscRuntime": false
+  }
+}

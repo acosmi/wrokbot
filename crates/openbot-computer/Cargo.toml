@@ -1,0 +1,53 @@
+[package]
+name = "openbot-computer"
+description = "manager、supervisor、browser protocol、screen、file/shell（v3 §5.1）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[example]]
+name = "engine-runsc-probe"
+path = "examples/engine-runsc-probe.rs"
+required-features = ["runsc-spike"]
+
+[features]
+# Test-only constructors for cross-crate real transport fixtures. Default/product builds cannot
+# synthesize EngineScreenSource or AuthContext.
+testkit = []
+# P1-only diagnostic example executed as PID 1 inside an authority-created runsc OCI bundle. An
+# example is structurally absent from default/product bins and cannot launch on host Linux without
+# RunscAttestation.
+runsc-spike = []
+
+[dependencies]
+# Authority-owned IDs/AuthContext and the one canonical ECMAScript TrimString implementation.
+openbot-contracts.workspace = true
+# ScreenSession tickets are issued only through the single typed ApplicationService port.
+openbot-application.workspace = true
+async-trait.workspace = true
+# SecretInsert reuses the repository's non-Clone, zeroizing, redacted secret container instead of
+# inventing a second plaintext holder inside the engine boundary.
+openbot-domain.workspace = true
+thiserror.workspace = true
+time.workspace = true
+# P1 engine host: bounded typed JSON framing, random one-shot boot capability, digest-before-spawn,
+# async UDS peer credentials/process lifecycle. No HTTP client or free protocol dependency enters.
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+# R127 keeps every Win32 unsafe call in one independently audited security-boundary crate. The
+# core computer crate remains `unsafe_code = deny` and consumes only owned safe types.
+openbot-windows-sandbox.workspace = true
+
+[dev-dependencies]
+# `AuthContext::for_test` is deliberately absent from production builds.
+openbot-contracts = { workspace = true, features = ["testkit"] }

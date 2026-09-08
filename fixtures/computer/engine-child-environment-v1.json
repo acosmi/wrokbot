@@ -1,0 +1,80 @@
+{
+  "schema": "openbot-engine-child-environment-v1",
+  "protocol_version": 4,
+  "release_epoch": 4,
+  "unix": {
+    "inherits_parent_environment": false,
+    "keys": [
+      "HOME",
+      "PATH",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ],
+    "home": "authority-owned profile directory",
+    "temp": "authority-owned temp directory",
+    "path": "/usr/bin:/bin",
+    "cwd": "authority-owned profile directory",
+    "linux_runsc_display": ":99"
+  },
+  "windows": {
+    "inherits_parent_environment": false,
+    "enumerates_parent_environment": false,
+    "system_directory_api": "GetSystemWindowsDirectoryW",
+    "keys": [
+      "APPDATA",
+      "HOME",
+      "LOCALAPPDATA",
+      "PATH",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE",
+      "WINDIR"
+    ],
+    "profile_locations": [
+      "HOME",
+      "USERPROFILE",
+      "APPDATA",
+      "LOCALAPPDATA"
+    ],
+    "temp_locations": [
+      "TEMP",
+      "TMP"
+    ],
+    "path_sources": [
+      "OS Windows directory/System32",
+      "OS Windows directory"
+    ],
+    "encoding": "UTF-16, case-insensitive key order, double NUL terminal",
+    "max_block_units": 32767
+  },
+  "canary_evidence": {
+    "test": "both_roles_exclude_the_parent_environment_from_main_and_renderer",
+    "host": "macOS arm64",
+    "parent_positive_control": true,
+    "before": {
+      "browser_main": true,
+      "browser_renderer": true,
+      "component_main": true,
+      "component_renderer": true
+    },
+    "after": {
+      "browser_main": false,
+      "browser_renderer": false,
+      "component_main": false,
+      "component_renderer": false
+    },
+    "raw_environment_logged": false,
+    "processes_cleaned": true
+  },
+  "remaining": {
+    "windows_runtime": false,
+    "linux_runsc_runtime": false,
+    "filesystem_read_boundary": false,
+    "helper_exec_compromise": false,
+    "engine_proxy_navigation": false,
+    "full_G5": false,
+    "full_G7": false
+  }
+}

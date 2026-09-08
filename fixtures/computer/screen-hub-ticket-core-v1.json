@@ -1,0 +1,63 @@
+{
+  "schema": "openbot-screen-hub-ticket-core-v1",
+  "engineSource": {
+    "protocolVersion": 3,
+    "frameMagic": "OBFRAME2",
+    "soleSourcePerEngineSession": true,
+    "streamIdentity": ["scopeDigest", "computerId", "computerGeneration", "tabId"],
+    "audienceIdentity": ["tenantId", "actorId", "authGeneration"]
+  },
+  "ticket": {
+    "entropyBits": 128,
+    "ttlSeconds": 30,
+    "storage": "sha256-digest-only",
+    "baseProtocol": "openbot.screen.v1",
+    "ticketProtocolPrefix": "obot_screen_",
+    "ticketInUrlOrQuery": false,
+    "upgradeResponseEchoesTicket": false,
+    "singleUse": true,
+    "wrongBindingDoesNotConsume": true,
+    "serverBinding": ["origin"],
+    "desktopBinding": ["origin", "windowLabel", "windowBindingGeneration"]
+  },
+  "latestFrame": {
+    "engineIngressCapacity": 1,
+    "screenHubCapacity": 1,
+    "combinedPerTabMaximum": 2,
+    "perViewerPendingMaximum": 1,
+    "sharedAllocationAcrossViewers": true,
+    "viewerFrameMagic": "OBSCRN01",
+    "viewerFrameVersion": 1,
+    "viewerFrameHeaderBytes": 68,
+    "viewerFields": ["computerGeneration", "sequence", "capturedAtMs", "width", "height", "deviceScaleFactor", "pageScaleFactor", "scrollX", "scrollY", "jpeg"],
+    "omittedViewerFields": ["scopeDigest", "computerId", "tabId", "ticket", "cdpScreencastSessionId"]
+  },
+  "macosArm64Evidence": {
+    "rolesPassed": ["browser_computer", "sandboxed_component"],
+    "viewersPerRole": 2,
+    "sameSequenceAndAllocation": true,
+    "ticketReplayRejected": true,
+    "wrongActorRejectedBeforeTicket": true,
+    "wrongBindingRejectedWithoutBurn": true,
+    "authGenerationAdvanceClosesBoth": true,
+    "appAsarBytes": 29806,
+    "asarHeaderSha256": "0297234048a52c164c34f3c7c9e31749208411972dfa0e73ee6f65110f289772"
+  },
+  "evidenceBoundary": {
+    "engineBackedSource": true,
+    "screenHubLatestCore": true,
+    "multiViewerCore": true,
+    "viewerTicketCore": true,
+    "authGenerationInvalidationCore": true,
+    "serverAuthenticatedWebSocket": false,
+    "desktopLoopbackWebSocket": false,
+    "productionAuthInvalidationHook": false,
+    "connectionFrameSizeBandwidthIdleLimits": false,
+    "fpsOrLatencyBudget": false,
+    "lastViewerStopsScreencastWithinTwoSeconds": false,
+    "captureScreenshotFallback": false,
+    "serverOrDesktopComputerAssembly": false,
+    "windowsRuntime": false,
+    "linuxRunscRuntime": false
+  }
+}

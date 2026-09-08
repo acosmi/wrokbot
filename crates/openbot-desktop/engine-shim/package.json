@@ -1,0 +1,7 @@
+{
+  "name": "acosmi-engine-shim",
+  "version": "0.0.0",
+  "main": "main.mjs",
+  "private": true,
+  "type": "module"
+}

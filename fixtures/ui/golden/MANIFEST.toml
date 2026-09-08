@@ -1,0 +1,296 @@
+# OpenBot GUI golden 基线清单
+#
+# 真源：repository contract §10.1 / §10.2 / §10.4 / §10.5，
+#       并入 repository contract §19.3 的 Phase 0 产物。
+#
+# 本文件是**清单**，不是台账。它规定 golden 怎么截、怎么比、允许多大；
+# 一张 PNG 到底有没有产出由 parity ledger（fixtures/MANIFEST.yaml 的 T-FIX-* 条目）负责，
+# 二者不得互相冒充：本文件里写着的 digest 占位不等于 ledger 里可以写 done。
+
+schema = "ui-golden-manifest"
+schema_version = 2
+upstream_commit = "891df72f1827454d8b353d108fe5dd2313b7e30d"
+generated_by = "manual"
+
+# ---------------------------------------------------------------------------
+# 1. 数据与时钟（§10.2）
+# ---------------------------------------------------------------------------
+[determinism]
+seed = "fixtures/ui/seed.json"
+seed_loader = "openbot-testkit 的 fake ApplicationService；无 PostgreSQL、无模型调用、无网络"
+clock_pinned_at = "2026-01-01T00:00:00Z"
+clock_injected_via = "openbot_testkit::Clock"
+golden_feature = "golden"
+golden_feature_note = "cargo feature `golden`。生产 bundle 不编译该特性；闸门见 §10.3 的路由表测试与 xtask design-lint。"
+design_gallery_feature = "design-gallery"
+design_gallery_route = "/_design"
+design_gallery_note = "测试与开发构建开启，生产关闭。生产 bundle 的路由表测试必须断言该 route 不存在。"
+reduced_motion = "CDP Emulation.setEmulatedMedia -> prefers-reduced-motion: reduce"
+wait_before_capture = ["document.fonts.ready", "network idle"]
+avatar_determinism = "§6.6：SHA-256(principal_id) 前 8 位映射到 8 个预设底色；同一 id 在任何平台任何时间同一头像"
+
+# ---------------------------------------------------------------------------
+# 2. 容器镜像与字体（§10.2）
+# ---------------------------------------------------------------------------
+[image]
+purpose = "Web 腿的截图容器。CJK 字体不随包，只由本镜像提供，所以镜像换了 zh-CN golden 必须全量重截。"
+platform = "linux/amd64"
+digest = "TBD"
+digest_status = "placeholder"
+digest_note = """
+TBD 由 CI 第一次成功跑完 Web golden 腿时固化写回本文件（形如 sha256:<64hex>），并与那一批 PNG 同 PR 提交。
+这是**本清单的占位**，不是 fixtures/MANIFEST.yaml 里 T-FIX-0008 可以写 done 的理由：
+ledger 的 done 需要 done_evidence 指向真实产出的 PNG 与固化后的 digest 两者。
+当前 macOS 已有可验证 Electron engine 与 Leptos/Axum fixture，但没有 Ubuntu 24.04 x64 golden
+容器/runtime、固定 fonts-noto-cjk 包版本或该容器内的 110 张 Web 基线，故仍不能填写 digest。
+"""
+cjk_font_package = "fonts-noto-cjk"
+cjk_font_package_version = "TBD"
+cjk_font_package_version_note = "随 digest 一并固化：镜像里 `dpkg-query -W -f='${Version}' fonts-noto-cjk` 的输出逐字写入。"
+
+[[fonts.bundled]]
+family = "Inter Variable"
+version = "4.1"
+license = "SIL OFL 1.1"
+source = "rsms/inter release v4.1 -> Inter-4.1.zip"
+archive_sha256 = "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e"
+file = "web/InterVariable.woff2"
+bytes = 352240
+sha256 = "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3"
+
+[[fonts.bundled]]
+family = "Inter Variable Italic"
+version = "4.1"
+license = "SIL OFL 1.1"
+source = "rsms/inter release v4.1 -> Inter-4.1.zip"
+archive_sha256 = "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e"
+file = "web/InterVariable-Italic.woff2"
+bytes = 387976
+sha256 = "e564f652916db6c139570fefb9524a77c4d48f30c92928de9db19b6b5c7a262a"
+
+[fonts]
+stack_ui = '"Inter Variable", ui-sans-serif, system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif'
+stack_mono = 'ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans Mono CJK SC", monospace'
+remote_fonts = "禁止（v3 §13.1 CSP / §16.2 首次运行零下载）"
+font_display = "swap"
+
+# ---------------------------------------------------------------------------
+# 3. 视口、主题、locale（§10.1）
+# ---------------------------------------------------------------------------
+[[viewports]]
+name = "wide"
+width = 1440
+height = 900
+dpr = 1
+
+[[viewports]]
+name = "min"
+width = 1024
+height = 640
+dpr = 1
+note = "§5.3 的最小支持视口。"
+
+[themes]
+values = ["light", "dark"]
+system_third_state = "CDP Emulation.setEmulatedMedia 模拟 prefers-color-scheme 两次，覆盖 §7 第三态的 CSS 块；不额外产出第三套 PNG。"
+
+[locales]
+values = ["en", "zh-CN"]
+default = "en"
+note = "§8.4 首版只有这两个 locale。en 覆盖全部视口 × 主题；zh-CN 只截 §10.1 的补充集合，见 [[matrix]] 的 web-zh-CN。"
+
+[naming]
+root_page_key = "home"
+route_segment_separator = "--"
+dynamic_parameter_rule = "逐segment以fixtures/ui/seed.json::pages_covered[].golden_param替换$param；TanStack $key_ 的尾下划线只用于路由消歧，参数名按key读取"
+gallery_page_key = "design-gallery"
+gallery_viewport = "1440x900"
+allowed_page_key_bytes = "ASCII alphanumeric, hyphen, underscore"
+
+# ---------------------------------------------------------------------------
+# 4. 平台矩阵与张数（§10.1）
+# ---------------------------------------------------------------------------
+# 页数固定 27 = 26 个上游页面 route + memory 页（fixtures/ui/seed.json::pages_covered 是逐条真源）。
+# 设计画廊 /_design 另算 1 页，只在 Web 腿出现。
+
+[[matrix]]
+id = "web-en"
+platform = "web"
+runner = "Linux x64 容器（[image]）"
+capture = "本项目 Chromium 引擎，CDP Page.captureScreenshot（v3 §11.2）"
+locale = "en"
+pages = 27
+gallery_pages = 1
+themes = 2
+viewports = 2
+count = 110
+count_formula = "27 × 2 主题 × 2 视口 + 1 画廊 × 2 主题 = 108 + 2 = 110"
+path_pattern = "fixtures/ui/golden/web/<page>.<theme>.<w>x<h>.png"
+status = "todo"
+
+[[matrix]]
+id = "web-zh-CN"
+platform = "web"
+runner = "Linux x64 容器（[image]）"
+capture = "同 web-en"
+locale = "zh-CN"
+pages = 27
+gallery_pages = 0
+themes = 1
+viewports = 1
+count = 27
+count_formula = "27 × 1 主题(light) × 1 视口(1440×900) = 27"
+count_authority = "27 zh-CN pages at light theme and 1440x900; expand this matrix when adding coverage."
+path_pattern = "fixtures/ui/golden/web/<page>.zh-CN.light.1440x900.png"
+status = "todo"
+
+[[matrix]]
+id = "desktop-macos-arm64"
+platform = "macos-arm64"
+runner = "macOS arm64 真机 / CI runner"
+capture = "xcap 0.9.8 捕获窗口（Apache-2.0，仅 testkit 依赖）"
+locale = "en"
+pages = 27
+gallery_pages = 0
+themes = 2
+viewports = 1
+count = 54
+count_formula = "27 × 2 主题 × 1 视口(1440×900) = 54"
+path_pattern = "fixtures/ui/golden/macos-arm64/<page>.<theme>.1440x900.png"
+status = "todo"
+
+[[matrix]]
+id = "desktop-windows-x64"
+platform = "windows-x64"
+runner = "Windows x64 CI runner"
+capture = "xcap 0.9.8 捕获窗口"
+locale = "en"
+pages = 27
+gallery_pages = 0
+themes = 2
+viewports = 1
+count = 54
+count_formula = "27 × 2 主题 × 1 视口(1440×900) = 54"
+path_pattern = "fixtures/ui/golden/windows-x64/<page>.<theme>.1440x900.png"
+status = "todo"
+
+[matrix_totals]
+web_en = 110
+web_zh_cn = 27
+desktop_per_platform = 54
+desktop_platforms = 2
+grand_total = 245
+grand_total_formula = "110 + 27 + 54 × 2 = 245"
+
+# ---------------------------------------------------------------------------
+# 5. 比对规则（§10.4）
+# ---------------------------------------------------------------------------
+[compare]
+implementation = "openbot-testkit::golden + cargo xtask golden，crate `image` 0.25.10（PNG-only）"
+pixel_differs_when = "任一通道差 > 16/255"
+channel_threshold = 16
+channel_threshold_denominator = 255
+fail_when_any = [
+  "差异像素占比 > 0.1%",
+  "存在任一 8×8 全差异块",
+]
+diff_pixel_ratio_max = 0.001
+block_size = 8
+block_rule = "8×8 块内全部像素均为差异像素即判失败，不受比例稀释"
+block_rule_why = "小区域真回归（一个图标、一个焦点环）在 0.1% 比例判据下会被整页像素数稀释掉。"
+
+[compare.cross_platform]
+rule = "不做跨引擎逐像素比对"
+why = "WKWebView / WebView2 / Chromium 的字体栅格化不同，逐像素相等构造上不可达。"
+desktop_parity_definition = "同一 bundle 摘要（dist/ 的 sha256 清单）在三平台相等 + 各平台对自己的 golden 基线比对。这就是 v3 G6 \"web/desktop visual parity\" 的可判定定义。"
+
+[compare.update_flow]
+allowed = "同 PR 提交新 PNG + harness 生成的 diff 图 + 评审批准"
+diff_dir = "fixtures/ui/golden/_diff/"
+diff_dir_in_repo = false
+forbidden = "CI 自动覆盖 golden"
+
+[compare.reduced_motion_equivalence]
+rule = "§9.2 条 4：prefers-reduced-motion 模式下的 golden 与动画开启时的终态逐像素相等"
+why = "证明动画只是过渡而不是信息载体。"
+
+# ---------------------------------------------------------------------------
+# 6. mask 清单（§10.2）
+# ---------------------------------------------------------------------------
+[masks]
+attribute = "data-golden-mask"
+rect_source = "harness 经 CDP DOM.getBoxModel 取矩形"
+scope_rule = "仅限无法钉死的区域（如实时 screencast 帧）"
+review_rule = "新增 mask 需评审：任何新条目必须在同 PR 里说明为什么该区域不能被 Clock / seed / 确定性头像钉死，并由评审批准。"
+count = 0
+count_note = "首版为空列表。空不是遗漏：seed + Clock + 确定性头像已覆盖 27 页的全部动态源；实时 screencast 帧只在 v3 §12 的 handover 面出现，而该面不在 §10.1 的 27 页里。"
+
+# 新增 mask 时在此追加：
+# [[masks.allowed]]
+# selector = "[data-golden-mask=\"screencast-frame\"]"
+# pages = ["/bot"]
+# why = "..."
+# approved_in_pr = "#NNN"
+masks_allowed_placeholder = "本键仅为占位说明，实际条目用 [[masks.allowed]] 表追加；解析器读 [[masks.allowed]] 的长度必须等于 masks.count。"
+
+# ---------------------------------------------------------------------------
+# 7. bundle 预算（§10.5，闸门 `xtask bundle-budget`）
+# ---------------------------------------------------------------------------
+[[budget]]
+artifact = "app.wasm"
+measurement = "gzip"
+limit_bytes = 3670016
+limit_human = "3.5 MiB"
+
+[[budget]]
+artifact = "app.css"
+measurement = "raw"
+limit_bytes = 131072
+warning_bytes = 122880
+limit_human = "128 KiB"
+
+[[budget]]
+artifact = "fonts (两份 woff2)"
+measurement = "raw sum"
+limit_bytes = 819200
+limit_human = "800 KiB"
+measured_bytes = 740216
+measured_note = "352240 + 387976 = 740216，即 [[fonts.bundled]] 两条 bytes 之和，留 78,984 B 余量。"
+
+[budget_rules]
+on_exceed = "红"
+relax_requires = "delta audit 附实测；不得在 PR 里顺手抬高数字"
+icons = "内联进 wasm，不单列"
+
+# ---------------------------------------------------------------------------
+# 8. 复算
+# ---------------------------------------------------------------------------
+[[recount]]
+command = "python3 -c \"import tomllib,pathlib;d=tomllib.loads(pathlib.Path('fixtures/ui/golden/MANIFEST.toml').read_text(encoding='utf-8'));print(sum(m['count'] for m in d['matrix']))\""
+cwd = "repo"
+expect = 245
+
+[[recount]]
+command = "python3 -c \"import tomllib,pathlib;d=tomllib.loads(pathlib.Path('fixtures/ui/golden/MANIFEST.toml').read_text(encoding='utf-8'));print(len(d['matrix']))\""
+cwd = "repo"
+expect = 4
+
+[[recount]]
+command = "python3 -c \"import tomllib,pathlib;d=tomllib.loads(pathlib.Path('fixtures/ui/golden/MANIFEST.toml').read_text(encoding='utf-8'));print(sum(f['bytes'] for f in d['fonts']['bundled']))\""
+cwd = "repo"
+expect = 740216
+
+[[recount]]
+command = "python3 -c \"import tomllib,pathlib;d=tomllib.loads(pathlib.Path('fixtures/ui/golden/MANIFEST.toml').read_text(encoding='utf-8'));print(len(d.get('masks',{}).get('allowed',[])), d['masks']['count'])\""
+cwd = "repo"
+expect = "0 0"
+
+[[recount]]
+command = "jq '.pages_covered | length' fixtures/ui/seed.json"
+cwd = "repo"
+expect = 27
+
+[[recount]]
+command = "python3 -c \"import tomllib,pathlib;d=tomllib.loads(pathlib.Path('fixtures/ui/golden/MANIFEST.toml').read_text(encoding='utf-8'));print(len(d['budget']))\""
+cwd = "repo"
+expect = 3

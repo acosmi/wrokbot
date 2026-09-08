@@ -1,0 +1,57 @@
+{
+  "schema": "openbot-macos-engine-main-read-v1",
+  "target": "Engine main SBPL direct filesystem access",
+  "production_generator": "openbot_computer::engine::process::sandbox_profile",
+  "role_protocol_epoch": 4,
+  "policy": {
+    "file_read_default": "deny",
+    "content_allowlist": "owned bundle/profile/temp/runtime plus explicit OS resources",
+    "metadata_allowlist": "owned/OS root ancestors, no global subpath grant",
+    "dyld_root_anchor": "literal / only, never subpath /",
+    "whole_System_or_Data_subtree": false
+  },
+  "native_policy_probe": {
+    "programs": [
+      "/bin/cat",
+      "/bin/ls",
+      "/bin/ln"
+    ],
+    "scope_inputs": "owned synthetic directories and canary files only",
+    "positive_controls": [
+      "own file readable",
+      "own directory enumerable",
+      "same-scope hardlink succeeds",
+      "filesystem hardlink supported before sandbox test"
+    ],
+    "before": {
+      "sibling_read": true,
+      "symlink_read": true,
+      "data_volume_alias_read": true
+    },
+    "after": {
+      "sibling_read": false,
+      "symlink_read": false,
+      "data_volume_alias_read": false,
+      "sibling_listing": false,
+      "outside_hardlink_creation": false
+    },
+    "substitute_for_real_Engine": false
+  },
+  "real_engine": {
+    "host": "macOS arm64",
+    "browser_and_component_conformance": true,
+    "parent_environment_canary_absent": true,
+    "input_frame_stop_cleanup": true
+  },
+  "remaining": {
+    "helper_exec_compromise": false,
+    "arbitrary_mach_broker_boundaries": false,
+    "inherited_descriptor_audit": false,
+    "exact_proxy_UDS_network_boundary": false,
+    "Windows_read_boundary": false,
+    "Linux_runsc_runtime": false,
+    "production_ComputerManager": false,
+    "full_G5E": false,
+    "full_Alpha": false
+  }
+}

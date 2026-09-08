@@ -1,0 +1,122 @@
+[package]
+name = "openbot-server"
+description = "Axum HTTP/SSE/WS、static GUI、health/readiness（v3 §5.1）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "wrok-bot-server"
+path = "src/main.rs"
+
+[features]
+default = []
+# 打开 `auth::FixedAuthResolver`（固定身份的测试替身）。默认关，理由与
+# `openbot-contracts` 的同名 feature 一致：一个"永远放行"的 `AuthResolver` 就是后门，
+# 它不该出现在生产 feature 图里。它转开 contracts 的 `testkit`，因为构造 `AuthContext`
+# 的唯一测试入口 `AuthContext::for_test` 住在那边同名 feature 下。
+testkit = ["openbot-contracts/testkit"]
+
+[[bin]]
+name = "openbot-ui-fixture"
+path = "src/bin/openbot-ui-fixture.rs"
+required-features = ["testkit"]
+
+[dependencies]
+# 穿越边界的类型：AuthContext / AppCommand / AppReply / AppError / ChannelPage。
+openbot-contracts.workspace = true
+# 唯一业务入口。transport 只经 `ApplicationService` 说话（v3 §5.2）。
+openbot-application.workspace = true
+# G2 起启动配置要落成领域类型（retention 窗口等），而不是一堆裸字符串。
+openbot-domain.workspace = true
+# W-4 生产组装与 PostgreSQL session resolver；依赖方向 server -> infra -> application，无环。
+openbot-infra = { workspace = true, features = ["server-sso"] }
+openbot-agent.workspace = true
+# Screen ticket consumption and binary latest-frame transport remain in the Computer authority.
+openbot-computer.workspace = true
+
+# `AuthResolver` / `ReadinessProbe` 都要对象安全（state 里持的是 `dyn`），
+# edition 2024 的 AFIT 仍不给对象安全，所以走 `async_trait`。
+async-trait.workspace = true
+# SSE framing wrapper 直接实现 `Stream`，不复制业务流、不引 futures-util。
+futures-core.workspace = true
+
+# transport 本体。
+axum.workspace = true
+# `AuthResolver::resolve` 的入参是 `http::request::Parts`。axum 也再导出了它，
+# 但直接依赖 `http` 让这个 port 的签名不绑定在 axum 上 —— 它是**认证边界**，
+# 不是 axum 的扩展点。
+http.workspace = true
+deadpool-postgres.workspace = true
+tokio-postgres.workspace = true
+# §5.2 点名的 transport 四件事之一：输入大小限制。
+tower-http.workspace = true
+
+# 查询参数与响应体的 derive。
+serde = { workspace = true }
+# `AGENT_COMPUTER_POLICY` 是一段 JSON（上游 config.ts::computerConfig 在启动时解析并对非法值
+# 直接 throw）。启动期把它解析成 `openbot_domain::policy::ActionPolicy` 属于**配置校验**而不是
+# 业务判定：一个坏策略必须在启动时被发现，而不是等到第一次工具调用才 fail-closed 成"什么都不许"。
+# **不给 `ActionPolicy` 派生 `Deserialize`**：那会开一条"自由 JSON 直接铸造领域类型"的路（§5.2
+# 明令禁止的形态）。这里逐字段读、逐字段校验、再显式构造。
+serde_json = { workspace = true }
+url.workspace = true
+
+# 请求 span。
+tracing.workspace = true
+# **本 crate 刻意与 `openbot-application` 相反**：那边把 subscriber 挡在生产依赖图外，
+# 理由是"库不该替二进制决定日志去向"。`openbot-server` 是 Server 发行物的**组装层**
+# （§16.1 那份发行物清单的 owner），给宿主一个可复用的 subscriber 构造器正是它的活。
+# 兑现方式见 `telemetry::init`：本 crate **不**在任何路径上自动装全局 subscriber，
+# 只提供显式调用的构造函数。
+tracing-subscriber.workspace = true
+
+# request_id 的铸造源。UUIDv7 而不是自增计数：多副本 Server 下自增会重号，
+# 而 request_id 的唯一用途就是跨副本、跨进程把一次请求的日志串起来。
+uuid.workspace = true
+# production session resolver/main 需要墙钟与 Tokio runtime。
+time.workspace = true
+tokio.workspace = true
+ring.workspace = true
+zeroize.workspace = true
+
+# §16.4「Server 暴露 Prometheus metrics」。**门面 + exporter 两层**，不直接依赖 prometheus
+# 客户端库：库代码只调 `metrics` 门面，不知道 exporter 是谁 —— 没装 recorder 时每次调用
+# 都是 no-op，**零网络行为由构造保证而不是靠纪律**（§16.4 零 phone-home）。
+metrics.workspace = true
+# exporter 的 `default-features = false` 由仓根钉死：默认 feature 会带进 `http-listener`
+# 与 `push-gateway`，前者会自己起一个监听端口、后者会主动往外推 —— 两者都直接违反
+# 「不另开监听端口」与「零 phone-home」。关掉之后本 crate 只用它渲染文本。
+metrics-exporter-prometheus.workspace = true
+
+[dev-dependencies]
+# `AuthContext::for_test`（contracts 的 `testkit` 默认关，只在 dev 侧打开；feature 可加，
+# 生产构建不受影响）。
+openbot-contracts = { workspace = true, features = ["testkit"] }
+openbot-computer = { workspace = true, features = ["testkit"] }
+
+# `ServiceExt::oneshot` —— 内存里跑 Axum service，不监听端口。它在 `util` feature 下，
+# 而 workspace 根给 `tower` 开的是 `timeout` / `limit`。feature 是可加的：这里追加
+# `util` 不改根 Cargo.toml，也不影响任何生产依赖图（`tower` 不在 `[dependencies]` 里）。
+tower = { workspace = true, features = ["util"] }
+
+# 真实 TCP/WebSocket handshake + frame 测试；不进 production dependency 图。
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+# Official pinned RMCP server used only by the real callback HTTP integration test.
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+aes-gcm.workspace = true
+ed25519-dalek.workspace = true
+base64.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+
+# 注：`serde_json` 已上移到 [dependencies]（G2 起启动期要解析 `AGENT_COMPUTER_POLICY`），
+# 这里不再重复声明。它进生产依赖**不等于**放开"自由 params"：那条禁令针对的是
+# `AppCommand` 面接受任意 JSON，而 `AppCommand` 仍是封闭 enum，本 crate 的路由一个
+# `serde_json::Value` 参数都不收。

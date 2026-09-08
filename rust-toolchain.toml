@@ -1,0 +1,10 @@
+# 工具链单一真源。
+#
+# 钉死值来自 repository contract §3〈固定基线〉与 v3 §1.2：Rust `1.98.0`，edition 2024。
+# 改动这里 = 新建 delta audit（repository contract §3），禁止静默升。
+#
+# rustup 按目录解析，本文件一处覆盖整个 workspace；CI（.github/workflows/ci.yml）
+# 不额外 `rustup toolchain install`，直接靠本文件锁定编译器版本 —— 换编译器 = 换产物字节。
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

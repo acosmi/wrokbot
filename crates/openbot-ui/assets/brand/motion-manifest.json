@@ -1,0 +1,19 @@
+{
+  "product": "Wrok Bot",
+  "selection": "256px GIF, 6 second loop; source supplied by user",
+  "reduced_motion": "picture source selects matching static PNG",
+  "assets": [
+    {
+      "source": "artifacts/wrok-bot-3d/output/gui-logo/wrok-bot-logo-256-gui.gif",
+      "file": "wrok-bot-motion.gif",
+      "bytes": 1778610,
+      "sha256": "f46144a1d90f176785620a6c7945365760bccf00bdf712a7bc614b341f454d7e"
+    },
+    {
+      "source": "artifacts/wrok-bot-3d/output/gui-logo/wrok-bot-logo-static.png",
+      "file": "wrok-bot-motion-still.png",
+      "bytes": 121384,
+      "sha256": "6fabb3c4c8428b0abb101ecab061dddc5b10ece04366bf35385df88da9353e79"
+    }
+  ]
+}

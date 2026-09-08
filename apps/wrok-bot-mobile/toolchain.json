@@ -1,0 +1,31 @@
+{
+  "framework": "uni-app x",
+  "ui": "Vue 3 / typed TS-UTS",
+  "appRenderer": "vapor",
+  "targets": [
+    "app-ios",
+    "app-android",
+    "app-harmony",
+    "mp-weixin"
+  ],
+  "hbuilderx": {
+    "version": "5.24.2026081301",
+    "channel": "official stable",
+    "source": "https://download1.dcloud.net.cn/hbuilderx/release.json",
+    "macArm64": {
+      "url": "https://download1.dcloud.net.cn/download/HBuilderX.5.24.2026081301.arm64.dmg",
+      "sha256": "3a1e0041551b25ddedcf00301ae0b00009167821749f953f917636b5f54e877b",
+      "verifiedCodeSignature": true,
+      "notarized": true
+    }
+  },
+  "validation": {
+    "syntax": "iOS official compiler completed after fixing native button child content, scroll direction and CSS selectors; earlier empty LSP receipts remain excluded",
+    "webBuild": "The last Web publisher receipt rejected phone binding; the user subsequently confirmed binding. This is not a current iOS compilation blocker and Web publishing remains unverified",
+    "nativeBuilds": "iOS and Android resources compiled; iOS simulator executable pending arm64 custom playground; no installable app, APK, Harmony or WeChat build verified",
+    "deviceJourneys": "not run",
+    "iosCompile": "PASS: official HBuilderX 5.24 Vapor bytecode compile of all 6 pages; final log contains no unsupported-component/style warnings",
+    "androidCompile": "PASS: official HBuilderX 5.24 Vapor code/resource compile of all 6 pages; not an APK or emulator runtime test",
+    "webDevelopment": "PASS: official launch web starts this source project with HMR at 127.0.0.1:5173; simulator Safari home rendered. No cloud packaging submitted"
+  }
+}

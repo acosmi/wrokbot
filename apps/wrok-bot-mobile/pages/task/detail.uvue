@@ -1,0 +1,16 @@
+<template>
+  <scroll-view class="full-scroll" direction="vertical"><view class="page-content"><view v-if="task != null"><text class="eyebrow">{{task!.deviceName}}</text><text class="page-title">{{task!.title}}</text><text class="page-subtitle">{{task!.summary}}</text><text class="row-subtitle">{{task!.deviceDescription}} · {{taskStateLabel(task!.state)}}</text>
+    <view class="screen-placeholder"><text class="state-title">实时画面暂未连接</text><text class="state-description">画面与控制需要当前设备的有效授权。</text></view>
+    <text class="section-label">执行进度</text><view v-for="(step, index) in task!.steps" :key="index" class="fact-row"><text class="body-copy">{{step}}</text></view>
+    <view v-if="task!.result != null" class="review-card"><text class="state-title">审查结果</text><text class="body-copy" :selectable="true">{{task!.result}}</text></view>
+    <view class="review-actions"><button class="button-reset secondary-button review-action" :disabled="true">停止任务</button><button class="button-reset secondary-button review-action" :disabled="true">申请接管</button></view><text class="footnote">任务归属保持不变，不随首页选中的设备切换。</text>
+    </view><StateNotice v-else title="任务暂不可用" description="请回到工作空间重新加载；不会从当前设备猜测任务归属。"/></view></scroll-view>
+</template>
+<script setup lang="uts">
+import { ref, computed } from 'vue'
+import StateNotice from '../../components/StateNotice.uvue'
+import { taskById, taskStateLabel } from '../../core/console.uts'
+const id = ref('')
+const task = computed(() => taskById(id.value))
+onLoad((options) => { id.value = options['id'] ?? '' })
+</script>

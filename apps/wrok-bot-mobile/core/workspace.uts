@@ -1,0 +1,56 @@
+import { reactive } from 'vue'
+import { clearConsolePresentation } from './console.uts'
+
+// Display facts only. These types are not a proposed public backend wire contract.
+export type BoundDevice = {
+  id: string,
+  displayName: string,
+  kind: string,
+  osFamily: string,
+  model: string | null,
+  connection: string
+}
+
+export const workspace = reactive({
+  accountGeneration: 0,
+  selectedDeviceId: null as string | null,
+  devices: [] as BoundDevice[],
+  deviceStatus: 'unavailable',
+  screenObject: null as string | null,
+  controlState: 'unavailable',
+  taskDraft: '',
+  chatDraft: ''
+})
+
+export function suspendPresentation() {
+  workspace.screenObject = null
+  workspace.controlState = 'unavailable'
+}
+
+export function selectDevice(id: string): boolean {
+  if (!workspace.devices.some((device: BoundDevice): boolean => device.id == id)) return false
+  if (workspace.selectedDeviceId != id) {
+    suspendPresentation()
+    workspace.selectedDeviceId = id
+    // A draft associated with one execution target must not silently cross into another.
+    workspace.taskDraft = ''
+  }
+  return true
+}
+
+export function clearAccountPresentation() {
+  clearConsolePresentation()
+  suspendPresentation()
+  workspace.accountGeneration += 1
+  workspace.selectedDeviceId = null
+  workspace.devices = []
+  workspace.deviceStatus = 'unavailable'
+  workspace.taskDraft = ''
+  workspace.chatDraft = ''
+}
+
+export function deviceDescription(device: BoundDevice): string {
+  const kind = device.kind == 'server' ? '服务器' : device.kind == 'workstation' ? '工作电脑' : '设备'
+  const system = device.osFamily == 'macos' ? 'macOS' : device.osFamily == 'windows' ? 'Windows' : device.osFamily == 'linux' ? 'Linux' : '系统待同步'
+  return kind + ' · ' + system + (device.model != null && device.model != '' ? ' · ' + device.model : '')
+}

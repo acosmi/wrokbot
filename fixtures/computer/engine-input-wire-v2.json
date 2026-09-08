@@ -1,0 +1,42 @@
+{
+  "schema": "openbot-engine-input-wire-v2",
+  "protocol": {
+    "version": 2,
+    "releaseEpoch": 2,
+    "generatedModuleSha256": "ef213bb4d8f9f66b0854ef4feb9a7718de5bae139348320ed3fe8f6641b9bdf6",
+    "commands": ["start", "input", "stop", "shutdown"],
+    "events": ["hello", "ready", "started", "input_applied", "stopped", "shutdown_complete", "error"],
+    "inputKinds": ["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "raw_key_down", "key_up", "insert_text"],
+    "cdpMethods": ["Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Input.insertText", "Page.captureScreenshot", "Page.enable", "Runtime.evaluate"],
+    "maxControlFrameBytes": 65536
+  },
+  "macosArm64Bundle": {
+    "electronVersion": "43.3.0",
+    "archiveBytes": 122102881,
+    "archiveSha256": "ee939d1564d83d61032b3b3cb23af4e46005a4900c91f0695f7ed793f0ce6e83",
+    "appAsarBytes": 22819,
+    "asarHeaderSha256": "cb289d04fc42ba59622590c0f699933d3b55c4361a39ae92670a056c105a5063",
+    "fuseWire": "000011001"
+  },
+  "liveMatrix": {
+    "roles": ["browser_computer", "sandboxed_component"],
+    "effects": ["hover", "active_down", "active_up", "key_text", "raw_backspace", "unknown_multi_unit_zero", "insert_text", "wheel_scroll"],
+    "inputAckAndFrameChannelsIndependent": true,
+    "conformanceCaptureFramePerAcceptedInput": true,
+    "crossScopeReceiptFrames": 0,
+    "expiredReceiptFrames": 0,
+    "ordinarySecretFrames": 0,
+    "tcpListeners": 0,
+    "orphanProcesses": 0,
+    "profileLocksAfterShutdown": 0
+  },
+  "evidenceBoundary": {
+    "macosArm64Actual": true,
+    "windowsRuntime": false,
+    "linuxRunscRuntime": false,
+    "serverOrDesktopComputerAssembly": false,
+    "secretTypedEffect": false,
+    "screenHub": false,
+    "pageStartScreencast": false
+  }
+}

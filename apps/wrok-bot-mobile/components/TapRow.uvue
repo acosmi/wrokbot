@@ -1,0 +1,11 @@
+<template>
+  <view class="tap-row">
+    <view class="tap-row-content"><slot/></view>
+    <button class="button-reset tap-row-hit" :aria-label="label" @click="$emit('activate')">{{label}}</button>
+  </view>
+</template>
+<script setup lang="uts">
+defineOptions({ styleIsolation: 'app' })
+defineProps<{ label: string }>()
+defineEmits(['activate'])
+</script>

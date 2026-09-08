@@ -1,0 +1,16 @@
+# 全仓统一 LF。Windows 上开发同样以 LF 入库、LF 检出 —— 一旦某个 golden 文件被 CRLF 污染，
+# `fixtures/ui/golden` 的逐像素比对和 `Cargo.lock` 的可复现构建校验都会给出无法解释的差异。
+* text=auto eol=lf
+
+# 二进制：不做行尾转换，也不进 diff。
+*.png binary
+*.woff2 binary
+*.ico binary
+*.icns binary
+*.jsonl text eol=lf
+# Recorded SSE response bodies intentionally retain the terminal blank event delimiter. Keep all
+# other whitespace checks while exempting only Git's blank-at-EOF diagnostic for this wire format.
+*.sse text eol=lf whitespace=-blank-at-eof
+
+# Preserve upstream license text, including its trailing blank line.
+crates/openbot-ui/assets/notices/markdown/Microsoft_TypeScript-Sublime-Plugin_LICENSE whitespace=-blank-at-eof

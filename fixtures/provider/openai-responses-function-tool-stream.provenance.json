@@ -1,0 +1,84 @@
+{
+  "schema": "openbot-provider-recorded-trace-v1",
+  "provider": "openai",
+  "protocol": {
+    "api": "Responses",
+    "transport": "HTTP/1.1 server-sent events",
+    "endpoint": "https://api.openai.com/v1/responses",
+    "method": "POST",
+    "openai_version": "2020-10-01",
+    "request_model": "gpt-4o-mini",
+    "response_model": "gpt-4o-mini-2024-07-18",
+    "response_created_at_utc": "2026-08-29T21:40:16Z",
+    "status_code": 200
+  },
+  "provenance": {
+    "kind": "vendor_capture_published_by_vendor",
+    "publisher": "OpenAI",
+    "repository": "https://github.com/openai/openai-dotnet",
+    "source_commit": "19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5",
+    "source_commit_time_utc": "2026-09-02T18:33:36Z",
+    "source_record_url": "https://github.com/openai/openai-dotnet/blob/19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5/tests/SessionRecords/ResponsesToolTests/FunctionToolStreamingWorks.json",
+    "source_test_url": "https://github.com/openai/openai-dotnet/blob/19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5/tests/Responses/ResponsesToolTests.cs#L102-L161",
+    "source_record_git_blob_sha1": "3272bc4116a32b4472d21f68b41ce23ce363c02c",
+    "source_record_bytes": 13211,
+    "source_record_sha256": "ff7fadb3baabc1fd1fc482fe9ec28ba93d5a899b961cce73bf19f8d9c1fe20b8",
+    "retrieved_at_utc": "2026-09-04T09:39:09Z"
+  },
+  "payload": {
+    "path": "fixtures/provider/openai-responses-function-tool-stream.sse",
+    "derivation": "Byte-for-byte UTF-8 concatenation of Entries[0].ResponseBody from the pinned source record.",
+    "raw_response_body_bytes": 9070,
+    "raw_response_body_sha256": "fe38a7a044f8de33d441d0c9bf426e1291b1401bb9099ef419f62651b50d2927",
+    "fixture_bytes": 9070,
+    "fixture_sha256": "fe38a7a044f8de33d441d0c9bf426e1291b1401bb9099ef419f62651b50d2927"
+  },
+  "response_headers": {
+    "preserved": {
+      "content-type": "text/event-stream; charset=utf-8",
+      "openai-version": "2020-10-01"
+    },
+    "discarded": [
+      "access-control-expose-headers",
+      "alt-svc",
+      "cf-cache-status",
+      "cf-ray",
+      "connection",
+      "date",
+      "openai-organization",
+      "openai-processing-ms",
+      "openai-project",
+      "server",
+      "strict-transport-security",
+      "transfer-encoding",
+      "x-content-type-options",
+      "x-request-id"
+    ]
+  },
+  "redaction": {
+    "source_record_already_sanitized": [
+      "RequestHeaders.Authorization",
+      "ResponseHeaders.Date",
+      "ResponseHeaders.openai-organization",
+      "ResponseHeaders.openai-processing-ms",
+      "ResponseHeaders.openai-project",
+      "ResponseHeaders.X-Request-ID"
+    ],
+    "local_rules": [
+      "Retain only the response-body byte stream plus the two allowlisted response headers.",
+      "Omit RequestHeaders, RequestBody, and Variables completely; no request prompt or credential value is copied.",
+      "Do not alter ResponseBody bytes; preserve public response, item, and call IDs as trace identities.",
+      "Do not retain Authorization/API keys, customer data, or any verifiable secret hash."
+    ],
+    "request_prompt_stored": false,
+    "authorization_or_api_key_stored": false,
+    "customer_data_stored": false,
+    "verifiable_secret_hash_stored": false,
+    "data_classification": "Public OpenAI SDK recorded-test response; synthetic test scenario, not a customer/user session."
+  },
+  "license": {
+    "spdx": "MIT",
+    "copyright": "Copyright (c) 2024 OpenAI (https://openai.com)",
+    "source_license_url": "https://github.com/openai/openai-dotnet/blob/19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5/LICENSE"
+  }
+}

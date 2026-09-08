@@ -1,0 +1,42 @@
+import { reactive } from 'vue'
+
+// Presenter models populated by a future authenticated adapter; never a backend wire schema.
+export type TaskView = { id: string, title: string, deviceId: string, deviceName: string, deviceDescription: string, state: string, summary: string, steps: string[], result: string | null }
+export type ApprovalFact = { name: string, value: string }
+export type ApprovalView = { id: string, title: string, summary: string, deviceName: string, facts: ApprovalFact[], state: string }
+export type ConversationView = { id: string, title: string, updatedLabel: string }
+export type MessageView = { id: string, conversationId: string, role: string, body: string }
+
+export const consoleState = reactive({
+  tasksStatus: 'unavailable', tasks: [] as TaskView[],
+  approvalsStatus: 'unavailable', approvals: [] as ApprovalView[],
+  conversationsStatus: 'unavailable', conversations: [] as ConversationView[],
+  messages: [] as MessageView[]
+})
+
+export function clearConsolePresentation() {
+  consoleState.tasks = []; consoleState.tasksStatus = 'unavailable'
+  consoleState.approvals = []; consoleState.approvalsStatus = 'unavailable'
+  consoleState.conversations = []; consoleState.conversationsStatus = 'unavailable'
+  consoleState.messages = []
+}
+
+export function taskStateLabel(state: string): string {
+  if (state == 'running') return '执行中'
+  if (state == 'queued') return '等待执行'
+  if (state == 'awaiting_approval') return '等待审批'
+  if (state == 'completed') return '已完成'
+  if (state == 'failed') return '执行失败'
+  if (state == 'cancelled') return '已停止'
+  return '状态待同步'
+}
+
+export function taskById(id: string): TaskView | null {
+  for (const item of consoleState.tasks) { if (item.id == id) return item }
+  return null
+}
+
+export function visibleConversationMessages(id: string): MessageView[] {
+  // System/tool material cannot become a visible chat message by passing an arbitrary role.
+  return consoleState.messages.filter((item: MessageView): boolean => item.conversationId == id && (item.role == 'user' || item.role == 'assistant'))
+}

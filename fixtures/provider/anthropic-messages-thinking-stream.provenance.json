@@ -1,0 +1,79 @@
+{
+  "schema": "openbot-provider-recorded-trace-v1",
+  "provider": "anthropic",
+  "protocol": {
+    "api": "Messages",
+    "transport": "HTTP/1.1 server-sent events",
+    "endpoint": "https://api.anthropic.com/v1/messages",
+    "replay_endpoint": "https://api.anthropic.com/v1/messages",
+    "method": "POST",
+    "anthropic_version": "2023-06-01",
+    "request_model": "claude-sonnet-4-5",
+    "response_model": "claude-sonnet-4-5",
+    "status_code": 200
+  },
+  "provenance": {
+    "kind": "vendor_capture_published_by_vendor",
+    "publisher": "Anthropic",
+    "repository": "https://github.com/anthropics/anthropic-sdk-php",
+    "source_commit": "93aa419595dceeb7062292e09406b4e2a63b96e1",
+    "source_commit_time_utc": "2026-09-01T18:08:37Z",
+    "source_record_url": "https://github.com/anthropics/anthropic-sdk-php/blob/93aa419595dceeb7062292e09406b4e2a63b96e1/fixtures/ga/thinking.txt",
+    "source_test_url": "https://github.com/anthropics/anthropic-sdk-php/blob/93aa419595dceeb7062292e09406b4e2a63b96e1/tests/Lib/Streaming/MessageAccumulatorTest.php#L25-L49",
+    "recording_proof_url": "https://github.com/anthropics/anthropic-sdk-php/blob/93aa419595dceeb7062292e09406b4e2a63b96e1/fixtures/README.md#L10-L19",
+    "source_record_git_blob_sha1": "b6d1f6575606504542fd59bf55b8ef6cbeaa7731",
+    "source_record_bytes": 1609,
+    "source_record_sha256": "70366a8b43b634eb1bc1e4e1fabbc7c14a8d182cca7561402ff40c07594652ef",
+    "retrieved_at_utc": "2026-09-04T22:13:41Z"
+  },
+  "payload": {
+    "path": "fixtures/provider/anthropic-messages-thinking-stream.sse",
+    "derivation": "Split the pinned captured raw HTTP response at its first LF-LF header separator and preserve every following response-body byte through EOF.",
+    "raw_response_body_bytes": 1415,
+    "raw_response_body_sha256": "d5cf8f848dd95e809110c93c7531d3689331f52a92f0722211ca5c71bbff23d8",
+    "fixture_bytes": 1415,
+    "fixture_sha256": "d5cf8f848dd95e809110c93c7531d3689331f52a92f0722211ca5c71bbff23d8"
+  },
+  "response_headers": {
+    "preserved": {
+      "content-type": "text/event-stream; charset=utf-8"
+    },
+    "discarded": [
+      "anthropic-ratelimit-requests-remaining",
+      "anthropic-ratelimit-tokens-remaining",
+      "request-id"
+    ]
+  },
+  "redaction": {
+    "source_record_already_sanitized": [
+      "The public shared accumulator capture uses example-shaped request and message identifiers and a synthetic 2 + 2 scenario."
+    ],
+    "local_rules": [
+      "Retain only the response body after the first HTTP header separator and the allowlisted content-type value.",
+      "Omit the public example request-id and all rate-limit response headers.",
+      "Do not alter response-body bytes; the public message ID and signature delta remain only as untrusted protocol test data.",
+      "The retained message ID and signature were published in Anthropic's public shared SDK fixture, grant no authority, and are not credentials or secrets.",
+      "Do not retain request prompts, Authorization/API keys, customer data, or any verifiable secret hash."
+    ],
+    "request_prompt_stored": false,
+    "authorization_or_api_key_stored": false,
+    "customer_data_stored": false,
+    "verifiable_secret_hash_stored": false,
+    "retained_public_protocol_values": {
+      "message_id": {
+        "value": "msg_thinking_x",
+        "non_secret_basis": "Published in Anthropic's public shared SDK fixture; retained only for trace correlation and grants no authority."
+      },
+      "signature_delta": {
+        "value": "abc123sig==",
+        "non_secret_basis": "Published example protocol data in Anthropic's public shared SDK fixture; it is not a credential, is ignored by OpenBot, and grants no authority."
+      }
+    },
+    "data_classification": "Public Anthropic SDK captured-and-replayed HTTP/SSE fixture for a synthetic arithmetic case, not a customer or user session."
+  },
+  "license": {
+    "spdx": "MIT",
+    "copyright": "Copyright 2023 Anthropic, PBC.",
+    "source_license_url": "https://github.com/anthropics/anthropic-sdk-php/blob/93aa419595dceeb7062292e09406b4e2a63b96e1/LICENSE"
+  }
+}

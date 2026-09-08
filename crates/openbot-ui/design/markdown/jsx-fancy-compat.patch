@@ -1,0 +1,65 @@
+--- upstream-bat-jsx
++++ wrok-jsx
+@@ -438,7 +438,7 @@
+         (?x)
+         (?:([_$a-zA-Z][$\w]*)\s*(=)\s*)?
+         (?:\b(async)\s+)?
+-        (?=(\((?>(?>[^()]+)|\g<-1>)*\))\s*(=>))
++        (?=(\((?>(?>[^()]+)|[^()]*)*\))\s*(=>))
+       captures:
+         1: entity.name.function.js
+         2: keyword.operator.assignment.js
+@@ -469,7 +469,7 @@
+         (\.)([_$a-zA-Z][$\w]*)
+         \s*(=)
+         \s*(async)?
+-        \s*(?=(\((?>(?>[^()]+)|\g<-1>)*\))\s*(=>))
++        \s*(?=(\((?>(?>[^()]+)|[^()]*)*\))\s*(=>))
+       captures:
+         1: entity.name.class.js
+         2: keyword.operator.accessor.js
+@@ -510,7 +510,7 @@
+         (\.)([_$a-zA-Z][$\w]*)
+         \s*(=)
+         \s*(async)?
+-        \s*(?=(\((?>(?>[^()]+)|\g<-1>)*\))\s*(=>))
++        \s*(?=(\((?>(?>[^()]+)|[^()]*)*\))\s*(=>))
+       captures:
+         1: entity.name.class.js
+         2: keyword.operator.accessor.js
+@@ -550,7 +550,7 @@
+         )
+         \s*(:)
+         \s*(?:\b(async)\s+)?
+-        \s*(?=(\((?>(?>[^()]+)|\g<-1>)*\))\s*(=>))
++        \s*(?=(\((?>(?>[^()]+)|[^()]*)*\))\s*(=>))
+       captures:
+         1: string.quoted.js
+         2: punctuation.definition.string.begin.js
+@@ -871,7 +871,7 @@
+           ((")((?>[^"\\]|\\.)*)("))|
+           (([_$a-zA-Z][$\w]*|\d+))
+         )
+-        (?=\s*(\((?>(?>[^()]+)|\g<-1>)*\))(?>\s|/\*.*\*/)*\{)
++        (?=\s*(\((?>(?>[^()]+)|[^()]*)*\))(?>\s|/\*.*\*/)*\{)
+       captures:
+         1: storage.type.js
+         2: storage.type.js
+@@ -896,7 +896,7 @@
+         \b(?:(static)\s+)?
+         (get|set)\s+
+         ([_$a-zA-Z][$\w]*|\d+)\s*
+-        (?=(\((?>(?>[^()]+)|\g<-1>)*\))(?>\s|/\*.*\*/)*\{)
++        (?=(\((?>(?>[^()]+)|[^()]*)*\))(?>\s|/\*.*\*/)*\{)
+       captures:
+         1: storage.type.js
+         2: storage.type.accessor.js
+@@ -1222,7 +1222,7 @@
+             0: punctuation.definition.string.template.end.js
+           pop: true
+         - include: scope:source.js.css
+-    - match: '(?<!\.)\b(styled)\s*(?=(\((?>(?>[^()]+)|\g<-1>)*\))\s*`)'
++    - match: '(?<!\.)\b(styled)\s*(?=(\((?>(?>[^()]+)|[^()]*)*\))\s*`)'
+       captures:
+         1: meta.function-call.with-arguments.js variable.function.js
+       push:

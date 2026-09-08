@@ -1,0 +1,39 @@
+{"type":"RUN_STARTED","threadId":"thread-official-001","runId":"run-official-001","parentRunId":"run-parent-000","input":{"threadId":"thread-official-001","runId":"run-official-001","messages":[{"id":"msg-user-1","role":"user","content":"Hello OpenBot"}],"tools":[{"name":"search_docs","description":"Search OpenBot docs","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}],"context":[{"description":"workspace","value":"/workspace"}],"forwardedProps":{},"state":{}}}
+{"type":"STEP_STARTED","stepName":"step-plan-and-execute"}
+{"type":"TEXT_MESSAGE_START","messageId":"msg-text-001","role":"assistant","name":"OpenBot"}
+{"type":"TEXT_MESSAGE_CONTENT","messageId":"msg-text-001","delta":"I am starting the analysis."}
+{"type":"TEXT_MESSAGE_END","messageId":"msg-text-001"}
+{"type":"TEXT_MESSAGE_CHUNK","messageId":"msg-chunk-002","role":"assistant","delta":"Streaming additional details."}
+{"type":"TEXT_MESSAGE_CHUNK","delta":""}
+{"type":"TOOL_CALL_START","toolCallId":"call-tool-001","toolCallName":"search_docs","parentMessageId":"msg-text-001"}
+{"type":"TOOL_CALL_ARGS","toolCallId":"call-tool-001","delta":"{\"query\":\"AGUI official specification\"}"}
+{"type":"TOOL_CALL_END","toolCallId":"call-tool-001"}
+{"type":"TOOL_CALL_RESULT","messageId":"msg-tool-res-001","toolCallId":"call-tool-001","content":"{\"results\":[\"AGUI 0.0.57 schema found\"]}","role":"tool"}
+{"type":"TOOL_CALL_CHUNK","toolCallId":"call-chunk-002","toolCallName":"search_docs","delta":"{\"query\":\"quick\"}"}
+{"type":"TOOL_CALL_CHUNK","delta":""}
+{"type":"STATE_SNAPSHOT","snapshot":{"stage":"analysis","items_processed":1,"metadata":{"version":"0.0.57"}}}
+{"type":"STATE_DELTA","delta":[{"op":"replace","path":"/items_processed","value":2},{"op":"add","path":"/stage_completed","value":true}]}
+{"type":"MESSAGES_SNAPSHOT","messages":[{"id":"msg-snapshot-1","role":"user","content":"Hello OpenBot"},{"id":"msg-snapshot-2","role":"assistant","content":"Analysis in progress","toolCalls":[{"id":"call-tool-001","type":"function","function":{"name":"search_docs","arguments":"{\"query\":\"AGUI official specification\"}"}}]}]}
+{"type":"ACTIVITY_SNAPSHOT","messageId":"act-plan-001","activityType":"execution_plan","content":{"title":"AGUI Fixture Integration","progress":50},"replace":true}
+{"type":"ACTIVITY_DELTA","messageId":"act-plan-001","activityType":"execution_plan","patch":[{"op":"replace","path":"/progress","value":100}]}
+{"type":"RAW","event":{"vendor_channel":"sse_direct","packet_seq":42},"source":"agui_official_gateway"}
+{"type":"CUSTOM","name":"telemetry_metric","value":{"metric_name":"latency_ms","value":85.5}}
+{"type":"REASONING_START","messageId":"reason-session-001"}
+{"type":"REASONING_MESSAGE_START","messageId":"reason-msg-001","role":"reasoning"}
+{"type":"REASONING_MESSAGE_CONTENT","messageId":"reason-msg-001","delta":"Evaluating conformance against 33 official schema events..."}
+{"type":"REASONING_MESSAGE_END","messageId":"reason-msg-001"}
+{"type":"REASONING_MESSAGE_CHUNK","messageId":"reason-chunk-002","delta":"Verifying zero-npm constraints and hash stability."}
+{"type":"REASONING_MESSAGE_CHUNK","delta":""}
+{"type":"REASONING_END","messageId":"reason-session-001"}
+{"type":"THINKING_START","title":"Legacy thinking workflow"}
+{"type":"THINKING_TEXT_MESSAGE_START"}
+{"type":"THINKING_TEXT_MESSAGE_CONTENT","delta":"Backward-compatible thinking tokens decoded successfully."}
+{"type":"THINKING_TEXT_MESSAGE_END"}
+{"type":"THINKING_END"}
+{"type":"REASONING_ENCRYPTED_VALUE","subtype":"message","entityId":"reason-msg-001","encryptedValue":"enc:v1:aGVsbG8tb3BlbmJvdC1yZWFzb25pbmc="}
+{"type":"STEP_FINISHED","stepName":"step-plan-and-execute"}
+{"type":"RUN_FINISHED","threadId":"thread-official-001","runId":"run-official-001","result":{"summary":"All 31 stream events processed successfully"},"outcome":{"type":"success"}}
+{"type":"RUN_STARTED","threadId":"thread-official-002","runId":"run-official-002"}
+{"type":"RUN_ERROR","message":"Remote AG-UI agent runtime exception encountered","code":"AGENT_RUNTIME_FAULT"}
+{"type":"RUN_STARTED","threadId":"thread-official-003","runId":"run-official-003"}
+{"type":"RUN_FINISHED","threadId":"thread-official-003","runId":"run-official-003","outcome":{"type":"interrupt","interrupts":[{"id":"int-001","reason":"human_approval_required","message":"Action requires human approval before proceeding","toolCallId":"call-tool-001"}]}}

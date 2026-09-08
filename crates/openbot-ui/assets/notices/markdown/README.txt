@@ -1,0 +1,1 @@
+Wrok Bot bundles these original notices for its Markdown syntax resources. Exact sources, changes and hashes are documented in design/markdown/PROVENANCE.md and MANIFEST.json in the source distribution.

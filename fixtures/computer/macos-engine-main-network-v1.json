@@ -1,0 +1,46 @@
+{
+  "schema": "openbot-macos-engine-main-network-v1",
+  "scope": "Engine main outbound only",
+  "protocol_epoch": 4,
+  "allowed_uds": [
+    "runtime/control.sock",
+    "runtime/frame.sock"
+  ],
+  "allowed_tcp_ports": [],
+  "allow_all_unix_sockets": false,
+  "allow_all_localhost_ports": false,
+  "native_probe": {
+    "implementation": "owned Rust test subprocess under production SBPL generator",
+    "positive": [
+      "control socket connected",
+      "frame socket connected",
+      "each refused endpoint accepts the same unconfined probe"
+    ],
+    "before": {
+      "extra_runtime_socket": true,
+      "sibling_socket": true,
+      "other_loopback_port": true
+    },
+    "after": {
+      "extra_runtime_socket": false,
+      "sibling_socket": false,
+      "other_loopback_port": false
+    }
+  },
+  "real_engine": {
+    "host": "macOS arm64",
+    "Browser_and_Component": true,
+    "full_existing_conformance": true
+  },
+  "remaining": {
+    "helper_process_network": false,
+    "helper_exec_and_signing": false,
+    "Mach_brokers": false,
+    "production_proxy_port_binding": false,
+    "Browser_navigation": false,
+    "Windows_runtime": false,
+    "Linux_runsc_runtime": false,
+    "full_G5E": false,
+    "full_Alpha": false
+  }
+}

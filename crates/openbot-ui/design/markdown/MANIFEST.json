@@ -1,0 +1,130 @@
+{
+  "verified_date": "2026-09-05",
+  "scope": "UI syntax resources only; 24 user language tokens including bash/sh alias; embedded dependency syntaxes are retained in the pack",
+  "assets": [
+    {
+      "file": "syntaxes/dockerfile.sublime-syntax",
+      "repo": "keith-hall/Containerfile-sublime-syntax",
+      "ref": "1459a3b954608b50894789c4130fae80db22011d",
+      "upstream_path": "Containerfile.sublime-syntax",
+      "license": "MIT",
+      "bytes": 10929,
+      "sha256": "d8583e0ba79f496d7fc435b16f84863a3eacdb3681b2886fdba02b9f1972f055",
+      "review": "GitHub tree blob f91f8fd26690df0aa93827ca639d45e0e00240a0 equals local git blob; filename only renamed."
+    },
+    {
+      "file": "syntaxes/kotlin.sublime-syntax",
+      "repo": "guille/sublime-kotlin",
+      "ref": "9b8b4a1f651ff651741fab031fbb6d6a4fce3ac3",
+      "upstream_path": "Kotlin.sublime-syntax",
+      "license": "Unlicense",
+      "bytes": 31835,
+      "sha256": "34a1cb04142f24533d014f77fffe23572719c89ec02fa838c631a4cd4616519e",
+      "review": "Downloaded bytes match."
+    },
+    {
+      "file": "syntaxes/powershell.sublime-syntax",
+      "repo": "SublimeText/PowerShell",
+      "ref": "2938700b586aeaa9c1d2dc0c04a1cc569ff3c24e",
+      "upstream_path": "PowerShell.sublime-syntax",
+      "license": "MIT",
+      "bytes": 50804,
+      "sha256": "0b3a72aa262a3998429952162818e2f68c433bb3228680a21e8d066cc7bfda62",
+      "review": "Downloaded bytes match."
+    },
+    {
+      "file": "syntaxes/toml.sublime-syntax",
+      "repo": "sublimehq/Packages",
+      "ref": "ee7e91ce623d570dd8fee5a5ba8562cb7ef2e720",
+      "upstream_path": "TOML/TOML.sublime-syntax",
+      "license": "LicenseRef-Sublime-Packages",
+      "bytes": 13297,
+      "sha256": "995dfa4118581bedebad815f76310435a898445912d279b0f0e8506bd52c0af5",
+      "review": "Downloaded bytes match; preserve actual permissive LICENSE text, not MIT relabeling."
+    },
+    {
+      "file": "syntaxes/swift.sublime-syntax",
+      "repo": "sharkdp/bat",
+      "ref": "7323a7514f7601737640e7172be115127d6db08c",
+      "upstream_path": "assets/syntaxes/02_Extra/Swift.sublime-syntax",
+      "license": "MIT OR Apache-2.0",
+      "bytes": 13456,
+      "sha256": "6c3ed1c4606fbf1c33d773d6a9f4202751cd8e15b26859a961991883a8361930",
+      "review": "Downloaded bytes match; retain bat NOTICE and licenses."
+    },
+    {
+      "file": "syntaxes/typescript.sublime-syntax",
+      "repo": "sharkdp/bat",
+      "ref": "7323a7514f7601737640e7172be115127d6db08c",
+      "upstream_path": "assets/syntaxes/02_Extra/TypeScript.sublime-syntax",
+      "license": "MIT OR Apache-2.0",
+      "bytes": 201893,
+      "sha256": "28ee3a665973468be16e44c89fdae5cf1f865680132c086b6973c2b3900dfb5e",
+      "review": "Downloaded bytes match; also retain original Microsoft TypeScript-Sublime Apache-2.0 license."
+    },
+    {
+      "file": "syntaxes/tsx.sublime-syntax",
+      "repo": "sharkdp/bat",
+      "ref": "a02713dc15818dd2d82d5a38b45d2cc33a4de95c",
+      "upstream_path": "assets/syntaxes/02_Extra/TypsecriptReact.sublime-syntax",
+      "license": "MIT OR Apache-2.0",
+      "bytes": 153556,
+      "sha256": "0a06403fc12b4779a6cb8a04a466e9ebeb9570e390643ec2d19516284bc4950e",
+      "review": "Replaced untraceable 200576-byte candidate with verified 153556-byte upstream file. Typsecript spelling is the actual historical path; retain Microsoft original license."
+    },
+    {
+      "file": "syntaxes/jsx.sublime-syntax",
+      "repo": "sharkdp/bat",
+      "ref": "7323a7514f7601737640e7172be115127d6db08c",
+      "upstream_path": "assets/syntaxes/02_Extra/JavaScript (Babel).sublime-syntax",
+      "license": "MIT",
+      "bytes": 42229,
+      "sha256": "9ac02fa331403b2832e9e0b945e57cf86c56a735a2aa9282df6b320fbd680b31",
+      "review": "Base SHA256 8072942a98bf6d87331f3bc9245919a2642e91d332e2c331e6964e7ca9675434; exact documented fancy-regex compatibility patch; retain Babel MIT license."
+    }
+  ],
+  "pack": {
+    "file": "openbot_syntaxes.packdump",
+    "bytes": 460072,
+    "sha256": "850817c7a148b5a96434cb51c14636330ce922229c915b2f986eef0b41f23212",
+    "builder": "cargo run -p openbot-ui --example pack_markdown --locked --offline"
+  },
+  "licenses": [
+    {
+      "file": "assets/notices/markdown/Microsoft_TypeScript-Sublime-Plugin_LICENSE",
+      "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14"
+    },
+    {
+      "file": "assets/notices/markdown/SublimeText_PowerShell_LICENSE.txt",
+      "sha256": "4cbacdf136ebd84b5276f18801c054e3eabc29bc1c17206f5e4d9d57965d5742"
+    },
+    {
+      "file": "assets/notices/markdown/babel_babel-sublime_LICENSE",
+      "sha256": "1784efc54a3ed6978f0910a2b2df1fa0b75adab00ca8929c231e79e0526876e7"
+    },
+    {
+      "file": "assets/notices/markdown/guille_sublime-kotlin_LICENSE.md",
+      "sha256": "b5065838cbac452dfc855ba6e6e031481ad2c68406f70d21ead9321374653e6c"
+    },
+    {
+      "file": "assets/notices/markdown/keith-hall_Containerfile-sublime-syntax_LICENSE",
+      "sha256": "94ff688f586f32ddba5b7a543a4aafdd68f69283158adf331eaa4a774bf37933"
+    },
+    {
+      "file": "assets/notices/markdown/sharkdp_bat_LICENSE-APACHE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "file": "assets/notices/markdown/sharkdp_bat_LICENSE-MIT",
+      "sha256": "dccda9eb9533f5c65624a1106536c6cfde46008d58e60b3faf154e8b9fd5b46e"
+    },
+    {
+      "file": "assets/notices/markdown/sharkdp_bat_NOTICE",
+      "sha256": "dd46bdeebfdf5e0e55dd0b4636eff2bfbb8f8efeaea018ed86814710a23c1bda"
+    },
+    {
+      "file": "assets/notices/markdown/sublimehq_Packages_LICENSE",
+      "sha256": "6aa3901416905d6ed0fc6b0fcca75e6649f4066db3f610e9653d0e0049e139e7"
+    }
+  ]
+}

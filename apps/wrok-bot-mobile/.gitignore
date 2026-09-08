@@ -1,0 +1,9 @@
+/unpackage/
+/node_modules/
+/.hbuilderx/
+/manifest.local.json
+/project.private.config.json
+*.keystore
+*.p12
+*.p8
+*.mobileprovision

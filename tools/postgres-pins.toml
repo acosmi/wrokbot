@@ -1,0 +1,19 @@
+# PostgreSQL Desktop sidecar source provenance. This is a build/release input only: the
+# installed application bundles already-built, signed binaries and never downloads on first run.
+schema = "openbot-postgres-pins"
+schema_version = 1
+
+[source]
+version = "17.11"
+major = 17
+archive = "postgresql-17.11.tar.gz"
+url = "https://ftp.postgresql.org/pub/source/v17.11/postgresql-17.11.tar.gz"
+size_bytes = 28397423
+sha256 = "5367f6fb2ec97efe1eb2e0c7926bb33438e51b0bd3a9733b88498056a7dc9a7e"
+checksum_url = "https://ftp.postgresql.org/pub/source/v17.11/postgresql-17.11.tar.gz.sha256"
+
+[bundle]
+manifest_schema = "openbot-postgres-sidecar-bundle"
+manifest_schema_version = 1
+release_epoch = 5
+required_programs = ["postgres", "initdb", "pg_ctl"]

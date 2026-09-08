@@ -1,0 +1,12 @@
+{
+  "identifier": "desktop-main",
+  "description": "Host-bound structured events and the closed drag action for the verified local main window.",
+  "local": true,
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "permissions": [
+    "allow-openbot-structured-events-open",
+    "allow-openbot-structured-events-close",
+    "allow-wrok-bot-window-chrome"
+  ]
+}

@@ -1,0 +1,13 @@
+<template>
+  <scroll-view class="full-scroll" direction="vertical"><view class="page-content"><text class="eyebrow">同一账号，多处工作</text><text class="page-title">我的 Wrok Bot</text><text class="page-subtitle">选择工作电脑或服务器。</text>
+    <StateNotice v-if="workspace.deviceStatus == 'unavailable'" title="设备绑定服务正在接入" description="你可以绑定多台设备；每台设备的任务、在线状态与控制权限分别管理。"/>
+    <view v-else><TapRow v-for="device in workspace.devices" :key="device.id" class="account-row" @activate="choose(device.id)" :label="device.displayName"><view class="row-copy"><text class="row-title">{{device.displayName}}</text><text class="row-subtitle">{{deviceDescription(device)}}</text><text class="row-subtitle">{{device.connection}}</text></view><text class="chevron">{{workspace.selectedDeviceId == device.id ? '✓' : '›'}}</text></TapRow></view>
+    <button class="button-reset secondary-button" :disabled="true">绑定新的 Wrok Bot</button><text class="footnote">需要设备端确认配对；这里不会打开本机免登录端口。</text>
+  </view></scroll-view>
+</template>
+<script setup lang="uts">
+import TapRow from '../../components/TapRow.uvue'
+import StateNotice from '../../components/StateNotice.uvue'
+import { workspace, deviceDescription, selectDevice } from '../../core/workspace.uts'
+function choose(id: string) { if (selectDevice(id)) uni.navigateBack() }
+</script>

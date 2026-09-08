@@ -1,0 +1,14 @@
+{
+  "brand": "Wrok Bot",
+  "source": "Original geometric path lettering authored for this repository, 2026-09-05",
+  "file": "wrok-bot-wordmark.svg",
+  "sha256": "f4c791bf42b6323863665167d5970916463331941fc8cc7dd409fb5c868ea0e1",
+  "bytes": 644,
+  "viewBox": [
+    0,
+    0,
+    116,
+    24
+  ],
+  "display": "CSS mask inherits currentColor; decorative; link retains Wrok Bot accessible name"
+}

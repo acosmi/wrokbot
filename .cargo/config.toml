@@ -1,0 +1,31 @@
+# `cargo xtask <子命令>` 的唯一入口。
+#
+# xtask 是 `openbot-testkit` 的 bin target（`required-features = ["xtask"]`），
+# 刻意不是第 11 个 crate —— 理由见仓根 Cargo.toml 顶部注释与 v3 §5.1。
+# 结尾的 `--` 把用户参数原样透传给二进制，而不是被 `cargo run` 自己吃掉。
+[alias]
+# `--target-dir target-xtask`：驱动器**必须**建在 `target/` 之外。
+# `cargo xtask ci` 的第 3 步是 `cargo test --workspace --all-features`，它会重新链接
+# 驱动器自己（xtask 的 `required-features = ["xtask"]` 恰好被 `--all-features` 满足），
+# 而 Windows 不允许删除正在运行的 exe —— cargo 的 uplift 报
+# `failed to remove file target/debug/xtask.exe: 拒绝访问 (os error 5)`，
+# 同一条命令在 Linux 上却恒绿。判据本身钉在 `xtask.rs::driver_conflicts_with_child_target`，
+# 改了这里而没改那里，`cargo xtask ci` 会当场拒跑并打印两条路径。
+xtask = "run -p openbot-testkit --features xtask --target-dir target-xtask --bin xtask --"
+
+# samael/xmlsec 在 macOS 必须让 Rust `libxml` crate 与 Homebrew xmlsec1 加载**同一份** libxml2。
+# 否则前者经 Xcode pkg-config 落到 `/usr/lib/libxml2.2.dylib`，后者加载 Homebrew 2.15，
+# 同进程两套全局 libxml 状态会在 XMLDSig 时 SIGSEGV。Linux runner 的发行包由 apt 的同一
+# libxml2 闭包提供，不需要本段；两个 Homebrew 标准前缀按架构分别钉死。
+[target.aarch64-apple-darwin]
+rustflags = ["-L", "native=/opt/homebrew/opt/libxml2/lib"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-L", "native=/usr/local/opt/libxml2/lib"]
+
+# swift-rs 1.0.8's registered build target is normally a 21-line no-op, but the dependency enables
+# its `build` feature and a caller-controlled TEST_SWIFT_RS=true would enter a separate 574-line
+# Swift/xcrun/clang/nm/llvm-objcopy toolchain. OpenBot never builds swift-rs' own test package, so
+# make the unreachable premise constructive and immune to ambient shell/CI environment variables.
+[env]
+TEST_SWIFT_RS = { value = "false", force = true }

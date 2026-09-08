@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><!-- Axum / Tauri 发出时改写 lang 与 class（§7、§8.4） -->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Wrok Bot</title>
+  <link data-trunk rel="tailwind-css" href="design/app.css">
+  <link data-trunk rel="copy-dir" href="assets/fonts">
+  <link data-trunk rel="copy-dir" href="assets/brand">
+  <link data-trunk rel="copy-dir" href="assets/notices">
+  <link rel="icon" type="image/png" href="/brand/wrok-bot-motion-still.png">
+  <link data-trunk rel="rust" data-bin="openbot-ui" data-wasm-opt="z">
+</head>
+<body></body>
+</html>
+<!--
+  真源：repository contract；继承固定的外置资源构建链。
+  文档里 <title>…</title> 的省略号取产品名 Wrok Bot（GUI 方案 §8.7：产品名不翻译）；
+  运行时由 leptos_meta 覆盖成页面标题（§12.4）。
+
+  三条不变量：
+    1. 零内联脚本标签。v3 §0.1 不保留第一方 JavaScript，v3 §13.1 是 strict CSP。
+       主题与语言的首帧正确性靠服务端改写 html 元素的 class 与 lang（§7「首帧零 JavaScript」），
+       不靠脚本探测。
+       本注释刻意不写出脚本标签的字面量，好让闸门可以直接对整个文件计数判 0，
+       不必先剔除注释——注释里的一次提及会让那道闸门恒红。
+    2. CSP 不写在 HTML 里：Server 由 Axum 响应头下发，Desktop 由 tauri.conf.json 下发
+       （v3 §13.1）。
+    3. 字体由 copy-dir 随包，零远程字体（§4.3）。
+-->

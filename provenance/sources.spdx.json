@@ -1,0 +1,1486 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "openbot-rs-phase0-evidence-freeze",
+  "documentNamespace": "https://github.com/acosmi/wrokbot/spdxrepository contract",
+  "creationInfo": {
+    "created": "2026-08-22T12:43:56Z",
+    "creators": [
+      "Tool: openbot-phase0-provenance",
+      "Organization: acosmi"
+    ],
+    "licenseListVersion": "3.27"
+  },
+  "hasExtractedLicensingInfos": [
+    {
+      "licenseId": "LicenseRef-OpenBot-RS-Proprietary",
+      "name": "OpenBot-rs Proprietary (All Rights Reserved)",
+      "extractedText": "Copyright (c) 2026 acosmi. All rights reserved.\n\n本项目第一方新代码为专有、闭源、保留一切权利（v3 §23.2）。仓库在 GitHub 上 public 只是可见性设置，不构成任何开源许可、不授予任何使用、复制、修改或再分发许可。第三方组件按各自条款分区随包，见仓根 NOTICE。许可证全文见仓根 LICENSE。"
+    },
+    {
+      "licenseId": "LicenseRef-CrabCode-Proprietary",
+      "name": "CrabCode Proprietary (closed-source)",
+      "extractedText": "CrabCode 是闭源专有软件。其根 THIRD_PARTY_NOTICES 明示 closed-source proprietary；workspace 中的 `license = MIT` 是一条 metadata，不覆盖根声明，也不构成对任何文件的授权。复用任一文件都需要逐文件书面授权（含 SOURCE_PROVENANCE 八项），否则只能 clean-room 重写。"
+    }
+  ],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-openbot-rs",
+      "name": "openbot-rs",
+      "versionInfo": "0.0.0-phase0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LicenseRef-OpenBot-RS-Proprietary",
+      "licenseDeclared": "LicenseRef-OpenBot-RS-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "homepage": "https://github.com/acosmi/wrokbot",
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-webpki-roots",
+      "name": "webpki-roots",
+      "versionInfo": "1.0.9",
+      "downloadLocation": "https://crates.io/api/v1/crates/webpki-roots/1.0.9/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "CDLA-Permissive-2.0",
+      "licenseDeclared": "CDLA-Permissive-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/webpki-roots@1.0.9"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-samael",
+      "name": "samael",
+      "versionInfo": "0.0.22",
+      "downloadLocation": "https://crates.io/api/v1/crates/samael/0.0.22/download",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "3507857cc308877abafd0db18e30b2852623db961006ba38b402e0eff048ee7f"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2020 Nathan Jaremko",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/samael@0.0.22"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libxml2-native",
+      "name": "libxml2",
+      "versionInfo": "2.15.3",
+      "downloadLocation": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.3.tar.xz",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "78262a6e7ac170d6528ebfe2efccdf220191a5af6a6cd61ea4a9a9a5042c7a07"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (C) 1998-2012 Daniel Veillard; Copyright (C) The Libxml2 Contributors",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-xmlsec-native",
+      "name": "xmlsec",
+      "versionInfo": "1.3.12",
+      "downloadLocation": "https://github.com/lsh123/xmlsec/releases/download/1.3.12/xmlsec1-1.3.12.tar.gz",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "24045199af12d93fe5fdbbbf7e386e823e4842071e9432e2b90ac108b889a923"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (C) 2002-2026 Aleksey Sanin",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-openssl-native",
+      "name": "OpenSSL",
+      "versionInfo": "3.6.3",
+      "downloadLocation": "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright OpenSSL Project Authors",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-copilotkit-openbot",
+      "name": "CopilotKit/openbot",
+      "versionInfo": "891df72f1827454d8b353d108fe5dd2313b7e30d",
+      "downloadLocation": "git+https://github.com/CopilotKit/openbot.git@891df72f1827454d8b353d108fe5dd2313b7e30d",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2026 CopilotKit",
+      "supplier": "Organization: CopilotKit",
+      "sourceInfo": "无 SHA256：本条的身份是 git commit 本身（externalRefs 的 purl 已带 @<commit>），没有钉死的 release tarball 可算摘要。发行前若要打包快照，须在 §16.3 的 SBOM 步骤补 tarball 摘要。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d"
+        }
+      ],
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-ag-ui",
+      "name": "ag-ui-protocol/ag-ui",
+      "versionInfo": "e42bdbedc27cdf982ed9b5de904215acd73a17fb",
+      "downloadLocation": "git+https://github.com/ag-ui-protocol/ag-ui.git@e42bdbedc27cdf982ed9b5de904215acd73a17fb",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2025",
+      "sourceInfo": "无 SHA256：本条的身份是 git commit 本身（externalRefs 的 purl 已带 @<commit>），没有钉死的 release tarball 可算摘要。发行前若要打包快照，须在 §16.3 的 SBOM 步骤补 tarball 摘要。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/ag-ui-protocol/ag-ui@e42bdbedc27cdf982ed9b5de904215acd73a17fb"
+        }
+      ],
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-rmcp",
+      "name": "rmcp (modelcontextprotocol/rust-sdk)",
+      "versionInfo": "3.1.4",
+      "downloadLocation": "git+https://github.com/modelcontextprotocol/rust-sdk.git@4a738b9dd99eaca418b614afa433a0cbdaf8d056",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "Batch 11 已作为 production dependency 锁入 Cargo.lock；crates.io .crate checksum = 1a15bc53261a9dc37e105df006e4656c598379a8f9581f8950debb130f27a7cf，.cargo_vcs_info.json 同时绑定 commit 4a738b9dd99eaca418b614afa433a0cbdaf8d056。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/rmcp@3.1.4"
+        },
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/modelcontextprotocol/rust-sdk@4a738b9dd99eaca418b614afa433a0cbdaf8d056"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-jsonschema",
+      "name": "jsonschema",
+      "versionInfo": "0.51.0",
+      "downloadLocation": "https://crates.io/api/v1/crates/jsonschema/0.51.0/download",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "152999731bfbe0bb82d561550be73b0c31a9827d6ebe3fe96ad47563703b5328"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2020-2026 Dmitry Dygalo",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/jsonschema@0.51.0"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-openai-codex",
+      "name": "openai/codex",
+      "versionInfo": "4f39251a010a8bd7d692d25fb33832ff06f1635a",
+      "downloadLocation": "git+https://github.com/openai/codex.git@4f39251a010a8bd7d692d25fb33832ff06f1635a",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright 2025 OpenAI",
+      "supplier": "Organization: OpenAI",
+      "sourceInfo": "无 SHA256：本条的身份是 git commit 本身（externalRefs 的 purl 已带 @<commit>），没有钉死的 release tarball 可算摘要。发行前若要打包快照，须在 §16.3 的 SBOM 步骤补 tarball 摘要。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/openai/codex@4f39251a010a8bd7d692d25fb33832ff06f1635a"
+        }
+      ],
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-xai-grok-build",
+      "name": "xai-org/grok-build",
+      "versionInfo": "19d42e35c07a9c9244f03f6df0c4c353f970d4f9",
+      "downloadLocation": "git+https://github.com/xai-org/grok-build.git@19d42e35c07a9c9244f03f6df0c4c353f970d4f9",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright 2023-2026 SpaceXAI",
+      "supplier": "Organization: xAI",
+      "sourceInfo": "无 SHA256：本条的身份是 git commit 本身（externalRefs 的 purl 已带 @<commit>），没有钉死的 release tarball 可算摘要。发行前若要打包快照，须在 §16.3 的 SBOM 步骤补 tarball 摘要。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/xai-org/grok-build@19d42e35c07a9c9244f03f6df0c4c353f970d4f9"
+        }
+      ],
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-tauri",
+      "name": "tauri",
+      "versionInfo": "2.11.5",
+      "downloadLocation": "https://crates.io/api/v1/crates/tauri/2.11.5/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0 OR MIT",
+      "licenseDeclared": "Apache-2.0 OR MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/tauri@2.11.5"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-leptos",
+      "name": "leptos",
+      "versionInfo": "0.8.19",
+      "downloadLocation": "https://crates.io/api/v1/crates/leptos/0.8.19/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/leptos@0.8.19"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-leptos-router",
+      "name": "leptos_router",
+      "versionInfo": "0.8.13",
+      "downloadLocation": "https://crates.io/api/v1/crates/leptos_router/0.8.13/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/leptos_router@0.8.13"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-leptos-meta",
+      "name": "leptos_meta",
+      "versionInfo": "0.8.6",
+      "downloadLocation": "https://crates.io/api/v1/crates/leptos_meta/0.8.6/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/leptos_meta@0.8.6"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-leptos-i18n",
+      "name": "leptos_i18n",
+      "versionInfo": "0.6.2",
+      "downloadLocation": "https://crates.io/api/v1/crates/leptos_i18n/0.6.2/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/leptos_i18n@0.6.2"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-leptos-i18n-build",
+      "name": "leptos_i18n_build",
+      "versionInfo": "0.6.2",
+      "downloadLocation": "https://crates.io/api/v1/crates/leptos_i18n_build/0.6.2/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/leptos_i18n_build@0.6.2"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-cel",
+      "name": "cel",
+      "versionInfo": "0.14.3",
+      "downloadLocation": "https://crates.io/api/v1/crates/cel/0.14.3/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/cel@0.14.3"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-openidconnect",
+      "name": "openidconnect",
+      "versionInfo": "4.0.1",
+      "downloadLocation": "https://crates.io/api/v1/crates/openidconnect/4.0.1/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/openidconnect@4.0.1"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-samael",
+      "name": "samael",
+      "versionInfo": "0.0.22",
+      "downloadLocation": "https://crates.io/api/v1/crates/samael/0.0.22/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/samael@0.0.22"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-pulldown-cmark",
+      "name": "pulldown-cmark",
+      "versionInfo": "0.13.4",
+      "downloadLocation": "https://crates.io/api/v1/crates/pulldown-cmark/0.13.4/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/pulldown-cmark@0.13.4"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-syntect",
+      "name": "syntect",
+      "versionInfo": "5.3.0",
+      "downloadLocation": "https://crates.io/api/v1/crates/syntect/5.3.0/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/syntect@5.3.0"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-sys-locale",
+      "name": "sys-locale",
+      "versionInfo": "0.3.2",
+      "downloadLocation": "https://crates.io/api/v1/crates/sys-locale/0.3.2/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/sys-locale@0.3.2"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-image",
+      "name": "image",
+      "versionInfo": "0.25.10",
+      "downloadLocation": "https://crates.io/api/v1/crates/image/0.25.10/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "Batch107 已仅以 openbot-testkit/xtask 的 PNG-only optional edge 引入；Cargo.lock checksum = 85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104。不开 xtask 时不进入任何产品图。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/image@0.25.10"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crate-xcap",
+      "name": "xcap",
+      "versionInfo": "0.9.8",
+      "downloadLocation": "https://crates.io/api/v1/crates/xcap/0.9.8/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "无 SHA256：本条只钉版本号，`.crate` 文件的摘要由 Cargo.lock 的 checksum 字段承担（本仓 Cargo.lock 当前尚未引入该依赖，见 provenance 的 status 说明）。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/xcap@0.9.8"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-electron",
+      "name": "Electron",
+      "versionInfo": "43.3.0",
+      "downloadLocation": "https://github.com/electron/electron/releases/tag/v43.3.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) Electron contributors; Copyright (c) 2013-2020 GitHub Inc.",
+      "sourceInfo": "无 SHA256：本条钉的是 release tag，不是某一件平台资产；实际随包的 Electron 字节由 browser kernel 的 pin 文件按平台校验（v3 §16.2），SBOM 在打包腿补该平台资产摘要。",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/electron/electron@v43.3.0"
+        }
+      ],
+      "primaryPackagePurpose": "FRAMEWORK"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-chromium",
+      "name": "Chromium",
+      "versionInfo": "150.0.7871.212",
+      "downloadLocation": "https://chromium.googlesource.com/chromium/src/+/150.0.7871.212",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright 2015 The Chromium Authors",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/chromium@150.0.7871.212"
+        }
+      ],
+      "primaryPackagePurpose": "FRAMEWORK"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-nodejs",
+      "name": "Node.js",
+      "versionInfo": "24.18.1",
+      "downloadLocation": "https://nodejs.org/download/release/v24.18.1/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/nodejs@24.18.1"
+        }
+      ],
+      "primaryPackagePurpose": "FRAMEWORK"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-postgresql",
+      "name": "PostgreSQL",
+      "versionInfo": "17.11",
+      "downloadLocation": "https://ftp.postgresql.org/pub/source/v17.11/postgresql-17.11.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "PostgreSQL",
+      "licenseDeclared": "PostgreSQL",
+      "copyrightText": "Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group; Portions Copyright (c) 1994, The Regents of the University of California",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/postgresql@17.11"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-rust-toolchain",
+      "name": "Rust toolchain",
+      "versionInfo": "1.94.1",
+      "downloadLocation": "https://static.rust-lang.org/dist/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0 OR MIT",
+      "licenseDeclared": "Apache-2.0 OR MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/rust@1.94.1"
+        }
+      ],
+      "primaryPackagePurpose": "OTHER"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-inter",
+      "name": "Inter",
+      "versionInfo": "4.1",
+      "downloadLocation": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "OFL-1.1",
+      "licenseDeclared": "OFL-1.1",
+      "copyrightText": "Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)",
+      "supplier": "Organization: The Inter Project Authors",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/rsms/inter@v4.1"
+        }
+      ],
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-inter-intervariable-woff2",
+      "name": "web/InterVariable.woff2",
+      "versionInfo": "4.1",
+      "downloadLocation": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "OFL-1.1",
+      "licenseDeclared": "OFL-1.1",
+      "copyrightText": "Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3"
+        }
+      ],
+      "primaryPackagePurpose": "FILE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-inter-intervariable-italic-woff2",
+      "name": "web/InterVariable-Italic.woff2",
+      "versionInfo": "4.1",
+      "downloadLocation": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "OFL-1.1",
+      "licenseDeclared": "OFL-1.1",
+      "copyrightText": "Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e564f652916db6c139570fefb9524a77c4d48f30c92928de9db19b6b5c7a262a"
+        }
+      ],
+      "primaryPackagePurpose": "FILE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-lucide",
+      "name": "Lucide",
+      "versionInfo": "1.33.0",
+      "downloadLocation": "https://github.com/lucide-icons/lucide/releases/download/1.33.0/lucide-icons-1.33.0.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "ISC AND MIT",
+      "licenseDeclared": "ISC AND MIT",
+      "copyrightText": "Copyright (c) 2026 Lucide Icons and Contributors; Copyright (c) 2013-present Cole Bemis",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "53831c8def65621f88cae315cdb38ac70db1d937062df35c93546efb00260a98"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/lucide-icons/lucide@1.33.0"
+        }
+      ],
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-tailwindcss-linux-x64",
+      "name": "tailwindcss standalone CLI (linux-x64)",
+      "versionInfo": "4.3.3",
+      "downloadLocation": "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-linux-x64",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "dc61b3ac6b8c9ca874c0cc4c57b2409791a64c5540404ca5f5367360babc313a"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/tailwindlabs/tailwindcss@v4.3.3"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-tailwindcss-linux-arm64",
+      "name": "tailwindcss standalone CLI (linux-arm64)",
+      "versionInfo": "4.3.3",
+      "downloadLocation": "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-linux-arm64",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "55fd0b241214eff3de1e8ee4f22796662f2d2e7a49bcfca7477cfd0bac398195"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/tailwindlabs/tailwindcss@v4.3.3"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-tailwindcss-macos-arm64",
+      "name": "tailwindcss standalone CLI (macos-arm64)",
+      "versionInfo": "4.3.3",
+      "downloadLocation": "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-macos-arm64",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "cdf646702987a743464dff4d9c60fd4480d1c1e73dd819a9a67f1078815dce9d"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/tailwindlabs/tailwindcss@v4.3.3"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-tailwindcss-macos-x64",
+      "name": "tailwindcss standalone CLI (macos-x64)",
+      "versionInfo": "4.3.3",
+      "downloadLocation": "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-macos-x64",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "7922e0953f2110c05976e3bf58f14e643d90427575e766b7d433f5f80cbee7e1"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/tailwindlabs/tailwindcss@v4.3.3"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-tailwindcss-windows-x64",
+      "name": "tailwindcss standalone CLI (windows-x64)",
+      "versionInfo": "4.3.3",
+      "downloadLocation": "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-windows-x64.exe",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e0e260ce048014e9268f6237ff18f8ccf02cef521cbd0ae04e82c2cdf7aa3955"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/tailwindlabs/tailwindcss@v4.3.3"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-binaryen-linux-x64",
+      "name": "binaryen / wasm-opt (linux-x64)",
+      "versionInfo": "version_132",
+      "downloadLocation": "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-linux.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/WebAssembly/binaryen@version_132"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-binaryen-linux-arm64",
+      "name": "binaryen / wasm-opt (linux-arm64)",
+      "versionInfo": "version_132",
+      "downloadLocation": "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-aarch64-linux.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "c58562417836c5d0493d89bdefc434933bdc097db641b483df86bcfa557a107f"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/WebAssembly/binaryen@version_132"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-binaryen-macos-arm64",
+      "name": "binaryen / wasm-opt (macos-arm64)",
+      "versionInfo": "version_132",
+      "downloadLocation": "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-arm64-macos.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "98aad827847af7ef990ed7098d885725c8e5b5aae75073403635617ae4e259aa"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/WebAssembly/binaryen@version_132"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-binaryen-macos-x64",
+      "name": "binaryen / wasm-opt (macos-x64)",
+      "versionInfo": "version_132",
+      "downloadLocation": "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-macos.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "40c3de90bb3766bd0282a895e139a6f50253dba49b4f5bb89e66faca162d832e"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/WebAssembly/binaryen@version_132"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-binaryen-windows-x64",
+      "name": "binaryen / wasm-opt (windows-x64)",
+      "versionInfo": "version_132",
+      "downloadLocation": "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-windows.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "2089428ec98c899b45ee5d00636ddd6e2da8636cc473ef50b165cc25793ef7cb"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/WebAssembly/binaryen@version_132"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-trunk",
+      "name": "trunk",
+      "versionInfo": "0.21.14",
+      "downloadLocation": "https://crates.io/api/v1/crates/trunk/0.21.14/download",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "4f7fe1b23957a580be9a7a8b305c331b2977989f33695128d663380d09eaea37"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/trunk@0.21.14"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tool-wasm-bindgen-cli",
+      "name": "wasm-bindgen-cli",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/wasm-bindgen-cli"
+        }
+      ],
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crabcode",
+      "name": "CrabCode",
+      "versionInfo": "98f971bcf7411f056e8489e6e5a8e826f6672d38",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-CrabCode-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crabcode-reuse-supervisor",
+      "name": "CrabCode reuse candidate: `acosmi-supervisor` / daemon launcher / heartbeat",
+      "versionInfo": "98f971bcf7411f056e8489e6e5a8e826f6672d38",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-CrabCode-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crabcode-reuse-permission-sandbox",
+      "name": "CrabCode reuse candidate: permission / shell parser / sandbox / exec",
+      "versionInfo": "98f971bcf7411f056e8489e6e5a8e826f6672d38",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-CrabCode-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crabcode-reuse-cmd-browser",
+      "name": "CrabCode reuse candidate: `acosmi-cmd-browser`",
+      "versionInfo": "98f971bcf7411f056e8489e6e5a8e826f6672d38",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-CrabCode-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crabcode-reuse-browser-shell",
+      "name": "CrabCode reuse candidate: `components/browser-shell`",
+      "versionInfo": "98f971bcf7411f056e8489e6e5a8e826f6672d38",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-CrabCode-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crabcode-reuse-app-server-protocol",
+      "name": "CrabCode reuse candidate: app-server protocol/transport",
+      "versionInfo": "98f971bcf7411f056e8489e6e5a8e826f6672d38",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-CrabCode-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crabcode-reuse-tauri-host",
+      "name": "CrabCode reuse candidate: 历史 Tauri host",
+      "versionInfo": "98f971bcf7411f056e8489e6e5a8e826f6672d38",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-CrabCode-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-crabcode-reuse-ts-agent-mcp",
+      "name": "CrabCode reuse candidate: TS Agent/MCP",
+      "versionInfo": "98f971bcf7411f056e8489e6e5a8e826f6672d38",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-CrabCode-Proprietary",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-openai-dotnet-recorded-trace",
+      "name": "OpenAI .NET Responses recorded test trace",
+      "versionInfo": "19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5",
+      "downloadLocation": "https://github.com/openai/openai-dotnet/blob/19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5/tests/SessionRecords/ResponsesToolTests/FunctionToolStreamingWorks.json",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "ff7fadb3baabc1fd1fc482fe9ec28ba93d5a899b961cce73bf19f8d9c1fe20b8"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2024 OpenAI (https://openai.com)",
+      "homepage": "https://github.com/openai/openai-dotnet",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-ag-ui-core-schema-0-0-57",
+      "name": "@ag-ui/core official schema fixture",
+      "versionInfo": "0.0.57",
+      "downloadLocation": "git+https://github.com/ag-ui-protocol/ag-ui.git@54f13419055b4d0f442c71e1efab18b310982ce1",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2025",
+      "sourceInfo": "Selected source files under sdks/typescript/packages/core plus root LICENSE; exact paths/Git blobs/bytes/SHA-256 in fixtures/agui/official-event-family.provenance.json. package.json bytes are preserved as package-manifest.json, never executed.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40ag-ui/core@0.0.57"
+        }
+      ],
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-anthropic-go-recorded-trace",
+      "name": "Anthropic Go Messages recorded test trace",
+      "versionInfo": "e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33",
+      "downloadLocation": "https://github.com/anthropics/anthropic-sdk-go/blob/e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33/toolrunner/testdata/cassettes/tool_runner_streaming_all.yaml",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "a523fe3e4db93da6e1b8f715e151d448bc9cc2231bae603d5357f2f6583140fe"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright 2023 Anthropic, PBC.",
+      "homepage": "https://github.com/anthropics/anthropic-sdk-go",
+      "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-anthropic-php-recorded-trace",
+      "name": "Anthropic PHP Messages captured test trace",
+      "versionInfo": "93aa419595dceeb7062292e09406b4e2a63b96e1",
+      "downloadLocation": "https://github.com/anthropics/anthropic-sdk-php/blob/93aa419595dceeb7062292e09406b4e2a63b96e1/fixtures/ga/thinking.txt",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "70366a8b43b634eb1bc1e4e1fabbc7c14a8d182cca7561402ff40c07594652ef"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright 2023 Anthropic, PBC.",
+      "homepage": "https://github.com/anthropics/anthropic-sdk-php",
+      "primaryPackagePurpose": "SOURCE"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "GENERATED_FROM",
+      "relatedSpdxElement": "SPDXRef-Package-openai-dotnet-recorded-trace"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-webpki-roots"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-samael"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-samael",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-xmlsec-native"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-xmlsec-native",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-libxml2-native"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-xmlsec-native",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-openssl-native"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "GENERATED_FROM",
+      "relatedSpdxElement": "SPDXRef-Package-copilotkit-openbot"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "GENERATED_FROM",
+      "relatedSpdxElement": "SPDXRef-Package-ag-ui"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-rmcp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-jsonschema"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-openai-codex"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-xai-grok-build"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-tauri"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-leptos"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-leptos-router"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-leptos-meta"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-leptos-i18n"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-leptos-i18n-build"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-cel"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-openidconnect"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-samael"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-pulldown-cmark"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-syntect"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-sys-locale"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-image"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-crate-xcap"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-electron"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-electron",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-chromium"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-electron",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-nodejs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-postgresql"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-rust-toolchain",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-inter"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-inter",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-inter-intervariable-woff2"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-inter-intervariable-woff2"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-inter",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-inter-intervariable-italic-woff2"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-inter-intervariable-italic-woff2"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-lucide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-tailwindcss-linux-x64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-tailwindcss-linux-arm64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-tailwindcss-macos-arm64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-tailwindcss-macos-x64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-tailwindcss-windows-x64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-binaryen-linux-x64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-binaryen-linux-arm64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-binaryen-macos-arm64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-binaryen-macos-x64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-binaryen-windows-x64",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-trunk",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-tool-wasm-bindgen-cli",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-openbot-rs"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-crabcode",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-supervisor"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-supervisor"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-crabcode",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-permission-sandbox"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-permission-sandbox"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-crabcode",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-cmd-browser"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-cmd-browser"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-crabcode",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-browser-shell"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-browser-shell"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-crabcode",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-app-server-protocol"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-app-server-protocol"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-crabcode",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-tauri-host"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-tauri-host"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-crabcode",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-ts-agent-mcp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "OTHER",
+      "relatedSpdxElement": "SPDXRef-Package-crabcode-reuse-ts-agent-mcp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "GENERATED_FROM",
+      "relatedSpdxElement": "SPDXRef-Package-ag-ui-core-schema-0-0-57"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "GENERATED_FROM",
+      "relatedSpdxElement": "SPDXRef-Package-anthropic-go-recorded-trace"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "GENERATED_FROM",
+      "relatedSpdxElement": "SPDXRef-Package-anthropic-php-recorded-trace"
+    }
+  ]
+}

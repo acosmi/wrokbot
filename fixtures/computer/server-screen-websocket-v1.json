@@ -1,0 +1,56 @@
+{
+  "schema": "openbot-server-screen-websocket-v1",
+  "application": {
+    "command": "issue_screen_session",
+    "reply": "screen_session",
+    "targetFields": ["computerId", "computerGeneration", "tabId"],
+    "bindingFromJsonBody": false,
+    "ticketDebugRedacted": true
+  },
+  "server": {
+    "sessionEndpoint": "POST /api/screen/sessions",
+    "websocketEndpoint": "GET /api/screen",
+    "trustedOriginBeforeBody": true,
+    "sessionResponseNoStore": true,
+    "ticketInUrlOrQuery": false,
+    "queryRejected": true,
+    "requestedProtocolsExactly": ["openbot.screen.v1", "obot_screen_<128-bit-lower-hex>"],
+    "selectedProtocol": "openbot.screen.v1",
+    "selectedProtocolContainsTicket": false,
+    "ticketSingleUse": true,
+    "inboundTextOrBinaryCloseCode": 1008,
+    "inputFrameLimitBytes": 1024,
+    "outputFrameLimitBytes": 8388676,
+    "defaultViewersPerStream": 8
+  },
+  "binary": {
+    "initialFrameImmediately": true,
+    "nextFramesUseLatestWatchValue": true,
+    "magic": "OBSCRN01",
+    "jpegOffset": 68,
+    "scopeOrTicketInFrame": false,
+    "authGenerationInvalidationCloseCode": 1008
+  },
+  "macosArm64Evidence": {
+    "realElectronRole": "browser_computer",
+    "path": ["authenticated_engine_pipe", "screen_hub", "application_ticket", "axum_tcp_websocket", "binary_client"],
+    "firstFrameSequenceMatchesEngine": true,
+    "jpegMagicMatches": true,
+    "boundedShutdown": true
+  },
+  "evidenceBoundary": {
+    "typedApplicationTicket": true,
+    "serverSameOriginWebSocket": true,
+    "realEngineToServerBinaryFrame": true,
+    "productionServerHubAndPortComposition": true,
+    "productionManagerAttachesEngineSource": false,
+    "postgresSessionCookieBrowser": false,
+    "externalTlsTermination": false,
+    "desktopLoopbackWebSocket": false,
+    "viewerInputOverWebSocket": false,
+    "bandwidthOrIdleLimit": false,
+    "lastViewerStopsScreencastWithinTwoSeconds": false,
+    "windowsRuntime": false,
+    "linuxRunscRuntime": false
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "schema": "openbot-browser-runtime-budget-v1",
+  "upstream": {
+    "repository": "CopilotKit/openbot",
+    "commit": "891df72f1827454d8b353d108fe5dd2313b7e30d",
+    "selector": "agent-computer/src/browser-eviction.ts",
+    "runtime": "agent-computer/src/profiles.ts"
+  },
+  "defaults": {
+    "maximumLiveBrowsers": 8,
+    "browserIdleTimeoutMs": 1800000
+  },
+  "cases": {
+    "concurrentSameScope": {
+      "coldLaunches": 1,
+      "liveBrowsers": 1
+    },
+    "capacity": {
+      "maximumLiveBrowsers": 2,
+      "touchOrder": ["a", "b", "a", "c"],
+      "retired": ["b"],
+      "reason": "capacity",
+      "remaining": ["a", "c"]
+    },
+    "allLeased": {
+      "maximumLiveBrowsers": 1,
+      "errorCode": "computer_runtime_busy",
+      "extraLaunches": 0
+    },
+    "idleBoundary": {
+      "idleTimeoutMs": 10,
+      "lastUsedMs": 0,
+      "sweepAtMs": 10,
+      "retired": true,
+      "leasedRetired": false
+    },
+    "generation": {
+      "staleErrorCode": "computer_generation_stale",
+      "identityConflictErrorCode": "computer_scope_identity_conflict",
+      "advanceRetirementReason": "generation_advanced"
+    },
+    "launchFailure": {
+      "errorCode": "computer_launch_failed",
+      "reservedVictimRestored": true
+    },
+    "shutdown": {
+      "leasedErrorCode": "computer_runtime_busy",
+      "afterLeaseDropRetired": 1,
+      "newLeaseErrorCode": "computer_runtime_closed"
+    }
+  },
+  "evidenceBoundary": {
+    "pureSelector": true,
+    "managerOwnsDriverHandles": true,
+    "serverOrDesktopEngineAssembly": false,
+    "cpuRssPidsDiskBudget": false
+  }
+}

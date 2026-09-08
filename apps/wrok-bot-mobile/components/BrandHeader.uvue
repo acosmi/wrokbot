@@ -1,0 +1,10 @@
+<template>
+  <view class="brand-header">
+    <view class="brand-lockup"><image class="brand-logo" src="/static/brand/wrok-bot-motion-still.png" mode="aspectFit"/><text class="brand-word">Wrok Bot</text></view>
+    <button class="button-reset profile-button" aria-label="我的账户" @click="openAccount">W</button>
+  </view>
+</template>
+<script setup lang="uts">
+defineOptions({ styleIsolation: 'app' })
+function openAccount() { uni.navigateTo({ url: '/pages/account/index' }) }
+</script>

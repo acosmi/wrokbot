@@ -1,0 +1,66 @@
+{
+  "schema": "openbot-screen-coordinate-input-journey-v1",
+  "officialCdpUnits": {
+    "devtoolsFrontendCommit": "036dd84bc4fdfb0fd4be2a5ddb3fe37ef24939cd",
+    "inputModelGitBlob": "cfa97617c47f1b01957429f1bfdc96ebd6fe07d7",
+    "screencastViewGitBlob": "978df09ac874f754df3e7a353cc544616cee5516",
+    "pageMetadataSource": "https://chromedevtools.github.io/devtools-protocol/tot/Page/#type-ScreencastFrameMetadata",
+    "inputSource": "https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchMouseEvent",
+    "deviceWidthAndHeight": "device-independent-pixels",
+    "pageScaleFactor": "separate-positive-scale",
+    "scrollOffset": "document-css-pixels",
+    "mouseCoordinates": "main-frame-viewport-css-pixels",
+    "wheelDeltas": "css-pixels",
+    "insertTextUse": ["emoji-keyboard", "ime-completed-text"]
+  },
+  "mapping": {
+    "canvasFit": "contain",
+    "letterboxInput": "reject",
+    "rightAndBottomEdges": "exclusive",
+    "frameSequenceCarried": true,
+    "deviceScaleAppliedExactlyOnce": true,
+    "pageScaleAppliedOnlyToDocumentHitTestCoordinates": true,
+    "scrollAddedOnlyToDocumentHitTestCoordinates": true,
+    "decodedAspectMismatch": "reject",
+    "maximumCanvasAxisCssPixels": 1000000,
+    "minimumDecodedAxisPixels": 16,
+    "maximumDecodedAxisPixels": 16384
+  },
+  "pureMatrix": {
+    "testsPassed": 4,
+    "letterboxCanvas": {"left": 100, "top": 50, "width": 640, "height": 500},
+    "decodedFrame": {"width": 1280, "height": 800},
+    "clientPoint": {"x": 140, "y": 184},
+    "viewportPoint": {"x": 80, "y": 168},
+    "documentPointWithScroll10x20": {"x": 90, "y": 188},
+    "deviceScaleOneAndTwoMatch": true,
+    "pageScaleTwoKeepsViewportAndHalvesDocumentContribution": true
+  },
+  "macosArm64Evidence": {
+    "rolesPassed": ["browser_computer", "sandboxed_component"],
+    "letterboxPointReachedButton": true,
+    "dragSequence": ["mousePressed", "mouseMoved", "mouseReleased"],
+    "imeCompletedText": "日本語🔐",
+    "imePath": "Input.insertText",
+    "viewerWheelDeltaY": 200,
+    "cdpWheelDeltaY": 400,
+    "receivedEqualsAcknowledged": true,
+    "slowConsumerDroppedAtLeast": 1
+  },
+  "evidenceBoundary": {
+    "pureCoordinateMatrix": true,
+    "macosActualEngineJourney": true,
+    "imeCompletedTextJourney": true,
+    "downMoveUpJourney": true,
+    "nonUnitDeviceScaleHardware": false,
+    "nonUnitPageScaleHardware": false,
+    "nonZeroScrollPointerHardware": false,
+    "leptosCanvasEventWiring": false,
+    "staleDisplayedFrameTransportRejection": false,
+    "serverOrDesktopWebSocket": false,
+    "productionComputerAssembly": false,
+    "resizeNavigationTabSwitch": false,
+    "windowsRuntime": false,
+    "linuxRunscRuntime": false
+  }
+}

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Source: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d examples/fintech/model.yaml
+model:
+  provider: openai
+  credential_secret_ref: openai-api-key
+  default_model: gpt-4.1

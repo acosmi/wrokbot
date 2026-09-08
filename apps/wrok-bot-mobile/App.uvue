@@ -1,0 +1,9 @@
+<script lang="uts">
+import { suspendPresentation } from './core/workspace.uts'
+export default {
+  onHide() { suspendPresentation() }
+}
+</script>
+<style>
+@import './styles/mobile.css';
+</style>

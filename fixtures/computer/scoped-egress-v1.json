@@ -1,0 +1,81 @@
+{
+  "schema": "openbot-scoped-egress-v1",
+  "source_lineage": [
+    "OpenBot v4 §10.5",
+    "RFC 9110 §7.6/§9.3.6",
+    "RFC 9112 §3.2",
+    "RFC 6455"
+  ],
+  "implementation": "openbot_infra::net::scope_gateway",
+  "dialer": "openbot_infra::net::safe_http",
+  "capability": {
+    "listener": "IPv4 loopback, ephemeral port, one instance owner",
+    "secret_bits": 256,
+    "verification": "HMAC-SHA256 with private random key; constant-time digest verification",
+    "actor_or_scope_from_request": false,
+    "proxy_credential_forwarded": false
+  },
+  "defaults": {
+    "connections": 32,
+    "downstream_header_dns_connect_upgrade_ms": 10000,
+    "idle_ms": 30000,
+    "connection_lifetime_ms": 1800000,
+    "request_body_bytes": 8388608,
+    "response_body_bytes": 67108864,
+    "tunnel_bytes_both_directions": 1073741824,
+    "aggregate_bytes_per_second": 8388608,
+    "burst_bytes": 1048576,
+    "header_bytes": 32768,
+    "header_count": 64,
+    "copy_chunk_bytes": 16384
+  },
+  "protocols": [
+    "HTTP/1 absolute form",
+    "HTTP/1 CONNECT opaque TCP",
+    "HTTP/1 websocket upgrade, opaque RFC6455 frames"
+  ],
+  "behavior": {
+    "http_keep_alive": false,
+    "outgoing_pool": false,
+    "automatic_retry": false,
+    "automatic_redirect": false,
+    "host_policy": "canonical exact/wildcard subdomain; deny before allow; explicit ports",
+    "numeric_ip_dns": false,
+    "dns_after_auth_and_host_policy": true,
+    "re_resolve_each_new_hop": true,
+    "scope_shutdown": "cancel listener/connections; abort and join HTTP drivers; Drop aborts owned tasks",
+    "unknown_length_over_limit": "truncate/fail, never replay; an already sent prefix remains an unknown effect"
+  },
+  "evidence": {
+    "host": "macOS arm64",
+    "tests": [
+      "authentication_shape_host_and_ip_refusals_happen_before_effects",
+      "http_forwards_body_and_end_to_end_headers_but_never_proxy_credential_or_redirect",
+      "connect_is_bidirectional_and_scope_shutdown_joins_both_sockets",
+      "websocket_upgrade_preserves_rfc6455_frames_and_retires_its_driver",
+      "denied_shapes_and_declared_body_limit_never_connect",
+      "preauth_capacity_idle_lifetime_and_drop_close_owned_connections",
+      "policy_rules_are_canonical_and_do_not_admit_ambiguous_wildcards",
+      "deny_rules_override_allowed_subdomains_and_an_empty_allowlist_denies_everything",
+      "ipv6_literals_use_the_vetted_numeric_address_without_dns",
+      "shutdown_drops_pending_resolution_and_joins_a_stalled_http_driver",
+      "body_and_tunnel_byte_limits_are_enforced_while_data_flows",
+      "a_chunked_upload_cannot_forward_its_over_budget_suffix",
+      "aggregate_bandwidth_is_shared_between_connections",
+      "activity_in_one_direction_keeps_a_tunnel_alive_then_idle_closes_it",
+      "https_connect_carries_real_tls_with_client_side_certificate_verification"
+    ],
+    "network": "real loopback HTTP, CONNECT, WS and TLS; isolated synthetic peers; existing non-production test certificate",
+    "live_provider": false
+  },
+  "remaining": {
+    "production_computer_manager": false,
+    "tenant_policy_loading": false,
+    "browser_engine_proxy_bootstrap": false,
+    "server_namespace_routing": false,
+    "kernel_egress_boundary": false,
+    "tls_content_or_sni_policy": false,
+    "full_G5": false,
+    "full_G7": false
+  }
+}

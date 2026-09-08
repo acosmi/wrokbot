@@ -1,0 +1,11 @@
+<template>
+  <view class="console-root"><scroll-view class="console-scroll" direction="vertical"><view class="page-content"><text class="eyebrow">聊天记录</text><text class="page-title">继续这段对话</text><StateNotice v-if="messages.length == 0" title="聊天记录暂不可用" description="连接工作空间后重新加载当前账号可访问的聊天。"/><view v-for="message in messages" :key="message.id" class="review-card"><text class="row-subtitle">{{message.role == 'user' ? '你' : 'Wrok Bot'}}</text><text class="body-copy" :selectable="true">{{message.body}}</text></view></view></scroll-view><view class="composer-wrap"><text class="footnote">移动对话续写正在接入。历史正文不会自动变成执行任务的授权。</text></view></view>
+</template>
+<script setup lang="uts">
+import { ref, computed } from 'vue'
+import StateNotice from '../../components/StateNotice.uvue'
+import { visibleConversationMessages } from '../../core/console.uts'
+const id = ref('')
+const messages = computed(() => visibleConversationMessages(id.value))
+onLoad((options) => { id.value = options['id'] ?? '' })
+</script>

@@ -1,0 +1,141 @@
+{
+  "schema": "openbot-fixture-provenance-v1",
+  "protocol": "AG-UI",
+  "version": "0.0.57",
+  "provenance": {
+    "kind": "official_schema_and_spec_release",
+    "publisher": "ag-ui-protocol",
+    "repository": "https://github.com/ag-ui-protocol/ag-ui",
+    "release_commit": "54f13419055b4d0f442c71e1efab18b310982ce1",
+    "npm_package": "@ag-ui/core@0.0.57",
+    "npm_registry_url": "https://registry.npmjs.org/@ag-ui%2fcore/0.0.57",
+    "npm_tarball_shasum": "3bf9686780aae8e998fbeaf31c5218cd144ca934",
+    "npm_tarball_integrity": "sha512-gho1OWjNE6E3Rl7ZEZ1wr2CEpUHjLFU0FqzCZZk439TicLu+BfLCMkMokB07bMGlRmbJ60hM6LW60iOVauCx+Q==",
+    "slsa_attestation_url": "https://registry.npmjs.org/-/npm/v1/attestations/@ag-ui%2fcore@0.0.57",
+    "zero_npm_attestation": "Main audit uses official Git tree/blob identity and local Rust replay; no npm/npx. The source package manifest is stored as inert package-manifest.json, preserving official bytes.",
+    "source_candidate_commit": "dd7febe7f03b01f2c3ffa515cfcd752aacfcb864",
+    "verified_at_utc": "2026-09-04T22:43:16.503998+00:00",
+    "slsa_signature_verified": false,
+    "registry_metadata_checked": true,
+    "attestation_payload_source_commit": "54f13419055b4d0f442c71e1efab18b310982ce1",
+    "attestation_payload_checked": true
+  },
+  "license": {
+    "spdx": "MIT",
+    "copyright": "Copyright (c) 2025",
+    "source_license_url": "https://github.com/ag-ui-protocol/ag-ui/blob/54f13419055b4d0f442c71e1efab18b310982ce1/LICENSE"
+  },
+  "vendored_schema": {
+    "directory": "fixtures/agui/schema-0.0.57",
+    "files": {
+      "LICENSE": {
+        "bytes": 1056,
+        "sha256": "06dcddbb6908a0c6dd4a9e8ec822eea41d5a460a53089fecccc8a68049e99241",
+        "upstream_path": "LICENSE",
+        "git_blob": "b77bf2ab726c6e7cb5a81a9d3b7dc38266ebfd3d"
+      },
+      "README.md": {
+        "bytes": 1341,
+        "sha256": "3c194484b1edafc01619c4545285c796d89369dee26dc5dee056e876192fe5e7",
+        "source": "OpenBot-authored documentation"
+      },
+      "capabilities.ts": {
+        "bytes": 14030,
+        "sha256": "7c4482bf8a3f65609cf80e9eb3841ce9792b2e37e6335659ac82945ea1884f15",
+        "upstream_path": "sdks/typescript/packages/core/src/capabilities.ts",
+        "git_blob": "6ad1d6dbe222b55610da3721048f9cb9c3b31eab"
+      },
+      "events.ts": {
+        "bytes": 18682,
+        "sha256": "268de0990a52d3a3a485559b53a74ac0465525916106cfa0d0a3e013e880eb24",
+        "upstream_path": "sdks/typescript/packages/core/src/events.ts",
+        "git_blob": "101875c81c12b844ca0d46e210b3eb9c825e19e4"
+      },
+      "index.ts": {
+        "bytes": 1034,
+        "sha256": "cdf3e9daa5bcdb8d0d70c373bb5efd246da6a40972d121181dfc40c9dce21c27",
+        "upstream_path": "sdks/typescript/packages/core/src/index.ts",
+        "git_blob": "b77fb19dd68a615394705063b0f0a33f08101aaf"
+      },
+      "types.ts": {
+        "bytes": 8095,
+        "sha256": "f7f18fea44fe16da4e190b32ceffb36830f5f5e0bc55f57f9a5a5f3102ccf2ce",
+        "upstream_path": "sdks/typescript/packages/core/src/types.ts",
+        "git_blob": "0045f17cb1302037b128f9fd16634294e877897f"
+      },
+      "package-manifest.json": {
+        "bytes": 1176,
+        "sha256": "35ca23f46ab0910d423cf9225fb570588dc5ad5bf4e171bb209a150006a7ba0c",
+        "upstream_path": "sdks/typescript/packages/core/package.json",
+        "git_blob": "dacd97777b02e86e83637083dee63bce216773a2"
+      }
+    }
+  },
+  "fixture": {
+    "path": "fixtures/agui/official-event-family.jsonl",
+    "line_count": 39,
+    "bytes": 4426,
+    "sha256": "6c13dad31a54a85a7c38b2d8e7623b9799a31d546eb0502d58000244708ec5ab",
+    "distinct_event_types_count": 33,
+    "exact_match_with_openbot_agui_event_types": true,
+    "all_33_event_types": [
+      "ACTIVITY_DELTA",
+      "ACTIVITY_SNAPSHOT",
+      "CUSTOM",
+      "MESSAGES_SNAPSHOT",
+      "RAW",
+      "REASONING_ENCRYPTED_VALUE",
+      "REASONING_END",
+      "REASONING_MESSAGE_CHUNK",
+      "REASONING_MESSAGE_CONTENT",
+      "REASONING_MESSAGE_END",
+      "REASONING_MESSAGE_START",
+      "REASONING_START",
+      "RUN_ERROR",
+      "RUN_FINISHED",
+      "RUN_STARTED",
+      "STATE_DELTA",
+      "STATE_SNAPSHOT",
+      "STEP_FINISHED",
+      "STEP_STARTED",
+      "TEXT_MESSAGE_CHUNK",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_END",
+      "TEXT_MESSAGE_START",
+      "THINKING_END",
+      "THINKING_START",
+      "THINKING_TEXT_MESSAGE_CONTENT",
+      "THINKING_TEXT_MESSAGE_END",
+      "THINKING_TEXT_MESSAGE_START",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_CHUNK",
+      "TOOL_CALL_END",
+      "TOOL_CALL_RESULT",
+      "TOOL_CALL_START"
+    ],
+    "lifecycle_runs": [
+      {
+        "run_id": "run-official-001",
+        "lines": "1-35",
+        "description": "35 events; complete success lifecycle. Other scenarios cover RUN_ERROR and interrupt outcome."
+      },
+      {
+        "run_id": "run-official-002",
+        "lines": "36-37",
+        "description": "Failure lifecycle starting with RUN_STARTED and terminating with RUN_ERROR."
+      },
+      {
+        "run_id": "run-official-003",
+        "lines": "38-39",
+        "description": "Human-in-the-loop interruption lifecycle starting with RUN_STARTED and terminating with RUN_FINISHED containing interrupt outcome."
+      }
+    ]
+  },
+  "retention_and_sanitization": {
+    "request_prompt_stored": false,
+    "authorization_or_api_key_stored": false,
+    "customer_data_stored": false,
+    "verifiable_secret_hash_stored": false,
+    "data_classification": "Public AG-UI official protocol specification schema fixture and synthetic lifecycle event vectors."
+  }
+}

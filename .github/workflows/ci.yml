@@ -1,0 +1,127 @@
+# CI is manually triggered.
+
+name: CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_supply_chain:
+        description: "是否跑 supply-chain job（cargo deny / audit / vet，比 gates 慢）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+
+jobs:
+  gates:
+    name: gates（fmt / clippy / test / native guards / parity）
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: 安装 SAML xmlsec 原生闭包
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxmlsec1-dev libxmlsec1-openssl libclang-dev pkg-config libssl-dev ripgrep
+          xmlsec1-config --version
+          pkg-config --modversion libxml-2.0 openssl
+          rg --version
+
+      - name: 安装 rust-toolchain.toml 钉住的工具链
+        run: rustup show
+
+      - name: 记录版本（判红时的第一手证据）
+        run: |
+          rustc --version
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: gates
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy --all-targets --all-features -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: cargo test --locked
+        run: cargo test --workspace --all-features --locked
+
+      - name: W-7 safe dialer dependency / C-FFI guard
+        run: bash tools/check-safe-dialer-dependencies.sh
+
+      - name: W-7b SAML / xmlsec / OpenSSL / libxml2 FFI guard
+        run: bash tools/check-saml-dependencies.sh
+
+      - name: G3 WebSocket dependency / unsafe delta guard
+        run: bash tools/check-websocket-dependencies.sh
+
+      - name: G3/G8 Intelligence importer crypto / runtime-exclusion guard
+        run: bash tools/check-intelligence-import-dependencies.sh
+
+      - name: xtask parity-check
+        run: cargo xtask parity-check
+
+  supply-chain:
+    name: supply-chain（cargo deny / cargo audit / cargo vet）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ inputs.run_supply_chain }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: 安装 SAML xmlsec 原生闭包
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxmlsec1-dev libxmlsec1-openssl libclang-dev pkg-config libssl-dev ripgrep
+          xmlsec1-config --version
+          rg --version
+
+      - name: 安装 rust-toolchain.toml 钉住的工具链
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: supply-chain
+
+      - name: 安装钉版 supply-chain 工具
+        uses: taiki-e/install-action@v2.86.5
+        with:
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-vet@0.10.0
+
+      - name: RUSTSEC waiver reachability guard
+        run: bash tools/check-rustsec-waivers.sh
+
+      - name: W-7 safe dialer dependency / C-FFI guard
+        run: bash tools/check-safe-dialer-dependencies.sh
+
+      - name: W-7b SAML / xmlsec / OpenSSL / libxml2 FFI guard
+        run: bash tools/check-saml-dependencies.sh
+
+      - name: 获取 RustSec advisory database（供 GUI waiver guard 判 patched 状态）
+        run: cargo audit fetch
+
+      - name: G6 Leptos GUI dependency / license / build-script guard
+        run: bash tools/check-ui-dependencies.sh
+
+      - name: cargo deny（licenses / bans / advisories / sources 四段）
+        run: cargo deny check
+
+      - name: cargo audit / RustSec
+        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0173
+
+      - name: cargo vet（锁定 imports 与 exemptions 棘轮）
+        run: cargo vet --locked

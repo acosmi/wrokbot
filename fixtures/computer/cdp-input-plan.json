@@ -1,0 +1,51 @@
+{
+  "schema": "openbot-cdp-input-plan-v1",
+  "upstream": {
+    "repository": "CopilotKit/openbot",
+    "commit": "891df72f1827454d8b353d108fe5dd2313b7e30d",
+    "path": "agent-computer/src/screencast.ts",
+    "gitBlob": "9bc27c11fc1b4cd296f7fc9df412aea0bedbbb22",
+    "bytes": 6906,
+    "sha256": "be79bde5007f03f37e3b99a1ef1388ba672d684ba32ec2b9090c417f9f47f566"
+  },
+  "namedVirtualKeyCodes": [
+    ["Backspace", 8],
+    ["Tab", 9],
+    ["Enter", 13],
+    ["Shift", 16],
+    ["Control", 17],
+    ["Alt", 18],
+    ["Escape", 27],
+    [" ", 32],
+    ["PageUp", 33],
+    ["PageDown", 34],
+    ["End", 35],
+    ["Home", 36],
+    ["ArrowLeft", 37],
+    ["ArrowUp", 38],
+    ["ArrowRight", 39],
+    ["ArrowDown", 40],
+    ["Delete", 46]
+  ],
+  "keyRules": {
+    "singleUtf16Unit": "uppercase then first UTF-16 code unit",
+    "unknownMultiUtf16Units": 0,
+    "downWithNonEmptyText": "keyDown",
+    "downWithoutText": "rawKeyDown",
+    "up": "keyUp",
+    "nativeEqualsWindows": true
+  },
+  "mouseRules": {
+    "move": ["mouseMoved", 0],
+    "down": ["mousePressed", 1],
+    "up": ["mouseReleased", 1],
+    "wheel": "mouseWheel"
+  },
+  "evidenceBoundary": {
+    "closedPurePlan": true,
+    "ordinaryPlanAcceptsSecretInsert": false,
+    "productEngineWire": false,
+    "liveCdpEffect": false,
+    "screenHub": false
+  }
+}

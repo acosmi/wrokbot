@@ -1,0 +1,582 @@
+# OpenBot 图标 allowlist 单一真源
+#
+# 真源文档：repository contract §4.6
+# 文档 §4.6.2 的映射表、本文件的 upstream_tabler/name 与 parity/ui.yaml 图标 target 由
+# design-lint 三向逐条 join；任一不一致直接判红，不允许在冲突时静默选择其中一份。
+#
+# 消费者（GUI 方案 §4.6.1、§13）：
+#   crates/openbot-ui/build.rs 读本文件 + design/icons/<name>.svg，生成 src/icons.rs 的
+#   `Icon` 枚举与 `view!` 片段。
+#
+# 闸门（xtask design-lint，两向零漂移）：
+#   ① 源码里出现的每个 `Icon::X` 必须在本文件的 [[icon]] 里；
+#   ② design/icons/ 里的每个 SVG 必须被本文件收录，且被源码引用；
+#   ③ 本文件的每个 name 必须在 design/icons/ 有同名 .svg。
+#
+# SVG 处理（GUI 方案 §4.6.1）：从 Lucide 1.33.0 官方 zip 抽出后，把根元素的
+# stroke-width 由 Lucide 默认的 2 改写为 1.75，其余字节不动；颜色 currentColor（Lucide 原样）。
+# 渲染尺寸只有 16（行内 / 文字旁）与 20（导航 / 按钮），由调用点决定，不写进 SVG。
+# 许可证文本进 NOTICE。
+#
+# 字段说明：
+#   name            —— Lucide 1.33.0 的图标名，等于 design/icons/<name>.svg 的文件名。
+#   label           —— parity | 新增 | 替代。parity = 上游同一图标槽位存在（见 upstream_tabler）；
+#                      新增 = 上游没有这个槽位，本项目新加的页面 / 控件需要。
+#   upstream_tabler —— 上游 @tabler/icons-react 的组件名。仅 label = "parity" 的条目有此字段。
+#   upstream_usage  —— 该 Tabler 组件在上游 891df72f 的 app/src 下的引用文件（相对 app/src）。
+#                      2026-08-22 由 grep -rlE '\b<name>\b' --include=*.tsx --include=*.ts 实跑得到，
+#                      是事实不是推断。
+#   purpose         —— 本项目的用途说明（首版裁决，非上游断言）。
+
+schema_version = 1
+
+[meta]
+icon_set = "lucide"
+icon_set_version = "1.33.0"
+icon_set_license = "ISC"
+source_zip = "lucide-icons-1.33.0.zip"
+source_zip_sha256 = "53831c8def65621f88cae315cdb38ac70db1d937062df35c93546efb00260a98"
+source_zip_svg_count = 1776
+stroke_width = "1.75"
+lucide_default_stroke_width = "2"
+render_sizes = [16, 20]
+color = "currentColor"
+icons_dir = "design/icons"
+brand_dir = "design/brand"
+# 46 个映射自上游 Tabler + 28 个新增 = 74
+expected_icon_count = 74
+
+# 上游图标全集的事实基线（GUI 方案 §17 的复算命令，本轮实跑复现）：
+# cd <upstream>/app/src && grep -rhoE '\bIcon[A-Z][A-Za-z0-9]+' --include=*.tsx --include=*.ts . | sort -u | wc -l  == 47
+# 47 = 46 个映射到 Lucide + 1 个 IconBrandGoogleDrive 走品牌标（见 [[brand]]）。
+upstream_commit = "891df72f1827454d8b353d108fe5dd2313b7e30d"
+upstream_tabler_icon_count = 47
+upstream_tabler_mapped_to_lucide = 46
+upstream_tabler_mapped_to_brand = 1
+
+# ===========================================================================
+# 46 个 parity 条目（上游 Tabler → Lucide）
+# ===========================================================================
+
+[[icon]]
+name = "triangle-alert"
+label = "parity"
+upstream_tabler = "IconAlertTriangle"
+upstream_usage = ["routes/_authed/admin/components/$name.tsx"]
+purpose = "错误 / 警告提示前导标（语义色只落图标本身，不落背景）"
+
+[[icon]]
+name = "arrow-down"
+label = "parity"
+upstream_tabler = "IconArrowDown"
+upstream_usage = ["components/ui/message-scroller.tsx"]
+purpose = "MessageScroller 的「回到底部」胶囊"
+
+[[icon]]
+name = "arrow-left"
+label = "parity"
+upstream_tabler = "IconArrowLeft"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "components/settings/settings-sidebar.tsx"]
+purpose = "admin / settings 二级侧栏的返回上一层"
+
+[[icon]]
+name = "arrow-up"
+label = "parity"
+upstream_tabler = "IconArrowUp"
+upstream_usage = ["components/channels/composer/composer.tsx"]
+purpose = "Composer 发送按钮的备选箭头形态（首版发送用 send，见新增段）"
+
+[[icon]]
+name = "arrow-up-right"
+label = "parity"
+upstream_tabler = "IconArrowUpRight"
+upstream_usage = ["routes/_authed/admin/plugins/$key.tsx", "routes/_authed/settings/connected-accounts/$key.tsx"]
+purpose = "跳转到外部 / 上层资源的行内指示"
+
+[[icon]]
+name = "zap"
+label = "parity"
+upstream_tabler = "IconBolt"
+upstream_usage = ["components/app-sidebar/app-sidebar.tsx"]
+purpose = "侧栏 skills 入口"
+
+[[icon]]
+name = "box"
+label = "parity"
+upstream_tabler = "IconBox"
+upstream_usage = ["components/app-sidebar/app-sidebar.tsx", "components/channels/chat-transcript.tsx"]
+purpose = "组件 / 制品（component、artifact）标识"
+
+[[icon]]
+name = "landmark"
+label = "parity"
+upstream_tabler = "IconBuildingBank"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "routes/_authed/admin/identity-providers.tsx", "routes/_authed/admin/index.tsx"]
+purpose = "admin 身份提供方（identity provider）"
+
+[[icon]]
+name = "check"
+label = "parity"
+upstream_tabler = "IconCheck"
+upstream_usage = ["components/ui/combobox.tsx", "components/ui/dropdown-menu.tsx", "components/ui/select.tsx"]
+purpose = "Combobox / Menu / Select 的选中对勾（原则 3：选中态只由文字色 + 对勾表达）"
+
+[[icon]]
+name = "chevron-down"
+label = "parity"
+upstream_tabler = "IconChevronDown"
+upstream_usage = ["components/ui/combobox.tsx", "components/ui/select.tsx", "routes/_authed/settings/connected-accounts/$key.tsx"]
+purpose = "下拉触发器与可折叠段的展开指示"
+
+[[icon]]
+name = "chevron-left"
+label = "parity"
+upstream_tabler = "IconChevronLeft"
+upstream_usage = ["components/layout/page-shell.tsx"]
+purpose = "PageShell 面包屑 / 返回"
+
+[[icon]]
+name = "chevron-right"
+label = "parity"
+upstream_tabler = "IconChevronRight"
+upstream_usage = ["components/ui/dropdown-menu.tsx", "routes/_authed/admin/components/$name.tsx", "routes/_authed/admin/index.tsx", "routes/_authed/admin/plugins/$key.tsx", "routes/_authed/admin/plugins/index.tsx", "routes/_authed/settings/connected-accounts/index.tsx"]
+purpose = "Menu 子菜单指示、Item 行的可进入指示、面包屑分隔"
+
+[[icon]]
+name = "chevron-up"
+label = "parity"
+upstream_tabler = "IconChevronUp"
+upstream_usage = ["components/ui/select.tsx"]
+purpose = "Select 列表向上滚动指示"
+
+[[icon]]
+name = "clock"
+label = "parity"
+upstream_tabler = "IconClock"
+upstream_usage = ["routes/_authed/admin/components/$name.tsx"]
+purpose = "时间戳 / 时长（配 tabular-nums）"
+
+[[icon]]
+name = "code"
+label = "parity"
+upstream_tabler = "IconCode"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "routes/_authed/admin/components/$name.tsx", "routes/_authed/admin/index.tsx", "routes/_authed/settings/components-gallery/$name.tsx"]
+purpose = "代码块 / 组件源码入口"
+
+[[icon]]
+name = "database"
+label = "parity"
+upstream_tabler = "IconDatabase"
+upstream_usage = ["routes/_authed/admin/components/$name.tsx"]
+purpose = "数据源 / 数据类组件参数"
+
+[[icon]]
+name = "monitor"
+label = "parity"
+upstream_tabler = "IconDeviceDesktop"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "routes/_authed/admin/index.tsx", "routes/_authed/_app/channel/$channelId.tsx"]
+purpose = "computer（计算机）页与频道内计算机入口"
+
+[[icon]]
+name = "ellipsis"
+label = "parity"
+upstream_tabler = "IconDots"
+upstream_usage = ["routes/_authed/_app/skills.tsx"]
+purpose = "行尾更多动作（打开 Menu）"
+
+[[icon]]
+name = "external-link"
+label = "parity"
+upstream_tabler = "IconExternalLink"
+upstream_usage = ["routes/_authed/admin/plugins/$key.tsx"]
+purpose = "外链（一律 rel=noopener noreferrer，Desktop 交宿主打开）"
+
+[[icon]]
+name = "file"
+label = "parity"
+upstream_tabler = "IconFile"
+upstream_usage = ["components/computer/activity-log.tsx", "lib/markdown.tsx"]
+purpose = "通用文件（computer 活动日志、transcript 附件芯片）"
+
+[[icon]]
+name = "file-text"
+label = "parity"
+upstream_tabler = "IconFileText"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "lib/markdown.tsx", "routes/_authed/admin/components/$name.tsx", "routes/_authed/admin/index.tsx", "routes/_authed/admin/skills.tsx"]
+purpose = "文本类文档 / skill 定义"
+
+[[icon]]
+name = "folder"
+label = "parity"
+upstream_tabler = "IconFolder"
+upstream_usage = ["components/computer/activity-log.tsx"]
+purpose = "目录（computer 活动日志）"
+
+[[icon]]
+name = "key"
+label = "parity"
+upstream_tabler = "IconKey"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "routes/_authed/admin/index.tsx"]
+purpose = "admin 凭据（credential）"
+
+[[icon]]
+name = "layout-grid"
+label = "parity"
+upstream_tabler = "IconLayoutGrid"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "components/settings/settings-sidebar.tsx", "routes/_authed/admin/index.tsx"]
+purpose = "gallery（组件库）入口"
+
+[[icon]]
+name = "panel-left"
+label = "parity"
+upstream_tabler = "IconLayoutSidebar"
+upstream_usage = ["components/ui/sidebar.tsx"]
+purpose = "Sidebar 折叠 / 展开触发（快捷键 Ctrl/⌘+B）"
+
+[[icon]]
+name = "list-checks"
+label = "parity"
+upstream_tabler = "IconListDetails"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "routes/_authed/admin/index.tsx"]
+purpose = "admin 审批 / 任务清单"
+
+[[icon]]
+name = "lock"
+label = "parity"
+upstream_tabler = "IconLock"
+upstream_usage = ["routes/_authed/admin/people.tsx"]
+purpose = "受限 / 已锁定状态（成员管理）"
+
+[[icon]]
+name = "log-out"
+label = "parity"
+upstream_tabler = "IconLogout"
+upstream_usage = ["components/app-sidebar/app-sidebar.tsx"]
+purpose = "侧栏底部用户菜单的退出登录"
+
+[[icon]]
+name = "circle-stop"
+label = "parity"
+upstream_tabler = "IconPlayerStopFilled"
+upstream_usage = ["components/channels/composer/composer.tsx"]
+purpose = "Composer 运行中的停止按钮（中性，不用语义色）。上游是实心 stop，Lucide circle-stop 是描边形态"
+
+[[icon]]
+name = "plug"
+label = "parity"
+upstream_tabler = "IconPlug"
+upstream_usage = ["components/settings/settings-sidebar.tsx", "routes/_authed/admin/plugins/index.tsx", "routes/_authed/settings/connected-accounts/index.tsx"]
+purpose = "连接器 / 插件 / 已连接账户"
+
+[[icon]]
+name = "plus"
+label = "parity"
+upstream_tabler = "IconPlus"
+upstream_usage = ["components/app-sidebar/app-sidebar.tsx", "components/channels/composer/composer.tsx", "routes/_authed/admin/credentials.tsx", "routes/_authed/admin/skills.tsx", "routes/_authed/_app/agents/index.tsx", "routes/_authed/_app/bot.tsx", "routes/_authed/_app/skills.tsx"]
+purpose = "新建（新频道 / 新同事 / 新技能 / 新凭据）"
+
+[[icon]]
+name = "presentation"
+label = "parity"
+upstream_tabler = "IconPresentation"
+upstream_usage = ["lib/markdown.tsx"]
+purpose = "演示 / 幻灯类组件"
+
+[[icon]]
+name = "puzzle"
+label = "parity"
+upstream_tabler = "IconPuzzle"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "routes/_authed/admin/index.tsx"]
+purpose = "admin 插件（plugin）"
+
+[[icon]]
+name = "refresh-cw"
+label = "parity"
+upstream_tabler = "IconRefresh"
+upstream_usage = ["routes/_authed/admin/audit.tsx"]
+purpose = "刷新列表 / 重试"
+
+[[icon]]
+name = "search"
+label = "parity"
+upstream_tabler = "IconSearch"
+upstream_usage = ["components/app-sidebar/app-sidebar.tsx"]
+purpose = "搜索输入前缀与侧栏搜索入口"
+
+[[icon]]
+name = "chevrons-up-down"
+label = "parity"
+upstream_tabler = "IconSelector"
+upstream_usage = ["components/ui/select.tsx"]
+purpose = "Select 触发器的上下双箭头"
+
+[[icon]]
+name = "settings"
+label = "parity"
+upstream_tabler = "IconSettings"
+upstream_usage = ["components/app-sidebar/app-sidebar.tsx", "components/settings/settings-sidebar.tsx", "routes/_authed/_app/channel/$channelId.tsx"]
+purpose = "设置入口"
+
+[[icon]]
+name = "shield-check"
+label = "parity"
+upstream_tabler = "IconShieldCheck"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "routes/_authed/admin/index.tsx", "routes/_authed/admin/people.tsx"]
+purpose = "admin 成员 / 已授权状态"
+
+[[icon]]
+name = "shield-lock"
+label = "parity"
+upstream_tabler = "IconShieldLock"
+upstream_usage = ["components/app-sidebar/app-sidebar.tsx"]
+purpose = "侧栏 admin（受保护区域）入口"
+
+[[icon]]
+name = "table"
+label = "parity"
+upstream_tabler = "IconTable"
+upstream_usage = ["lib/markdown.tsx"]
+purpose = "transcript 表格块标识"
+
+[[icon]]
+name = "tag"
+label = "parity"
+upstream_tabler = "IconTag"
+upstream_usage = ["routes/_authed/admin/components/$name.tsx", "routes/_authed/settings/components-gallery/$name.tsx"]
+purpose = "版本 / 标签"
+
+[[icon]]
+name = "square-terminal"
+label = "parity"
+upstream_tabler = "IconTerminal2"
+upstream_usage = ["components/computer/activity-log.tsx"]
+purpose = "computer 的命令执行行"
+
+[[icon]]
+name = "trash-2"
+label = "parity"
+upstream_tabler = "IconTrash"
+upstream_usage = ["routes/_authed/admin/identity-providers.tsx"]
+purpose = "删除（危险动作，用 danger-text variant，语义色只落文字 / 图标）"
+
+[[icon]]
+name = "user"
+label = "parity"
+upstream_tabler = "IconUser"
+upstream_usage = ["routes/_authed/admin/people.tsx"]
+purpose = "单个成员 / 当前用户"
+
+[[icon]]
+name = "users"
+label = "parity"
+upstream_tabler = "IconUsers"
+upstream_usage = ["components/admin/admin-sidebar.tsx", "routes/_authed/admin/components/$name.tsx", "routes/_authed/admin/index.tsx"]
+purpose = "成员集合（people）"
+
+[[icon]]
+name = "globe"
+label = "parity"
+upstream_tabler = "IconWorld"
+upstream_usage = ["routes/_authed/admin/components/$name.tsx"]
+purpose = "网络 / 公开可见范围"
+
+# ===========================================================================
+# 28 个新增条目（上游无对应槽位）
+# ===========================================================================
+
+[[icon]]
+name = "brain"
+label = "新增"
+purpose = "memory（记忆）页（GUI 方案 §4.6.2 点名）"
+
+[[icon]]
+name = "sun"
+label = "新增"
+purpose = "ThemeToggle 的 light 态（主题三态之一，§7）"
+
+[[icon]]
+name = "moon"
+label = "新增"
+purpose = "ThemeToggle 的 dark 态（§7）"
+
+[[icon]]
+name = "sun-moon"
+label = "新增"
+purpose = "ThemeToggle 的 system 态（默认，§7；system 态本身也是新增）"
+
+[[icon]]
+name = "languages"
+label = "新增"
+purpose = "LocaleSwitch 语言切换（§8）"
+
+[[icon]]
+name = "copy"
+label = "新增"
+purpose = "代码块 / 消息 / ID 的复制按钮（中性胶囊）"
+
+[[icon]]
+name = "x"
+label = "新增"
+purpose = "关闭 Dialog / Sheet / Toast / 移除芯片"
+
+[[icon]]
+name = "eye"
+label = "新增"
+purpose = "显示密文（凭据、token）"
+
+[[icon]]
+name = "eye-off"
+label = "新增"
+purpose = "隐藏密文"
+
+[[icon]]
+name = "pencil"
+label = "新增"
+purpose = "编辑（skill / coworker / 设置项）"
+
+[[icon]]
+name = "loader-circle"
+label = "新增"
+purpose = "loading 态与 AgentPresence 的 thinking 旋转弧（1.2s/圈，§6.7）"
+
+[[icon]]
+name = "info"
+label = "新增"
+purpose = "提示信息（info 语义色只落图标 / 文字）"
+
+[[icon]]
+name = "circle-check"
+label = "新增"
+purpose = "成功终态（success 语义色只落图标 / 文字）"
+
+[[icon]]
+name = "circle-x"
+label = "新增"
+purpose = "失败终态（danger 语义色只落图标 / 文字）"
+
+[[icon]]
+name = "circle-alert"
+label = "新增"
+purpose = "需要注意但未失败（caution 语义色只落图标 / 文字）"
+
+[[icon]]
+name = "paperclip"
+label = "新增"
+purpose = "Composer 左下附件（§6.5）"
+
+[[icon]]
+name = "send"
+label = "新增"
+purpose = "Composer 右下发送（primary 圆形 32px，§6.5）"
+
+[[icon]]
+name = "at-sign"
+label = "新增"
+purpose = "@coworker 触发指示（§6.5）"
+
+[[icon]]
+name = "bot"
+label = "新增"
+purpose = "Bot 身份标识（Avatar 缺省底、transcript 角色标）"
+
+[[icon]]
+name = "archive"
+label = "新增"
+purpose = "归档频道 / 会话"
+
+[[icon]]
+name = "undo-2"
+label = "新增"
+purpose = "撤销 / 恢复默认值"
+
+[[icon]]
+name = "minus"
+label = "新增"
+purpose = "移除一行（与 plus 成对）、三态复选的部分选中"
+
+[[icon]]
+name = "log-in"
+label = "新增"
+purpose = "sign-in 页与会话过期后的重新登录（与 log-out 成对）"
+
+[[icon]]
+name = "panel-right"
+label = "新增"
+purpose = "detail panel 开合触发（§5.1，右侧 360px；与 panel-left 成对）"
+
+[[icon]]
+name = "maximize-2"
+label = "新增"
+purpose = "computer live view / 图片进入全屏"
+
+[[icon]]
+name = "minimize-2"
+label = "新增"
+purpose = "退出全屏"
+
+[[icon]]
+name = "keyboard"
+label = "新增"
+purpose = "快捷键帮助面板入口"
+
+[[icon]]
+name = "command"
+label = "新增"
+purpose = "Kbd 原语里的 ⌘ 修饰键渲染"
+
+# ===========================================================================
+# 品牌标（design/brand/，不进 Lucide allowlist）
+#
+# GUI 方案 §4.6.3：sign-in 按钮（Google / Microsoft / Okta，parity 于上游
+# app/src/components/auth/provider-logo.tsx 的 GoogleMark / MicrosoftMark / OktaMark）
+# 与连接器行（Google Drive，parity 于上游 IconBrandGoogleDrive）使用各家官方 SVG 标志，
+# 不改色、不描边、不与 Lucide 混排进 allowlist。
+# 每个文件的来源 URL、版本与使用条款登记进 v3 §19.3 的 provenance/sources.spdx.json。
+# 这是原则 5「语义色不落图标」的唯一例外，因为品牌标不是语义色。
+#
+# status = todo：品牌标 SVG 本身尚未取得（各家品牌资产有独立的下载入口与使用条款，
+# 需逐个核对许可后才能入库）。解除条件 = 四个 SVG 落到 design/brand/ 且 sources.spdx.json
+# 有对应条目。Phase 0 只固定契约，不静默用 Lucide 图标顶替。
+# ===========================================================================
+
+[brand]
+dir = "design/brand"
+in_lucide_allowlist = false
+recolor_allowed = false
+status = "todo"
+
+[[brand.mark]]
+name = "google"
+file = "google.svg"
+label = "parity"
+upstream_source = "components/auth/provider-logo.tsx::GoogleMark"
+purpose = "sign-in 的 Google 身份提供方按钮"
+status = "todo"
+
+[[brand.mark]]
+name = "microsoft"
+file = "microsoft.svg"
+label = "parity"
+upstream_source = "components/auth/provider-logo.tsx::MicrosoftMark"
+purpose = "sign-in 的 Microsoft 身份提供方按钮"
+status = "todo"
+
+[[brand.mark]]
+name = "okta"
+file = "okta.svg"
+label = "parity"
+upstream_source = "components/auth/provider-logo.tsx::OktaMark"
+purpose = "sign-in 的 Okta 身份提供方按钮"
+status = "todo"
+# 实测记录：上游 OktaMark 用 currentColor 而不是 Okta 蓝（其源码注释自陈这是它与另外两个标的
+# 唯一区别）。GUI 方案 §4.6.3 的「不改色」与上游此处行为不一致，取标时需要一次裁决：
+# 沿用上游的 currentColor（parity）还是按 §4.6.3 用官方配色。未裁决，故 status = todo。
+
+[[brand.mark]]
+name = "google-drive"
+file = "google-drive.svg"
+label = "parity"
+upstream_tabler = "IconBrandGoogleDrive"
+upstream_usage = ["routes/_authed/admin/plugins/index.tsx", "routes/_authed/settings/connected-accounts/index.tsx"]
+purpose = "连接器行的 Google Drive 标（上游用 Tabler 的品牌图标，本项目改用官方标）"
+status = "todo"

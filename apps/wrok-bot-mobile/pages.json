@@ -1,0 +1,46 @@
+{
+  "pages": [
+    {
+      "path": "pages/console/index",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/account/index",
+      "style": {
+        "navigationBarTitleText": "我的账户"
+      }
+    },
+    {
+      "path": "pages/account/detail",
+      "style": {
+        "navigationBarTitleText": "账户"
+      }
+    },
+    {
+      "path": "pages/devices/index",
+      "style": {
+        "navigationBarTitleText": "绑定的 Wrok Bot"
+      }
+    },
+    {
+      "path": "pages/task/detail",
+      "style": {
+        "navigationBarTitleText": "任务详情"
+      }
+    },
+    {
+      "path": "pages/chat/detail",
+      "style": {
+        "navigationBarTitleText": "聊天"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarBackgroundColor": "#FAF9F7",
+    "backgroundColor": "#FAF9F7",
+    "backgroundTextStyle": "dark"
+  }
+}

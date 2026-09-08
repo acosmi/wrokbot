@@ -1,0 +1,89 @@
+{
+  "schema": "openbot-provider-recorded-trace-v1",
+  "provider": "anthropic",
+  "protocol": {
+    "api": "Beta Messages",
+    "transport": "HTTP/1.1 server-sent events",
+    "endpoint": "https://api.anthropic.com/v1/messages?beta=true",
+    "replay_endpoint": "https://api.anthropic.com/v1/messages",
+    "method": "POST",
+    "anthropic_version": "2023-06-01",
+    "request_model": "claude-3-7-sonnet-latest",
+    "response_model": "claude-3-7-sonnet-20250219",
+    "response_date_utc": "2025-10-30T16:17:36Z",
+    "status_code": 200
+  },
+  "provenance": {
+    "kind": "vendor_capture_published_by_vendor",
+    "publisher": "Anthropic",
+    "repository": "https://github.com/anthropics/anthropic-sdk-go",
+    "source_commit": "e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33",
+    "source_commit_time_utc": "2026-09-03T22:32:55Z",
+    "source_record_url": "https://github.com/anthropics/anthropic-sdk-go/blob/e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33/toolrunner/testdata/cassettes/tool_runner_streaming_all.yaml",
+    "source_test_url": "https://github.com/anthropics/anthropic-sdk-go/blob/e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33/toolrunner/runner_test.go#L188-L227",
+    "recording_proof_url": "https://github.com/anthropics/anthropic-sdk-go/blob/e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33/internal/testutil/vcr.go#L12-L35",
+    "source_record_git_blob_sha1": "2085d5a9d2bb3b97992e74206a35fb0c92253ecb",
+    "source_record_bytes": 10980,
+    "source_record_sha256": "a523fe3e4db93da6e1b8f715e151d448bc9cc2231bae603d5357f2f6583140fe",
+    "retrieved_at_utc": "2026-09-04T22:13:41Z"
+  },
+  "payload": {
+    "path": "fixtures/provider/anthropic-messages-tool-use-stream.sse",
+    "derivation": "Parse the pinned go-vcr YAML and write interactions[0].response.body, a YAML literal scalar, as unchanged UTF-8 bytes including trailing line feeds.",
+    "raw_response_body_bytes": 3489,
+    "raw_response_body_sha256": "9e75e3423449cfda1266e73327f43949fa0318b68a1d17293d4d06fe7ecbd783",
+    "fixture_bytes": 3489,
+    "fixture_sha256": "9e75e3423449cfda1266e73327f43949fa0318b68a1d17293d4d06fe7ecbd783"
+  },
+  "response_headers": {
+    "preserved": {
+      "content-type": "text/event-stream; charset=utf-8"
+    },
+    "discarded": [
+      "anthropic-organization-id",
+      "anthropic-ratelimit-*",
+      "cache-control",
+      "cf-cache-status",
+      "cf-ray",
+      "date",
+      "request-id",
+      "server",
+      "strict-transport-security",
+      "x-envoy-upstream-service-time",
+      "x-robots-tag"
+    ]
+  },
+  "redaction": {
+    "source_record_already_sanitized": [
+      "RequestHeaders.X-Api-Key is an explicit non-secret testing placeholder in the public cassette."
+    ],
+    "local_rules": [
+      "Retain only interactions[0].response.body and the allowlisted content-type value.",
+      "Omit every request field and header, including the fake test key and synthetic prompt.",
+      "Omit Anthropic-Organization-Id, request-id, rate-limit metadata, dates, and all other response headers.",
+      "Do not alter response-body bytes; the public message and tool-use IDs remain only as untrusted trace correlation values.",
+      "The retained message and tool-use IDs were published in Anthropic's public SDK cassette, grant no authority, and are not credentials or secrets.",
+      "Do not retain customer data or any verifiable secret hash."
+    ],
+    "request_prompt_stored": false,
+    "authorization_or_api_key_stored": false,
+    "customer_data_stored": false,
+    "verifiable_secret_hash_stored": false,
+    "retained_public_protocol_values": {
+      "message_id": {
+        "value": "msg_01H1pwRRkQxKbUGKi785gT4M",
+        "non_secret_basis": "Published in Anthropic's public SDK cassette; retained only for trace correlation and grants no authority."
+      },
+      "tool_use_id": {
+        "value": "toolu_01RaX2WYWRWCbaeFHssmGJXG",
+        "non_secret_basis": "Published in Anthropic's public SDK cassette; retained only to pair streamed tool arguments and grants no authority."
+      }
+    },
+    "data_classification": "Public Anthropic SDK go-vcr response from a synthetic weather tool test, not a customer or user session."
+  },
+  "license": {
+    "spdx": "MIT",
+    "copyright": "Copyright 2023 Anthropic, PBC.",
+    "source_license_url": "https://github.com/anthropics/anthropic-sdk-go/blob/e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33/LICENSE"
+  }
+}

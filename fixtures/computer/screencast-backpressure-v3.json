@@ -1,0 +1,49 @@
+{
+  "schema": "openbot-screencast-backpressure-v3",
+  "protocol": {
+    "version": 3,
+    "releaseEpoch": 3,
+    "generatedModuleSha256": "16cc1f4d35aa8d0437ae43f7d81595eed378dcb864bc7bd190be075232f3f8bf",
+    "frameMagic": "OBFRAME2",
+    "fixedHeaderBytes": 76,
+    "commands": ["start", "input", "frame_ack", "stop", "shutdown"],
+    "screencast": {
+      "format": "jpeg",
+      "quality": 70,
+      "maxWidth": 1280,
+      "maxHeight": 800,
+      "everyNthFrame": 1,
+      "maxFramesInFlight": 1,
+      "sendLastFrame": true
+    }
+  },
+  "frameMetadata": ["capturedAtMs", "deviceWidth", "deviceHeight", "deviceScaleFactor", "pageScaleFactor", "scrollX", "scrollY", "screencastSessionId"],
+  "backpressure": {
+    "rustLatestBufferCapacity": 1,
+    "ackAfterRustPublish": true,
+    "receivedEqualsAcknowledged": true,
+    "slowConsumerDroppedAtLeast": 1,
+    "stopIdempotent": true
+  },
+  "macosArm64Evidence": {
+    "rolesPassed": ["browser_computer", "sandboxed_component"],
+    "receivedAtLeast": 2,
+    "acknowledgedEqualsReceived": true,
+    "droppedAtLeast": 1,
+    "appAsarBytes": 29806,
+    "asarHeaderSha256": "0297234048a52c164c34f3c7c9e31749208411972dfa0e73ee6f65110f289772"
+  },
+  "evidenceBoundary": {
+    "pageStartScreencast": true,
+    "pageStopScreencast": true,
+    "pageScreencastFrameAck": true,
+    "screenIngressLatestBuffer": true,
+    "viewerTicketOrWebSocket": false,
+    "multiViewer": false,
+    "fpsOrLatencyBudget": false,
+    "captureScreenshotFallback": false,
+    "serverOrDesktopComputerAssembly": false,
+    "windowsRuntime": false,
+    "linuxRunscRuntime": false
+  }
+}

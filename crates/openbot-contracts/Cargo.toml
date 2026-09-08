@@ -1,0 +1,40 @@
+[package]
+name = "openbot-contracts"
+description = "native/wasm-safe ID、DTO、event、error、schema（v3 §5.1）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# 打开 `AuthContext::for_test`。默认关：`AuthContext` 的构造受限性有一半靠“测试构造器
+# 不在生产 feature 图里”来兑现（v3 §5.3）。生产 transport 即使想绕过 `AuthContextBuilder`
+# 也拿不到那个函数 —— 它压根没被编译进去。
+testkit = []
+
+# 依赖面必须 wasm 可编（`openbot-ui` 是 Leptos CSR/WASM 且只依赖本 crate，设计系统文档 §13）。
+# 禁止 tokio / axum / tokio-postgres / 任何做 I/O 的 crate。闸门：
+#   cargo check -p openbot-contracts --target wasm32-unknown-unknown
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+# 在 workspace 的 feature 之上追加 `serde-well-known`：它提供 `time::serde::rfc3339`，
+# 让跨边界时间戳有一个**显式且稳定**的线上格式。不加它就会落到 `time` 默认的 serde
+# 实现 —— 一个由 crate 内部决定、没写进任何契约文档的复合形状，升 `time` 小版本就可能变。
+# 纯格式化代码，不引入任何 I/O。
+time = { workspace = true, features = ["serde-well-known"] }
+
+# tool invocation 的参数是封闭 command 里的一个 JSON 对象，不是自由 method/SQL。保留结构而不
+# 先 stringify，application 才能对同一组字节做 schema、大小与 canonical hash 校验。
+serde_json = { workspace = true }
+# ThreadIdentity 的 deployment fingerprint 是纯 SHA-256；不读随机数、不做 I/O，mint 所需的
+# 16 字节 entropy 由 infra 注入，因此继续满足 WASM-safe contracts 边界。
+sha2 = { workspace = true }
+# One-time callback response allocations are cleared on drop and compared without prefix timing.
+zeroize = { workspace = true }
+subtle = { workspace = true }

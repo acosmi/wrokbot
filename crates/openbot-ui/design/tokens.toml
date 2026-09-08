@@ -1,0 +1,379 @@
+# Wrok Bot UI v3 — token 单一真源
+#
+# 真源文档：repository contract
+# 本文件是那几张表的机器可读形态；文档表是本文件的人类快照。两者不一致时以本文件为准，
+# 并在同一个 PR 里把文档改回来（GUI 方案 §4.1「单一来源」）。
+#
+# 消费者（GUI 方案 §4.1、§13）：
+#   crates/openbot-ui/build.rs 从本文件生成
+#     ① design/tokens.css —— 三块同源，不手写：
+#          :root { … }                                        亮色（[color.light]）
+#          .dark { … }                                        强制暗（[color.dark]）
+#          @media (prefers-color-scheme: dark) {
+#            :root:not(.light) { … }                          跟随系统（同 [color.dark]）
+#          }
+#        非颜色 token（[radius] [size] [z_index] [typography] [motion]）只进 :root 一块，
+#        它们不随主题变化；随主题变化的非颜色量（阴影强度、图片压暗）已经做成 color 段的
+#        shadow_popover / shadow_dialog / image_dim（GUI 方案 §4.1 禁 `dark:` 变体的前提）。
+#     ② src/tokens.rs（生成，不入库）—— compiled component 与对比度单测 token_contrast_wcag_aa 共用。
+#
+# 命名约定：本文件的 key 用 snake_case（TOML 惯例 + Rust 常量直接派生）；
+# 生成的 CSS 自定义属性名用 kebab-case，规则 = key 里的 `_` 换成 `-`，前缀见每段的 css_prefix。
+# 例：[color.light] 的 bg_subtle → `--bg-subtle`；[radius] 的 md → `--radius-md`。
+
+schema_version = 1
+
+# 生成器契约：build.rs 必须按这三个选择器产出三块，且亮/暗两块的 key 集合逐字相等。
+[meta]
+light_selector = ":root"
+dark_selector = ".dark"
+system_dark_media = "(prefers-color-scheme: dark)"
+system_dark_selector = ":root:not(.light)"
+
+# 哪些段进 tokens.css，哪些段只进 tokens.rs。
+#
+# 判据：Tailwind v4 自己有 @theme namespace 的量（颜色 / 字体栈 / 字号阶 / 圆角阶 / 缓动 /
+# 断点）在 design/app.css 的 `@theme inline` 里声明一次；tokens.css 再声明一遍同名自定义
+# 属性会与它撞名（`--radius-sm: var(--radius-sm)` 是自引用，直接失效）。所以：
+#   * 颜色是唯一既进 tokens.css 又被 @theme inline 引用的段——它必须随主题切三块，而
+#     @theme inline 只能声明一次。tokens.css 用 `--bg` 这类无前缀名，@theme 那边写
+#     `--color-bg: var(--bg)`，两个名字不同，不自引用。
+#   * Tailwind 没有 namespace 的量（z-index 阶、控件高度 / 固定尺寸、动效时长与级联参数、
+#     CJK 排版覆盖）只进 tokens.css。
+#   * 其余（字体栈、字号阶、圆角阶、缓动、断点）只进 tokens.rs，值在 app.css 手写一份。
+css_emit_sections = ["color", "z_index", "size", "motion", "typography_cjk"]
+rust_emit_sections = ["color", "typography", "spacing", "radius", "border", "focus", "size", "breakpoint", "z_index", "shadow", "motion"]
+
+# 重复来源的漂移闸门（status = done）：
+# app.css 的 `@theme inline` 手写了 typography.font_sans / font_mono / typography.scale /
+# radius.{sm,md,lg,xl} / motion.ease_{enter,exit} / breakpoint.{md,lg}。必须有一条测试解析
+# app.css 与本文件、断言这几组值逐字相等；否则改了本文件而 app.css 没跟，界面按 app.css 走、
+# 测试按本文件走，两边各自「正确」，全绿且不一致。
+# 解除条件 = crates/openbot-ui 里存在该测试并被 `cargo test -p openbot-ui` 跑到。
+css_theme_drift_gate = "done"
+
+# ---------------------------------------------------------------------------
+# §4.2 颜色（亮 / 暗两套）
+#
+# 对比度判据（GUI 方案 §4.2，单测 token_contrast_wcag_aa 读本文件）：
+#   文字 token（fg / fg_secondary / fg_muted / danger / caution / success / info）
+#     对每个可作其底的背景 token（bg / bg_subtle / bg_chip / bg_sidebar / bg_popover）≥ 4.5:1；
+#   fg_inverse 对 bg_inverse ≥ 4.5:1；
+#   ring 与 chart_* 对 bg ≥ 3:1。
+# 2026-08-22 在本文件上实跑全交叉对（7 文字 × 5 底 × 2 主题 + 2 inverse + 12 图形 = 84 对）：
+#   pairs: 84  failures: 0，最低一对 = 暗色 fg_muted on bg_chip = 4.59:1。
+# 注：GUI 方案 §17 的脚本只算 66 对（它排除了 fg_muted on bg_popover，且 danger/caution/
+# success/info 只对 2–3 个底）。84 对是 66 对的超集，两者都为 0 failure；单测按 84 对写。
+# Batch18 另给 avatar_0..7 增加 fg 对比度 8×2=16 对独立单测；不把头像底加入所有文字 token
+# 的 surface 全交叉，因为它只承载 Avatar initials 的 fg，不是通用页面 surface。
+# 改任何值都必须让该单测继续为绿。
+# ---------------------------------------------------------------------------
+[color]
+css_prefix = ""
+
+# 文字类 token（对比度判据的分子）
+text_tokens = ["fg", "fg_secondary", "fg_muted", "danger", "caution", "success", "info"]
+# 可作文字底的背景 token（对比度判据的分母）
+surface_tokens = ["bg", "bg_subtle", "bg_chip", "bg_sidebar", "bg_popover"]
+# 非文字、只需 3:1 的 token
+graphic_tokens = ["ring", "chart_1", "chart_2", "chart_3", "chart_4", "chart_5"]
+
+# CSS 自定义属性名覆盖。默认规则是 key 里的 `_` 换 `-`（bg_subtle → --bg-subtle），
+# 这两个是例外：app.css 的 `@theme inline` 要声明 `--shadow-popover` 才能生成
+# `shadow-popover` utility（§12.6 的 `rg 'shadow-(?!popover|dialog|none)'` 判的就是这个
+# utility 名）。若 tokens.css 里的原始 token 也叫 `--shadow-popover`，
+# `--shadow-popover: var(--shadow-popover)` 就是自引用。故原始 token 改名 `--elevation-*`，
+# utility 名不变。
+[color.css_var_overrides]
+shadow_popover = "elevation-popover"
+shadow_dialog = "elevation-dialog"
+
+[color.light]
+bg = "#FAF9F7"              # 页面 / 卡片 / 输入框底
+bg_subtle = "#F1F0EE"       # hover 底、表头、代码块底
+bg_chip = "#EAE8E6"         # 中性按钮 / 胶囊 / 芯片底、选中行
+bg_sidebar = "#F4F3F1"      # 侧栏底
+bg_popover = "#FFFFFF"      # popover / menu / dialog 底
+bg_inverse = "#111111"      # primary 按钮底（唯一实心色）
+fg = "#191918"              # 正文、标题、选中态文字
+fg_secondary = "#60615F"    # 次级文字、按钮默认文字、侧栏项
+fg_muted = "#676864"        # 占位符、时间戳、说明
+fg_inverse = "#FFFFFF"      # primary 按钮文字
+border = "#E5E3E0"          # 输入框 / 分隔线 / 表格线
+ring = "#1A1A1A"            # :focus-visible 环（中性，不用品牌色）
+danger = "#B42318"          # 错误文字 / 图标 / 状态点
+caution = "#9A5100"         # 警告
+success = "#067647"         # 成功 / 在线
+info = "#1552C5"            # 提示
+chart_1 = "#3B5BDB"         # 以下仅 gallery 图表数据系列可用
+chart_2 = "#0AA074"
+chart_3 = "#E8590C"
+chart_4 = "#AE3EC9"
+chart_5 = "#868E96"
+shadow_popover = "0 4px 16px rgb(0 0 0 / .10)"
+shadow_dialog = "0 12px 40px rgb(0 0 0 / .18)"
+image_dim = "1"             # 暗色下内容图片 filter: brightness()
+modal_overlay = "rgb(0 0 0 / .10)"
+avatar_0 = "#E8E8EA"
+avatar_1 = "#E8ECEB"
+avatar_2 = "#E9EBE4"
+avatar_3 = "#EEE9E3"
+avatar_4 = "#ECE7EA"
+avatar_5 = "#E7E9EE"
+avatar_6 = "#ECEBE5"
+avatar_7 = "#E5ECEC"
+
+[color.dark]
+bg = "#141415"
+bg_subtle = "#1F1F22"
+bg_chip = "#27272B"
+bg_sidebar = "#0F0F10"
+bg_popover = "#1C1C1F"
+bg_inverse = "#F4F4F5"
+fg = "#ECECEE"
+fg_secondary = "#A6A6AF"
+fg_muted = "#8E8E98"
+fg_inverse = "#111111"
+border = "#2E2E33"
+ring = "#F4F4F5"
+danger = "#F97066"
+caution = "#FDB022"
+success = "#47CD89"
+info = "#84ADFF"
+chart_1 = "#748FFC"
+chart_2 = "#38D9A9"
+chart_3 = "#FFA94D"
+chart_4 = "#DA77F2"
+chart_5 = "#ADB5BD"
+shadow_popover = "0 4px 16px rgb(0 0 0 / .45)"
+shadow_dialog = "0 12px 40px rgb(0 0 0 / .60)"
+image_dim = ".88"
+modal_overlay = "rgb(0 0 0 / .35)"
+avatar_0 = "#2A2A2E"
+avatar_1 = "#26302E"
+avatar_2 = "#303027"
+avatar_3 = "#312B27"
+avatar_4 = "#30282E"
+avatar_5 = "#282C34"
+avatar_6 = "#302F28"
+avatar_7 = "#263132"
+
+# ---------------------------------------------------------------------------
+# §4.3 字体与排版
+# ---------------------------------------------------------------------------
+[typography]
+css_prefix = ""
+
+# 字体栈。CJK 不随包（Noto Sans CJK 体量与授权复杂度都不值得）；
+# golden 只在钉了 CJK 字体包的 Linux 容器里跑（GUI 方案 §10.2）。
+font_sans = '"Inter Variable", ui-sans-serif, system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif'
+font_mono = 'ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans Mono CJK SC", monospace'
+
+# 字重只用这三档
+font_weights = [400, 500, 600]
+
+# 数字一律 tabular-nums（时间、计数、表格）
+font_variant_numeric = "tabular-nums"
+# 中英混排：text-wrap: pretty 仅标题，正文 overflow-wrap: anywhere 防长 token 撑破列
+heading_text_wrap = "pretty"
+body_overflow_wrap = "anywhere"
+
+# §8.6 CJK 排版。这一小段进 tokens.css（css_emit_sections 里的 "typography_cjk"），
+# 生成 `:lang(zh) { … }` 一条规则；Tailwind 没有对应 namespace。
+# 中英文之间不自动加空格（由文案维护），所以这里没有对应 token。
+[typography.cjk]
+selector = ":lang(zh)"
+line_height = "1.6"                 # 英文 14/20 = 1.43 在中文偏挤
+hanging_punctuation = "first"       # 支持的引擎生效，不支持无害
+
+# 字号阶（Tailwind @theme 覆盖默认值）。size / line_height 单位均为 px。
+[typography.scale.xs]
+size = 12
+line_height = 16
+
+[typography.scale.sm]
+size = 13
+line_height = 18
+
+[typography.scale.base]
+size = 14
+line_height = 20
+
+[typography.scale.lg]
+size = 16
+line_height = 24
+
+[typography.scale.xl]
+size = 20
+line_height = 28
+
+[typography.scale."2xl"]
+size = 24
+line_height = 32
+
+# 随包字体资产（GUI 方案 §4.3；文件在 crates/openbot-ui/assets/fonts/）。
+# 字节数与 sha256 由 xtask 校验；zip 来源 rsms/inter release v4.1。
+[[typography.font_face]]
+family = "Inter Variable"
+style = "normal"
+weight = "100 900"
+display = "swap"
+file = "../assets/fonts/InterVariable.woff2"
+bytes = 352240
+sha256 = "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3"
+
+[[typography.font_face]]
+family = "Inter Variable"
+style = "italic"
+weight = "100 900"
+display = "swap"
+file = "../assets/fonts/InterVariable-Italic.woff2"
+bytes = 387976
+sha256 = "e564f652916db6c139570fefb9524a77c4d48f30c92928de9db19b6b5c7a262a"
+
+# ---------------------------------------------------------------------------
+# §4.4 尺寸、圆角、边框、焦点、层级、阴影
+# ---------------------------------------------------------------------------
+
+# 间距：Tailwind 默认 4px 阶，允许用下列倍数（×4px）；禁止任意值 [Npx]。
+[spacing]
+base_px = 4
+allowed_steps = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16]
+
+# 圆角阶。--radius = 8px 是基准；胶囊按钮与芯片 = full，输入框/菜单项/卡片 = md，
+# popover / dialog = lg。
+[radius]
+css_prefix = "radius"
+base = "8px"
+sm = "8px"
+md = "10px"
+lg = "16px"
+xl = "24px"
+full = "9999px"
+
+# 边框：1px border 色；只用于 Input / Select / Textarea / Separator / Table / Combobox 列表容器。
+[border]
+width = "1px"
+
+# 焦点：仅 :focus-visible；禁止 outline: none 而无替代。
+[focus]
+outline_width = "2px"
+outline_style = "solid"
+outline_color_token = "ring"
+outline_offset = "2px"
+
+# 控件高度与固定尺寸（单位 px）。
+[size]
+css_prefix = "size"
+sidebar_min = 264
+sidebar_max = 344
+home_top_min = 72
+home_top_max = 200
+home_pad_min = 24
+home_pad_max = 56
+agent_picker_max = 280
+account_panel_min = 240
+account_panel_max = 520
+brand_mark = 40
+brand_mark_small = 28
+brand_sign = 64
+home_title = 32
+composer_height = 132
+composer_radius = 28
+control_sm = 32
+control_md = 36          # 默认
+control_lg = 40
+textarea_max = 218       # 10 × base line-height 20 + block padding 16 + borders 2
+avatar_sm = 24
+avatar_md = 32
+avatar_lg = 40
+kbd = 22
+toast_viewport_gutter = 32
+modal_gutter = 32
+modal_max = 512
+menu_min = 180
+message_scroller_preview = 320
+listbox_min = 180
+listbox_max = 288
+sidebar_preview = 360
+table_row = 36
+sidebar_item = 44
+topbar = 80
+native_toolbar = 56    # macOS unified title/toolbar; host-authored overlay mode only
+sidebar = 304            # §5.1
+sidebar_rail = 64
+detail_panel = 360
+subnav = 184             # admin / settings 二级侧栏
+content_max = 960        # 配置类页面
+content_max_table = 1200 # 表格类页面
+content_max_chat = 880   # Chat 模板内容列
+icon_inline = 16         # §4.6.1 行内 / 文字旁
+icon_nav = 20            # §4.6.1 导航 / 按钮
+min_viewport_w = 1024    # §5.3 最小支持视口
+min_viewport_h = 640
+
+# 断点（§5.3；上游 24 处断点用法不构成契约，本表是唯一真源）。
+[breakpoint]
+md = "768px"
+lg = "1024px"
+
+# z-index 阶。禁止其它值。
+[z_index]
+css_prefix = "z"
+base = 0
+sticky = 10
+sidebar = 304
+detail_panel = 20
+popover = 30
+menu = 30
+combobox = 30
+sheet = 40
+dialog = 50
+tooltip = 60
+toast = 70
+
+# 阴影：只有这两个 token（值在 [color.*]，因为它们随主题变化）；
+# 卡片、按钮、输入框零阴影。
+[shadow]
+tokens = ["shadow_popover", "shadow_dialog"]
+
+# ---------------------------------------------------------------------------
+# §4.5 动效
+#
+# 缓动与时长是本项目新增自定（上游 EASE_OUT / 0.2s 是其自有值，不做 parity）。
+# 实现只用 CSS transition / @keyframes；需要 JS 驱动的用 web-sys 的 Web Animations API，
+# 不引入动画 crate。
+# ---------------------------------------------------------------------------
+[motion]
+css_prefix = "motion"
+
+ease_enter = "cubic-bezier(0.2, 0, 0, 1)"
+ease_exit = "cubic-bezier(0.4, 0, 1, 1)"
+
+duration_hover = "120ms"            # hover / 底色
+duration_overlay_enter = "180ms"    # popover / menu / sheet 进入
+duration_overlay_exit = "120ms"     # 同上退出
+duration_dialog_enter = "240ms"     # dialog 进入
+duration_dialog_exit = "160ms"      # 同上退出
+stagger_step = "30ms"               # 列表入场级联每项 +30ms
+stagger_max_items = 8               # 级联上限 8 项
+agent_presence_cycle = "1200ms"     # thinking/speaking 状态环周期（§6.7）
+agent_presence_error = "160ms"      # error 单次横向位移（§6.7）
+
+# 允许动画的清单（闭合，增项走 PR）。design-lint 用它核对 @keyframes 名。
+allowed_animations = [
+  "color_transition",   # ① 底色 / 文字色过渡
+  "overlay",            # ② popover / menu / sheet / dialog 出入
+  "list_stagger",       # ③ 列表入场级联（替代上游 layout/stagger.tsx）
+  "detail_panel_slide", # ④ detail panel 滑入（替代 layout/detail-panel.tsx 的 motion）
+  "skeleton_breathe",   # ⑤ skeleton 呼吸
+  "tool_line_shimmer",  # ⑥ 运行中工具行的文字扫光（上游 styles.css 已有，parity）
+  "agent_presence_ring" # ⑦ agent 状态环（§6.7）
+]
+
+# prefers-reduced-motion 是一条 token 级总开关，不允许组件自行豁免。
+# app.css 的 @media 块把以下两个值应用到 *, *::before, *::after。
+[motion.reduced]
+media = "(prefers-reduced-motion: reduce)"
+transition_duration = "0ms"
+animation = "none"

@@ -1,0 +1,6 @@
+channels:
+  - id: wrok-workspace
+    name: Workspace
+    description: Work with your personal assistant.
+    permitted_agents: [wrok-assistant]
+    allowed_groups: [all]

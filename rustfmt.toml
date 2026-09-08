@@ -1,0 +1,9 @@
+# 只钉一个稳定选项：换行符。
+#
+# rustfmt 默认 `newline_style = "Auto"`（沿用文件里出现的第一个换行符），在 Windows 上一旦
+# 有人用 CRLF 编辑器保存了一个 .rs，`cargo fmt --check` 会照样绿 —— 于是 .gitattributes 的
+# `eol=lf` 就成了唯一防线，而它只在 git 出入库时生效，管不到工作树。钉成 "Unix" 之后，
+# CRLF 会被 `cargo fmt --check` 当场判红，闸门和 .gitattributes 指向同一个事实。
+#
+# 其余格式规则一律用 rustfmt 默认值：默认值不需要维护，也不会在升工具链时变成一堆无意义 diff。
+newline_style = "Unix"

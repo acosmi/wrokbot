@@ -1,0 +1,1544 @@
+{
+  "schema": "cel-corpus",
+  "schema_version": 1,
+  "upstream_commit": "891df72f1827454d8b353d108fe5dd2313b7e30d",
+  "oracle": {
+    "engine": "cel-js",
+    "version": "0.8.2",
+    "pinned_by": "server/package.json + bun.lock",
+    "entrypoint": "evaluate(expression, context, functions)",
+    "globals": [
+      "contains",
+      "matches"
+    ],
+    "globals_source": "server/src/computer/policy.ts::POLICY_FUNCTIONS"
+  },
+  "candidate": {
+    "engine": "cel",
+    "version": "0.14.3",
+    "note": "v3 §1.2 / §8.3 钉版。本文件不含 Rust 侧实测值：openbot-computer 的 CEL 求值面尚未存在，Rust 一侧由 T-FIX-0005 的 golden 对照测试在 crate 落地后填。"
+  },
+  "result_class_vocabulary": {
+    "values": [
+      "true",
+      "false",
+      "error"
+    ],
+    "mapping_note": "与 v3 §8.3 的三类对齐。上游 server/src/computer/policy.ts::matches 把\"抛错\"与\"返回非布尔\"归入同一条 fail-closed 路径，因此本文件把非布尔结果记为 error，并在 engine_raw.kind = \"non-boolean\" 里保留引擎真实返回，避免两种失效模式被压成一个字符串而不可区分。"
+  },
+  "policy_layer_semantics": {
+    "source": "server/src/computer/policy.ts::evaluateActionPolicy",
+    "rules": [
+      "deny 先于 allow；deny 命中即拒绝，whatever allow says。",
+      "deny 侧 onError=true：result_class=error 的表达式判为\"拒绝\"。",
+      "allow 侧 onError=false：result_class=error 的表达式判为\"不放行\"。",
+      "result_class=false 是真答案，不得读成 broken。",
+      "mode=dry-run 只改 forward，不改 allowed / matched / source。",
+      "policy 为 null/undefined，或 allow 为空列表，一律 source=\"default\" 且 allowed=false。"
+    ]
+  },
+  "measured_findings": [
+    {
+      "id": "F-CEL-1",
+      "severity": "blocking-for-migration",
+      "claim": "cel-js 0.8.2 没有任何字符串方法：contains / startsWith / endsWith / matches 的方法形式一律抛 \"Unknown method: <名>\"。",
+      "evidence_entries": [
+        "method-form-contains",
+        "method-form-startswith",
+        "method-form-endswith",
+        "method-form-matches"
+      ],
+      "positive_control": [
+        "global-form-contains",
+        "global-form-matches"
+      ],
+      "rust_risk": "Rust cel 0.14.3 实现标准 CEL 字符串方法，同一表达式会正常求值 ⇒ 结果类别 error→true/false，deny 规则的语义整条翻转。v3 §8.3 差异 1。"
+    },
+    {
+      "id": "F-CEL-2",
+      "severity": "blocking-for-migration",
+      "claim": "上游注入的两个全局函数都是大小写不敏感：contains 双向 toLowerCase，matches 强制 RegExp 的 i 标志。",
+      "evidence_entries": [
+        "contains-case-insensitive-haystack",
+        "contains-case-insensitive-needle",
+        "global-matches-case-insensitive"
+      ],
+      "positive_control": [
+        "contains-miss"
+      ],
+      "rust_risk": "标准 CEL 的同名方法大小写敏感。Rust 侧注册全局函数时若沿用标准语义，\"never click submit\" 不再命中 \"SUBMIT NOW\"，属悄悄放宽。"
+    },
+    {
+      "id": "F-CEL-3",
+      "severity": "blocking-for-migration",
+      "claim": "cel-js 0.8.2 的 && 只从左向右短路；|| 完全不短路，左操作数为 true 时仍会求值右操作数并因缺标识符抛错。",
+      "evidence_entries": [
+        "and-shortcircuit-left-false",
+        "and-no-reverse-shortcircuit",
+        "or-no-shortcircuit-left-true",
+        "or-no-shortcircuit-right-true"
+      ],
+      "positive_control": [
+        "key-guarded-on-navigation"
+      ],
+      "rust_risk": "标准 CEL 对 || 做 commutative 短路。一条 \"true || key == \\\"Enter\\\"\" 形状的规则在上游是 error（deny 侧=拒绝），在 Rust 侧会变 true——同样是拒绝；但 allow 侧同一条会从\"不放行\"变成\"放行\"。类别翻转必须逐条进迁移报告。"
+    },
+    {
+      "id": "F-CEL-4",
+      "severity": "blocking-for-migration",
+      "claim": "读取 context 里不存在的标识符或不存在的嵌套字段一律抛错，不返回 null。",
+      "evidence_entries": [
+        "contains-missing-element",
+        "key-unguarded-on-navigation",
+        "intent-missing-on-plain-click",
+        "probe-absent-nested-field-read",
+        "non-boolean-unknown-root"
+      ],
+      "positive_control": [
+        "contains-empty-element-name",
+        "probe-has-absent-field"
+      ],
+      "rust_risk": "Rust 侧若把缺字段求值为 null 或空值，deny 规则从 error（拒绝）变 false（放行）。上游 gateway 刻意给 MCP / command context 塞满空串字段就是为了区分\"存在且为空\"与\"不存在\"，Rust 侧必须原样保留这个区分。"
+    },
+    {
+      "id": "F-CEL-5",
+      "severity": "documented-upstream-inconsistency",
+      "claim": "上游 server/tests/computer-policy.test.ts 把 \"repeat.count\" 标注为 \"a number\"（非布尔），实测它抛 Identifier not found（throw）。",
+      "evidence_entries": [
+        "non-boolean-unknown-root"
+      ],
+      "positive_control": [
+        "non-boolean-bare-field"
+      ],
+      "rust_risk": "两条路径在 policy 层同归 fail-closed，所以上游测试恒绿、注释错了也没人发现。Rust 侧照抄注释就会把它分到错误的类别。"
+    },
+    {
+      "id": "F-CEL-6",
+      "severity": "audit-payload-risk",
+      "claim": "cel-js 的 \"Identifier not found\" 错误消息把**整个 context 的 JSON**拼进消息体，而上游 server/src/computer/policy.ts::matches 用 console.error 把 String(error) 原样打日志。",
+      "evidence_entries": [
+        "contains-missing-element",
+        "key-unguarded-on-navigation"
+      ],
+      "positive_control": [
+        "method-form-contains"
+      ],
+      "rust_risk": "一条写错的 deny 规则会把 page.url、command、file.path 逐字写进服务器日志，与 v3 §8.6 的 payload 字段 allowlist 冲突。Rust 侧的错误消息必须只带表达式与失败原因，不带 context 内容；本条不是 parity 项，是**明确不照译**的上游缺陷（v3 §2.4 类）。"
+    }
+  ],
+  "contexts": {
+    "click_submit": {
+      "tool": {
+        "name": "computer_click"
+      },
+      "bot": {
+        "id": "risk-analyst"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "https://example.com/order",
+        "host": "example.com"
+      },
+      "element": {
+        "ref": "e13",
+        "role": "button",
+        "name": "Submit order"
+      }
+    },
+    "click_large": {
+      "tool": {
+        "name": "computer_click"
+      },
+      "bot": {
+        "id": "risk-analyst"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "https://example.com/order",
+        "host": "example.com"
+      },
+      "element": {
+        "ref": "e6",
+        "role": "input",
+        "name": "Large"
+      }
+    },
+    "click_submit_upper": {
+      "tool": {
+        "name": "computer_click"
+      },
+      "bot": {
+        "id": "risk-analyst"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "https://example.com/order",
+        "host": "example.com"
+      },
+      "element": {
+        "ref": "e1",
+        "role": "button",
+        "name": "SUBMIT NOW"
+      }
+    },
+    "click_no_element": {
+      "tool": {
+        "name": "computer_click"
+      },
+      "bot": {
+        "id": "risk-analyst"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "https://example.com/order",
+        "host": "example.com"
+      }
+    },
+    "type_computer_type": {
+      "tool": {
+        "name": "computer_type"
+      },
+      "bot": {
+        "id": "risk-analyst"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "https://example.com/order",
+        "host": "example.com"
+      },
+      "element": {
+        "ref": "e13",
+        "role": "button",
+        "name": "Submit order"
+      }
+    },
+    "key_enter_order": {
+      "tool": {
+        "name": "computer_key"
+      },
+      "bot": {
+        "id": "sales"
+      },
+      "actor": {
+        "id": "someone"
+      },
+      "page": {
+        "url": "https://example.com/order",
+        "host": "example.com"
+      },
+      "key": "Enter"
+    },
+    "key_a_order": {
+      "tool": {
+        "name": "computer_key"
+      },
+      "bot": {
+        "id": "sales"
+      },
+      "actor": {
+        "id": "someone"
+      },
+      "page": {
+        "url": "https://example.com/order",
+        "host": "example.com"
+      },
+      "key": "a"
+    },
+    "activate_click_button": {
+      "tool": {
+        "name": "computer_click"
+      },
+      "bot": {
+        "id": "b"
+      },
+      "actor": {
+        "id": "a"
+      },
+      "page": {
+        "url": "https://example.com/",
+        "host": "example.com"
+      },
+      "intent": "activate",
+      "element": {
+        "ref": "e1",
+        "role": "button",
+        "name": "Submit order"
+      }
+    },
+    "activate_key_enter_button": {
+      "tool": {
+        "name": "computer_key"
+      },
+      "bot": {
+        "id": "b"
+      },
+      "actor": {
+        "id": "a"
+      },
+      "page": {
+        "url": "https://example.com/",
+        "host": "example.com"
+      },
+      "intent": "activate",
+      "key": "Enter",
+      "element": {
+        "ref": "e1",
+        "role": "button",
+        "name": "Submit order"
+      }
+    },
+    "activate_key_space_button": {
+      "tool": {
+        "name": "computer_key"
+      },
+      "bot": {
+        "id": "b"
+      },
+      "actor": {
+        "id": "a"
+      },
+      "page": {
+        "url": "https://example.com/",
+        "host": "example.com"
+      },
+      "intent": "activate",
+      "key": "Space",
+      "element": {
+        "ref": "e1",
+        "role": "button",
+        "name": "Submit order"
+      }
+    },
+    "activate_key_enter_textbox": {
+      "tool": {
+        "name": "computer_key"
+      },
+      "bot": {
+        "id": "b"
+      },
+      "actor": {
+        "id": "a"
+      },
+      "page": {
+        "url": "https://example.com/",
+        "host": "example.com"
+      },
+      "intent": "activate",
+      "key": "Enter",
+      "element": {
+        "ref": "e3",
+        "role": "textbox",
+        "name": "E-mail address:"
+      }
+    },
+    "type_customer_name": {
+      "tool": {
+        "name": "computer_type"
+      },
+      "bot": {
+        "id": "b"
+      },
+      "actor": {
+        "id": "a"
+      },
+      "page": {
+        "url": "https://example.com/",
+        "host": "example.com"
+      },
+      "intent": "type",
+      "element": {
+        "ref": "e2",
+        "role": "textbox",
+        "name": "Customer name:"
+      }
+    },
+    "type_password_field": {
+      "tool": {
+        "name": "computer_type"
+      },
+      "bot": {
+        "id": "b"
+      },
+      "actor": {
+        "id": "a"
+      },
+      "page": {
+        "url": "https://example.com/login",
+        "host": "example.com"
+      },
+      "intent": "type",
+      "element": {
+        "ref": "e4",
+        "role": "textbox",
+        "name": "Password"
+      }
+    },
+    "navigate_httpbin": {
+      "tool": {
+        "name": "computer_navigate"
+      },
+      "bot": {
+        "id": "b"
+      },
+      "actor": {
+        "id": "a"
+      },
+      "page": {
+        "url": "https://httpbin.org/forms/post",
+        "host": "httpbin.org"
+      },
+      "intent": "navigate"
+    },
+    "navigate_facebook": {
+      "tool": {
+        "name": "computer_navigate"
+      },
+      "bot": {
+        "id": "b"
+      },
+      "actor": {
+        "id": "a"
+      },
+      "page": {
+        "url": "https://facebook.com/groups/1",
+        "host": "facebook.com"
+      },
+      "intent": "navigate"
+    },
+    "mcp_search_notes": {
+      "tool": {
+        "name": "mcp__notes__search_notes"
+      },
+      "bot": {
+        "id": "knowledge"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "",
+        "host": ""
+      },
+      "element": {
+        "ref": "",
+        "role": "",
+        "name": "",
+        "type": ""
+      },
+      "key": "",
+      "file": {
+        "path": "",
+        "name": "",
+        "extension": ""
+      },
+      "mcp": {
+        "server": "notes",
+        "tool": "search_notes",
+        "effect": "read"
+      }
+    },
+    "read_file_secrets": {
+      "tool": {
+        "name": "computer_read_file"
+      },
+      "bot": {
+        "id": "risk-analyst"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "https://example.com/order",
+        "host": "example.com"
+      },
+      "element": {
+        "ref": "e13",
+        "role": "button",
+        "name": "Submit order"
+      },
+      "file": {
+        "path": "/workspace/secrets.env",
+        "name": "secrets.env",
+        "extension": "env"
+      }
+    },
+    "run_command_rm": {
+      "tool": {
+        "name": "computer_run_command"
+      },
+      "bot": {
+        "id": "general-assistant"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "",
+        "host": ""
+      },
+      "intent": "run_command",
+      "command": "rm -rf /"
+    },
+    "run_command_ls": {
+      "tool": {
+        "name": "computer_run_command"
+      },
+      "bot": {
+        "id": "general-assistant"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "",
+        "host": ""
+      },
+      "intent": "run_command",
+      "command": "ls -la"
+    },
+    "run_command_apt": {
+      "tool": {
+        "name": "computer_run_command"
+      },
+      "bot": {
+        "id": "general-assistant"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "",
+        "host": ""
+      },
+      "intent": "run_command",
+      "command": "apt-get install -y jq"
+    },
+    "run_command_echo_neutral": {
+      "tool": {
+        "name": "computer_run_command"
+      },
+      "bot": {
+        "id": "general-assistant"
+      },
+      "actor": {
+        "id": "dev-local-user"
+      },
+      "page": {
+        "url": "",
+        "host": ""
+      },
+      "intent": "run_command",
+      "command": "echo hello",
+      "element": {
+        "ref": "",
+        "role": "",
+        "name": "",
+        "type": ""
+      },
+      "key": ""
+    }
+  },
+  "entries": [
+    {
+      "id": "method-form-contains",
+      "group": "engine-divergence",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "element.name.contains(\"submit\")",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Unknown method: contains"
+      },
+      "notes": "v3 §8.3 差异 1。cel-js 0.8.2 无任何字符串方法，方法形式抛 Unknown method；Rust cel 0.14.3 上同一表达式会正常求值为 true，结果类别 error→true 即为迁移 preflight 必须高亮的分歧。"
+    },
+    {
+      "id": "global-form-contains",
+      "group": "engine-divergence",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "contains(element.name, \"submit\")",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "method-form-contains 的正向对照：全局函数形式在 cel-js 下正常求值，证明\"抛错\"来自方法形式而非 contains 本身不可用。"
+    },
+    {
+      "id": "method-form-startswith",
+      "group": "engine-divergence",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "element.name.startsWith(\"Submit\")",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Unknown method: startsWith"
+      },
+      "notes": "v3 §8.3 差异 1 列举的四个方法之一。上游没有对应全局函数，Rust 侧属超集能力。"
+    },
+    {
+      "id": "method-form-endswith",
+      "group": "engine-divergence",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "element.name.endsWith(\"order\")",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Unknown method: endsWith"
+      },
+      "notes": "v3 §8.3 差异 1 列举的四个方法之一。"
+    },
+    {
+      "id": "method-form-matches",
+      "group": "engine-divergence",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "element.name.matches(\"sub.*\")",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Unknown method: matches"
+      },
+      "notes": "v3 §8.3 差异 1 列举的四个方法之一。注意标准 CEL 的 matches 大小写敏感，上游全局 matches 强制 i 标志，语义也不同。"
+    },
+    {
+      "id": "global-form-matches",
+      "group": "engine-divergence",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "matches(element.name, \"sub.*\")",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "method-form-matches 的正向对照。全局 matches 用 new RegExp(pattern, \"i\")，所以小写 pattern 命中大写文本。"
+    },
+    {
+      "id": "global-matches-case-insensitive",
+      "group": "engine-divergence",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "matches(element.name, \"SUBMIT\")",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "Rust 侧注册 matches 时必须显式加 case-insensitive，否则这条从 true 变 false，是\"悄悄放宽\"。"
+    },
+    {
+      "id": "global-matches-invalid-pattern",
+      "group": "engine-divergence",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "matches(element.name, \"(\")",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "not a valid pattern: ("
+      },
+      "notes": "上游 matches 对不可解析 pattern 主动 throw（而非返回 false），使 deny 侧 fail-closed。Rust 侧必须同样抛错，返回 false 会静默削弱 deny 规则。"
+    },
+    {
+      "id": "default-allow-true",
+      "group": "default-policy",
+      "label": "parity",
+      "upstream": "server/src/computer/policy-store.ts::DEFAULT_ACTION_POLICY",
+      "expression": "true",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "v3 §28.2 复核通过：上游 DEFAULT_ACTION_POLICY = {mode:\"enforce\",deny:[],allow:[\"true\"]}。v3 §8.3 裁决新安装不再有隐式 allow:[\"true\"]，故 Rust 侧此表达式仍须可求值，但不再作为默认装配。"
+    },
+    {
+      "id": "default-allow-true-on-command",
+      "group": "default-policy",
+      "label": "parity",
+      "upstream": "server/src/computer/policy-store.ts::DEFAULT_ACTION_POLICY",
+      "expression": "true",
+      "context": "run_command_echo_neutral",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "同一 allow 表达式在非浏览器 context 下的表现，证明它不依赖任何字段。"
+    },
+    {
+      "id": "contains-miss",
+      "group": "contains-semantics",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(element.name, \"submit\")",
+      "context": "click_large",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "上游测试 \"a deny rule leaves unrelated elements alone\"：答 false 是真答案，不得被读成 broken。"
+    },
+    {
+      "id": "contains-case-insensitive-haystack",
+      "group": "contains-semantics",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(element.name, \"submit\")",
+      "context": "click_submit_upper",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "上游测试 \"substring matching is case-insensitive\"：haystack 大写、needle 小写仍命中。"
+    },
+    {
+      "id": "contains-case-insensitive-needle",
+      "group": "contains-semantics",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "contains(element.name, \"SUBMIT\")",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "反向对照：needle 大写、haystack 混合大小写仍命中。两条一起钉死\"双向 toLowerCase\"。"
+    },
+    {
+      "id": "contains-missing-element",
+      "group": "contains-semantics",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(element.name, \"submit\")",
+      "context": "click_no_element",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Identifier \"element\" not found in context: {\"tool\":{\"name\":\"computer_click\"},\"bot\":{\"id\":\"risk-analyst\"},\"actor\":{\"id\":\"dev-local-user\"},\"page\":{\"url\":\"https://example.com/order\",\"host\":\"example.com\"}}"
+      },
+      "notes": "上游测试 \"a rule about an element still decides when the element is unknown\"：缺字段抛错，deny 侧因而拒绝。Rust 若把缺字段求值成 null 再 String 化，这条会从 error 变 false，属\"悄悄放宽\"。"
+    },
+    {
+      "id": "contains-empty-element-name",
+      "group": "contains-semantics",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(element.name, \"submit\")",
+      "context": "mcp_search_notes",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "中性空字段（存在但为空串）与缺字段的分歧点：上游对 MCP context 刻意塞满空浏览器字段，就是为了让浏览器规则求值成 false 而不是不可求值。"
+    },
+    {
+      "id": "non-boolean-bare-string",
+      "group": "non-boolean",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "\"Submit order\"",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "non-boolean",
+        "type": "string",
+        "value": "Submit order"
+      },
+      "notes": "上游 test.each \"a bare string, i.e. the list read as labels\"。表达式层不抛错，policy 层 matches() 按 broken 走 onError。"
+    },
+    {
+      "id": "non-boolean-bare-field",
+      "group": "non-boolean",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "element.name",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "non-boolean",
+        "type": "string",
+        "value": "Submit order"
+      },
+      "notes": "上游 test.each \"a bare field reference\"。"
+    },
+    {
+      "id": "non-boolean-ternary",
+      "group": "non-boolean",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(element.name, \"submit\") ? element.name : false",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "non-boolean",
+        "type": "string",
+        "value": "Submit order"
+      },
+      "notes": "上游 test.each \"a ternary\"。也顺带证明 cel-js 支持三元条件。"
+    },
+    {
+      "id": "non-boolean-unknown-root",
+      "group": "non-boolean",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "repeat.count",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Identifier \"repeat\" not found in context: {\"tool\":{\"name\":\"computer_click\"},\"bot\":{\"id\":\"risk-analyst\"},\"actor\":{\"id\":\"dev-local-user\"},\"page\":{\"url\":\"https://example.com/order\",\"host\":\"example.com\"},\"element\":{\"ref\":\"e13\",\"role\":\"button\",\"name\":\"Submit order\"}}"
+      },
+      "notes": "上游 test.each 把它标注为 \"a number\"，但 repeat 在 context 里根本不存在：实测 cel-js 0.8.2 抛 Identifier not found，走的是 throw 分支而非非布尔分支。上游注释与实际失效模式不一致，两条路径在 policy 层同归 fail-closed 所以测试照样绿——照抄注释就会在 Rust 侧写错分类。"
+    },
+    {
+      "id": "broken-deny-expression",
+      "group": "broken-syntax",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "this is not ( valid cel",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Given string is not a valid CEL expression: Redundant input, expecting EOF but found: is"
+      },
+      "notes": "上游测试 \"a BROKEN deny expression still denies\"。"
+    },
+    {
+      "id": "broken-allow-expression",
+      "group": "broken-syntax",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "also not ( valid",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Given string is not a valid CEL expression: Redundant input, expecting EOF but found: not"
+      },
+      "notes": "上游测试 \"a broken allow expression does not permit\"。"
+    },
+    {
+      "id": "by-tool-name",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "tool.name == \"computer_type\"",
+      "context": "type_computer_type",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "by-page-host",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "page.host == \"example.com\"",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "by-bot-id",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "bot.id == \"risk-analyst\"",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "by-actor-id",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": "server/src/computer/policy.ts::POLICY_FUNCTIONS",
+      "expression": "actor.id == \"dev-local-user\"",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "actor.id 在 .env.example 的 Attributes 清单里列出，但上游测试没有独立用例；补进 corpus 以覆盖全部可写字段根。"
+    },
+    {
+      "id": "by-page-url",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": ".env.example::AGENT_COMPUTER_POLICY",
+      "expression": "contains(page.url, \"/order\")",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "by-element-role",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": ".env.example::AGENT_COMPUTER_POLICY",
+      "expression": "element.role == \"button\"",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "by-element-ref",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": ".env.example::AGENT_COMPUTER_POLICY",
+      "expression": "element.ref == \"e13\"",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "by-file-extension",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": ".env.example::AGENT_COMPUTER_POLICY",
+      "expression": "file.extension == \"env\"",
+      "context": "read_file_secrets",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "by-file-name",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(file.name, \"secrets\")",
+      "context": "read_file_secrets",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "by-file-path",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(file.path, \"secrets\")",
+      "context": "read_file_secrets",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "上游测试 \"a refused file action still names the file\"。"
+    },
+    {
+      "id": "by-mcp-server",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "mcp.server == \"notes\"",
+      "context": "mcp_search_notes",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "上游测试 \"a refused tool call names the tool and the server it was aimed at\"。"
+    },
+    {
+      "id": "by-mcp-effect-write",
+      "group": "field-rules",
+      "label": "parity",
+      "upstream": ".env.example::AGENT_COMPUTER_POLICY",
+      "expression": "mcp.effect == \"write\"",
+      "context": "mcp_search_notes",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "负向对照：effect 为 read 时这条必须答 false，否则\"禁止一切写\"的规则会连读也拦。"
+    },
+    {
+      "id": "key-unguarded-on-keypress",
+      "group": "key-and-shortcircuit",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "key == \"Enter\"",
+      "context": "key_enter_order",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "key-unguarded-on-navigation",
+      "group": "key-and-shortcircuit",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "key == \"Enter\"",
+      "context": "navigate_httpbin",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Identifier \"key\" not found in context: {\"tool\":{\"name\":\"computer_navigate\"},\"bot\":{\"id\":\"b\"},\"actor\":{\"id\":\"a\"},\"page\":{\"url\":\"https://httpbin.org/forms/post\",\"host\":\"httpbin.org\"},\"intent\":\"navigate\"}"
+      },
+      "notes": "上游测试 \"unguarded, it refuses a navigation that has no key at all\"：缺 key 标识符抛错，deny 侧拒绝。这是\"未加守卫的 key 规则会误伤导航\"的机械证据。"
+    },
+    {
+      "id": "key-guarded-on-navigation",
+      "group": "key-and-shortcircuit",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "tool.name == \"computer_key\" && key == \"Enter\"",
+      "context": "navigate_httpbin",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "上游测试 \"guarded by the tool name, the navigation is allowed\"。承重点：&& 必须短路，否则右操作数抛错、整条变 error，导航被误拒。Rust 引擎的 && 短路语义必须与此一致。"
+    },
+    {
+      "id": "key-guarded-on-keypress",
+      "group": "key-and-shortcircuit",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "tool.name == \"computer_key\" && key == \"Enter\"",
+      "context": "key_enter_order",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "key-guarded-ordinary-key",
+      "group": "key-and-shortcircuit",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "tool.name == \"computer_key\" && key == \"Enter\"",
+      "context": "key_a_order",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "上游测试 \"And an ordinary keystroke still goes through\"。"
+    },
+    {
+      "id": "and-shortcircuit-left-false",
+      "group": "key-and-shortcircuit",
+      "label": "新增",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "false && key == \"Enter\"",
+      "context": "navigate_httpbin",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "新增：&& 短路的最小化对照，把 key-guarded-on-navigation 的结论与 tool.name 判据解耦。实测 cel-js 0.8.2 的 && 在左操作数为 false 时短路，右操作数的缺标识符不抛错。"
+    },
+    {
+      "id": "and-no-reverse-shortcircuit",
+      "group": "key-and-shortcircuit",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "key == \"Enter\" && false",
+      "context": "navigate_httpbin",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Identifier \"key\" not found in context: {\"tool\":{\"name\":\"computer_navigate\"},\"bot\":{\"id\":\"b\"},\"actor\":{\"id\":\"a\"},\"page\":{\"url\":\"https://httpbin.org/forms/post\",\"host\":\"httpbin.org\"},\"intent\":\"navigate\"}"
+      },
+      "notes": "新增：实测 cel-js 0.8.2 的 && **只**从左向右短路。同一条规则把两个从句调换顺序，结果类别就从 false 变 error——预设里\"guard 必须写在左边\"不是风格而是承重。"
+    },
+    {
+      "id": "or-no-shortcircuit-left-true",
+      "group": "key-and-shortcircuit",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "true || key == \"Enter\"",
+      "context": "navigate_httpbin",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Identifier \"key\" not found in context: {\"tool\":{\"name\":\"computer_navigate\"},\"bot\":{\"id\":\"b\"},\"actor\":{\"id\":\"a\"},\"page\":{\"url\":\"https://httpbin.org/forms/post\",\"host\":\"httpbin.org\"},\"intent\":\"navigate\"}"
+      },
+      "notes": "新增：实测 cel-js 0.8.2 的 || **不**短路（左为 true 仍求值右操作数并抛错），与 && 不对称。标准 CEL 与 Rust cel 0.14.3 通常对 || 短路，因此这条极可能是 error→true 的类别翻转，属 §8.3 preflight 必须高亮的第三处引擎差异。"
+    },
+    {
+      "id": "or-no-shortcircuit-right-true",
+      "group": "key-and-shortcircuit",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "key == \"Enter\" || true",
+      "context": "navigate_httpbin",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Identifier \"key\" not found in context: {\"tool\":{\"name\":\"computer_navigate\"},\"bot\":{\"id\":\"b\"},\"actor\":{\"id\":\"a\"},\"page\":{\"url\":\"https://httpbin.org/forms/post\",\"host\":\"httpbin.org\"},\"intent\":\"navigate\"}"
+      },
+      "notes": "新增：|| 不短路的反向对照，排除\"只是右操作数没被求值\"的解释。"
+    },
+    {
+      "id": "intent-activate-submit-click",
+      "group": "intent",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "intent == \"activate\" && contains(element.name, \"submit\")",
+      "context": "activate_click_button",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "intent-activate-submit-enter-button",
+      "group": "intent",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "intent == \"activate\" && contains(element.name, \"submit\")",
+      "context": "activate_key_enter_button",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "上游测试 \"catches Enter pressed on the same button\"。"
+    },
+    {
+      "id": "intent-activate-submit-space-button",
+      "group": "intent",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "intent == \"activate\" && contains(element.name, \"submit\")",
+      "context": "activate_key_space_button",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "intent-activate-submit-typing",
+      "group": "intent",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "intent == \"activate\" && contains(element.name, \"submit\")",
+      "context": "type_customer_name",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "上游测试 \"leaves ordinary typing alone\"。"
+    },
+    {
+      "id": "intent-activate-submit-enter-in-field",
+      "group": "intent",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "intent == \"activate\" && contains(element.name, \"submit\")",
+      "context": "activate_key_enter_textbox",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "上游测试 \"does NOT catch Enter in a text field\"：intent 描述被寻址元素而非表单副作用，这条答 false 是**正确**行为，预设因此还要另外拒 Enter。类别翻转就等于悄悄收紧。"
+    },
+    {
+      "id": "intent-run-command",
+      "group": "intent",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "intent == \"run_command\"",
+      "context": "run_command_apt",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "上游测试 \"a deployment can refuse the shell outright\"。"
+    },
+    {
+      "id": "intent-missing-on-plain-click",
+      "group": "intent",
+      "label": "新增",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "intent == \"activate\"",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Identifier \"intent\" not found in context: {\"tool\":{\"name\":\"computer_click\"},\"bot\":{\"id\":\"risk-analyst\"},\"actor\":{\"id\":\"dev-local-user\"},\"page\":{\"url\":\"https://example.com/order\",\"host\":\"example.com\"},\"element\":{\"ref\":\"e13\",\"role\":\"button\",\"name\":\"Submit order\"}}"
+      },
+      "notes": "新增：上游 context() 辅助函数不带 intent，而 gateway 在实际调用时会填。缺 intent 时的类别必须钉死，否则 Rust 侧把缺字段当 null 会让 intent 规则从 error 变 false。"
+    },
+    {
+      "id": "command-contains-hit",
+      "group": "command",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(command, \"rm -rf\")",
+      "context": "run_command_rm",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "command-contains-miss",
+      "group": "command",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(command, \"rm -rf\")",
+      "context": "run_command_ls",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "browser-rule-on-command",
+      "group": "command",
+      "label": "parity",
+      "upstream": "server/tests/computer-policy.test.ts",
+      "expression": "contains(element.name, \"submit\") || key == \"Enter\"",
+      "context": "run_command_echo_neutral",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "上游测试 \"a browser rule does not refuse a command\"：中性空字段让浏览器规则答 false。若 Rust 侧 gateway 不填这些空字段，这条会变 error，等于每条命令都被浏览器 deny 规则误杀。"
+    },
+    {
+      "id": "preset-never-submit-on-click-button",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "(intent == \"activate\" && contains(element.name, \"submit\")) || ((tool.name == \"computer_key\" || tool.name == \"computer_type\") && key == \"Enter\")",
+      "context": "activate_click_button",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "上游预设 \"Never submit a form\"，也是 .env.example::AGENT_COMPUTER_POLICY 注释里的示例 deny 规则（逐字相同）。"
+    },
+    {
+      "id": "preset-never-submit-on-enter-in-field",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "(intent == \"activate\" && contains(element.name, \"submit\")) || ((tool.name == \"computer_key\" || tool.name == \"computer_type\") && key == \"Enter\")",
+      "context": "activate_key_enter_textbox",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "预设的第二个从句（key == \"Enter\"）就是为了盖住 intent 盖不住的这一格。"
+    },
+    {
+      "id": "preset-never-submit-on-navigation",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "(intent == \"activate\" && contains(element.name, \"submit\")) || ((tool.name == \"computer_key\" || tool.name == \"computer_type\") && key == \"Enter\")",
+      "context": "navigate_httpbin",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "承重：预设在无 element、无 key 的导航上必须可求值且为 false。实测 false——因为 intent == \"activate\" 与 tool.name == \"computer_key\" 两个 guard 都先答 false 并短路，右侧读 element.name / key 的从句从未被求值。把任一 guard 挪到 && 右边就会变 error（见 and-no-reverse-shortcircuit），预设的从句顺序是承重结构。"
+    },
+    {
+      "id": "preset-never-submit-on-command",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "(intent == \"activate\" && contains(element.name, \"submit\")) || ((tool.name == \"computer_key\" || tool.name == \"computer_type\") && key == \"Enter\")",
+      "context": "run_command_echo_neutral",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "同上，但走中性空字段路径。"
+    },
+    {
+      "id": "preset-never-type-password-hit",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "intent == \"type\" && contains(element.name, \"password\")",
+      "context": "type_password_field",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "preset-never-type-password-miss",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "intent == \"type\" && contains(element.name, \"password\")",
+      "context": "type_customer_name",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "preset-social-media-hit",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "intent == \"navigate\" && (contains(page.host, \"facebook.com\") || contains(page.host, \"x.com\"))",
+      "context": "navigate_facebook",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": ""
+    },
+    {
+      "id": "preset-social-media-miss",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "intent == \"navigate\" && (contains(page.host, \"facebook.com\") || contains(page.host, \"x.com\"))",
+      "context": "navigate_httpbin",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "boundaries-placeholder-rule",
+      "group": "shipped-presets",
+      "label": "parity",
+      "upstream": "app/src/routes/_authed/admin/boundaries.tsx::PRESETS",
+      "expression": "tool.name == \"computer_click\" && contains(element.name, \"submit\")",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "Boundaries 页输入框 placeholder 里的示例规则，管理员最可能照抄的第一条规则。"
+    },
+    {
+      "id": "probe-has-macro",
+      "group": "engine-probe",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "has(element.name)",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "新增探针：标准 CEL 的 has() 宏。实测 cel-js 0.8.2 支持，且要求参数是字段选择（has(标识符) 抛 \"has() requires a field selection\"）。"
+    },
+    {
+      "id": "probe-has-absent-field",
+      "group": "engine-probe",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "has(element.type)",
+      "context": "click_submit",
+      "result_class": "false",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": false
+      },
+      "notes": "新增探针：has() 对存在的对象上缺失的字段答 false 而不抛错。这是管理员写\"缺字段安全规则\"的唯一可移植手法，Rust 侧必须保持同语义。"
+    },
+    {
+      "id": "probe-absent-nested-field-read",
+      "group": "engine-probe",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "element.type == \"textbox\"",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Identifier \"type\" not found in context: {\"tool\":{\"name\":\"computer_click\"},\"bot\":{\"id\":\"risk-analyst\"},\"actor\":{\"id\":\"dev-local-user\"},\"page\":{\"url\":\"https://example.com/order\",\"host\":\"example.com\"},\"element\":{\"ref\":\"e13\",\"role\":\"button\",\"name\":\"Submit order\"}}"
+      },
+      "notes": "新增探针：直接读对象上缺失的字段抛错（不是 null）。PolicyContext.element.type 在类型上是可选的，因此一条按 element.type 写的规则在\"没有 type 的元素\"上会 fail-closed 拒绝——这是上游现存行为，Rust 侧若返回 null 则从 error 变 false，属悄悄放宽。"
+    },
+    {
+      "id": "probe-in-operator",
+      "group": "engine-probe",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "\"Enter\" in [\"Enter\", \"Space\"]",
+      "context": "key_enter_order",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "新增探针：列表成员运算符。"
+    },
+    {
+      "id": "probe-size-function",
+      "group": "engine-probe",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "size(element.name) > 0",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "新增探针：size() 全局函数。"
+    },
+    {
+      "id": "probe-string-concat",
+      "group": "engine-probe",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "tool.name + \":\" + bot.id == \"computer_click:risk-analyst\"",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "新增探针：字符串拼接与比较。"
+    },
+    {
+      "id": "probe-negation",
+      "group": "engine-probe",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "!contains(element.name, \"cancel\")",
+      "context": "click_submit",
+      "result_class": "true",
+      "engine_raw": {
+        "kind": "boolean",
+        "value": true
+      },
+      "notes": "新增探针：一元否定。allow 侧最常见的写法。"
+    },
+    {
+      "id": "probe-unknown-global-function",
+      "group": "engine-probe",
+      "label": "新增",
+      "upstream": "-",
+      "expression": "startsWith(element.name, \"Submit\")",
+      "context": "click_submit",
+      "result_class": "error",
+      "engine_raw": {
+        "kind": "throw",
+        "message": "Macros startsWith not recognized"
+      },
+      "notes": "新增探针：未注册的全局函数。上游只注册 contains 与 matches 两个；Rust 侧若多注册一个同名全局，这条会从 error 变 true，属超集扩张，必须在 preflight 报告里显式列出。"
+    }
+  ],
+  "recount": [
+    {
+      "command": "jq '.entries | length' fixtures/policy/cel-corpus.json",
+      "cwd": "repo",
+      "expect": 69
+    },
+    {
+      "command": "jq -c '[.entries[].result_class] | group_by(.) | map({(.[0]): length}) | add' fixtures/policy/cel-corpus.json",
+      "cwd": "repo",
+      "expect": "{\"error\":19,\"false\":15,\"true\":35}"
+    },
+    {
+      "command": "jq '.contexts | length' fixtures/policy/cel-corpus.json",
+      "cwd": "repo",
+      "expect": 21
+    },
+    {
+      "command": "jq '[.entries[] | select(.group == \"engine-divergence\")] | length' fixtures/policy/cel-corpus.json",
+      "cwd": "repo",
+      "expect": 8
+    }
+  ]
+}

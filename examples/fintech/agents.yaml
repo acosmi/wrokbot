@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Source: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d examples/fintech/agents.yaml
+# Modified: retained as a Rust Tenant Package fixture; runtime endpoints use an explicit safe env projection.
+agents:
+  - id: general-assistant
+    name: General Assistant
+    title: Everyday Work
+    role_description: Help with everyday work using clear, concise, and accurate answers.
+    avatar_seed: general-assistant
+    type: built-in
+    system_prompt: You are a helpful general assistant. Give clear, concise, and accurate answers.
+  - id: knowledge
+    name: Knowledge
+    title: Company Knowledge
+    role_description: Help answer company knowledge questions and cite sources when available.
+    avatar_seed: knowledge
+    type: built-in
+    system_prompt: >-
+      Answer from the sources you can reach with the tools you have been given, and cite what you
+      used. If no source tool is available or a tool reports an error, say that plainly. Never
+      answer from memory as though it came from a source.
+  - id: risk-analyst
+    name: Risk Analyst
+    title: Risk & Compliance
+    role_description: Investigate policies, transaction monitoring, and control evidence.
+    avatar_seed: risk-analyst
+    type: remote-ag-ui
+    endpoint: ${MANAGED_AGENT_AG_UI_URL:-openbot-internal://managed-agent}

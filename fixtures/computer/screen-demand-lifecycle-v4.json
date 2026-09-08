@@ -1,0 +1,40 @@
+{
+  "schema": "openbot-screen-demand-lifecycle-v4",
+  "protocol": {
+    "version": 4,
+    "releaseEpoch": 4,
+    "generatedModuleSha256": "a2bd3a3978a650e199294437aba1661c7bb0ed0c8861ade85a09ff9a49a1252c",
+    "captureCommand": "screencast",
+    "captureEvent": "screencast_state"
+  },
+  "owner": {
+    "commandCapacity": 16,
+    "operationDeadlineMs": 750,
+    "shutdownDeadlineMs": 1500,
+    "pendingTicketsCountAsViewers": false,
+    "initialZeroViewersPause": true,
+    "lastViewerPausesWithinTwoSeconds": true,
+    "pausedCountersRemainStable": true,
+    "pauseDoesNotDestroyDocument": true,
+    "resumeKeepsFrameSequence": true,
+    "queueStoresAuthorityReceipt": false,
+    "leaseRevalidatedAtExecution": true,
+    "leaseGuardHeldThroughBoundedInput": true,
+    "oldOwnerCannotDetachReplacement": true,
+    "oldSourceCannotPublishOrCloseReplacement": true
+  },
+  "evidenceBoundary": {
+    "macosBrowserAndComponentActual": true,
+    "realServerWebSocketIdleToEnginePause": true,
+    "protocolPauseResumeAndReplay": true,
+    "queuedStaleEpochRefused": true,
+    "sameRendererAndScrolledDocumentRetained": true,
+    "actorGenerationInvalidationRetiresOwner": true,
+    "productionComputerManagerAssembly": false,
+    "productionAuthInvalidationHook": false,
+    "desktopLoopbackTransport": false,
+    "fpsAndCaptureToPaintLatency": false,
+    "windowsRuntime": false,
+    "linuxRunscRuntime": false
+  }
+}

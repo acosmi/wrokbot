@@ -1,0 +1,51 @@
+[package]
+name = "openbot-domain"
+description = "纯领域状态、不变量、policy 类型、Agent reducer（v3 §5.1）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# 依赖面的判据是**确定性**，不是「依赖数量少」：同样的输入必须给同样的输出，不读时钟、不读
+# 环境、不发请求、不落盘。`cel` 是纯解析器 + 求值器，`regex` 是纯匹配，`sha2` 是纯摘要 ——
+# 三者都满足。反过来 `tokio` / `tokio-postgres` / `axum` 一个都不许进来。
+[dependencies]
+openbot-contracts = { workspace = true }
+# CEL 求值器。`default-features = false` 的理由（少一条与 oracle 的语义分歧）写在 workspace
+# 根的依赖声明处，不在这里重复。
+cel = { workspace = true }
+# 全局函数 `matches(value, pattern)` 的正则实现。上游 server/src/computer/policy.ts 用的是
+# `new RegExp(pattern, "i")`，所以这里必须强制 case-insensitive，见 policy::cel::globals。
+regex = { workspace = true }
+# `PolicyVersion` 的内容摘要与审计 hash chain 的 row_hash / prev_hash（§8.3 / §8.6）。
+# 策略文档没有版本列（`action_policy` 主键恒为常量 'current'），版本必须**由内容派生**，
+# 否则一次内容相同的重写也会让全部既有 approval 失效。
+sha2 = { workspace = true }
+# session token 的 keyed hash（§6.3：数据库只保存 keyed hash，不保存可直接使用的明文 token）。
+# 给定密钥与输入是纯函数，因此归领域层；**密钥本身与 token 的生成属于 infra**。
+hmac = { workspace = true }
+# 常量时间比较。token / hash 的比较提前返回会泄漏「前几个字节对了」。
+subtle = { workspace = true }
+# 明文和密钥容器 drop 时的编译器层清零保证；只开 Vec 需要的 alloc。
+zeroize = { workspace = true }
+# Vault 的 v1 信封（12 字节 IV、无 AAD）与 v2 AEAD（§6.4）。**只做给定密钥与 nonce 的纯变换**，
+# nonce 与 DEK 的生成在 infra —— 随机数不进领域层。
+aes-gcm = { workspace = true }
+# v1 信封是一段 JSON（`{"version":1,"iv":…,"ciphertext":…}`，上游 server/src/credentials.ts），
+# 以及审计 payload 的 allowlist 投影。
+serde_json = { workspace = true }
+# v1 信封的 iv / ciphertext 是 base64。
+base64 = { workspace = true }
+# session 的 idle / 绝对期限与 retention 窗口都是时间算术。**不含时钟**：`OffsetDateTime`
+# 由调用方传入，领域层不调用 `now()`。
+time = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# 测试里读 fixtures/db/seed-0012.sql 之类的定值需要它；`serde_json` 已在 [dependencies]。
+openbot-contracts = { workspace = true, features = ["testkit"] }

@@ -1,0 +1,50 @@
+# trunk 0.21.14 配置。
+#
+# 真源：repository contract v2 的固定构建链）。
+#
+# 构建命令（零网络、零 Node）：
+#   PATH=target/tools/bin:$PATH trunk build --release --offline --locked
+#
+# 为什么 offline + locked 是契约而不是优化：
+# trunk 的 `find_system` 用 `which` 在 PATH 里找同名二进制并比对下面 [tools] 钉的版本，
+# 匹配即用；在 `offline = true`（或 --offline）下，找不到或版本不符**直接报错，不下载**。
+# 少了这一条，构建机可以静默拉一个没被 tools/pins.toml 校验过 sha256 的工具，
+# 产物字节就不再由仓库决定（v3 §16.3 供应链条目）。
+#
+# 这些工具不进发行物；v3 §0.1 的「第一方非 Rust 源码只有 Electron shim」指的是发行物。
+
+[build]
+target = "index.html"
+offline = true
+locked = true
+pattern_script = '<script type="module" src="{base}openbot-bootstrap.mjs"></script>'
+
+[tools]
+# 版本与 sha256 的真源是仓根 tools/pins.toml；`xtask tools verify` 校验 sha256 与 --version，
+# 任一不符即红。这里只钉 trunk 自己要比对的版本号。
+tailwindcss = "4.3.3"
+wasm_opt = "version_132"
+
+# Asset pipelines run concurrently. `design/tokens.css` is intentionally untracked, so a clean
+# checkout cannot let Tailwind race the Rust build.rs that creates it. Pre-build invokes the same
+# shared generator source through xtask before Trunk spawns either pipeline; no second token
+# generator exists and Cargo build-script caching cannot skip this explicit materialization.
+[[hooks]]
+stage = "pre_build"
+command = "cargo"
+command_arguments = ["run", "--manifest-path", "../../Cargo.toml", "--locked", "--offline", "--package", "openbot-testkit", "--features", "xtask", "--target-dir", "../../target-xtask", "--bin", "xtask", "--", "ui-assets"]
+
+# Trunk's default initializer is inline. The GUI first source requires zero inline scripts, so the
+# Rust xtask writes an external, relative-path-only bootstrap into the staging dist after the
+# hashed wasm-bindgen pair exists. `pattern_script` above references that fixed generated file.
+[[hooks]]
+stage = "post_build"
+command = "cargo"
+command_arguments = ["run", "--manifest-path", "../../Cargo.toml", "--locked", "--offline", "--package", "openbot-testkit", "--features", "xtask", "--target-dir", "../../target-xtask", "--bin", "xtask", "--", "ui-finalize"]
+
+# trunk 调 Tailwind 的参数是 --input/--output/--minify（读自其 tailwind_css pipeline），
+# 与 Tailwind v4 CLI 兼容，不传 --config —— v4 的配置在 design/app.css 的 @theme inline 里。
+#
+# wasm-bindgen CLI 的版本不在这里钉：它必须等于 Cargo.lock 里的 wasm-bindgen crate 版本，
+# 由 xtask 从 lock 读出后 `cargo install --locked wasm-bindgen-cli --version <lock>`；
+# trunk 自身也按 lock 校验。写死在这里会和 lock 打架。

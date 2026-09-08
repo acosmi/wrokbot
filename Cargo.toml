@@ -1,0 +1,324 @@
+# OpenBot Rust workspace —— Phase 0 骨架（v3 §19.3 / §24 G0）。
+#
+# 成员集合由 v3 §5.1〈精简 workspace〉的十个核心 crate，加 R127 唯一批准的
+# Windows 与 R228 macOS 窄 OS 安全边界组成。新增 crate 的四个允许理由（v4 §5.1）：
+#   1) 独立安全边界  2) 独立发布单元  3) 明显不同的 feature graph  4) 可单独复用的纯协议
+# 其余一律以 module 组织 —— 细粒度 crate 会放大编译时间、循环依赖与跨 crate 重构成本。
+#
+# `openbot-windows-sandbox` 命中第 1/3 条：它是唯一允许 Win32 unsafe FFI 的独立安全
+# 边界（Engine confinement + Credential Manager）且只进入 Windows feature graph。xtask 仍不是额外 crate：它一条都不满足，只是
+# 仓库闸门的驱动器。
+# 落点 = `openbot-testkit` 的 bin target（`crates/openbot-testkit/src/bin/xtask.rs`，
+# `required-features = ["xtask"]`），由 `.cargo/config.toml` 的 alias `cargo xtask` 调用。
+# v3 §5.1 的 crate 表里 `openbot-testkit` 的职责原文就写着 "golden trace、fault injection、
+# fake provider、xtask"，所以 xtask 归属它是方案内既定归属，不是本轮新增。
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/openbot-contracts",
+    "crates/openbot-domain",
+    "crates/openbot-application",
+    "crates/openbot-infra",
+    "crates/openbot-agent",
+    "crates/openbot-computer",
+    "crates/openbot-server",
+    "crates/openbot-ui",
+    "crates/openbot-desktop",
+    "crates/openbot-testkit",
+    "crates/openbot-windows-sandbox",
+    "crates/wrok-bot-macos-local-auth",
+]
+
+[workspace.package]
+version = "0.0.0"
+# repository contract §3 固定基线：Rust `1.98.0`，edition 2024。与 rust-toolchain.toml 同值。
+edition = "2024"
+rust-version = "1.98.0"
+# v3 §23.2〈新项目发行许可〉：本次实施默认是内部、闭源、all-rights-reserved 的第一方新代码。
+# 因此这里**不能**写 MIT —— 上游 OpenBot 的 MIT（v3 §23.1 条 1）只约束被复用的上游源码，
+# 不上溯覆盖本仓第一方代码。SPDX 的 `LicenseRef-` 前缀是表达"非 SPDX 登记许可"的合法写法。
+# 若未来开源，必须另立书面发布决议并重做 whole-tree license audit（v3 §23.2），不在本次重写中自动发生。
+license = "LicenseRef-OpenBot-Proprietary"
+publish = false
+
+# v3 §16.3〈Supply chain〉：核心 crate `unsafe_code = "deny"`。
+# 确需 unsafe 的窄 crate 必须有 owner、测试和安全说明，并在该 crate 内显式 `#![allow(unsafe_code)]`
+# + 单列审计条目；Phase 0 十个 crate 一个都不豁免。
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.dependencies]
+# R228: fixed macOS confirmation/session boundary; core crates keep unsafe denied.
+objc2 = { version = "=0.6.4", default-features = false, features = ["std"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSError", "NSNotification", "NSOperation", "block2"] }
+block2 = { version = "=0.6.2", default-features = false, features = ["std"] }
+objc2-local-authentication = { version = "=0.3.2", default-features = false, features = ["std", "LAContext", "LAError", "block2"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWorkspace"] }
+wrok-bot-macos-local-auth = { path = "crates/wrok-bot-macos-local-auth" }
+# R230: one Infra-owned SDK transport; existing SafeDialer remains the only network stack.
+acosmi-sdk = { version = "=4.0.0", default-features = false, features = ["custom-transport", "sanitize"] }
+# SDK HttpTransport names this existing dependency's token in its public trait signature.
+# This direct edge belongs only to Infra's SDK adapter; Desktop keeps its existing local token.
+tokio-util = { version = "=0.7.19", default-features = false }
+# 内部 crate 也走 workspace 声明。deny.toml 的 [bans.workspace-dependencies] 开了
+# `include-path-dependencies = true`，成员各写各的 path 会被判 workspace-duplicate ——
+# 那条判据要的是"同一依赖只有一个真源"，内部 crate 同样适用（改路径时只改一处）。
+openbot-contracts = { path = "crates/openbot-contracts" }
+openbot-domain = { path = "crates/openbot-domain" }
+openbot-application = { path = "crates/openbot-application" }
+openbot-infra = { path = "crates/openbot-infra", default-features = false }
+openbot-agent = { path = "crates/openbot-agent" }
+openbot-computer = { path = "crates/openbot-computer" }
+openbot-server = { path = "crates/openbot-server" }
+openbot-ui = { path = "crates/openbot-ui" }
+openbot-desktop = { path = "crates/openbot-desktop" }
+openbot-testkit = { path = "crates/openbot-testkit" }
+openbot-windows-sandbox = { path = "crates/openbot-windows-sandbox" }
+
+# xtask（仓库闸门驱动器）的依赖。版本由本机 `cargo search` / `cargo add` 在 2026-08-22 实测
+# 解析出的真实最新版，不手写猜测；精确 lock 见提交入库的 `Cargo.lock`（v3 §16.3）。
+# 只有 `openbot-testkit` 在 `xtask` feature 下消费它们；十个业务 crate 在 Phase 0 零依赖。
+anyhow = "1.0.104"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+# 上游实际版本号是 `0.9.34+deprecated`（dtolnay 已归档该 crate）。`+deprecated` 是 semver
+# build metadata，不参与版本需求匹配，所以这里写 `0.9.34`。选它而不是替代品的理由：parity
+# ledger 是人手写的 YAML 1.1 子集，serde_yaml 的行为已被大量既有工具固化；真要换（例如
+# `serde_norway` / `serde_yaml_ng`）必须单独 delta audit，因为 YAML 解析差异会静默改变
+# `parity-check` 的判定结果。cargo-deny 的 advisories 段对它只会报 unmaintained（本 crate
+# 只在开发期 xtask 里编译，不进发行物）。
+serde_yaml = "0.9.34"
+walkdir = "2.5.0"
+flate2 = "=1.1.9"
+tar = "=0.4.46"
+# Electron 官方发行物只提供 zip。关闭默认 feature，避免 xtask 为只读 deflate 解包带入
+# AES/bzip2/lzma/zstd；该版本已经由 leptos_i18n_build 锁在 Cargo.lock 中，不新增 package。
+zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+# P1 engine bundle rewrites macOS Info.plist and ASAR integrity metadata without Electron/npm
+# packagers. This package is already locked through Tauri's build graph; xtask adds no new package.
+plist = "=1.10.0"
+# GUI first source §10.4 pins the developer-only golden decoder/encoder. PNG is the sole enabled
+# format; disabling defaults avoids GIF/JPEG/WebP/AVIF codecs that the gate never accepts.
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+# `xtask test-inventory`（v3 §24 G0 / G8 点名的 AST 级 test inventory）的 TS/TSX 解析器。
+#
+# **版本 `0.146.0`（2026-08-22 实测最新）。五个 crate 同版本 —— oxc 全家桶同步发版。**
+# 本仓一度钉在 `0.139.0`，理由是当时工具链还是 `1.94.1`，而 `cargo build` 直接拒绝：
+#   `rustc 1.94.1 is not supported by the following packages: oxc_parser@0.146.0 requires rustc 1.95.0`
+# oxc 的 MSRV 台阶是 `0.139.0 -> 1.94.0`、`0.140.0 -> 1.95.0`，所以 0.139.0 曾是唯一可编版本。
+# 2026-08-22 工具链升 `1.98.0` 后该约束消失（delta audit 见 repository contract）。
+# 升级已实测无行为差异：0.139.0 与 0.146.0 各跑一次 `xtask test-inventory`，
+# `fixtures/tests/upstream-ast-inventory.json` **逐字节相同**（1,047 test 节点 / 229 describe 节点）。
+# 再动版本仍须走 delta audit：解析器版本决定 G0/G8 的 inventory 判定，不得静默升。
+# 选纯 Rust parser 而不是起 Node/Bun 子进程：v3 §1.3 明写"1,007 是词法命中，不冒充 AST 解析后
+# 的精确 test 数"，而 §24 G0 要求归档 AST 级 inventory —— 走 JS 运行时会把闸门的正确性系在
+# 一个本仓刻意不安装的运行时上（v3 §3.5 已裁决删除 Bun launcher）。
+oxc_allocator = "0.146.0"
+oxc_ast = "0.146.0"
+# `oxc_ast_visit` 提供 `Visit` trait 的默认 walk。不用它就得手写覆盖全部 AST 节点类型的递归，
+# 漏一个节点类型 = inventory 静默少数用例 —— 那正是本轮要消灭的失效模式。
+oxc_ast_visit = "0.146.0"
+oxc_parser = "0.146.0"
+oxc_span = "0.146.0"
+
+# ---------------------------------------------------------------------------
+# G1（W5–10 Rust Foundation）依赖面
+# ---------------------------------------------------------------------------
+# 版本全部由 `cargo search` 于 2026-08-22 实测当日最新，不靠记忆钉版。
+
+async-trait = "0.1.92"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "io-util"] }
+# R127 sole Windows unsafe boundary. `windows-sys` 0.61.2 was already present in the locked Tauri
+# graph; making it direct adds no registry package and keeps every Win32 call in the one audited
+# crate. Features are the exact API families used by spawn/token/ACL/pipe/Job and current-user
+# Credential Manager code.
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Credentials",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+
+# Desktop macOS Keychain adapter for PostgreSQL SCRAM secret. Exact versions are target-scoped by
+# openbot-desktop; Windows uses the existing sole unsafe Win32 boundary instead.
+security-framework = "=3.7.0"
+security-framework-sys = "=2.17.0"
+
+# 可观测性（v3 §16.4）：tracing 是全链真源，Server 侧再由 openbot-server 暴露 Prometheus。
+# **刻意不在 G1 引入 opentelemetry SDK**：§16.4 要求 exporter「只在管理员显式配置 collector
+# 地址时才建连」，而 G1 还没有配置面（那是 §15.4 env 的 G2 工作）。此刻拉进 exporter 只会得到
+# 一个零调用点的依赖 —— repository contract 记着 `StartModelsUpdater` 那个教训：自引入即零调用点的
+# 「fallback」在九轮里骗过了所有人。G1 落 tracing + 关联字段 + 脱敏，OTel 导出在 G2 接线。
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+# PostgreSQL（v3 §14.1）。**裁决 D3：tokio-postgres + deadpool，不用 sqlx 的编译期查询宏。**
+# sqlx 的 `query!` 要么在构建时连活库，要么把 `.sqlx` 离线元数据入库并保持同步 —— 两条路都让
+# `cargo build --locked` 的答案取决于跑在哪台机器上（repository contract〈本机绿 ≠ CI 绿〉正是这个反模式）。
+# SQL 显式手写，由对真库的集成测试验证，构建期与数据库彻底解耦。
+# 列类型全集实测（fixtures/db/schema-0012.json，204 列）：text 118 / timestamptz 55 / jsonb 10
+# / uuid 7 / text[] 5 / boolean 3 / integer 2 / 四个 enum 各 1。uuid 那 7 列要 with-uuid-1。
+tokio-postgres = { version = "0.7.18", features = ["with-serde_json-1", "with-time-0_3", "with-uuid-1"] }
+deadpool-postgres = "0.14.1"
+postgres-types = { version = "0.2", features = ["derive", "with-serde_json-1", "with-time-0_3", "with-uuid-1"] }
+time = { version = "0.3.55", features = ["serde", "formatting", "parsing", "macros"] }
+
+# G6 single Rust GUI (frontend first source §12.4). Exact pins are deliberate: router 0.8.14+
+# requires Leptos 0.8.20, while this release is audited against Leptos 0.8.19.
+leptos = { version = "=0.8.19", features = ["csr"] }
+leptos_router = "=0.8.13"
+leptos_meta = "=0.8.6"
+leptos_i18n = { version = "=0.6.2", features = ["csr", "plurals", "format_datetime", "format_nums", "icu_compiled_data"] }
+leptos_i18n_build = "=0.6.2"
+tauri = { version = "=2.11.5", default-features = false, features = ["wry"] }
+# Opt-in macOS product context generation; already pinned transitively before the launcher.
+tauri-build = { version = "=2.6.3", default-features = false, features = ["config-json"] }
+sys-locale = "=0.3.2"
+toml = "=0.9.8"
+gloo-net = { version = "=0.6.0", default-features = false, features = ["http", "json", "websocket"] }
+js-sys = "=0.3.104"
+wasm-bindgen-futures = "=0.4.77"
+wasm-bindgen = "=0.2.127"
+web-sys = { version = "=0.3.104", features = ["Crypto", "CssStyleDeclaration", "Document", "DomRect", "DomTokenList", "Element", "Event", "EventSource", "EventTarget", "HtmlCollection", "HtmlElement", "HtmlIFrameElement", "HtmlInputElement", "HtmlTextAreaElement", "KeyboardEvent", "Location", "MediaQueryList", "MessageChannel", "MessageEvent", "MessagePort", "MutationObserver", "MutationObserverInit", "Navigator", "Node", "NodeList", "ResizeObserver", "Storage", "Window"] }
+
+# Axum transport（v3 §5.2：transport 只做认证 / framing / 大小限制 / 错误映射）
+axum = { version = "0.8.9", features = ["macros", "ws"] }
+# 只给 Server WebSocket 真 socket 测试使用；生产走 axum::extract::ws 的同一 tungstenite 图。
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "async-await", "std"] }
+tower = { version = "0.5.3", features = ["timeout", "limit"] }
+tower-http = { version = "0.6", features = ["trace", "limit", "fs"] }
+http = "1.5.0"
+httpdate = "1.0.3"
+
+# W-7 HTTP safe dialer（v3 §6.2 / §7.5 / §10.5，R29 delta audit）。这里不引入
+# reqwest：它会再带一层代理、自动 retry/redirect 与 resolver 组合，反而让「连接必须绑定
+# 已验证 IP」只能靠配置约定。dialer 直接把 `TcpStream` 连到已验证 `SocketAddr`，再交给
+# rustls（TLS SNI 仍用原 host）与 Hyper HTTP/1 framing；因此 DNS rebinding 边界在一处可证明。
+#
+# `hyper` / `hyper-util` / `http-body-util` / `bytes` 在 W-4 的 Axum 图中已锁定，本批只是把
+# 真实消费者上收为 workspace 直接依赖，不新增版本。新增 TLS 图刻意选择 rustls 0.23 的
+# `ring` provider，而不是默认 `aws-lc-rs`：rustls 官方将 ring 定位为更易跨平台构建的
+# first-party provider；代价是 ring 仍含 C/汇编 build.rs 与 Windows 预生成对象。该代价已在
+# `repository contract` 和 deny.toml 单列，绝不称为纯 Rust。
+# webpki-roots 是随 lock 固定的 Mozilla 根集合：不读宿主代理/根证书环境，构建与运行答案可复算；
+# 私有 CA 必须作为未来显式配置输入，不能靠隐藏的系统状态改变认证答案。
+bytes = "1.12.1"
+http-body-util = "0.1.5"
+hyper = { version = "1.11.0", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
+ipnet = { version = "2.12.1", default-features = false, features = ["std"] }
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+ring = "0.17.14"
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1.0.9"
+
+# G4 MCP runtime（v3 §1.2 / §9.1）：只启 client + generic Streamable HTTP transport。
+# 明确不启 reqwest/stdio/server/resources/prompts/tasks/elicitation；HTTP backend 由唯一 SafeDialer 实现。
+rmcp = { version = "=3.1.4", default-features = false, features = ["client", "transport-streamable-http-client"] }
+sse-stream = "=0.2.4"
+# MCP arguments are validated against the vendor's real schema before policy/decision.  All
+# resolver features stay off: a catalog schema must be self-contained and cannot make the Server
+# fetch arbitrary HTTP/file `$ref` targets while compiling an untrusted schema.
+jsonschema = { version = "=0.51.0", default-features = false }
+
+# W-7b SAML：第一真源 §6.2 精确钉 samael 0.0.22，并要求 xmlsec 签名验证，不允许用
+# `default-features = false` 关闭验证能力冒充对等完成。OpenSSL/libxml2/xmlsec/libclang 的
+# FFI/build delta 必须先判红、审计、再由机器 guard 放行（R29）。
+samael = { version = "=0.0.22", default-features = false, features = ["xmlsec"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde", "std"] }
+quick-xml = { version = "=0.41.0", features = ["serialize"] }
+openssl = { version = "=0.10.81", default-features = false }
+
+# metrics（v3 §16.4「Server 暴露 Prometheus metrics」+ §24 G1 判据第四条）
+# 选门面 + exporter 两层，而不是直接依赖 prometheus 客户端库：库代码只调 metrics 门面，
+# 不知道 exporter 是谁；**没装 exporter 就没有任何网络行为**，§16.4 的「零 phone-home」
+# 由构造保证而不是靠纪律。exporter 渲染成文本后由本仓自己的 Axum 路由吐出，
+# 不另开监听端口（那会是一块没经过评审的网络面）。
+# 高基数字段禁入 label 由 openbot_contracts::telemetry::METRICS_LABEL_ALLOWLIST 白名单承担。
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+
+# read checksum（v3 §24 G1「read checksum 0 差异」）**不为它声明 sha2 / hex**：该判据的实现
+# 让 PostgreSQL 自己算 md5(ROW(...)::表::text) 并两侧对拍，摘要与十六进制编码都在服务端完成，
+# Rust 侧一个字节都不用编。G1 当时写的是"真需要时再加"——G2 的审计 hash chain 与 policy 内容
+# 版本确实需要，`sha2` 因此出现在下面的 G2 段；它**不是**回过头来给 read checksum 用的，
+# read checksum 的两条腿至今仍然都在数据库侧渲染。
+uuid = { version = "1.25.0", features = ["serde", "v7"] }
+
+# 这两条上收自 openbot-application（它原本直接写版本号）。**没有新增任何 crate**：
+# 两者在加进来之前就已经在 Cargo.lock 里，`futures-core` 经 tokio-util <- tokio-postgres，
+# `base64` 经 postgres-protocol <- tokio-postgres，版本号逐字等于当时已解析的值。
+# 上收的理由是 deny.toml 的 [bans.workspace-dependencies] 把 workspace 根当唯一钉版点，
+# 成员 crate 各自写版本号会让"同一依赖两个版本真源"这条判据失去落点。
+futures-core = "0.3.34"   # AppEventStream = Pin<Box<dyn Stream<Item = AppEvent> + Send>>
+base64 = "0.22.1"         # channel keyset 游标的 base64url 编解码
+
+# ---------------------------------------------------------------------------
+# G2（W11–20 Data/Auth/Governance）依赖面
+# ---------------------------------------------------------------------------
+
+# CEL 求值器（v3 §1.2 / §8.3 钉版 `0.14.3`；"cel-rust" 是仓库名，Cargo 里的 crate 名是 `cel`）。
+#
+# **`default-features = false` 是一次有测量支撑的裁决，不是省依赖的顺手。** 它的默认 feature
+# 是 `["regex", "chrono"]`，其中 `regex` 会打开 cel 自己那份**大小写敏感**的 `matches` 字符串
+# 方法。本轮把 `fixtures/policy/cel-corpus.json` 的 69 条逐条在两种配置下实跑对照：
+#
+#   - 开 `regex`：`element.name.matches("sub.*")` 走 cel 内建方法，求值成 `false`，
+#     而 oracle（cel-js 0.8.2）在同一条上抛 `Unknown method: matches` = `error`。**分歧 7 条。**
+#   - 关掉：同一条落到本仓注册的全局 `matches`，以方法形式调用时只收到 1 个实参，
+#     报 `Invalid argument count: expected 2, got 1` = `error`，与 oracle **同类**。**分歧 6 条。**
+#
+# 少一条分歧就是少一条要管理员在迁移 preflight 里逐条确认的规则语义翻转（§8.3）。
+# 附带效果是依赖图从 67 个 crate 降到 41 个（`cargo tree -e normal` 实测），chrono 一并出图。
+# §8.3 原文允许「标准 CEL 方法形式作为超集存在」，是**允许**不是**要求**，所以按 parity 取窄的那侧。
+cel = { version = "0.14.3", default-features = false }
+
+# 密码学原语（RustCrypto 系，纯 Rust，无 C / 汇编构建脚本）。五个用途，逐个点名：
+#   - `sha2`：审计 hash chain 的 row_hash / prev_hash（§8.6）、policy 文档的内容版本
+#     （§8.3「policy version 进入 approval 和 capability」）。
+#   - `hmac`：session token 的 keyed hash（§6.3「数据库只保存 keyed hash」），以及上游
+#     server/src/auth/signed-value.ts 那套「按标签派生子密钥再签名」的签名值。
+#   - `subtle`：常量时间比较。token 比较提前返回会泄漏「前几个字节对了」。
+#   - `aes-gcm`：Vault v1 信封读兼容（12 字节 IV、无 AAD）与 v2 AEAD（§6.4）。
+#   - `zeroize`：Vault 明文/密钥容器 drop 时清除当前整个 Vec allocation，并防优化器删写。
+# 刻意不用 `ring`：它带 C / 汇编构建脚本，会把一整套非 Rust 工具链拉进本项目的可复现构建面（§16.3）。
+sha2 = "0.10.9"
+hmac = "0.12.1"
+hkdf = "0.12.4"
+subtle = "2.6.1"
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+zeroize = { version = "1.9.0", default-features = false, features = ["alloc"] }
+
+# CSPRNG。直接用 `getrandom` 而不是 `rand`：本项目需要的全部随机数都是「给我 N 个密码学随机
+# 字节」（DEK、IV、session token、state / nonce / PKCE verifier），没有一处需要分布、采样或
+# 可复现种子。`rand` 会为此拉进 rand_core / rand_chacha 一整套，并且**多一个可以被误用成
+# 可复现种子的入口**。`getrandom` 本来就在依赖图里（经 `uuid` 的 v7），本条不新增 crate。
+getrandom = "0.4.3"
+
+# OIDC（v3 §1.2 / §6.2 钉版 `openidconnect 4.0.1`）。
+#
+# **`default-features = false` 关掉的是 `reqwest` + `rustls-tls`**，这是一次有理由的裁决：
+# `oauth2 5.0.0`（openidconnect 的底座）把 HTTP 抽象成 `AsyncHttpClient` trait
+# （`type Future`、`fn call(&self, HttpRequest) -> Self::Future`），协议实现与传输实现本来
+# 就是分开的。v3 §6.2 要求 OIDC discovery / JWKS「使用和 remote Agent/MCP 相同的 safe dialer、
+# redirect/IP 校验、大小/时间上限」—— 那个 dialer 是本项目自己的东西（SSRF 面在
+# `openbot-infra` 收口，§10.5），不是 `reqwest` 的默认行为。把 `reqwest` 拉进来只会得到
+# 第二条**绕过 safe dialer 的出网路径**，而它默认就带 TLS 栈（`rustls` 需要 `aws-lc-rs` 或
+# `ring`，两者都带 C / 汇编构建脚本 —— 与 §16.3 的可复现构建面是一次独立的、需要 delta audit
+# 的决定，不能作为加一个 OIDC 库的副作用悄悄发生）。
+openidconnect = { version = "4.0.1", default-features = false }
+# redirect URI 的精确比对与 issuer / audience 校验都要一个真正的 URL 解析器，不能用字符串前缀。
+# 它已经在依赖图里（经 `openidconnect` -> `oauth2`），本条不新增 crate，只是把版本钉在根上。
+url = "2.5.8"

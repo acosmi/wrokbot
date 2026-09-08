@@ -1,0 +1,293 @@
+{
+  "schema": "ui-seed",
+  "schema_version": 1,
+  "upstream_commit": "891df72f1827454d8b353d108fe5dd2313b7e30d",
+  "purpose": "GUI 设计系统与视觉规格 §10.2 的确定性数据源。openbot-server 在 cargo feature `golden` 下由 openbot-testkit 的 fake ApplicationService 从本文件装载，全程无 PostgreSQL、无模型调用、无网络。",
+  "clock": {
+    "now": "2026-01-01T00:00:00Z",
+    "injected_via": "openbot_testkit::Clock",
+    "rule": "GUI 取时间只经注入的 Clock；本文件里任何时间戳都不得晚于 now，相对时间文案（“3 天前”）由 now 减去字段值算出，因此 now 变了 golden 就必须重截。"
+  },
+  "conventions": {
+    "id_style": "全部为固定字面量，禁止随机或自增；uuid 形态的字段用固定 v4 字符串。",
+    "timestamps": "RFC3339，一律 UTC，秒级精度，无小数秒。",
+    "locale_coverage": "至少一个用户名、一个 channel 名、一条消息正文为中文，用来在 zh-CN golden 里同时覆盖 §8.6 CJK 排版与 §6.4 混排换行。",
+    "empty_states": "channel `ch-empty`、skill 列表的 `origin=shared` 分组、audit 的 `component.*` 过滤各留一个空集合，用来覆盖空态渲染，避免 golden 只测“有数据”的分支。"
+  },
+  "signed_in": {
+    "user_id": "usr-ada",
+    "session_id": "ses-golden-0001",
+    "roles": ["admin"],
+    "note": "27 页里 26 页以已登录 admin 身份渲染；/sign 是唯一的未登录页，golden harness 对它把 signed_in 置空。"
+  },
+  "pages_covered": [
+    { "route": "/sign", "upstream": "app/src/routes/sign.tsx", "label": "parity", "seed_keys": ["sso_providers"], "auth": "signed-out" },
+    { "route": "/", "upstream": "app/src/routes/_authed/_app/index.tsx", "label": "parity", "seed_keys": ["channels", "agents", "agent_profiles", "messages"], "auth": "admin" },
+    { "route": "/agents", "upstream": "app/src/routes/_authed/_app/agents/index.tsx", "label": "parity", "seed_keys": ["agents", "agent_profiles", "agent_preferences"], "auth": "admin" },
+    { "route": "/bot", "upstream": "app/src/routes/_authed/_app/bot.tsx", "label": "parity", "seed_keys": ["agents", "agent_profiles", "computer_fleet"], "auth": "admin" },
+    { "route": "/channel/$channelId", "upstream": "app/src/routes/_authed/_app/channel/$channelId.tsx", "label": "parity", "seed_keys": ["channels", "channel_memberships", "channel_agents", "threads", "messages", "runs", "tool_calls"], "auth": "admin", "golden_param": { "channelId": "ch-orders" } },
+    { "route": "/channel/new", "upstream": "app/src/routes/_authed/_app/channel/new.tsx", "label": "parity", "seed_keys": ["agents", "agent_profiles"], "auth": "admin" },
+    { "route": "/skills", "upstream": "app/src/routes/_authed/_app/skills.tsx", "label": "parity", "seed_keys": ["skills"], "auth": "admin" },
+    { "route": "/admin", "upstream": "app/src/routes/_authed/admin/index.tsx", "label": "parity", "seed_keys": ["users", "agents", "mcp_servers", "audit_events"], "auth": "admin" },
+    { "route": "/admin/audit", "upstream": "app/src/routes/_authed/admin/audit.tsx", "label": "parity", "seed_keys": ["audit_events", "users"], "auth": "admin" },
+    { "route": "/admin/boundaries", "upstream": "app/src/routes/_authed/admin/boundaries.tsx", "label": "parity", "seed_keys": ["action_policy"], "auth": "admin" },
+    { "route": "/admin/components", "upstream": "app/src/routes/_authed/admin/components/index.tsx", "label": "parity", "seed_keys": ["components"], "auth": "admin" },
+    { "route": "/admin/components/$name", "upstream": "app/src/routes/_authed/admin/components/$name.tsx", "label": "parity", "seed_keys": ["components", "component_exclusions", "component_functions"], "auth": "admin", "golden_param": { "name": "order-summary-card" } },
+    { "route": "/admin/computers", "upstream": "app/src/routes/_authed/admin/computers.tsx", "label": "parity", "seed_keys": ["computer_fleet", "computer_snapshot"], "auth": "admin" },
+    { "route": "/admin/credentials", "upstream": "app/src/routes/_authed/admin/credentials.tsx", "label": "parity", "seed_keys": ["credentials"], "auth": "admin" },
+    { "route": "/admin/identity-providers", "upstream": "app/src/routes/_authed/admin/identity-providers.tsx", "label": "parity", "seed_keys": ["sso_providers"], "auth": "admin" },
+    { "route": "/admin/people", "upstream": "app/src/routes/_authed/admin/people.tsx", "label": "parity", "seed_keys": ["users", "user_roles", "revoked_access"], "auth": "admin" },
+    { "route": "/admin/playground", "upstream": "app/src/routes/_authed/admin/playground.tsx", "label": "parity", "seed_keys": ["agents", "components"], "auth": "admin" },
+    { "route": "/admin/plugins", "upstream": "app/src/routes/_authed/admin/plugins/index.tsx", "label": "parity", "seed_keys": ["mcp_servers"], "auth": "admin" },
+    { "route": "/admin/plugins/$key", "upstream": "app/src/routes/_authed/admin/plugins/$key.tsx", "label": "parity", "seed_keys": ["mcp_servers", "mcp_tools", "plugin_grants"], "auth": "admin", "golden_param": { "key": "notes" } },
+    { "route": "/admin/plugins/$key_/tools/$tool", "upstream": "app/src/routes/_authed/admin/plugins/$key_.tools.$tool.tsx", "label": "parity", "seed_keys": ["mcp_tools", "plugin_grants"], "auth": "admin", "golden_param": { "key": "notes", "tool": "search_notes" } },
+    { "route": "/admin/skills", "upstream": "app/src/routes/_authed/admin/skills.tsx", "label": "parity", "seed_keys": ["skills", "users"], "auth": "admin" },
+    { "route": "/settings", "upstream": "app/src/routes/_authed/settings/index.tsx", "label": "parity", "seed_keys": ["users", "agent_preferences"], "auth": "admin" },
+    { "route": "/settings/components-gallery", "upstream": "app/src/routes/_authed/settings/components-gallery/index.tsx", "label": "parity", "seed_keys": ["sandboxed_components"], "auth": "admin" },
+    { "route": "/settings/components-gallery/$name", "upstream": "app/src/routes/_authed/settings/components-gallery/$name.tsx", "label": "parity", "seed_keys": ["sandboxed_components"], "auth": "admin", "golden_param": { "name": "delivery-eta" } },
+    { "route": "/settings/connected-accounts", "upstream": "app/src/routes/_authed/settings/connected-accounts/index.tsx", "label": "parity", "seed_keys": ["mcp_servers", "mcp_user_credentials"], "auth": "admin" },
+    { "route": "/settings/connected-accounts/$key", "upstream": "app/src/routes/_authed/settings/connected-accounts/$key.tsx", "label": "parity", "seed_keys": ["mcp_servers", "mcp_user_credentials", "credentials"], "auth": "admin", "golden_param": { "key": "notes" } },
+    { "route": "/memory", "upstream": "-", "label": "新增", "seed_keys": ["memories", "memory_events"], "auth": "admin", "note": "v3 §4.3 条 8/11 的 native memory 面，上游无对应 route。GUI §10.1 的“26 个上游页面 + memory 页 = 27”里的第 27 页。" }
+  ],
+  "entities": {
+    "users": [
+      { "id": "usr-ada", "email": "ada@openbot.example", "name": "Ada Okonkwo", "image": null, "email_verified": true, "groups": ["engineering", "admins"], "created_at": "2025-09-02T09:00:00Z", "updated_at": "2025-12-30T11:20:00Z" },
+      { "id": "usr-bo", "email": "bo@openbot.example", "name": "Bo Lindqvist", "image": null, "email_verified": true, "groups": ["engineering"], "created_at": "2025-09-14T13:30:00Z", "updated_at": "2025-12-29T08:05:00Z" },
+      { "id": "usr-chen", "email": "chen@openbot.example", "name": "陈墨", "image": null, "email_verified": true, "groups": ["support"], "created_at": "2025-10-06T02:15:00Z", "updated_at": "2025-12-31T15:45:00Z" },
+      { "id": "usr-dana", "email": "dana@openbot.example", "name": "Dana Ruiz", "image": null, "email_verified": false, "groups": [], "created_at": "2025-12-20T17:40:00Z", "updated_at": "2025-12-20T17:40:00Z" },
+      { "id": "usr-eli", "email": "eli@openbot.example", "name": "Eli Vance", "image": null, "email_verified": true, "groups": ["engineering"], "created_at": "2025-08-11T10:00:00Z", "updated_at": "2025-12-18T09:00:00Z" }
+    ],
+    "user_roles": [
+      { "user_id": "usr-ada", "role": "admin", "created_at": "2025-09-02T09:00:00Z" },
+      { "user_id": "usr-bo", "role": "user", "created_at": "2025-09-14T13:30:00Z" },
+      { "user_id": "usr-chen", "role": "user", "created_at": "2025-10-06T02:15:00Z" },
+      { "user_id": "usr-dana", "role": "user", "created_at": "2025-12-20T17:40:00Z" },
+      { "user_id": "usr-eli", "role": "user", "created_at": "2025-08-11T10:00:00Z" }
+    ],
+    "revoked_access": [
+      { "email": "eli@openbot.example", "revoked_at": "2025-12-18T09:05:00Z", "revoked_by": "usr-ada" }
+    ],
+    "sessions": [
+      { "id": "ses-golden-0001", "user_id": "usr-ada", "token": "golden-session-token-not-a-secret", "expires_at": "2026-01-08T00:00:00Z", "ip_address": "127.0.0.1", "user_agent": "openbot-golden-harness/1", "created_at": "2025-12-31T23:00:00Z", "updated_at": "2025-12-31T23:00:00Z" }
+    ],
+    "sso_providers": [
+      { "id": "sso-corp-oidc", "issuer": "https://login.example.com", "oidc_config": "{\"clientId\":\"openbot-golden\",\"scopes\":[\"openid\",\"email\",\"profile\"]}", "saml_config": null, "user_id": null, "provider_id": "corp-oidc", "organization_id": "org-example", "domain": "example.com" },
+      { "id": "sso-partner-saml", "issuer": "https://sso.partner.example", "oidc_config": null, "saml_config": "{\"entityId\":\"openbot-golden\"}", "user_id": null, "provider_id": "partner-saml", "organization_id": "org-partner", "domain": "partner.example" }
+    ],
+    "deployment_packages": [
+      { "id": "11111111-1111-4111-8111-111111111111", "tenant_id": "golden-tenant", "source_path": "/srv/openbot/packages/golden-tenant", "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000001", "loaded_at": "2025-12-01T00:00:00Z" }
+    ],
+    "agents": [
+      { "id": "concierge", "name": "Concierge", "type": "built_in", "configuration": { "model": "golden-model", "tools": ["remember", "computer_read"] }, "package_id": "11111111-1111-4111-8111-111111111111", "override": null, "created_at": "2025-09-02T09:10:00Z", "updated_at": "2025-12-30T11:20:00Z" },
+      { "id": "risk-analyst", "name": "Risk Analyst", "type": "built_in", "configuration": { "model": "golden-model", "tools": ["computer_click", "computer_read", "computer_read_file"] }, "package_id": "11111111-1111-4111-8111-111111111111", "override": null, "created_at": "2025-09-20T14:00:00Z", "updated_at": "2025-12-28T10:00:00Z" },
+      { "id": "general-assistant", "name": "General Assistant", "type": "built_in", "configuration": { "model": "golden-model", "tools": ["computer_run_command"] }, "package_id": null, "override": null, "created_at": "2025-10-02T08:00:00Z", "updated_at": "2025-12-22T16:30:00Z" },
+      { "id": "knowledge", "name": "Knowledge", "type": "remote_ag_ui", "configuration": { "url": "https://agents.example.com/knowledge", "protocol": "ag-ui" }, "package_id": null, "override": null, "created_at": "2025-11-05T11:00:00Z", "updated_at": "2025-12-27T09:15:00Z" },
+      { "id": "sales", "name": "Sales", "type": "remote_ag_ui", "configuration": { "url": "https://agents.example.com/sales", "protocol": "ag-ui" }, "package_id": null, "override": { "suggested_prompts": ["Draft a quote"] }, "created_at": "2025-11-19T12:00:00Z", "updated_at": "2025-12-26T13:00:00Z" }
+    ],
+    "agent_profiles": [
+      { "agent_id": "concierge", "owner_user_id": "usr-ada", "title": "Concierge", "role_description": "Answers questions about this deployment and hands work to other Bots.", "avatar_seed": "concierge-0001", "visibility": "public", "callback_token_hash": null, "callback_token_issued_at": null, "deleted_at": null, "created_at": "2025-09-02T09:10:00Z", "updated_at": "2025-12-30T11:20:00Z" },
+      { "agent_id": "risk-analyst", "owner_user_id": "usr-ada", "title": "Risk Analyst", "role_description": "Reads order pages and flags anything unusual before a person signs it off.", "avatar_seed": "risk-analyst-0001", "visibility": "public", "callback_token_hash": null, "callback_token_issued_at": null, "deleted_at": null, "created_at": "2025-09-20T14:00:00Z", "updated_at": "2025-12-28T10:00:00Z" },
+      { "agent_id": "general-assistant", "owner_user_id": "usr-bo", "title": "General Assistant", "role_description": "Runs everyday chores on its own computer.", "avatar_seed": "general-assistant-0001", "visibility": "private", "callback_token_hash": null, "callback_token_issued_at": null, "deleted_at": null, "created_at": "2025-10-02T08:00:00Z", "updated_at": "2025-12-22T16:30:00Z" },
+      { "agent_id": "knowledge", "owner_user_id": "usr-chen", "title": "知识助手", "role_description": "检索内部知识库并给出带出处的回答。", "avatar_seed": "knowledge-0001", "visibility": "public", "callback_token_hash": "sha256:00000000000000000000000000000000000000000000000000000000000000aa", "callback_token_issued_at": "2025-11-05T11:05:00Z", "deleted_at": null, "created_at": "2025-11-05T11:00:00Z", "updated_at": "2025-12-27T09:15:00Z" },
+      { "agent_id": "sales", "owner_user_id": "usr-bo", "title": "Sales", "role_description": "Drafts quotes and chases open opportunities.", "avatar_seed": "sales-0001", "visibility": "public", "callback_token_hash": null, "callback_token_issued_at": null, "deleted_at": null, "created_at": "2025-11-19T12:00:00Z", "updated_at": "2025-12-26T13:00:00Z" }
+    ],
+    "agent_preferences": [
+      { "user_id": "usr-ada", "agent_id": "sales", "hidden_at": "2025-12-29T10:00:00Z" },
+      { "user_id": "usr-bo", "agent_id": "risk-analyst", "hidden_at": null }
+    ],
+    "channels": [
+      { "id": "ch-general", "name": "General", "description": "Everything that does not have a better home.", "suggested_prompts": ["What changed this week?", "Who owns the order desk?"], "allowed_groups": [], "package_id": "11111111-1111-4111-8111-111111111111", "override": null, "last_message": "Ada: I have moved the order questions to the order desk.", "last_message_at": "2025-12-31T18:12:00Z", "last_message_agent_id": null, "created_at": "2025-09-02T09:20:00Z", "updated_at": "2025-12-31T18:12:00Z" },
+      { "id": "ch-orders", "name": "Order desk", "description": "Order checks, refunds and anything that touches the order page.", "suggested_prompts": ["Check order 4471", "Summarise today's refunds"], "allowed_groups": ["engineering", "support"], "package_id": "11111111-1111-4111-8111-111111111111", "override": null, "last_message": "Risk Analyst: Order 4471 is refused by policy, so I stopped before submitting.", "last_message_at": "2025-12-31T22:41:00Z", "last_message_agent_id": "risk-analyst", "created_at": "2025-09-20T14:10:00Z", "updated_at": "2025-12-31T22:41:00Z" },
+      { "id": "ch-support", "name": "客户支持", "description": "面向客户的问答与工单跟进。", "suggested_prompts": ["总结今天的工单", "查一下退款政策"], "allowed_groups": ["support"], "package_id": null, "override": null, "last_message": "知识助手：今天共有 3 张工单，其中 1 张待人工确认。", "last_message_at": "2025-12-31T13:05:00Z", "last_message_agent_id": "knowledge", "created_at": "2025-10-06T02:30:00Z", "updated_at": "2025-12-31T13:05:00Z" },
+      { "id": "ch-empty", "name": "Quarterly review", "description": "Opened for the January review; nothing has been said in it yet.", "suggested_prompts": [], "allowed_groups": [], "package_id": null, "override": null, "last_message": null, "last_message_at": null, "last_message_agent_id": null, "created_at": "2025-12-31T23:50:00Z", "updated_at": "2025-12-31T23:50:00Z" }
+    ],
+    "channel_memberships": [
+      { "channel_id": "ch-general", "user_id": "usr-ada", "created_at": "2025-09-02T09:20:00Z" },
+      { "channel_id": "ch-general", "user_id": "usr-bo", "created_at": "2025-09-14T13:35:00Z" },
+      { "channel_id": "ch-general", "user_id": "usr-chen", "created_at": "2025-10-06T02:20:00Z" },
+      { "channel_id": "ch-orders", "user_id": "usr-ada", "created_at": "2025-09-20T14:10:00Z" },
+      { "channel_id": "ch-orders", "user_id": "usr-bo", "created_at": "2025-09-20T14:11:00Z" },
+      { "channel_id": "ch-support", "user_id": "usr-chen", "created_at": "2025-10-06T02:30:00Z" },
+      { "channel_id": "ch-support", "user_id": "usr-ada", "created_at": "2025-10-06T02:31:00Z" },
+      { "channel_id": "ch-empty", "user_id": "usr-ada", "created_at": "2025-12-31T23:50:00Z" }
+    ],
+    "channel_agents": [
+      { "channel_id": "ch-general", "agent_id": "concierge", "created_at": "2025-09-02T09:20:00Z" },
+      { "channel_id": "ch-orders", "agent_id": "risk-analyst", "created_at": "2025-09-20T14:10:00Z" },
+      { "channel_id": "ch-orders", "agent_id": "concierge", "created_at": "2025-09-20T14:12:00Z" },
+      { "channel_id": "ch-support", "agent_id": "knowledge", "created_at": "2025-10-06T02:30:00Z" },
+      { "channel_id": "ch-support", "agent_id": "concierge", "created_at": "2025-10-06T02:32:00Z" },
+      { "channel_id": "ch-empty", "agent_id": "concierge", "created_at": "2025-12-31T23:50:00Z" }
+    ],
+    "credentials": [
+      { "id": "22222222-2222-4222-8222-222222222201", "kind": "model", "provider": "golden-provider", "encrypted_value": "enc:golden:0001", "key_id": "kek-golden-1", "metadata": { "label": "Primary model key" }, "revoked_at": null, "created_at": "2025-09-02T09:05:00Z", "updated_at": "2025-09-02T09:05:00Z" },
+      { "id": "22222222-2222-4222-8222-222222222202", "kind": "mcp", "provider": "notes", "encrypted_value": "enc:golden:0002", "key_id": "kek-golden-1", "metadata": { "label": "Notes server token" }, "revoked_at": null, "created_at": "2025-11-02T10:00:00Z", "updated_at": "2025-11-02T10:00:00Z" },
+      { "id": "22222222-2222-4222-8222-222222222203", "kind": "connector", "provider": "google-drive", "encrypted_value": "enc:golden:0003", "key_id": "kek-golden-1", "metadata": { "label": "Drive read-only" }, "revoked_at": null, "created_at": "2025-11-10T09:30:00Z", "updated_at": "2025-12-15T09:30:00Z" },
+      { "id": "22222222-2222-4222-8222-222222222204", "kind": "agent", "provider": "knowledge", "encrypted_value": "enc:golden:0004", "key_id": "kek-golden-1", "metadata": { "label": "Knowledge callback token" }, "revoked_at": null, "created_at": "2025-11-05T11:05:00Z", "updated_at": "2025-11-05T11:05:00Z" },
+      { "id": "22222222-2222-4222-8222-222222222205", "kind": "mcp", "provider": "tickets", "encrypted_value": "enc:golden:0005", "key_id": "kek-golden-0", "metadata": { "label": "Retired tickets token" }, "revoked_at": "2025-12-19T08:00:00Z", "created_at": "2025-10-01T08:00:00Z", "updated_at": "2025-12-19T08:00:00Z" }
+    ],
+    "mcp_servers": [
+      { "id": "notes", "title": "Notes", "vendor": "Example Notes Inc.", "url": "https://mcp.example.com/notes", "provenance": "first-party", "credential_id": "22222222-2222-4222-8222-222222222202", "tools_refreshed_at": "2025-12-31T20:00:00Z", "last_error": null, "added_by": "usr-ada", "created_at": "2025-11-02T10:00:00Z", "updated_at": "2025-12-31T20:00:00Z" },
+      { "id": "tickets", "title": "Tickets", "vendor": "Partner Support GmbH", "url": "https://mcp.partner.example/tickets", "provenance": "third-party", "credential_id": null, "tools_refreshed_at": "2025-12-19T07:59:00Z", "last_error": "The server refused the last refresh: credential revoked.", "added_by": "usr-ada", "created_at": "2025-10-01T08:00:00Z", "updated_at": "2025-12-19T08:00:00Z" },
+      { "id": "calendar", "title": "Calendar", "vendor": "Example Notes Inc.", "url": "https://mcp.example.com/calendar", "provenance": "first-party", "credential_id": null, "tools_refreshed_at": null, "last_error": null, "added_by": "usr-bo", "created_at": "2025-12-30T09:00:00Z", "updated_at": "2025-12-30T09:00:00Z" }
+    ],
+    "mcp_tools": [
+      { "server_id": "notes", "name": "search_notes", "description": "Search the note store and return matching titles.", "input_schema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] }, "created_at": "2025-11-02T10:01:00Z" },
+      { "server_id": "notes", "name": "read_note", "description": "Read one note by id.", "input_schema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] }, "created_at": "2025-11-02T10:01:00Z" },
+      { "server_id": "notes", "name": "write_note", "description": "Create or replace a note.", "input_schema": { "type": "object", "properties": { "id": { "type": "string" }, "body": { "type": "string" } }, "required": ["id", "body"] }, "created_at": "2025-11-02T10:01:00Z" },
+      { "server_id": "tickets", "name": "list_tickets", "description": "List open tickets.", "input_schema": { "type": "object", "properties": {} }, "created_at": "2025-10-01T08:01:00Z" },
+      { "server_id": "tickets", "name": "close_ticket", "description": "Close one ticket.", "input_schema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] }, "created_at": "2025-10-01T08:01:00Z" },
+      { "server_id": "calendar", "name": "list_events", "description": "List events in a window.", "input_schema": { "type": "object", "properties": { "from": { "type": "string" }, "to": { "type": "string" } }, "required": ["from", "to"] }, "created_at": "2025-12-30T09:01:00Z" },
+      { "server_id": "calendar", "name": "create_event", "description": "Create one event.", "input_schema": { "type": "object", "properties": { "title": { "type": "string" }, "at": { "type": "string" } }, "required": ["title", "at"] }, "created_at": "2025-12-30T09:01:00Z" }
+    ],
+    "mcp_user_credentials": [
+      { "server_id": "notes", "user_id": "usr-ada", "credential_id": "22222222-2222-4222-8222-222222222202", "scope": "notes.read notes.write", "connected_at": "2025-11-02T10:02:00Z", "updated_at": "2025-12-31T20:00:00Z" },
+      { "server_id": "notes", "user_id": "usr-chen", "credential_id": "22222222-2222-4222-8222-222222222202", "scope": "notes.read", "connected_at": "2025-11-08T03:00:00Z", "updated_at": "2025-11-08T03:00:00Z" }
+    ],
+    "plugin_grants": [
+      { "kind": "mcp_tool", "ref": "notes/search_notes", "agent_id": "knowledge", "granted_by": "usr-ada", "granted_at": "2025-11-05T11:10:00Z", "updated_at": "2025-11-05T11:10:00Z" },
+      { "kind": "mcp_tool", "ref": "notes/read_note", "agent_id": "knowledge", "granted_by": "usr-ada", "granted_at": "2025-11-05T11:10:00Z", "updated_at": "2025-11-05T11:10:00Z" },
+      { "kind": "mcp_tool", "ref": "notes/write_note", "agent_id": "concierge", "granted_by": "usr-ada", "granted_at": "2025-12-02T09:00:00Z", "updated_at": "2025-12-02T09:00:00Z" },
+      { "kind": "skill", "ref": "refund-checklist", "agent_id": "risk-analyst", "granted_by": "usr-ada", "granted_at": "2025-12-10T10:00:00Z", "updated_at": "2025-12-10T10:00:00Z" }
+    ],
+    "skills": [
+      { "id": "skl-refund-checklist", "owner_user_id": "usr-ada", "slug": "refund-checklist", "title": "Refund checklist", "summary": "The eight things to confirm before a refund is approved.", "instructions": "1. Confirm the order id.\n2. Confirm the payment method.\n3. Do not press Submit; hand it to a person.", "origin": "yours", "installed_by": null, "created_at": "2025-10-11T09:00:00Z", "updated_at": "2025-12-10T09:55:00Z" },
+      { "id": "skl-weekly-digest", "owner_user_id": "usr-bo", "slug": "weekly-digest", "title": "Weekly digest", "summary": "How this team wants its Monday summary written.", "instructions": "Group by channel, one line each, newest first.", "origin": "yours", "installed_by": null, "created_at": "2025-10-20T08:00:00Z", "updated_at": "2025-11-30T08:00:00Z" },
+      { "id": "skl-tone-zh", "owner_user_id": "usr-chen", "slug": "tone-zh", "title": "中文语气规范", "summary": "对外答复统一用简体中文，不使用表情符号。", "instructions": "称呼用“您”，不缩写，不加感叹号。", "origin": "yours", "installed_by": null, "created_at": "2025-10-25T04:00:00Z", "updated_at": "2025-12-05T04:00:00Z" },
+      { "id": "skl-incident-triage", "owner_user_id": null, "slug": "incident-triage", "title": "Incident triage", "summary": "Deployment-wide triage steps, installed from the package.", "instructions": "Page the on-call, then write the timeline.", "origin": "deployment", "installed_by": "usr-ada", "created_at": "2025-12-01T00:05:00Z", "updated_at": "2025-12-01T00:05:00Z" },
+      { "id": "skl-quote-format", "owner_user_id": null, "slug": "quote-format", "title": "Quote format", "summary": "The layout every quote must use.", "instructions": "Header, line items, total, expiry.", "origin": "deployment", "installed_by": "usr-ada", "created_at": "2025-12-01T00:05:00Z", "updated_at": "2025-12-01T00:05:00Z" }
+    ],
+    "components": [
+      { "name": "order-summary-card", "title": "Order summary card", "kind": "render", "draft_description": "Shows one order with its total and status.", "published_description": "Shows one order with its total and status.", "published": true, "published_at": "2025-12-04T10:00:00Z", "updated_by": "usr-ada", "created_at": "2025-11-28T10:00:00Z", "updated_at": "2025-12-04T10:00:00Z" },
+      { "name": "refund-approval", "title": "Refund approval", "kind": "action", "draft_description": "Asks a person to approve or refuse one refund.", "published_description": "Asks a person to approve or refuse one refund.", "published": true, "published_at": "2025-12-06T11:00:00Z", "updated_by": "usr-ada", "created_at": "2025-12-05T11:00:00Z", "updated_at": "2025-12-06T11:00:00Z" },
+      { "name": "ticket-table", "title": "Ticket table", "kind": "render", "draft_description": "A sortable table of open tickets.", "published_description": null, "published": false, "published_at": null, "updated_by": "usr-chen", "created_at": "2025-12-21T05:00:00Z", "updated_at": "2025-12-28T05:00:00Z" },
+      { "name": "quote-builder", "title": "Quote builder", "kind": "action", "draft_description": "Collects line items and produces a quote.", "published_description": null, "published": false, "published_at": null, "updated_by": "usr-bo", "created_at": "2025-12-27T12:00:00Z", "updated_at": "2025-12-27T12:00:00Z" }
+    ],
+    "component_exclusions": [
+      { "component_name": "refund-approval", "agent_id": "general-assistant", "withheld_by": "usr-ada", "withheld_at": "2025-12-07T09:00:00Z", "updated_at": "2025-12-07T09:00:00Z" },
+      { "component_name": "quote-builder", "agent_id": "risk-analyst", "withheld_by": "usr-ada", "withheld_at": "2025-12-27T12:30:00Z", "updated_at": "2025-12-27T12:30:00Z" }
+    ],
+    "component_functions": [
+      { "component_name": "order-summary-card", "function_name": "openOrder", "granted_by": "usr-ada", "granted_at": "2025-12-04T10:00:00Z", "updated_at": "2025-12-04T10:00:00Z" },
+      { "component_name": "refund-approval", "function_name": "approve", "granted_by": "usr-ada", "granted_at": "2025-12-06T11:00:00Z", "updated_at": "2025-12-06T11:00:00Z" },
+      { "component_name": "refund-approval", "function_name": "refuse", "granted_by": "usr-ada", "granted_at": "2025-12-06T11:00:00Z", "updated_at": "2025-12-06T11:00:00Z" }
+    ],
+    "sandboxed_components": [
+      { "name": "delivery-eta", "title": "Delivery ETA", "draft_description": "Renders a delivery window from a tracking number.", "draft_html": "<div class=\"eta\"><span data-eta></span></div>", "draft_css": ".eta{font-variant-numeric:tabular-nums}", "draft_js_functions": "export function render(props){ return props.eta }", "draft_argument_schema": { "type": "object", "properties": { "eta": { "type": "string" } }, "required": ["eta"] } },
+      { "name": "seat-map", "title": "Seat map", "draft_description": "A read-only seat map for one flight.", "draft_html": "<div class=\"seats\"></div>", "draft_css": ".seats{display:grid;grid-template-columns:repeat(6,1fr)}", "draft_js_functions": "export function render(){ return null }", "draft_argument_schema": {} }
+    ],
+    "action_policy": [
+      { "id": "current", "mode": "enforce", "deny": ["(intent == \"activate\" && contains(element.name, \"submit\")) || ((tool.name == \"computer_key\" || tool.name == \"computer_type\") && key == \"Enter\")", "intent == \"type\" && contains(element.name, \"password\")"], "allow": ["true"], "updated_by": "usr-ada", "updated_at": "2025-12-30T11:00:00Z" }
+    ],
+    "computer_snapshot": [
+      { "computer_id": "risk-analyst", "snapshot_id": 41, "url": "https://example.com/order/4471", "elements": [{ "ref": "e13", "role": "button", "name": "Submit order" }, { "ref": "e6", "role": "input", "name": "Large" }], "taken_at": "2025-12-31T22:40:00Z" },
+      { "computer_id": "general-assistant", "snapshot_id": 7, "url": "https://httpbin.org/forms/post", "elements": [{ "ref": "e3", "role": "textbox", "name": "E-mail address:" }], "taken_at": "2025-12-30T18:00:00Z" }
+    ],
+    "audit_events": [
+      { "id": "33333333-3333-4333-8333-333333333301", "actor_user_id": "usr-ada", "event_type": "policy.updated", "target_type": "action_policy", "target_id": "current", "payload": { "mode": "enforce", "deny_count": 2, "allow_count": 1 }, "created_at": "2025-12-30T11:00:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333302", "actor_user_id": null, "event_type": "computer.action.refused", "target_type": "computer", "target_id": "risk-analyst", "payload": { "tool": "computer_click", "rule": "(intent == \"activate\" && contains(element.name, \"submit\")) || ((tool.name == \"computer_key\" || tool.name == \"computer_type\") && key == \"Enter\")", "source": "deny", "mode": "enforce" }, "created_at": "2025-12-31T22:41:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333303", "actor_user_id": null, "event_type": "computer.action.allowed", "target_type": "computer", "target_id": "risk-analyst", "payload": { "tool": "computer_read", "source": "allow", "mode": "enforce" }, "created_at": "2025-12-31T22:39:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333304", "actor_user_id": "usr-ada", "event_type": "person.access.revoked", "target_type": "user", "target_id": "usr-eli", "payload": { "email_domain": "openbot.example" }, "created_at": "2025-12-18T09:05:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333305", "actor_user_id": "usr-ada", "event_type": "credential.revoked", "target_type": "credential", "target_id": "22222222-2222-4222-8222-222222222205", "payload": { "kind": "mcp", "provider": "tickets" }, "created_at": "2025-12-19T08:00:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333306", "actor_user_id": "usr-ada", "event_type": "plugin.grant.added", "target_type": "agent", "target_id": "knowledge", "payload": { "kind": "mcp_tool", "ref": "notes/search_notes" }, "created_at": "2025-11-05T11:10:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333307", "actor_user_id": "usr-chen", "event_type": "skill.created", "target_type": "skill", "target_id": "skl-tone-zh", "payload": { "slug": "tone-zh" }, "created_at": "2025-10-25T04:00:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333308", "actor_user_id": "usr-ada", "event_type": "mcp.server.added", "target_type": "mcp_server", "target_id": "calendar", "payload": { "vendor": "Example Notes Inc.", "provenance": "first-party" }, "created_at": "2025-12-30T09:00:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333309", "actor_user_id": null, "event_type": "run.started", "target_type": "run", "target_id": "run-orders-0003", "payload": { "thread_id": "thr-orders", "agent_id": "risk-analyst" }, "created_at": "2025-12-31T22:38:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333310", "actor_user_id": null, "event_type": "run.finished", "target_type": "run", "target_id": "run-orders-0003", "payload": { "thread_id": "thr-orders", "outcome": "stopped_by_policy" }, "created_at": "2025-12-31T22:41:00Z" }
+    ]
+  },
+  "native": {
+    "note": "v3 §4.3 的 native thread/realtime/memory 表。上游无对应表（Intelligence 托管），因此本节整体 label=新增。",
+    "threads": [
+      { "id": "thr-general", "channel_id": "ch-general", "title": "General", "created_by": "usr-ada", "created_at": "2025-09-02T09:20:00Z", "updated_at": "2025-12-31T18:12:00Z" },
+      { "id": "thr-orders", "channel_id": "ch-orders", "title": "Order 4471", "created_by": "usr-bo", "created_at": "2025-12-31T22:30:00Z", "updated_at": "2025-12-31T22:41:00Z" },
+      { "id": "thr-support", "channel_id": "ch-support", "title": "今日工单", "created_by": "usr-chen", "created_at": "2025-12-31T12:50:00Z", "updated_at": "2025-12-31T13:05:00Z" }
+    ],
+    "thread_memberships": [
+      { "thread_id": "thr-orders", "user_id": "usr-ada", "role": "observer", "created_at": "2025-12-31T22:31:00Z" },
+      { "thread_id": "thr-orders", "user_id": "usr-bo", "role": "owner", "created_at": "2025-12-31T22:30:00Z" },
+      { "thread_id": "thr-support", "user_id": "usr-chen", "role": "owner", "created_at": "2025-12-31T12:50:00Z" }
+    ],
+    "messages": [
+      { "id": "msg-general-0001", "thread_id": "thr-general", "seq": 1, "author_kind": "user", "author_id": "usr-ada", "body": "I have moved the order questions to the order desk.", "created_at": "2025-12-31T18:12:00Z" },
+      { "id": "msg-orders-0001", "thread_id": "thr-orders", "seq": 1, "author_kind": "user", "author_id": "usr-bo", "body": "Can you check order 4471 and tell me whether the total is right?", "created_at": "2025-12-31T22:30:00Z" },
+      { "id": "msg-orders-0002", "thread_id": "thr-orders", "seq": 2, "author_kind": "agent", "author_id": "risk-analyst", "body": "Opening the order page now.", "created_at": "2025-12-31T22:31:00Z" },
+      { "id": "msg-orders-0003", "thread_id": "thr-orders", "seq": 3, "author_kind": "agent", "author_id": "risk-analyst", "body": "The total reads **1 284.00 EUR** across 3 line items:\n\n| Item | Qty | Line total |\n| --- | --- | --- |\n| Widget A | 2 | 240.00 |\n| Widget B | 1 | 44.00 |\n| Service | 1 | 1000.00 |\n\nThe arithmetic is right.", "created_at": "2025-12-31T22:36:00Z", "render_note": "覆盖 §6.4 的 markdown 表格与粗体渲染。" },
+      { "id": "msg-orders-0004", "thread_id": "thr-orders", "seq": 4, "author_kind": "user", "author_id": "usr-bo", "body": "Good. Submit it.", "created_at": "2025-12-31T22:37:00Z" },
+      { "id": "msg-orders-0005", "thread_id": "thr-orders", "seq": 5, "author_kind": "agent", "author_id": "risk-analyst", "body": "This deployment's policy does not allow that: “Submit order” on example.com is blocked by the rule `(intent == \"activate\" && contains(element.name, \"submit\")) || ((tool.name == \"computer_key\" || tool.name == \"computer_type\") && key == \"Enter\")`.", "created_at": "2025-12-31T22:41:00Z", "render_note": "文案逐字取自 server/src/computer/policy.ts::describeRefusal 的输出形状，覆盖行内代码渲染与长规则换行。" },
+      { "id": "msg-orders-0006", "thread_id": "thr-orders", "seq": 6, "author_kind": "agent", "author_id": "risk-analyst", "body": "```json\n{\n  \"order\": 4471,\n  \"total\": \"1284.00\",\n  \"currency\": \"EUR\"\n}\n```", "created_at": "2025-12-31T22:41:30Z", "render_note": "覆盖 §6.4 的代码块渲染与等宽字体。" },
+      { "id": "msg-support-0001", "thread_id": "thr-support", "seq": 1, "author_kind": "user", "author_id": "usr-chen", "body": "帮我总结一下今天的工单。", "created_at": "2025-12-31T12:50:00Z" },
+      { "id": "msg-support-0002", "thread_id": "thr-support", "seq": 2, "author_kind": "agent", "author_id": "knowledge", "body": "今天共有 3 张工单，其中 1 张待人工确认。详见 https://tickets.example.com/today", "created_at": "2025-12-31T13:05:00Z", "render_note": "覆盖 §6.4 的裸链接自动识别与 §8.6 CJK 与拉丁混排换行。" },
+      { "id": "msg-support-0003", "thread_id": "thr-support", "seq": 3, "author_kind": "system", "author_id": null, "body": "陈墨 记住了一条偏好。", "created_at": "2025-12-31T13:06:00Z" }
+    ],
+    "runs": [
+      { "id": "run-orders-0003", "thread_id": "thr-orders", "agent_id": "risk-analyst", "status": "finished", "outcome": "stopped_by_policy", "started_at": "2025-12-31T22:38:00Z", "finished_at": "2025-12-31T22:41:00Z" },
+      { "id": "run-support-0001", "thread_id": "thr-support", "agent_id": "knowledge", "status": "finished", "outcome": "answered", "started_at": "2025-12-31T12:51:00Z", "finished_at": "2025-12-31T13:05:00Z" },
+      { "id": "run-general-0001", "thread_id": "thr-general", "agent_id": "concierge", "status": "failed", "outcome": "provider_error", "started_at": "2025-12-29T09:00:00Z", "finished_at": "2025-12-29T09:00:40Z" }
+    ],
+    "run_events": [
+      { "run_id": "run-orders-0003", "seq": 1, "kind": "run_started", "at": "2025-12-31T22:38:00Z" },
+      { "run_id": "run-orders-0003", "seq": 2, "kind": "tool_call_started", "at": "2025-12-31T22:39:00Z" },
+      { "run_id": "run-orders-0003", "seq": 3, "kind": "tool_call_refused", "at": "2025-12-31T22:41:00Z" },
+      { "run_id": "run-orders-0003", "seq": 4, "kind": "run_finished", "at": "2025-12-31T22:41:00Z" },
+      { "run_id": "run-support-0001", "seq": 1, "kind": "run_started", "at": "2025-12-31T12:51:00Z" },
+      { "run_id": "run-support-0001", "seq": 2, "kind": "run_finished", "at": "2025-12-31T13:05:00Z" }
+    ],
+    "thread_leases": [
+      { "thread_id": "thr-orders", "owner_run_id": "run-orders-0003", "fencing_token": 12, "expires_at": "2025-12-31T22:43:00Z", "released_at": "2025-12-31T22:41:00Z" }
+    ],
+    "tool_calls": [
+      { "id": "tc-orders-0001", "run_id": "run-orders-0003", "seq": 1, "tool": "computer_read", "decision": "allowed", "created_at": "2025-12-31T22:39:00Z" },
+      { "id": "tc-orders-0002", "run_id": "run-orders-0003", "seq": 2, "tool": "computer_click", "decision": "refused", "created_at": "2025-12-31T22:41:00Z" },
+      { "id": "tc-support-0001", "run_id": "run-support-0001", "seq": 1, "tool": "mcp__notes__search_notes", "decision": "allowed", "created_at": "2025-12-31T12:52:00Z" }
+    ],
+    "tool_attempts": [
+      { "id": "ta-orders-0001", "tool_call_id": "tc-orders-0001", "attempt": 1, "status": "succeeded", "at": "2025-12-31T22:39:02Z" },
+      { "id": "ta-orders-0002", "tool_call_id": "tc-orders-0002", "attempt": 1, "status": "refused_by_policy", "at": "2025-12-31T22:41:00Z" },
+      { "id": "ta-support-0001", "tool_call_id": "tc-support-0001", "attempt": 1, "status": "succeeded", "at": "2025-12-31T12:52:04Z" }
+    ],
+    "outbox": [
+      { "aggregate_id": "thr-orders", "seq": 6, "destination": "realtime", "delivered_at": "2025-12-31T22:41:30Z" },
+      { "aggregate_id": "thr-support", "seq": 3, "destination": "realtime", "delivered_at": "2025-12-31T13:06:00Z" }
+    ],
+    "memories": [
+      { "id": "mem-0001", "scope": "user:usr-chen", "kind": "preference", "body": "对外答复统一用简体中文。", "source_message_id": "msg-support-0003", "source_thread_id": "thr-support", "sensitivity": "normal", "created_by": "usr-chen", "supersedes": null, "expires_at": null, "created_at": "2025-12-31T13:06:00Z" },
+      { "id": "mem-0002", "scope": "user:usr-bo", "kind": "fact", "body": "Bo signs off refunds above 1 000 EUR himself.", "source_message_id": "msg-orders-0004", "source_thread_id": "thr-orders", "sensitivity": "normal", "created_by": "usr-bo", "supersedes": null, "expires_at": null, "created_at": "2025-12-31T22:37:30Z" },
+      { "id": "mem-0003", "scope": "deployment", "kind": "fact", "body": "The order desk covers refunds, order checks and delivery questions.", "source_message_id": "msg-general-0001", "source_thread_id": "thr-general", "sensitivity": "normal", "created_by": "usr-ada", "supersedes": null, "expires_at": null, "created_at": "2025-12-31T18:13:00Z" },
+      { "id": "mem-0004", "scope": "user:usr-ada", "kind": "preference", "body": "Ada wants weekly digests on Monday mornings.", "source_message_id": null, "source_thread_id": null, "sensitivity": "normal", "created_by": "usr-ada", "supersedes": null, "expires_at": "2026-06-30T00:00:00Z", "created_at": "2025-11-30T08:10:00Z" }
+    ],
+    "memory_events": [
+      { "memory_id": "mem-0001", "seq": 1, "kind": "created", "actor_user_id": "usr-chen", "at": "2025-12-31T13:06:00Z" },
+      { "memory_id": "mem-0002", "seq": 1, "kind": "created", "actor_user_id": "usr-bo", "at": "2025-12-31T22:37:30Z" },
+      { "memory_id": "mem-0003", "seq": 1, "kind": "created", "actor_user_id": "usr-ada", "at": "2025-12-31T18:13:00Z" },
+      { "memory_id": "mem-0004", "seq": 1, "kind": "created", "actor_user_id": "usr-ada", "at": "2025-11-30T08:10:00Z" }
+    ],
+    "intelligence_import_cursors": []
+  },
+  "runtime_views": {
+    "note": "不是表，是 GUI 直接消费的投影。fake ApplicationService 原样返回，形状取自上游 app/src/lib/computers/queries.ts::ComputerFleet 与 server/src/computer/schema.ts::ComputerStatus。",
+    "computer_fleet": {
+      "isolation": "per-bot",
+      "computers": [
+        { "bot_id": "risk-analyst", "running": true, "started_at": "2025-12-31T22:29:00Z", "egress": "203.0.113.11" },
+        { "bot_id": "general-assistant", "running": true, "started_at": "2025-12-30T17:55:00Z", "egress": null },
+        { "bot_id": "concierge", "running": false, "started_at": null, "egress": null }
+      ]
+    },
+    "computer_status": [
+      { "bot_id": "risk-analyst", "state": "ready" },
+      { "bot_id": "general-assistant", "state": "ready" },
+      { "bot_id": "concierge", "state": "absent" },
+      { "bot_id": "knowledge", "state": "unreachable", "reason": "The container has not answered a health check since 22:00." }
+    ]
+  },
+  "recount": [
+    { "command": "jq '[.entities | to_entries[] | .value | length] | add' fixtures/ui/seed.json", "cwd": "repo", "expect": 95 },
+    { "command": "jq '.entities | length' fixtures/ui/seed.json", "cwd": "repo", "expect": 25 },
+    { "command": "jq '.pages_covered | length' fixtures/ui/seed.json", "cwd": "repo", "expect": 27 },
+    { "command": "jq '[.pages_covered[] | select(.label == \"parity\")] | length' fixtures/ui/seed.json", "cwd": "repo", "expect": 26 },
+    { "command": "jq '.native.messages | length' fixtures/ui/seed.json", "cwd": "repo", "expect": 10 },
+    { "command": "jq '.entities.audit_events | length' fixtures/ui/seed.json", "cwd": "repo", "expect": 10 },
+    { "command": "grep -rhoE 'createFileRoute\\(\\s*$|createFileRoute\\(\"[^\"]*\"' app/src/routes | wc -l", "cwd": "upstream", "expect": 30, "note": "上游 30 个 createFileRoute 注册（其中 3 个是跨行写法，被第一个分支计入）。减去 4 个纯布局路由（/_authed、/_authed/_app、/_authed/admin、/_authed/settings）= 26 个页面 route，与 GUI §10.1 的 26 一致。" }
+  ]
+}

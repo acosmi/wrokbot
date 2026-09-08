@@ -1,0 +1,46 @@
+<template>
+  <view class="console-root">
+    <BrandHeader/>
+    <scroll-view class="console-scroll" direction="vertical">
+      <view class="page-content">
+        <view v-if="tab == 'tasks'">
+          <text class="eyebrow">我的工作空间</text><text class="page-title">让工作继续。</text><text class="page-subtitle">随时查看，安心交给 Wrok Bot。</text>
+          <TapRow class="device-card" @activate="openDevices" label="选择工作电脑或服务器"><view><text class="device-name">我的 Wrok Bot</text><text class="device-description">{{targetDescription}}</text></view><text class="chevron">›</text></TapRow>
+          <text class="section-label">所有设备的最近任务</text>
+          <StateNotice v-if="consoleState.tasksStatus != 'ready'" title="连接你的工作空间" description="登录后，查看绑定的工作电脑与服务器，以及它们正在执行的任务。"/>
+          <StateNotice v-else-if="consoleState.tasks.length == 0" title="还没有任务" description="选好工作设备，把第一件事交给 Wrok Bot。"/>
+          <TapRow v-else v-for="task in consoleState.tasks" :key="task.id" class="account-row" @activate="openTask(task.id)" :label="task.title"><view class="row-copy"><text class="row-title">{{task.title}}</text><text class="row-subtitle">{{task.deviceName}} · {{task.summary}}</text><text class="row-subtitle">{{taskStateLabel(task.state)}}</text></view><text class="chevron">›</text></TapRow>
+        </view>
+        <view v-else-if="tab == 'approvals'">
+          <text class="eyebrow">保持掌控</text><text class="page-title">需要你的决定。</text><text class="page-subtitle">先审查，再允许。</text>
+          <StateNotice v-if="consoleState.approvalsStatus != 'ready'" title="登录后查看审批" description="这里只显示你的真实待审批请求。其他设备已经处理、过期或撤销的操作会重新核对。"/>
+          <StateNotice v-else-if="consoleState.approvals.length == 0" title="暂时没有待审批操作" description="需要你的决定时，会在这里显示完整请求。"/>
+          <view v-else v-for="approval in consoleState.approvals" :key="approval.id" class="review-card"><text class="state-title">{{approval.title}}</text><text class="body-copy">{{approval.summary}}</text><text class="row-subtitle">{{approval.deviceName}}</text><view v-for="fact in approval.facts" :key="fact.name" class="fact-row"><text class="row-copy">{{fact.name}}</text><text class="fact-state">{{fact.value}}</text></view><view class="review-actions"><button class="button-reset secondary-button review-action" :disabled="true">拒绝</button><button class="button-reset secondary-button review-action" :disabled="true">允许这一次</button></view><text class="footnote">移动审批操作正在接入；显示请求不代表已授予权限。</text></view>
+        </view>
+        <view v-else>
+          <text class="eyebrow">留一点空间给想法</text><text class="page-title">聊点什么？</text><text class="page-subtitle">先讨论，再决定是否交给工作设备执行。</text>
+          <StateNotice v-if="consoleState.conversationsStatus != 'ready'" title="登录后继续聊天" description="聊天与历史归属于同一账号。聊天的执行能力由工作空间授予，不根据界面名称猜测。"/>
+          <TapRow v-else v-for="conversation in consoleState.conversations" :key="conversation.id" class="account-row" @activate="openConversation(conversation.id)" :label="conversation.title"><text class="row-copy">{{conversation.title}}</text><text class="row-subtitle">{{conversation.updatedLabel}}</text></TapRow>
+        </view>
+      </view>
+    </scroll-view>
+    <view v-if="tab != 'approvals'" class="composer-wrap"><view class="composer"><textarea v-if="tab == 'tasks'" class="composer-input" v-model="workspace.taskDraft" placeholder="交给 Wrok Bot 一个任务…" :maxlength="4096" :auto-height="true"/><textarea v-else class="composer-input" v-model="workspace.chatDraft" placeholder="说说你的想法…" :maxlength="4096" :auto-height="true"/><button class="button-reset send-button" :disabled="true" aria-label="连接工作空间后发送">↑</button></view><text class="footnote">远程登录正在接入，当前内容仅是本页草稿。</text></view>
+    <view class="bottom-nav"><button class="button-reset nav-button" :class="tab == 'tasks' ? 'nav-selected' : ''" @click="tab = 'tasks'">任务</button><button class="button-reset nav-button" :class="tab == 'approvals' ? 'nav-selected' : ''" @click="tab = 'approvals'">审批</button><button class="button-reset nav-button" :class="tab == 'chat' ? 'nav-selected' : ''" @click="tab = 'chat'">聊天</button></view>
+  </view>
+</template>
+<script setup lang="uts">
+import TapRow from '../../components/TapRow.uvue'
+import { ref, computed } from 'vue'
+import BrandHeader from '../../components/BrandHeader.uvue'
+import StateNotice from '../../components/StateNotice.uvue'
+import { workspace, deviceDescription } from '../../core/workspace.uts'
+import { consoleState, taskStateLabel } from '../../core/console.uts'
+const tab = ref('tasks')
+const targetDescription = computed((): string => {
+  for (const device of workspace.devices) { if (device.id == workspace.selectedDeviceId) return deviceDescription(device) }
+  return '选择已绑定的工作电脑或服务器'
+})
+function openDevices() { uni.navigateTo({ url: '/pages/devices/index' }) }
+function openTask(id: string) { uni.navigateTo({ url: '/pages/task/detail?id=' + encodeURIComponent(id) }) }
+function openConversation(id: string) { uni.navigateTo({ url: '/pages/chat/detail?id=' + encodeURIComponent(id) }) }
+</script>

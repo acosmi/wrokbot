@@ -1,0 +1,331 @@
+# tools/pins.toml —— 构建期工具二进制钉版
+#
+# 真源：GUI 设计系统文档 §12.1〈工具二进制钉版〉那张表的机器可读版；由 v3 §19.3 的
+# Phase 0 必做产物清单点名（`tools/pins.toml`），由 v3 §16.3 的 supply chain 闸门消费。
+#
+# 消费者：
+#   `cargo xtask tools fetch`   按 [tools.<id>.artifacts] 下载到 `target/tools/bin`
+#   `cargo xtask tools verify`  校验 sha256 与 [tools.<id>.verify]，任一不符即红
+# 两个子命令由 `crates/openbot-testkit/src/xtask/tools.rs` 实现；下载件先校本平台
+# sha256 再安装，cargo-install 件按本表/lock 精确版本安装，`verify` 再核版本输出。
+#
+# 这些工具**不进发行物**（GUI §12.1 末段）：v3 §0.1 的"第一方非 Rust 源码只有 Electron
+# shim"说的是发行物，构建期二进制按 v3 §16.3 的供应链条目管理。
+#
+# ---------------------------------------------------------------------------
+# 字段约定
+# ---------------------------------------------------------------------------
+# version            钉死的版本号，与 GUI §12.1 逐字相同。
+# license            SPDX 表达式；来源写在 license_evidence。
+# install            "download"（GitHub release 资产）或 "cargo-install"（从 crates.io 装）。
+# artifacts[]        仅 install="download" 时存在。platform 用统一键：
+#                    linux-x64 / linux-arm64 / macos-arm64 / macos-x64 / windows-x64。
+# sha256_source      这个摘要是谁给的：
+#                      "upstream-sha256sums"   上游 release 的 sha256sums.txt / .sha256 边车
+#                      "local-download"        本轮实际下载后本机 sha256sum 算出
+#                    两者都不是"独立第三方"——被攻陷的 release 会同时给出一致的摘要。
+#                    独立性由 v3 §16.3 的 reproducibility check 另行承担，不由本文件冒充。
+# url_http_status    本轮实测的 HTTP 状态码（301/302 跟随后的最终码），0 = 本轮未探测。
+# verify.*           `xtask tools verify` 的期望。stream 字段是必须的：见下面 tailwindcss
+#                    的 known_trap —— `--version` 的版本号在 **stderr**，stdout 是 CSS。
+# status             todo / in_progress / done，口径与 parity ledger 一致：
+#                    没有本轮实证的一律 todo，不写假 done。
+
+schema = "tools-pins"
+schema_version = 1
+generated_by = "manual"
+generated_at = "2026-08-22"
+# 本文件所有 sha256 与 HTTP 状态码都在 2026-08-22 本机（Windows 11，Git Bash，
+# curl 走 GitHub 作用域代理）实跑取得；复算命令见文件末尾 [recount]。
+
+# ===========================================================================
+# Tailwind CSS standalone CLI
+# ===========================================================================
+[tools.tailwindcss]
+version = "4.3.3"
+license = "MIT"
+license_evidence = "本轮实跑 `tailwindcss-windows-x64.exe --version`，stdout 首行为 `/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */`"
+install = "download"
+repo = "tailwindlabs/tailwindcss"
+release_tag = "v4.3.3"
+release_url = "https://github.com/tailwindlabs/tailwindcss/releases/tag/v4.3.3"
+checksums_manifest = "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/sha256sums.txt"
+checksums_manifest_http_status = 200
+status = "done"
+done_evidence = "五个平台的 sha256 与 release 的 sha256sums.txt 逐字相等（recount tw-sha-crosscheck）；windows-x64 另有本机下载后 sha256sum 端到端相符并跑通 --version"
+notes = """
+musl 两件（tailwindcss-linux-x64-musl / tailwindcss-linux-arm64-musl）刻意不收，
+与 GUI §12.1 的"musl 两件不用"一致；它们确实存在于同一份 sha256sums.txt 里，
+所以"不收"是裁决不是漏抄（正向对照见 recount tw-musl-present）。
+trunk 通过 `[tools] tailwindcss = "4.3.3"` 在 PATH 上找同名二进制并比对版本，
+`[build] offline = true` 下找不到或版本不符直接报错不下载（GUI §12.1）。
+"""
+
+  [tools.tailwindcss.verify]
+  args = ["--version"]
+  stream = "stderr"
+  expect_regex = "tailwindcss v4\\.3\\.3"
+  expect_exit_code = 0
+  verified_on = "windows-x64"
+  known_trap = """
+`tailwindcss --version` 不是纯版本查询：本轮实测（windows-x64，exit=0）
+stderr 只有 86 字节，内容是 ANSI 着色的 `≈ tailwindcss v4.3.3` 加一行 `Done in 812ms`；
+stdout 是 98,986 字节的编译产物 CSS，首行 `/*! tailwindcss v4.3.3 | MIT License | ... */`。
+所以只读 stdout 的朴素 `--version` 校验会拿到 ~97 KiB CSS 而不是版本串。
+比对前必须剥 ANSI 转义（stderr 里 `v4.3.3` 前后各有 `\\x1b[34m` / `\\x1b[39m`）。
+另一条同样成立的判据是 stdout 首行的 banner 注释；这里选 stderr 是因为它体量恒定。
+"""
+
+  [[tools.tailwindcss.artifacts]]
+  platform = "linux-x64"
+  asset = "tailwindcss-linux-x64"
+  url = "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-linux-x64"
+  sha256 = "dc61b3ac6b8c9ca874c0cc4c57b2409791a64c5540404ca5f5367360babc313a"
+  sha256_source = "upstream-sha256sums"
+  url_http_status = 200
+
+  [[tools.tailwindcss.artifacts]]
+  platform = "linux-arm64"
+  asset = "tailwindcss-linux-arm64"
+  url = "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-linux-arm64"
+  sha256 = "55fd0b241214eff3de1e8ee4f22796662f2d2e7a49bcfca7477cfd0bac398195"
+  sha256_source = "upstream-sha256sums"
+  url_http_status = 200
+
+  [[tools.tailwindcss.artifacts]]
+  platform = "macos-arm64"
+  asset = "tailwindcss-macos-arm64"
+  url = "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-macos-arm64"
+  sha256 = "cdf646702987a743464dff4d9c60fd4480d1c1e73dd819a9a67f1078815dce9d"
+  sha256_source = "upstream-sha256sums"
+  size_bytes = 79826018
+  url_http_status = 200
+
+  [[tools.tailwindcss.artifacts]]
+  platform = "macos-x64"
+  asset = "tailwindcss-macos-x64"
+  url = "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-macos-x64"
+  sha256 = "7922e0953f2110c05976e3bf58f14e643d90427575e766b7d433f5f80cbee7e1"
+  sha256_source = "upstream-sha256sums"
+  url_http_status = 200
+
+  [[tools.tailwindcss.artifacts]]
+  platform = "windows-x64"
+  asset = "tailwindcss-windows-x64.exe"
+  url = "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-windows-x64.exe"
+  sha256 = "e0e260ce048014e9268f6237ff18f8ccf02cef521cbd0ae04e82c2cdf7aa3955"
+  sha256_source = "local-download"
+  size_bytes = 112503296
+  url_http_status = 200
+
+# ===========================================================================
+# trunk（Leptos/WASM 构建驱动）
+# ===========================================================================
+[tools.trunk]
+version = "0.21.14"
+license = "MIT OR Apache-2.0"
+license_evidence = "crates.io API `.version.license` = `MIT/Apache-2.0`；仓库 v0.21.14 同时存在 LICENSE-MIT 与 LICENSE-APACHE（各 HTTP 200），单文件 LICENSE 为 404（正向/负向对照同一条命令）"
+install = "cargo-install"
+crate = "trunk"
+crates_io_cksum = "4f7fe1b23957a580be9a7a8b305c331b2977989f33695128d663380d09eaea37"
+cksum_source = "index.crates.io 稀疏索引 `.cksum` 字段（即 cargo 自己校验的那一个）"
+install_command = "cargo install --locked trunk --version 0.21.14"
+repo = "https://github.com/trunk-rs/trunk/tree/v0.21.14"
+status = "done"
+done_evidence = "index checksum/license 已核；2026-08-25 macOS arm64 经 xtask cargo install --locked 真安装，stdout=`trunk 0.21.14`"
+notes = """
+GUI §12.1 只写了"由 xtask 执行并校验 `trunk --version`"，没有给期望串。
+2026-08-25 已在 macOS arm64 真安装；上游 lock 含 yanked `crossbeam-channel 0.5.14` 与
+`zip 2.6.1`，`--locked` 仍可重现，但该事实必须保留在 Batch 15 供应链证据中。
+构建口径：`PATH=target/tools/bin:$PATH trunk build --release --offline --locked`。
+"""
+
+  [tools.trunk.verify]
+  args = ["--version"]
+  stream = "stdout"
+  expect_regex = "0\\.21\\.14"
+  expect_exit_code = 0
+  verified_on = "macos-arm64"
+  status_verify = "done"
+
+# ===========================================================================
+# wasm-opt（binaryen）
+# ===========================================================================
+[tools.wasm-opt]
+version = "version_132"
+license = "Apache-2.0"
+license_evidence = "raw.githubusercontent.com/WebAssembly/binaryen/version_132/LICENSE 首三行为 Apache License Version 2.0"
+install = "download"
+repo = "WebAssembly/binaryen"
+release_tag = "version_132"
+release_url = "https://github.com/WebAssembly/binaryen/releases/tag/version_132"
+released_at = "2026-08-12T21:53:49Z"
+status = "done"
+done_evidence = "五个平台的 sha256 取自同 release 的 `.sha256` 边车文件，本轮逐个下载；仓内可复算的一半 = recount `binaryen-sha-shape`（五个互不相同的合法摘要），与上游边车逐字比对的一半 = recount `binaryen-sha-vs-upstream`（2026-08-22 实跑得 SAME，但边车聚合文件未入库，干净 checkout 上跑不起来）。GUI §12.1 只写了『各平台 sha256 进 pins.toml』没给值，值是本轮补的"
+notes = """
+GUI §12.1 的表格里 binaryen 那一行**没有列出任何 sha256**（正向对照：同一表格的
+Tailwind 行列了五个），因此本文件的五个摘要是本轮新取的，不是抄表。
+资产是 tar.gz；macOS 包的 `wasm-opt` 动态依赖同包 `lib/libbinaryen.dylib`，xtask 同时抽取
+到 `target/tools/{bin,lib}`。只抽 binary 的真实负向是 dyld exit 134。
+trunk 侧对应 `[tools] wasm_opt = "version_132"`。
+"""
+
+  [tools.wasm-opt.unpack]
+  archive_format = "tar.gz"
+  expected_member = "binaryen-version_132/bin/wasm-opt"
+  expected_member_windows = "binaryen-version_132/bin/wasm-opt.exe"
+  expected_library_macos = "binaryen-version_132/lib/libbinaryen.dylib"
+  status = "done"
+  done_evidence = "2026-08-25 macOS arm64 校摘要后真列 archive：wasm-opt 位于 bin/，LC_RPATH 指向 ../lib，所需 libbinaryen.dylib 位于 lib/；仅抽 binary 会被 dyld 以 Library not loaded 终止"
+
+  [tools.wasm-opt.verify]
+  args = ["--version"]
+  stream = "stdout"
+  expect_regex = "^wasm-opt version 132 \\(version_132\\)\\r?\\n?$"
+  expect_exit_code = 0
+  verified_on = "macos-arm64"
+  status_verify = "done"
+
+  [[tools.wasm-opt.artifacts]]
+  platform = "linux-x64"
+  asset = "binaryen-version_132-x86_64-linux.tar.gz"
+  url = "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-linux.tar.gz"
+  sha256 = "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572"
+  sha256_source = "upstream-sha256sums"
+  size_bytes = 117057408
+  url_http_status = 200
+
+  [[tools.wasm-opt.artifacts]]
+  platform = "linux-arm64"
+  asset = "binaryen-version_132-aarch64-linux.tar.gz"
+  url = "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-aarch64-linux.tar.gz"
+  sha256 = "c58562417836c5d0493d89bdefc434933bdc097db641b483df86bcfa557a107f"
+  sha256_source = "upstream-sha256sums"
+  size_bytes = 111061229
+  url_http_status = 200
+
+  [[tools.wasm-opt.artifacts]]
+  platform = "macos-arm64"
+  asset = "binaryen-version_132-arm64-macos.tar.gz"
+  url = "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-arm64-macos.tar.gz"
+  sha256 = "98aad827847af7ef990ed7098d885725c8e5b5aae75073403635617ae4e259aa"
+  sha256_source = "upstream-sha256sums"
+  size_bytes = 7640117
+  url_http_status = 200
+
+  [[tools.wasm-opt.artifacts]]
+  platform = "macos-x64"
+  asset = "binaryen-version_132-x86_64-macos.tar.gz"
+  url = "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-macos.tar.gz"
+  sha256 = "40c3de90bb3766bd0282a895e139a6f50253dba49b4f5bb89e66faca162d832e"
+  sha256_source = "upstream-sha256sums"
+  size_bytes = 9069142
+  url_http_status = 200
+
+  [[tools.wasm-opt.artifacts]]
+  platform = "windows-x64"
+  asset = "binaryen-version_132-x86_64-windows.tar.gz"
+  url = "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-windows.tar.gz"
+  sha256 = "2089428ec98c899b45ee5d00636ddd6e2da8636cc473ef50b165cc25793ef7cb"
+  sha256_source = "upstream-sha256sums"
+  size_bytes = 113548735
+  url_http_status = 200
+
+# ===========================================================================
+# wasm-bindgen CLI
+# ===========================================================================
+[tools.wasm-bindgen-cli]
+version = "0.2.127"
+version_source = "Cargo.lock 里 `wasm-bindgen` crate 的版本（GUI §12.1：以 lock 为准）"
+license = "MIT OR Apache-2.0"
+install = "cargo-install"
+crate = "wasm-bindgen-cli"
+install_command = "cargo install --locked wasm-bindgen-cli --version <从 Cargo.lock 读出的版本>"
+status = "done"
+done_evidence = "Cargo.lock 唯一 wasm-bindgen=0.2.127；2026-08-25 macOS arm64 cargo install --locked，crate manifest license=MIT OR Apache-2.0，stdout=`wasm-bindgen 0.2.127`"
+notes = "trunk 自身也按 lock 校验 wasm-bindgen 版本（GUI §12.1），所以这里版本漂移会被两处同时照出。"
+
+  [tools.wasm-bindgen-cli.verify]
+  args = ["--version"]
+  stream = "stdout"
+  expect_regex = "^wasm-bindgen 0\\.2\\.127\\r?\\n?$"
+  expect_exit_code = 0
+  status_verify = "done"
+  verified_on = "macos-arm64"
+
+# ===========================================================================
+# 复算命令
+#
+# cwd = "repo" 指本仓根，这类条目在**干净 checkout 上就能跑**，是真闸门。
+# cwd = "scratchpad" 指产生它的那次会话的临时取证目录 —— 该目录随会话消失、不入库，
+# 所以这类条目**在干净 checkout 上跑不起来**，只是当时那一跑的留痕。每条都必须自带
+# `repo_reproducible = false` + `blocked_by`，禁止让它们混在真闸门里冒充可复算。
+# 同族的另一处在 fixtures/README.md（cel-corpus 的生成脚本不在仓内），两处口径一致。
+# ===========================================================================
+[[recount]]
+id = "tw-sha-crosscheck"
+command = "for p in linux-x64 linux-arm64 macos-arm64 macos-x64 windows-x64.exe; do doc=$(grep -oE \"\\`$p\\` \\`[0-9a-f]{64}\\`\" repository contract | grep -oE '[0-9a-f]{64}'); pin=$(grep -A3 \"asset = \\\"tailwindcss-$p\\\"\" tools/pins.toml | grep -oE '[0-9a-f]{64}'); [ \"$doc\" = \"$pin\" ] && echo \"$p MATCH\" || echo \"$p DIFFERS\"; done"
+cwd = "repo"
+repo_reproducible = true
+expect = """
+linux-x64 MATCH
+linux-arm64 MATCH
+macos-arm64 MATCH
+macos-x64 MATCH
+windows-x64.exe MATCH"""
+note = "expect 由 2026-08-22 的真实 stdout 逐字抄回（原先写的是散文『五行全部 MATCH』，机器没法比对）。"
+
+[[recount]]
+id = "tw-musl-present"
+command = "grep -c 'musl' tw-sums.txt"
+cwd = "scratchpad"
+repo_reproducible = false
+expect = 2
+blocked_by = "`tw-sums.txt` 是会话取证文件，不在本仓。解除条件 = 把 Tailwind release 的 sha256 边车入库到 `tools/`，再把 cwd 改成 repo。"
+
+[[recount]]
+id = "binaryen-sha-shape"
+command = "grep -A3 'binaryen-version_132-' tools/pins.toml | grep -oE '[0-9a-f]{64}' | sort -u | wc -l"
+cwd = "repo"
+repo_reproducible = true
+expect = 5
+note = "仓内可跑的那一半：五个平台资产各有一个互不相同的合法 sha256。它照得出『复制粘贴把两个平台写成同一个摘要』，照不出『摘要与上游不符』—— 后者由下面的 binaryen-sha-vs-upstream 负责。"
+
+[[recount]]
+id = "binaryen-sha-vs-upstream"
+command = "grep -oE '[0-9a-f]{64}' \"$BINARYEN_SUMS\" | sort > /tmp/a; grep -A3 'binaryen-version_132-' tools/pins.toml | grep -oE '[0-9a-f]{64}' | sort > /tmp/b; diff /tmp/a /tmp/b && echo SAME"
+cwd = "repo"
+repo_reproducible = false
+expect = "SAME"
+env_required = "BINARYEN_SUMS = 五个 `.sha256` 边车的聚合文件路径"
+last_run = "2026-08-22 实跑得 SAME（聚合文件在当次会话取证目录，未入库）"
+blocked_by = "聚合文件不在本仓，干净 checkout 上跑不起来。解除条件 = 把 release 的五个 `.sha256` 边车原样入库到 `tools/binaryen-version_132.sha256sums`，把命令里的 `$BINARYEN_SUMS` 换成该路径，并把 repo_reproducible 改 true。原先此条的命令里写的是字面量 `<取证目录>` 占位符 —— 那是一条谁也跑不了的命令，不是闸门。"
+
+[[recount]]
+id = "wasm-bindgen-absent"
+command = "grep -c 'name = \"wasm-bindgen\"' Cargo.lock"
+cwd = "repo"
+repo_reproducible = true
+expect = 0
+
+[[recount]]
+id = "wasm-bindgen-absent-positive-control"
+command = "grep -c 'name = \"serde\"' Cargo.lock"
+cwd = "repo"
+repo_reproducible = true
+expect = 1
+note = "上一条『lock 里没有 wasm-bindgen』的正向对照：同一条 grep 形态在确实存在的包上能命中，说明 0 不是命令写错"
+
+[[recount]]
+id = "pins-artifact-count"
+command = "grep -cE '^  \\[\\[tools\\.[a-z-]+\\.artifacts\\]\\]$' tools/pins.toml"
+cwd = "repo"
+repo_reproducible = true
+expect = 10
+
+[[recount]]
+id = "pins-tool-count"
+command = "grep -cE '^\\[tools\\.[a-z-]+\\]$' tools/pins.toml"
+cwd = "repo"
+repo_reproducible = true
+expect = 4

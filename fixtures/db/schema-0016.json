@@ -1,0 +1,4195 @@
+{
+    "enums": [
+        {
+            "name": "agent_type",
+            "values": [
+                "built_in",
+                "remote_ag_ui"
+            ]
+        },
+        {
+            "name": "agent_visibility",
+            "values": [
+                "public",
+                "private"
+            ]
+        },
+        {
+            "name": "credential_kind",
+            "values": [
+                "model",
+                "connector",
+                "agent",
+                "mcp",
+                "mcp_oauth_client",
+                "mcp_user_token"
+            ]
+        },
+        {
+            "name": "role",
+            "values": [
+                "admin",
+                "user"
+            ]
+        }
+    ],
+    "tables": [
+        {
+            "name": "accounts",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "account_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "provider_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "access_token",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 5
+                },
+                {
+                    "name": "refresh_token",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 6
+                },
+                {
+                    "name": "id_token",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "access_token_expires_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "refresh_token_expires_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                },
+                {
+                    "name": "scope",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 10
+                },
+                {
+                    "name": "password",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 11
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 12
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 13
+                },
+                {
+                    "name": "issuer",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 14
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)",
+                    "name": "accounts_pkey"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX accounts_provider_account_idx ON public.accounts USING btree (provider_id, account_id)",
+                    "name": "accounts_provider_account_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "accounts_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "accounts_user_id_users_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "action_policy",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "mode",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "deny",
+                    "type": "text[]",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "allow",
+                    "type": "text[]",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "updated_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 5
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 6
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX action_policy_pkey ON public.action_policy USING btree (id)",
+                    "name": "action_policy_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "action_policy_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "agent_preferences",
+            "columns": [
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "agent_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "hidden_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 3
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX agent_preferences_user_id_agent_id_pk ON public.agent_preferences USING btree (user_id, agent_id)",
+                    "name": "agent_preferences_user_id_agent_id_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE",
+                    "name": "agent_preferences_agent_id_agents_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (user_id, agent_id)",
+                    "name": "agent_preferences_user_id_agent_id_pk",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "agent_preferences_user_id_users_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "agent_profiles",
+            "columns": [
+                {
+                    "name": "agent_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "owner_user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 2
+                },
+                {
+                    "name": "title",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "role_description",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "avatar_seed",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "visibility",
+                    "type": "agent_visibility",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "deleted_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 9
+                },
+                {
+                    "name": "callback_token_hash",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 10
+                },
+                {
+                    "name": "callback_token_issued_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 11
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX agent_profiles_pkey ON public.agent_profiles USING btree (agent_id)",
+                    "name": "agent_profiles_pkey"
+                },
+                {
+                    "def": "CREATE INDEX agent_profiles_visibility_deleted_idx ON public.agent_profiles USING btree (visibility, deleted_at)",
+                    "name": "agent_profiles_visibility_deleted_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE",
+                    "name": "agent_profiles_agent_id_agents_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL",
+                    "name": "agent_profiles_owner_user_id_users_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (agent_id)",
+                    "name": "agent_profiles_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "agents",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "type",
+                    "type": "agent_type",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "configuration",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "package_id",
+                    "type": "uuid",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 5
+                },
+                {
+                    "name": "override",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 6
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 8
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX agents_pkey ON public.agents USING btree (id)",
+                    "name": "agents_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (package_id) REFERENCES deployment_packages(id) ON DELETE SET NULL",
+                    "name": "agents_package_id_deployment_packages_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "agents_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "audit_checkpoints",
+            "columns": [
+                {
+                    "name": "sequence",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "checkpoint_kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "first_event_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "first_row_hash",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "last_event_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "last_row_hash",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "event_count",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "unlinked_rows_before",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "retention_days",
+                    "type": "integer",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                },
+                {
+                    "name": "signature",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 10
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 11
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE INDEX audit_checkpoints_created_at_idx ON public.audit_checkpoints USING btree (created_at, sequence)",
+                    "name": "audit_checkpoints_created_at_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX audit_checkpoints_pkey ON public.audit_checkpoints USING btree (sequence)",
+                    "name": "audit_checkpoints_pkey"
+                }
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER audit_checkpoints_append_only BEFORE DELETE OR UPDATE ON public.audit_checkpoints FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+                    "name": "audit_checkpoints_append_only"
+                },
+                {
+                    "def": "CREATE TRIGGER audit_checkpoints_no_truncate BEFORE TRUNCATE ON public.audit_checkpoints FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+                    "name": "audit_checkpoints_no_truncate"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((event_count > 0))",
+                    "name": "audit_checkpoints_event_count_positive",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((first_row_hash ~ '^[0-9a-f]{64}$'::text))",
+                    "name": "audit_checkpoints_first_hash_lower_hex",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((((checkpoint_kind = 'genesis'::text) AND (first_event_id = last_event_id) AND (first_row_hash = last_row_hash) AND (event_count = 1) AND (unlinked_rows_before IS NOT NULL) AND (retention_days IS NULL)) OR ((checkpoint_kind = 'periodic'::text) AND (unlinked_rows_before IS NULL) AND (retention_days IS NULL)) OR ((checkpoint_kind = 'closure'::text) AND (unlinked_rows_before IS NULL) AND (retention_days IS NOT NULL))))",
+                    "name": "audit_checkpoints_kind_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((last_row_hash ~ '^[0-9a-f]{64}$'::text))",
+                    "name": "audit_checkpoints_last_hash_lower_hex",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (sequence)",
+                    "name": "audit_checkpoints_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK (((retention_days IS NULL) OR (retention_days >= 1)))",
+                    "name": "audit_checkpoints_retention_days_positive",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((sequence >= 0))",
+                    "name": "audit_checkpoints_sequence_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((signature ~ '^[0-9a-f]{64}$'::text))",
+                    "name": "audit_checkpoints_signature_lower_hex",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((unlinked_rows_before IS NULL) OR (unlinked_rows_before >= 0)))",
+                    "name": "audit_checkpoints_unlinked_rows_nonnegative",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "audit_events",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "uuid",
+                    "default": "gen_random_uuid()",
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "actor_user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 2
+                },
+                {
+                    "name": "event_type",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "target_type",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "target_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 5
+                },
+                {
+                    "name": "payload",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "prev_hash",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "row_hash",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE INDEX audit_events_actor_time_idx ON public.audit_events USING btree (actor_user_id, created_at DESC NULLS LAST, id DESC NULLS LAST)",
+                    "name": "audit_events_actor_time_idx"
+                },
+                {
+                    "def": "CREATE INDEX audit_events_created_at_idx ON public.audit_events USING btree (created_at)",
+                    "name": "audit_events_created_at_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX audit_events_pkey ON public.audit_events USING btree (id)",
+                    "name": "audit_events_pkey"
+                },
+                {
+                    "def": "CREATE INDEX audit_events_target_time_idx ON public.audit_events USING btree (target_type, target_id, created_at DESC NULLS LAST, id DESC NULLS LAST)",
+                    "name": "audit_events_target_time_idx"
+                },
+                {
+                    "def": "CREATE INDEX audit_events_type_time_idx ON public.audit_events USING btree (event_type, created_at DESC NULLS LAST, id DESC NULLS LAST)",
+                    "name": "audit_events_type_time_idx"
+                }
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER audit_events_append_only BEFORE DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION prevent_audit_event_mutation()",
+                    "name": "audit_events_append_only"
+                },
+                {
+                    "def": "CREATE TRIGGER audit_events_no_truncate BEFORE TRUNCATE ON public.audit_events FOR EACH STATEMENT EXECUTE FUNCTION prevent_audit_event_mutation()",
+                    "name": "audit_events_no_truncate"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK (((row_hash IS NOT NULL) OR (prev_hash IS NULL)))",
+                    "name": "audit_events_hash_pair_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "audit_events_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK (((prev_hash IS NULL) OR (prev_hash ~ '^[0-9a-f]{64}$'::text)))",
+                    "name": "audit_events_prev_hash_lower_hex",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((row_hash IS NULL) OR (row_hash ~ '^[0-9a-f]{64}$'::text)))",
+                    "name": "audit_events_row_hash_lower_hex",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "channel_agents",
+            "columns": [
+                {
+                    "name": "channel_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "agent_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 3
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX channel_agents_channel_id_agent_id_pk ON public.channel_agents USING btree (channel_id, agent_id)",
+                    "name": "channel_agents_channel_id_agent_id_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE",
+                    "name": "channel_agents_agent_id_agents_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (channel_id, agent_id)",
+                    "name": "channel_agents_channel_id_agent_id_pk",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE",
+                    "name": "channel_agents_channel_id_channels_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "channel_memberships",
+            "columns": [
+                {
+                    "name": "channel_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 3
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX channel_memberships_channel_id_user_id_pk ON public.channel_memberships USING btree (channel_id, user_id)",
+                    "name": "channel_memberships_channel_id_user_id_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE",
+                    "name": "channel_memberships_channel_id_channels_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (channel_id, user_id)",
+                    "name": "channel_memberships_channel_id_user_id_pk",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "channel_memberships_user_id_users_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "channels",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "suggested_prompts",
+                    "type": "text[]",
+                    "default": "'{}'::text[]",
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "allowed_groups",
+                    "type": "text[]",
+                    "default": "'{}'::text[]",
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "package_id",
+                    "type": "uuid",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 6
+                },
+                {
+                    "name": "override",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "last_message",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "last_message_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                },
+                {
+                    "name": "last_message_agent_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 10
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 11
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 12
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX channels_pkey ON public.channels USING btree (id)",
+                    "name": "channels_pkey"
+                },
+                {
+                    "def": "CREATE INDEX channels_recent_activity_idx ON public.channels USING btree (COALESCE(last_message_at, created_at) DESC)",
+                    "name": "channels_recent_activity_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (last_message_agent_id) REFERENCES agents(id) ON DELETE SET NULL",
+                    "name": "channels_last_message_agent_id_agents_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "FOREIGN KEY (package_id) REFERENCES deployment_packages(id) ON DELETE SET NULL",
+                    "name": "channels_package_id_deployment_packages_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "channels_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "component_exclusions",
+            "columns": [
+                {
+                    "name": "component_name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "agent_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "withheld_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 3
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX component_exclusions_component_name_agent_id_pk ON public.component_exclusions USING btree (component_name, agent_id)",
+                    "name": "component_exclusions_component_name_agent_id_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE",
+                    "name": "component_exclusions_agent_id_agents_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (component_name, agent_id)",
+                    "name": "component_exclusions_component_name_agent_id_pk",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (component_name) REFERENCES components(name) ON DELETE CASCADE",
+                    "name": "component_exclusions_component_name_components_name_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "component_functions",
+            "columns": [
+                {
+                    "name": "component_name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "function_name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "granted_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 3
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX component_functions_component_name_function_name_pk ON public.component_functions USING btree (component_name, function_name)",
+                    "name": "component_functions_component_name_function_name_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (component_name) REFERENCES components(name) ON DELETE CASCADE",
+                    "name": "component_functions_component_name_components_name_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (component_name, function_name)",
+                    "name": "component_functions_component_name_function_name_pk",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "components",
+            "columns": [
+                {
+                    "name": "name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "title",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "draft_description",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "published_description",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 5
+                },
+                {
+                    "name": "published",
+                    "type": "boolean",
+                    "default": "false",
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "published_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "updated_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 9
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 10
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX components_pkey ON public.components USING btree (name)",
+                    "name": "components_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (name)",
+                    "name": "components_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "computer_snapshot",
+            "columns": [
+                {
+                    "name": "computer_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "snapshot_id",
+                    "type": "integer",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "url",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "elements",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "taken_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX computer_snapshot_pkey ON public.computer_snapshot USING btree (computer_id)",
+                    "name": "computer_snapshot_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (computer_id)",
+                    "name": "computer_snapshot_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "credentials",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "uuid",
+                    "default": "gen_random_uuid()",
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "kind",
+                    "type": "credential_kind",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "provider",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "encrypted_value",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "key_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "metadata",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "revoked_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 9
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX credentials_pkey ON public.credentials USING btree (id)",
+                    "name": "credentials_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "credentials_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "deployment_packages",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "uuid",
+                    "default": "gen_random_uuid()",
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "tenant_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "source_path",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "checksum",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "loaded_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX deployment_packages_pkey ON public.deployment_packages USING btree (id)",
+                    "name": "deployment_packages_pkey"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX deployment_packages_tenant_id_unique ON public.deployment_packages USING btree (tenant_id)",
+                    "name": "deployment_packages_tenant_id_unique"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "deployment_packages_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "UNIQUE (tenant_id)",
+                    "name": "deployment_packages_tenant_id_unique",
+                    "type": "u"
+                }
+            ]
+        },
+        {
+            "name": "intelligence_channel_mappings",
+            "columns": [
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "channel_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "thread_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX intelligence_channel_mappings_thread_idx ON public.intelligence_channel_mappings USING btree (thread_id)",
+                    "name": "intelligence_channel_mappings_thread_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX intelligence_channel_mappings_user_id_channel_id_pk ON public.intelligence_channel_mappings USING btree (user_id, channel_id)",
+                    "name": "intelligence_channel_mappings_user_id_channel_id_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE",
+                    "name": "intelligence_channel_mappings_channel_id_channels_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (user_id, channel_id)",
+                    "name": "intelligence_channel_mappings_user_id_channel_id_pk",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "intelligence_channel_mappings_user_id_users_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "intelligence_import_cursors",
+            "columns": [
+                {
+                    "name": "bundle_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "aggregate_kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "deployment_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "cursor",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "last_hash",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "imported_count",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "provenance",
+                    "type": "jsonb",
+                    "default": "'{}'::jsonb",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 9
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX intelligence_import_cursors_pkey ON public.intelligence_import_cursors USING btree (bundle_id, aggregate_kind)",
+                    "name": "intelligence_import_cursors_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((imported_count >= 0))",
+                    "name": "intelligence_import_cursors_count_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((last_hash ~ '^[0-9a-f]{64}$'::text))",
+                    "name": "intelligence_import_cursors_hash_lower_hex",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((bundle_id <> ''::text) AND (deployment_id <> ''::text) AND (cursor <> ''::text)))",
+                    "name": "intelligence_import_cursors_identity_nonempty",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((aggregate_kind = ANY (ARRAY['thread'::text, 'message'::text, 'run_event'::text, 'memory'::text])))",
+                    "name": "intelligence_import_cursors_kind_known",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (bundle_id, aggregate_kind)",
+                    "name": "intelligence_import_cursors_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK ((jsonb_typeof(provenance) = 'object'::text))",
+                    "name": "intelligence_import_cursors_provenance_object",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text])))",
+                    "name": "intelligence_import_cursors_status_known",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "mcp_servers",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "title",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "vendor",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "url",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "provenance",
+                    "type": "text",
+                    "default": "'first-party'::text",
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "credential_id",
+                    "type": "uuid",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 6
+                },
+                {
+                    "name": "tools_refreshed_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "last_error",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "added_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 10
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 11
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX mcp_servers_pkey ON public.mcp_servers USING btree (id)",
+                    "name": "mcp_servers_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (credential_id) REFERENCES credentials(id) ON DELETE RESTRICT",
+                    "name": "mcp_servers_credential_id_credentials_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "mcp_servers_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "mcp_tools",
+            "columns": [
+                {
+                    "name": "server_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "default": "''::text",
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "input_schema",
+                    "type": "jsonb",
+                    "default": "'{}'::jsonb",
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX mcp_tools_server_id_name_pk ON public.mcp_tools USING btree (server_id, name)",
+                    "name": "mcp_tools_server_id_name_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE",
+                    "name": "mcp_tools_server_id_mcp_servers_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (server_id, name)",
+                    "name": "mcp_tools_server_id_name_pk",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "mcp_user_credentials",
+            "columns": [
+                {
+                    "name": "server_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "credential_id",
+                    "type": "uuid",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "scope",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "connected_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 6
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX mcp_user_credentials_server_id_user_id_pk ON public.mcp_user_credentials USING btree (server_id, user_id)",
+                    "name": "mcp_user_credentials_server_id_user_id_pk"
+                },
+                {
+                    "def": "CREATE INDEX mcp_user_credentials_user_idx ON public.mcp_user_credentials USING btree (user_id)",
+                    "name": "mcp_user_credentials_user_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (credential_id) REFERENCES credentials(id)",
+                    "name": "mcp_user_credentials_credential_id_credentials_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE",
+                    "name": "mcp_user_credentials_server_id_mcp_servers_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (server_id, user_id)",
+                    "name": "mcp_user_credentials_server_id_user_id_pk",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "mcp_user_credentials_user_id_users_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "memories",
+            "columns": [
+                {
+                    "name": "memory_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "tenant_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "owner_user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "scope_kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "scope_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 5
+                },
+                {
+                    "name": "memory_kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "content",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "tags",
+                    "type": "text[]",
+                    "default": "'{}'::text[]",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "sensitivity",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 9
+                },
+                {
+                    "name": "source_thread_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 10
+                },
+                {
+                    "name": "source_message_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 11
+                },
+                {
+                    "name": "origin",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 12
+                },
+                {
+                    "name": "created_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 13
+                },
+                {
+                    "name": "supersedes_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 14
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "default": "'active'::text",
+                    "notnull": true,
+                    "ordinal": 15
+                },
+                {
+                    "name": "expires_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 16
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 17
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 18
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX memories_pkey ON public.memories USING btree (memory_id)",
+                    "name": "memories_pkey"
+                },
+                {
+                    "def": "CREATE INDEX memories_recall_idx ON public.memories USING btree (tenant_id, owner_user_id, scope_kind, scope_id, created_at DESC, memory_id) WHERE (status = 'active'::text)",
+                    "name": "memories_recall_idx"
+                },
+                {
+                    "def": "CREATE INDEX memories_search_idx ON public.memories USING gin (to_tsvector('simple'::regconfig, COALESCE(content, ''::text)))",
+                    "name": "memories_search_idx"
+                },
+                {
+                    "def": "CREATE INDEX memories_tags_idx ON public.memories USING gin (tags)",
+                    "name": "memories_tags_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((((status = ANY (ARRAY['active'::text, 'superseded'::text])) AND (content IS NOT NULL) AND (content <> ''::text)) OR ((status = ANY (ARRAY['forbidden'::text, 'deleted'::text])) AND (content IS NULL))))",
+                    "name": "memories_content_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((expires_at IS NULL) OR (expires_at > created_at)))",
+                    "name": "memories_expiry_after_create",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((memory_kind <> 'fact'::text) OR (source_message_id IS NOT NULL)))",
+                    "name": "memories_fact_source_required",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((tenant_id <> ''::text) AND (owner_user_id <> ''::text) AND (created_by <> ''::text)))",
+                    "name": "memories_identity_nonempty",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((origin <> 'verified_import'::text) OR (source_message_id IS NOT NULL)))",
+                    "name": "memories_import_source_required",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((memory_kind = ANY (ARRAY['preference'::text, 'fact'::text])))",
+                    "name": "memories_kind_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((supersedes_id IS NULL) OR (supersedes_id <> memory_id)))",
+                    "name": "memories_no_self_supersede",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((origin = ANY (ARRAY['user_action'::text, 'remember_tool'::text, 'verified_import'::text])))",
+                    "name": "memories_origin_known",
+                    "type": "c"
+                },
+                {
+                    "def": "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "memories_owner_user_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (memory_id)",
+                    "name": "memories_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK ((((scope_kind = 'user'::text) AND (scope_id IS NULL)) OR ((scope_kind = ANY (ARRAY['bot'::text, 'thread'::text])) AND (scope_id IS NOT NULL) AND (scope_id <> ''::text))))",
+                    "name": "memories_scope_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((sensitivity = ANY (ARRAY['normal'::text, 'sensitive'::text])))",
+                    "name": "memories_sensitivity_known",
+                    "type": "c"
+                },
+                {
+                    "def": "FOREIGN KEY (source_thread_id, source_message_id) REFERENCES messages(thread_id, message_id) ON DELETE RESTRICT",
+                    "name": "memories_source_message_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "CHECK (((source_thread_id IS NULL) = (source_message_id IS NULL)))",
+                    "name": "memories_source_pair",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'forbidden'::text, 'deleted'::text])))",
+                    "name": "memories_status_known",
+                    "type": "c"
+                },
+                {
+                    "def": "FOREIGN KEY (supersedes_id) REFERENCES memories(memory_id) ON DELETE SET NULL",
+                    "name": "memories_supersedes_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "CHECK ((array_position(tags, NULL::text) IS NULL))",
+                    "name": "memories_tags_no_null",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((updated_at >= created_at))",
+                    "name": "memories_updated_after_create",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "memory_events",
+            "columns": [
+                {
+                    "name": "memory_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "seq",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "event_type",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "actor_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "metadata",
+                    "type": "jsonb",
+                    "default": "'{}'::jsonb",
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 6
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX memory_events_pkey ON public.memory_events USING btree (memory_id, seq)",
+                    "name": "memory_events_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((actor_id <> ''::text))",
+                    "name": "memory_events_actor_nonempty",
+                    "type": "c"
+                },
+                {
+                    "def": "FOREIGN KEY (memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE",
+                    "name": "memory_events_memory_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "CHECK ((jsonb_typeof(metadata) = 'object'::text))",
+                    "name": "memory_events_metadata_object",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (memory_id, seq)",
+                    "name": "memory_events_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK ((seq >= 0))",
+                    "name": "memory_events_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((event_type = ANY (ARRAY['create'::text, 'supersede'::text, 'correct'::text, 'forbid'::text, 'delete'::text])))",
+                    "name": "memory_events_type_known",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "messages",
+            "columns": [
+                {
+                    "name": "message_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "thread_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "seq",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "role",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "content",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "search_text",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "run_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "actor_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 9
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX messages_pkey ON public.messages USING btree (message_id)",
+                    "name": "messages_pkey"
+                },
+                {
+                    "def": "CREATE INDEX messages_search_idx ON public.messages USING gin (to_tsvector('simple'::regconfig, search_text))",
+                    "name": "messages_search_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX messages_thread_message_key ON public.messages USING btree (thread_id, message_id)",
+                    "name": "messages_thread_message_key"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX messages_thread_seq_key ON public.messages USING btree (thread_id, seq)",
+                    "name": "messages_thread_seq_key"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((content <> 'null'::jsonb))",
+                    "name": "messages_content_not_json_null",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (message_id)",
+                    "name": "messages_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text, 'system'::text, 'tool'::text, 'summary'::text])))",
+                    "name": "messages_role_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((seq >= 0))",
+                    "name": "messages_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "FOREIGN KEY (thread_id) REFERENCES threads(thread_id) ON DELETE CASCADE",
+                    "name": "messages_thread_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "UNIQUE (thread_id, message_id)",
+                    "name": "messages_thread_message_key",
+                    "type": "u"
+                },
+                {
+                    "def": "UNIQUE (thread_id, seq)",
+                    "name": "messages_thread_seq_key",
+                    "type": "u"
+                }
+            ]
+        },
+        {
+            "name": "outbox",
+            "columns": [
+                {
+                    "name": "outbox_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "aggregate_kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "aggregate_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "seq",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "destination",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "delivery_class",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "payload",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "default": "'pending'::text",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "attempt_count",
+                    "type": "integer",
+                    "default": "0",
+                    "notnull": true,
+                    "ordinal": 9
+                },
+                {
+                    "name": "available_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 10
+                },
+                {
+                    "name": "claimed_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 11
+                },
+                {
+                    "name": "claim_expires_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 12
+                },
+                {
+                    "name": "delivered_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 13
+                },
+                {
+                    "name": "last_error_code",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 14
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 15
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 16
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE INDEX outbox_claim_expiry_idx ON public.outbox USING btree (claim_expires_at, outbox_id) WHERE (status = 'delivering'::text)",
+                    "name": "outbox_claim_expiry_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX outbox_delivery_key ON public.outbox USING btree (aggregate_id, seq, destination)",
+                    "name": "outbox_delivery_key"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX outbox_pkey ON public.outbox USING btree (outbox_id)",
+                    "name": "outbox_pkey"
+                },
+                {
+                    "def": "CREATE INDEX outbox_ready_idx ON public.outbox USING btree (status, available_at, outbox_id)",
+                    "name": "outbox_ready_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((attempt_count >= 0))",
+                    "name": "outbox_attempt_count_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((((status = 'delivering'::text) AND (claimed_by IS NOT NULL) AND (claim_expires_at IS NOT NULL)) OR ((status <> 'delivering'::text) AND (claimed_by IS NULL) AND (claim_expires_at IS NULL))))",
+                    "name": "outbox_claim_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((status = 'delivered'::text) = (delivered_at IS NOT NULL)))",
+                    "name": "outbox_delivered_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((delivery_class = ANY (ARRAY['internal'::text, 'idempotent_external'::text])))",
+                    "name": "outbox_delivery_class_replay_safe",
+                    "type": "c"
+                },
+                {
+                    "def": "UNIQUE (aggregate_id, seq, destination)",
+                    "name": "outbox_delivery_key",
+                    "type": "u"
+                },
+                {
+                    "def": "CHECK (((aggregate_kind <> ''::text) AND (aggregate_id <> ''::text) AND (destination <> ''::text)))",
+                    "name": "outbox_identity_nonempty",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (outbox_id)",
+                    "name": "outbox_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK ((seq >= 0))",
+                    "name": "outbox_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((status = ANY (ARRAY['pending'::text, 'delivering'::text, 'delivered'::text, 'dead_letter'::text])))",
+                    "name": "outbox_status_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((updated_at >= created_at) AND (available_at >= created_at) AND ((claim_expires_at IS NULL) OR (claim_expires_at > updated_at)) AND ((delivered_at IS NULL) OR (delivered_at >= created_at))))",
+                    "name": "outbox_time_order",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "plugin_grants",
+            "columns": [
+                {
+                    "name": "kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "ref",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "agent_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "granted_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 4
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 6
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE INDEX plugin_grants_agent_idx ON public.plugin_grants USING btree (agent_id)",
+                    "name": "plugin_grants_agent_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX plugin_grants_kind_ref_agent_id_pk ON public.plugin_grants USING btree (kind, ref, agent_id)",
+                    "name": "plugin_grants_kind_ref_agent_id_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE",
+                    "name": "plugin_grants_agent_id_agents_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (kind, ref, agent_id)",
+                    "name": "plugin_grants_kind_ref_agent_id_pk",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "revoked_access",
+            "columns": [
+                {
+                    "name": "email",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "revoked_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "revoked_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX revoked_access_pkey ON public.revoked_access USING btree (email)",
+                    "name": "revoked_access_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (email)",
+                    "name": "revoked_access_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "run_events",
+            "columns": [
+                {
+                    "name": "run_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "seq",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "thread_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "event_seq",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "event_type",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "payload",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "terminal",
+                    "type": "boolean",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 8
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX run_events_one_terminal_per_run ON public.run_events USING btree (run_id) WHERE terminal",
+                    "name": "run_events_one_terminal_per_run"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX run_events_pkey ON public.run_events USING btree (run_id, seq)",
+                    "name": "run_events_pkey"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX run_events_thread_event_seq_key ON public.run_events USING btree (thread_id, event_seq)",
+                    "name": "run_events_thread_event_seq_key"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((event_seq >= 0))",
+                    "name": "run_events_event_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((payload <> 'null'::jsonb))",
+                    "name": "run_events_payload_not_json_null",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (run_id, seq)",
+                    "name": "run_events_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE",
+                    "name": "run_events_run_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "CHECK ((seq >= 0))",
+                    "name": "run_events_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((terminal = (event_type = ANY (ARRAY['completed'::text, 'failed'::text, 'cancelled'::text, 'reconciliation_required'::text]))))",
+                    "name": "run_events_terminal_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "UNIQUE (thread_id, event_seq)",
+                    "name": "run_events_thread_event_seq_key",
+                    "type": "u"
+                },
+                {
+                    "def": "FOREIGN KEY (thread_id) REFERENCES threads(thread_id) ON DELETE CASCADE",
+                    "name": "run_events_thread_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "CHECK ((event_type = ANY (ARRAY['started'::text, 'semantic_chunk'::text, 'checkpoint'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'reconciliation_required'::text])))",
+                    "name": "run_events_type_known",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "runs",
+            "columns": [
+                {
+                    "name": "run_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "thread_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "bot_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "actor_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "foreground",
+                    "type": "boolean",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "default": "'queued'::text",
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "fencing_token",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "next_event_seq",
+                    "type": "bigint",
+                    "default": "0",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "terminal_event_seq",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                },
+                {
+                    "name": "error_code",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 10
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 11
+                },
+                {
+                    "name": "started_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 12
+                },
+                {
+                    "name": "finished_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 13
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX runs_one_foreground_active_per_thread ON public.runs USING btree (thread_id) WHERE (foreground AND (status = ANY (ARRAY['queued'::text, 'running'::text, 'reconciliation_required'::text])))",
+                    "name": "runs_one_foreground_active_per_thread"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX runs_pkey ON public.runs USING btree (run_id)",
+                    "name": "runs_pkey"
+                },
+                {
+                    "def": "CREATE INDEX runs_thread_created_idx ON public.runs USING btree (thread_id, created_at DESC, run_id)",
+                    "name": "runs_thread_created_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK (((status <> ALL (ARRAY['failed'::text, 'reconciliation_required'::text])) OR (error_code IS NOT NULL)))",
+                    "name": "runs_error_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((fencing_token >= 0))",
+                    "name": "runs_fencing_token_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((bot_id <> ''::text) AND (actor_id <> ''::text)))",
+                    "name": "runs_identity_nonempty",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((next_event_seq >= 0))",
+                    "name": "runs_next_event_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (run_id)",
+                    "name": "runs_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK ((((status = 'queued'::text) AND (started_at IS NULL)) OR (status = 'cancelled'::text) OR ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'reconciliation_required'::text])) AND (started_at IS NOT NULL))))",
+                    "name": "runs_started_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'reconciliation_required'::text])))",
+                    "name": "runs_status_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((terminal_event_seq IS NULL) OR (terminal_event_seq >= 0)))",
+                    "name": "runs_terminal_event_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((((status = ANY (ARRAY['queued'::text, 'running'::text])) AND (terminal_event_seq IS NULL) AND (finished_at IS NULL)) OR ((status = ANY (ARRAY['completed'::text, 'failed'::text, 'cancelled'::text, 'reconciliation_required'::text])) AND (terminal_event_seq IS NOT NULL) AND (finished_at IS NOT NULL))))",
+                    "name": "runs_terminal_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "FOREIGN KEY (thread_id) REFERENCES threads(thread_id) ON DELETE CASCADE",
+                    "name": "runs_thread_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "CHECK ((((started_at IS NULL) OR (started_at >= created_at)) AND ((finished_at IS NULL) OR (finished_at >= created_at)) AND ((finished_at IS NULL) OR (started_at IS NULL) OR (finished_at >= started_at))))",
+                    "name": "runs_time_order",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "sandboxed_components",
+            "columns": [
+                {
+                    "name": "name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "title",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "draft_description",
+                    "type": "text",
+                    "default": "''::text",
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "draft_html",
+                    "type": "text",
+                    "default": "''::text",
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "draft_css",
+                    "type": "text",
+                    "default": "''::text",
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "draft_js_functions",
+                    "type": "text",
+                    "default": "''::text",
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "draft_argument_schema",
+                    "type": "jsonb",
+                    "default": "'{}'::jsonb",
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "published_description",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "published_html",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                },
+                {
+                    "name": "published_css",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 10
+                },
+                {
+                    "name": "published_js_functions",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 11
+                },
+                {
+                    "name": "published_argument_schema",
+                    "type": "jsonb",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 12
+                },
+                {
+                    "name": "sample_arguments",
+                    "type": "jsonb",
+                    "default": "'{}'::jsonb",
+                    "notnull": true,
+                    "ordinal": 13
+                },
+                {
+                    "name": "revision",
+                    "type": "integer",
+                    "default": "0",
+                    "notnull": true,
+                    "ordinal": 14
+                },
+                {
+                    "name": "published",
+                    "type": "boolean",
+                    "default": "false",
+                    "notnull": true,
+                    "ordinal": 15
+                },
+                {
+                    "name": "published_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 16
+                },
+                {
+                    "name": "authored_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 17
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 18
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 19
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX sandboxed_components_pkey ON public.sandboxed_components USING btree (name)",
+                    "name": "sandboxed_components_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (name)",
+                    "name": "sandboxed_components_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "sessions",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "token",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "expires_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "ip_address",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 5
+                },
+                {
+                    "name": "user_agent",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 6
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "auth_generation",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX sessions_pkey ON public.sessions USING btree (id)",
+                    "name": "sessions_pkey"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX sessions_token_unique ON public.sessions USING btree (token)",
+                    "name": "sessions_token_unique"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK (((auth_generation IS NULL) OR (auth_generation >= 0)))",
+                    "name": "sessions_auth_generation_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "sessions_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "UNIQUE (token)",
+                    "name": "sessions_token_unique",
+                    "type": "u"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "sessions_user_id_users_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "skills",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "owner_user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 2
+                },
+                {
+                    "name": "slug",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "title",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "summary",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "instructions",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "origin",
+                    "type": "text",
+                    "default": "'yours'::text",
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "installed_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 9
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 10
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE INDEX skills_owner_idx ON public.skills USING btree (owner_user_id)",
+                    "name": "skills_owner_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX skills_pkey ON public.skills USING btree (id)",
+                    "name": "skills_pkey"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX skills_slug_key ON public.skills USING btree (slug)",
+                    "name": "skills_slug_key"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "skills_owner_user_id_users_id_fk",
+                    "type": "f"
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "skills_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "sso_providers",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "issuer",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "oidc_config",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 3
+                },
+                {
+                    "name": "saml_config",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 4
+                },
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 5
+                },
+                {
+                    "name": "provider_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "organization_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "domain",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 8
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX sso_providers_pkey ON public.sso_providers USING btree (id)",
+                    "name": "sso_providers_pkey"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX sso_providers_provider_id_unique ON public.sso_providers USING btree (provider_id)",
+                    "name": "sso_providers_provider_id_unique"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "sso_providers_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "UNIQUE (provider_id)",
+                    "name": "sso_providers_provider_id_unique",
+                    "type": "u"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL",
+                    "name": "sso_providers_user_id_users_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "thread_leases",
+            "columns": [
+                {
+                    "name": "thread_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "owner_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "fencing_token",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "acquired_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "expires_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE INDEX thread_leases_expiry_idx ON public.thread_leases USING btree (expires_at, thread_id)",
+                    "name": "thread_leases_expiry_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX thread_leases_pkey ON public.thread_leases USING btree (thread_id)",
+                    "name": "thread_leases_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((expires_at > acquired_at))",
+                    "name": "thread_leases_expiry_after_acquire",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((fencing_token >= 0))",
+                    "name": "thread_leases_fencing_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((owner_id <> ''::text))",
+                    "name": "thread_leases_owner_nonempty",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (thread_id)",
+                    "name": "thread_leases_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (thread_id) REFERENCES threads(thread_id) ON DELETE CASCADE",
+                    "name": "thread_leases_thread_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "CHECK ((updated_at >= acquired_at))",
+                    "name": "thread_leases_updated_after_acquire",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "thread_memberships",
+            "columns": [
+                {
+                    "name": "thread_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 3
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX thread_memberships_pkey ON public.thread_memberships USING btree (thread_id, user_id)",
+                    "name": "thread_memberships_pkey"
+                },
+                {
+                    "def": "CREATE INDEX thread_memberships_user_id_idx ON public.thread_memberships USING btree (user_id, thread_id)",
+                    "name": "thread_memberships_user_id_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (thread_id, user_id)",
+                    "name": "thread_memberships_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (thread_id) REFERENCES threads(thread_id) ON DELETE CASCADE",
+                    "name": "thread_memberships_thread_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "thread_memberships_user_id_fkey",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "threads",
+            "columns": [
+                {
+                    "name": "thread_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "tenant_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "deployment_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "created_by",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "anchor_kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "anchor_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "title",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "default": "'active'::text",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "next_message_seq",
+                    "type": "bigint",
+                    "default": "0",
+                    "notnull": true,
+                    "ordinal": 9
+                },
+                {
+                    "name": "next_event_seq",
+                    "type": "bigint",
+                    "default": "0",
+                    "notnull": true,
+                    "ordinal": 10
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 11
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 12
+                },
+                {
+                    "name": "deleted_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 13
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE INDEX threads_anchor_idx ON public.threads USING btree (tenant_id, anchor_kind, anchor_id, created_at DESC)",
+                    "name": "threads_anchor_idx"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX threads_pkey ON public.threads USING btree (thread_id)",
+                    "name": "threads_pkey"
+                },
+                {
+                    "def": "CREATE INDEX threads_tenant_created_idx ON public.threads USING btree (tenant_id, created_at DESC, thread_id)",
+                    "name": "threads_tenant_created_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((anchor_kind = ANY (ARRAY['channel'::text, 'direct_bot'::text])))",
+                    "name": "threads_anchor_kind_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((status = 'deleted'::text) = (deleted_at IS NOT NULL)))",
+                    "name": "threads_deleted_shape",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((tenant_id <> ''::text) AND (deployment_id <> ''::text) AND (created_by <> ''::text) AND (anchor_id <> ''::text)))",
+                    "name": "threads_identity_nonempty",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((next_event_seq >= 0))",
+                    "name": "threads_next_event_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((next_message_seq >= 0))",
+                    "name": "threads_next_message_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (thread_id)",
+                    "name": "threads_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text, 'deleted'::text])))",
+                    "name": "threads_status_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((updated_at >= created_at) AND ((deleted_at IS NULL) OR (deleted_at >= created_at))))",
+                    "name": "threads_time_order",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "tool_attempts",
+            "columns": [
+                {
+                    "name": "tool_call_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "attempt_seq",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "attempt_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "capability_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 4
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "commit_state",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 6
+                },
+                {
+                    "name": "output_bytes",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 7
+                },
+                {
+                    "name": "duration_ms",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 8
+                },
+                {
+                    "name": "error_code",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                },
+                {
+                    "name": "started_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 10
+                },
+                {
+                    "name": "finished_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 11
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 12
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX tool_attempts_attempt_id_key ON public.tool_attempts USING btree (attempt_id)",
+                    "name": "tool_attempts_attempt_id_key"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX tool_attempts_capability_id_key ON public.tool_attempts USING btree (capability_id)",
+                    "name": "tool_attempts_capability_id_key"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX tool_attempts_pkey ON public.tool_attempts USING btree (tool_call_id, attempt_seq)",
+                    "name": "tool_attempts_pkey"
+                },
+                {
+                    "def": "CREATE INDEX tool_attempts_status_idx ON public.tool_attempts USING btree (status, created_at)",
+                    "name": "tool_attempts_status_idx"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "UNIQUE (attempt_id)",
+                    "name": "tool_attempts_attempt_id_key",
+                    "type": "u"
+                },
+                {
+                    "def": "CHECK ((attempt_seq >= 0))",
+                    "name": "tool_attempts_attempt_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "UNIQUE (capability_id)",
+                    "name": "tool_attempts_capability_id_key",
+                    "type": "u"
+                },
+                {
+                    "def": "CHECK (((commit_state IS NULL) OR (commit_state = ANY (ARRAY['committed'::text, 'not_committed'::text, 'unknown'::text]))))",
+                    "name": "tool_attempts_commit_state_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((duration_ms IS NULL) OR (duration_ms >= 0)))",
+                    "name": "tool_attempts_duration_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((output_bytes IS NULL) OR ((output_bytes >= 0) AND (output_bytes <= '4294967295'::bigint))))",
+                    "name": "tool_attempts_output_bytes_u32",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (tool_call_id, attempt_seq)",
+                    "name": "tool_attempts_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "CHECK (((status <> 'reconciliation_required'::text) OR (commit_state = 'unknown'::text)))",
+                    "name": "tool_attempts_reconciliation_is_unknown",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((status = ANY (ARRAY['decision_recorded'::text, 'executing'::text, 'completed'::text, 'reconciliation_required'::text, 'aborted'::text])))",
+                    "name": "tool_attempts_status_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((finished_at IS NULL) OR ((started_at IS NOT NULL) AND (finished_at >= started_at))))",
+                    "name": "tool_attempts_time_order",
+                    "type": "c"
+                },
+                {
+                    "def": "FOREIGN KEY (tool_call_id) REFERENCES tool_calls(tool_call_id) ON DELETE CASCADE",
+                    "name": "tool_attempts_tool_call_id_fkey",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "tool_calls",
+            "columns": [
+                {
+                    "name": "tool_call_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "run_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "call_seq",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "decision_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "actor_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "bot_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "tool_name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "schema_hash",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "catalog_generation",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 9
+                },
+                {
+                    "name": "args_hash",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 10
+                },
+                {
+                    "name": "target_kind",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 11
+                },
+                {
+                    "name": "target_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 12
+                },
+                {
+                    "name": "effect",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 13
+                },
+                {
+                    "name": "effect_downgraded",
+                    "type": "boolean",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 14
+                },
+                {
+                    "name": "idempotency",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 15
+                },
+                {
+                    "name": "idempotency_key",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 16
+                },
+                {
+                    "name": "approval_class",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 17
+                },
+                {
+                    "name": "policy_version",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 18
+                },
+                {
+                    "name": "decided_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 19
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX tool_calls_decision_id_key ON public.tool_calls USING btree (decision_id)",
+                    "name": "tool_calls_decision_id_key"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX tool_calls_pkey ON public.tool_calls USING btree (tool_call_id)",
+                    "name": "tool_calls_pkey"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX tool_calls_run_call_seq_key ON public.tool_calls USING btree (run_id, call_seq)",
+                    "name": "tool_calls_run_call_seq_key"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((approval_class = ANY (ARRAY['not_required'::text, 'once_per_run'::text, 'every_call'::text])))",
+                    "name": "tool_calls_approval_class_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((args_hash ~ '^[0-9a-f]{64}$'::text))",
+                    "name": "tool_calls_args_hash_lower_hex",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((call_seq >= 0))",
+                    "name": "tool_calls_call_seq_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((catalog_generation >= 0))",
+                    "name": "tool_calls_catalog_generation_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "UNIQUE (decision_id)",
+                    "name": "tool_calls_decision_id_key",
+                    "type": "u"
+                },
+                {
+                    "def": "CHECK ((effect = ANY (ARRAY['read'::text, 'write'::text, 'execute'::text, 'network'::text, 'credential'::text])))",
+                    "name": "tool_calls_effect_known",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK (((idempotency_key IS NULL) OR (idempotency_key <> ''::text)))",
+                    "name": "tool_calls_idempotency_key_nonempty",
+                    "type": "c"
+                },
+                {
+                    "def": "CHECK ((idempotency = ANY (ARRAY['idempotent'::text, 'keyed'::text, 'non_idempotent'::text])))",
+                    "name": "tool_calls_idempotency_known",
+                    "type": "c"
+                },
+                {
+                    "def": "PRIMARY KEY (tool_call_id)",
+                    "name": "tool_calls_pkey",
+                    "type": "p"
+                },
+                {
+                    "def": "UNIQUE (run_id, call_seq)",
+                    "name": "tool_calls_run_call_seq_key",
+                    "type": "u"
+                },
+                {
+                    "def": "FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE RESTRICT NOT VALID",
+                    "name": "tool_calls_run_id_fkey",
+                    "type": "f"
+                },
+                {
+                    "def": "CHECK ((schema_hash ~ '^[0-9a-f]{64}$'::text))",
+                    "name": "tool_calls_schema_hash_lower_hex",
+                    "type": "c"
+                }
+            ]
+        },
+        {
+            "name": "user_roles",
+            "columns": [
+                {
+                    "name": "user_id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "role",
+                    "type": "role",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 3
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX user_roles_user_id_role_pk ON public.user_roles USING btree (user_id, role)",
+                    "name": "user_roles_user_id_role_pk"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (user_id, role)",
+                    "name": "user_roles_user_id_role_pk",
+                    "type": "p"
+                },
+                {
+                    "def": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+                    "name": "user_roles_user_id_users_id_fk",
+                    "type": "f"
+                }
+            ]
+        },
+        {
+            "name": "users",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "email",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 3
+                },
+                {
+                    "name": "image",
+                    "type": "text",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 4
+                },
+                {
+                    "name": "email_verified",
+                    "type": "boolean",
+                    "default": "false",
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "groups",
+                    "type": "text[]",
+                    "default": "'{}'::text[]",
+                    "notnull": true,
+                    "ordinal": 6
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 7
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 8
+                },
+                {
+                    "name": "auth_generation",
+                    "type": "bigint",
+                    "default": null,
+                    "notnull": false,
+                    "ordinal": 9
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX users_email_unique ON public.users USING btree (email)",
+                    "name": "users_email_unique"
+                },
+                {
+                    "def": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)",
+                    "name": "users_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK (((auth_generation IS NULL) OR (auth_generation >= 0)))",
+                    "name": "users_auth_generation_nonnegative",
+                    "type": "c"
+                },
+                {
+                    "def": "UNIQUE (email)",
+                    "name": "users_email_unique",
+                    "type": "u"
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "users_pkey",
+                    "type": "p"
+                }
+            ]
+        },
+        {
+            "name": "verifications",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 1
+                },
+                {
+                    "name": "identifier",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 2
+                },
+                {
+                    "name": "value",
+                    "type": "text",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 3
+                },
+                {
+                    "name": "expires_at",
+                    "type": "timestamp with time zone",
+                    "default": null,
+                    "notnull": true,
+                    "ordinal": 4
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 5
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "default": "now()",
+                    "notnull": true,
+                    "ordinal": 6
+                }
+            ],
+            "indexes": [
+                {
+                    "def": "CREATE UNIQUE INDEX verifications_pkey ON public.verifications USING btree (id)",
+                    "name": "verifications_pkey"
+                }
+            ],
+            "triggers": [
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "verifications_pkey",
+                    "type": "p"
+                }
+            ]
+        }
+    ],
+    "functions": [
+        {
+            "def": "CREATE OR REPLACE FUNCTION public.prevent_audit_event_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nDECLARE\n  retention_days integer;\nBEGIN\n  -- Answered before anything else is read, so no setting and no missing OLD record can change it.\n  IF TG_OP = 'TRUNCATE' OR TG_OP = 'UPDATE' THEN\n    RAISE EXCEPTION 'Audit events are append-only';\n  END IF;\n\n  -- `true` so a session that never set it reads NULL instead of raising, which is the ordinary case\n  -- and has to stay a plain refusal.\n  BEGIN\n    retention_days := nullif(current_setting('openbot.audit_retention_days', true), '')::integer;\n  EXCEPTION WHEN others THEN\n    retention_days := NULL;\n  END;\n\n  IF retention_days IS NULL OR retention_days < 1 THEN\n    RAISE EXCEPTION 'Audit events are append-only';\n  END IF;\n\n  IF OLD.created_at >= now() - (retention_days || ' days')::interval THEN\n    RAISE EXCEPTION 'Audit events are append-only within the retention window';\n  END IF;\n\n  RETURN OLD;\nEND;\n$function$\n",
+            "name": "prevent_audit_event_mutation"
+        }
+    ],
+    "extensions": [
+    ]
+}

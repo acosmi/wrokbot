@@ -1,0 +1,336 @@
+{
+  "source_zip_sha256": "53831c8def65621f88cae315cdb38ac70db1d937062df35c93546efb00260a98",
+  "mappings": {
+    "IconAlertTriangle": "triangle-alert",
+    "IconLayoutSidebar": "panel-left",
+    "IconArrowDown": "arrow-down",
+    "IconListDetails": "list-checks",
+    "IconArrowLeft": "arrow-left",
+    "IconLock": "lock",
+    "IconArrowUp": "arrow-up",
+    "IconLogout": "log-out",
+    "IconArrowUpRight": "arrow-up-right",
+    "IconPlayerStopFilled": "circle-stop",
+    "IconBolt": "zap",
+    "IconPlug": "plug",
+    "IconBox": "box",
+    "IconPlus": "plus",
+    "IconBrandGoogleDrive": "brand/google-drive.svg",
+    "IconPresentation": "presentation",
+    "IconBuildingBank": "landmark",
+    "IconPuzzle": "puzzle",
+    "IconCheck": "check",
+    "IconRefresh": "refresh-cw",
+    "IconChevronDown": "chevron-down",
+    "IconSearch": "search",
+    "IconChevronLeft": "chevron-left",
+    "IconSelector": "chevrons-up-down",
+    "IconChevronRight": "chevron-right",
+    "IconSettings": "settings",
+    "IconChevronUp": "chevron-up",
+    "IconShieldCheck": "shield-check",
+    "IconClock": "clock",
+    "IconShieldLock": "shield-lock",
+    "IconCode": "code",
+    "IconTable": "table",
+    "IconDatabase": "database",
+    "IconTag": "tag",
+    "IconDeviceDesktop": "monitor",
+    "IconTerminal2": "square-terminal",
+    "IconDots": "ellipsis",
+    "IconTrash": "trash-2",
+    "IconExternalLink": "external-link",
+    "IconUser": "user",
+    "IconFile": "file",
+    "IconUsers": "users",
+    "IconFileText": "file-text",
+    "IconWorld": "globe",
+    "IconFolder": "folder",
+    "IconKey": "key",
+    "IconLayoutGrid": "layout-grid"
+  },
+  "entries": [
+    {
+      "id": "icon-IconAlertTriangle",
+      "target": "openbot_ui::icons::Icon::TriangleAlert",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/components/$name.tsx::IconAlertTriangle"
+    },
+    {
+      "id": "icon-IconArrowDown",
+      "target": "openbot_ui::icons::Icon::ArrowDown",
+      "status": "done",
+      "upstream": "app/src/components/ui/message-scroller.tsx::IconArrowDown"
+    },
+    {
+      "id": "icon-IconArrowLeft",
+      "target": "openbot_ui::icons::Icon::ArrowLeft",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconArrowLeft"
+    },
+    {
+      "id": "icon-IconArrowUp",
+      "target": "openbot_ui::icons::Icon::ArrowUp",
+      "status": "done",
+      "upstream": "app/src/components/channels/composer/composer.tsx::IconArrowUp"
+    },
+    {
+      "id": "icon-IconArrowUpRight",
+      "target": "openbot_ui::icons::Icon::ArrowUpRight",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/plugins/$key.tsx::IconArrowUpRight"
+    },
+    {
+      "id": "icon-IconBolt",
+      "target": "openbot_ui::icons::Icon::Zap",
+      "status": "done",
+      "upstream": "app/src/components/app-sidebar/app-sidebar.tsx::IconBolt"
+    },
+    {
+      "id": "icon-IconBox",
+      "target": "openbot_ui::icons::Icon::Box",
+      "status": "done",
+      "upstream": "app/src/components/app-sidebar/app-sidebar.tsx::IconBox"
+    },
+    {
+      "id": "icon-IconBrandGoogleDrive",
+      "target": "openbot_ui::icons::brand::GoogleDrive",
+      "status": "todo",
+      "upstream": "app/src/routes/_authed/admin/plugins/index.tsx::IconBrandGoogleDrive"
+    },
+    {
+      "id": "icon-IconBuildingBank",
+      "target": "openbot_ui::icons::Icon::Landmark",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconBuildingBank"
+    },
+    {
+      "id": "icon-IconCheck",
+      "target": "openbot_ui::icons::Icon::Check",
+      "status": "done",
+      "upstream": "app/src/components/ui/combobox.tsx::IconCheck"
+    },
+    {
+      "id": "icon-IconChevronDown",
+      "target": "openbot_ui::icons::Icon::ChevronDown",
+      "status": "done",
+      "upstream": "app/src/components/ui/combobox.tsx::IconChevronDown"
+    },
+    {
+      "id": "icon-IconChevronLeft",
+      "target": "openbot_ui::icons::Icon::ChevronLeft",
+      "status": "done",
+      "upstream": "app/src/components/layout/page-shell.tsx::IconChevronLeft"
+    },
+    {
+      "id": "icon-IconChevronRight",
+      "target": "openbot_ui::icons::Icon::ChevronRight",
+      "status": "done",
+      "upstream": "app/src/components/ui/dropdown-menu.tsx::IconChevronRight"
+    },
+    {
+      "id": "icon-IconChevronUp",
+      "target": "openbot_ui::icons::Icon::ChevronUp",
+      "status": "done",
+      "upstream": "app/src/components/ui/select.tsx::IconChevronUp"
+    },
+    {
+      "id": "icon-IconClock",
+      "target": "openbot_ui::icons::Icon::Clock",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/components/$name.tsx::IconClock"
+    },
+    {
+      "id": "icon-IconCode",
+      "target": "openbot_ui::icons::Icon::Code",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconCode"
+    },
+    {
+      "id": "icon-IconDatabase",
+      "target": "openbot_ui::icons::Icon::Database",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/components/$name.tsx::IconDatabase"
+    },
+    {
+      "id": "icon-IconDeviceDesktop",
+      "target": "openbot_ui::icons::Icon::Monitor",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconDeviceDesktop"
+    },
+    {
+      "id": "icon-IconDots",
+      "target": "openbot_ui::icons::Icon::Ellipsis",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/_app/skills.tsx::IconDots"
+    },
+    {
+      "id": "icon-IconExternalLink",
+      "target": "openbot_ui::icons::Icon::ExternalLink",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/plugins/$key.tsx::IconExternalLink"
+    },
+    {
+      "id": "icon-IconFile",
+      "target": "openbot_ui::icons::Icon::File",
+      "status": "done",
+      "upstream": "app/src/components/computer/activity-log.tsx::IconFile"
+    },
+    {
+      "id": "icon-IconFileText",
+      "target": "openbot_ui::icons::Icon::FileText",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconFileText"
+    },
+    {
+      "id": "icon-IconFolder",
+      "target": "openbot_ui::icons::Icon::Folder",
+      "status": "done",
+      "upstream": "app/src/components/computer/activity-log.tsx::IconFolder"
+    },
+    {
+      "id": "icon-IconKey",
+      "target": "openbot_ui::icons::Icon::Key",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconKey"
+    },
+    {
+      "id": "icon-IconLayoutGrid",
+      "target": "openbot_ui::icons::Icon::LayoutGrid",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconLayoutGrid"
+    },
+    {
+      "id": "icon-IconLayoutSidebar",
+      "target": "openbot_ui::icons::Icon::PanelLeft",
+      "status": "done",
+      "upstream": "app/src/components/ui/sidebar.tsx::IconLayoutSidebar"
+    },
+    {
+      "id": "icon-IconListDetails",
+      "target": "openbot_ui::icons::Icon::ListChecks",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconListDetails"
+    },
+    {
+      "id": "icon-IconLock",
+      "target": "openbot_ui::icons::Icon::Lock",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/people.tsx::IconLock"
+    },
+    {
+      "id": "icon-IconLogout",
+      "target": "openbot_ui::icons::Icon::LogOut",
+      "status": "done",
+      "upstream": "app/src/components/app-sidebar/app-sidebar.tsx::IconLogout"
+    },
+    {
+      "id": "icon-IconPlayerStopFilled",
+      "target": "openbot_ui::icons::Icon::CircleStop",
+      "status": "done",
+      "upstream": "app/src/components/channels/composer/composer.tsx::IconPlayerStopFilled"
+    },
+    {
+      "id": "icon-IconPlug",
+      "target": "openbot_ui::icons::Icon::Plug",
+      "status": "done",
+      "upstream": "app/src/components/settings/settings-sidebar.tsx::IconPlug"
+    },
+    {
+      "id": "icon-IconPlus",
+      "target": "openbot_ui::icons::Icon::Plus",
+      "status": "done",
+      "upstream": "app/src/components/app-sidebar/app-sidebar.tsx::IconPlus"
+    },
+    {
+      "id": "icon-IconPresentation",
+      "target": "openbot_ui::icons::Icon::Presentation",
+      "status": "done",
+      "upstream": "app/src/lib/markdown.tsx::IconPresentation"
+    },
+    {
+      "id": "icon-IconPuzzle",
+      "target": "openbot_ui::icons::Icon::Puzzle",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconPuzzle"
+    },
+    {
+      "id": "icon-IconRefresh",
+      "target": "openbot_ui::icons::Icon::RefreshCw",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/audit.tsx::IconRefresh"
+    },
+    {
+      "id": "icon-IconSearch",
+      "target": "openbot_ui::icons::Icon::Search",
+      "status": "done",
+      "upstream": "app/src/components/app-sidebar/app-sidebar.tsx::IconSearch"
+    },
+    {
+      "id": "icon-IconSelector",
+      "target": "openbot_ui::icons::Icon::ChevronsUpDown",
+      "status": "done",
+      "upstream": "app/src/components/ui/select.tsx::IconSelector"
+    },
+    {
+      "id": "icon-IconSettings",
+      "target": "openbot_ui::icons::Icon::Settings",
+      "status": "done",
+      "upstream": "app/src/components/app-sidebar/app-sidebar.tsx::IconSettings"
+    },
+    {
+      "id": "icon-IconShieldCheck",
+      "target": "openbot_ui::icons::Icon::ShieldCheck",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconShieldCheck"
+    },
+    {
+      "id": "icon-IconShieldLock",
+      "target": "openbot_ui::icons::Icon::ShieldLock",
+      "status": "done",
+      "upstream": "app/src/components/app-sidebar/app-sidebar.tsx::IconShieldLock"
+    },
+    {
+      "id": "icon-IconTable",
+      "target": "openbot_ui::icons::Icon::Table",
+      "status": "done",
+      "upstream": "app/src/lib/markdown.tsx::IconTable"
+    },
+    {
+      "id": "icon-IconTag",
+      "target": "openbot_ui::icons::Icon::Tag",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/components/$name.tsx::IconTag"
+    },
+    {
+      "id": "icon-IconTerminal2",
+      "target": "openbot_ui::icons::Icon::SquareTerminal",
+      "status": "done",
+      "upstream": "app/src/components/computer/activity-log.tsx::IconTerminal2"
+    },
+    {
+      "id": "icon-IconTrash",
+      "target": "openbot_ui::icons::Icon::Trash2",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/identity-providers.tsx::IconTrash"
+    },
+    {
+      "id": "icon-IconUser",
+      "target": "openbot_ui::icons::Icon::User",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/people.tsx::IconUser"
+    },
+    {
+      "id": "icon-IconUsers",
+      "target": "openbot_ui::icons::Icon::Users",
+      "status": "done",
+      "upstream": "app/src/components/admin/admin-sidebar.tsx::IconUsers"
+    },
+    {
+      "id": "icon-IconWorld",
+      "target": "openbot_ui::icons::Icon::Globe",
+      "status": "done",
+      "upstream": "app/src/routes/_authed/admin/components/$name.tsx::IconWorld"
+    }
+  ]
+}
