@@ -2,7 +2,7 @@
   <img src="crates/openbot-ui/assets/brand/wrok-bot-motion.gif" width="160" height="160" alt="Wrok Bot 动态 Logo">
 </p>
 
-<p align="center"><a href="crates/openbot-ui/assets/brand/wrok-bot-logo-1024.gif">1024 高清动态 Logo</a></p>
+<p align="center"><a href=".github/assets/wrok-bot-logo-1024.gif">1024 高清动态 Logo</a></p>
 
 <h1 align="center">Wrok Bot</h1>
 

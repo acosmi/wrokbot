@@ -90,6 +90,7 @@
     "git@github.com:acosmi/wrokbot.git"
   ],
   "file_size_limits": {
-    "crates/openbot-ui/assets/brand/wrok-bot-logo-1024.gif": 31457280
+    "crates/openbot-ui/assets/brand/wrok-bot-logo-1024.gif": 31457280,
+    ".github/assets/wrok-bot-logo-1024.gif": 31457280
   }
 }
