@@ -11,6 +11,7 @@
     "LICENSE",
     "NOTICE",
     "README.md",
+    "README.zh-CN.md",
     "apps",
     "crates",
     "deny.toml",
@@ -61,6 +62,7 @@
   ],
   "documents": [
     "README.md",
+    "README.zh-CN.md",
     "apps/wrok-bot-mobile/README.md",
     "crates/openbot-ui/assets/fonts/LICENSE.txt",
     "crates/openbot-ui/assets/notices/markdown/README.txt",

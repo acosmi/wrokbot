@@ -1,47 +1,49 @@
 <p align="center">
-  <img src="crates/openbot-ui/assets/brand/wrok-bot-motion.gif" width="160" height="160" alt="Wrok Bot 动态 Logo">
+  <img src="crates/openbot-ui/assets/brand/wrok-bot-motion.gif" width="160" height="160" alt="Wrok Bot animated logo">
 </p>
 
 <h1 align="center">Wrok Bot</h1>
 
-<p align="center">AI 工作台 · 智能体协作 · 浏览器与电脑操作</p>
+<p align="center"><strong>English</strong> | <a href="README.zh-CN.md">简体中文</a></p>
 
-Wrok Bot 是使用 Rust 构建的 AI 工作台，包含桌面宿主、服务端、Web 界面和开发中的移动客户端。项目目前处于开发验证阶段，首版优先面向 macOS。
+<p align="center">AI workbench · Agent collaboration · Browser and computer interaction</p>
 
-## 当前进度
+Wrok Bot is an AI workbench built with Rust, with a desktop host, server, web interface, and a mobile client under development. The project is currently in development and validation, with macOS as the first release platform.
 
-状态更新：2026-09-07。以下依据截至该日的开发与验收记录；分项测试通过不代表安装包或完整产品已经验收。
+## Current progress
 
-| 模块 | 当前情况 | 首版仍需完成 |
+Status as of September 7, 2026, based on the development and validation records available on that date. Passing individual checks does not mean the installer or the complete product has passed release validation.
+
+| Module | Current status | Remaining work for the first release |
 | --- | --- | --- |
-| 工作台与界面 | 品牌、频道、同事、技能、记忆及管理界面已有实现；已有 UI 单测和 Web 构建验证 | macOS 实际窗口的完整操作、键盘与可访问性验收 |
-| 本机服务与数据 | 本地服务、PostgreSQL、会话与数据持久化已有分项验证 | 干净安装、凭据访问、稳定启动退出、升级与恢复验证 |
-| 模型接入 | 自定义连接管理及共享推理已有实现；网关传输代码待组合验收 | 网关、账户桥接、自定义模型的选择、真实对话、工具、取消和恢复闭环 |
-| 系统确认与授权 | 本机确认状态机、窗口生命周期及相关测试已有实现 | 正式签名 App 上的原生认证、取消、锁屏和睡眠验证 |
-| 浏览器与电脑操作 | Engine、画面传输、控制权限与输入已有分项实现 | 产品内真实操作、人工接管、停止和故障恢复的完整验证 |
-| 移动客户端 | 共享页面源码和本地 Web 预览可用，已有 iOS/Android 资源编译记录 | 真实账户、设备绑定、原生安装及各平台真机验收；不计入 macOS 首版完成范围 |
+| Workbench and UI | Branding, channels, coworkers, skills, memory, and administration screens are implemented; UI unit tests and web builds have been validated | Complete workflow, keyboard, and accessibility validation in actual macOS windows |
+| Local services and data | Local services, PostgreSQL, sessions, and persistence have passed individual checks | Clean installation, credential access, reliable startup and shutdown, upgrades, and recovery validation |
+| Model connections | Custom connection management and shared inference are implemented; gateway transport awaits integration validation | End-to-end model selection, live conversations, tools, cancellation, and recovery across the gateway, account bridge, and custom model connections |
+| System confirmation and authorization | The local confirmation state machine, window lifecycle handling, and related tests are implemented | Native authentication, cancellation, screen locking, and sleep validation in a properly signed app |
+| Browser and computer interaction | Engine, screen transport, control permissions, and input have individual implementations | End-to-end validation of real operations, manual takeover, stopping, and failure recovery within the product |
+| Mobile client | Shared page source and local web previews are available, with iOS/Android resource compilation records | Real accounts, device binding, native installation, and testing on physical devices for each platform; outside the macOS first-release scope |
 
-## 预计完成情况
+## Estimated completion
 
-**当前交付目标：macOS 首版，预计 2–4 周完成。**
+**Current delivery target: the first macOS release, estimated in 2–4 weeks.**
 
-以 2026-09-07 为起点，目标窗口为 **2026-09-21 至 2026-10-05**。这是开发目标估算；最终交付时间取决于剩余功能、签名安装包和真实使用流程的验收结果，有变化会更新本页。
+Measured from September 7, 2026, the target window is **September 21–October 5, 2026**. This is a development estimate. Final delivery depends on completing the remaining features and validating signed installers and real user workflows. This page will be updated if the estimate changes.
 
-首版目标是可安装的 macOS 产品，完成工作台与 AI 工具、浏览器操作与接管、原生电脑操作与停止三类核心使用流程，并验证模型接入、凭据保护、数据恢复和安装启动。
+The first release aims to provide an installable macOS product covering three core workflows: the workbench and AI tools, browser interaction with manual takeover, and native computer interaction with stopping controls. Model connections, credential protection, data recovery, installation, and startup must also be validated.
 
-当前首版尚未完成。发布前仍需通过真实签名安装包、实际模型服务和 macOS 真机的组合验收。Apple Silicon 与 Intel 的支持范围以实际验证结果为准。Windows、Linux 和移动端后续分别验证并公布进展。
+The first release is not yet complete. Release validation still requires a signed installer, live model services, and testing on physical Macs. Apple Silicon and Intel support will be stated according to actual validation results. Windows, Linux, and mobile platforms will be validated separately, with progress published as work advances.
 
-## 源码目录
+## Source layout
 
-- `crates/`：领域、应用、基础设施、桌面、服务端、UI 和测试工具。
-- `apps/wrok-bot-mobile/`：移动客户端源码。
-- `examples/`：示例应用配置。
-- `fixtures/`：确定性测试数据和资源契约。
-- `tools/`：依赖检查与构建工具版本配置。
+- `crates/`: domain, application, infrastructure, desktop, server, UI, and test tools.
+- `apps/wrok-bot-mobile/`: mobile client source.
+- `examples/`: sample application configuration.
+- `fixtures/`: deterministic test data and asset contracts.
+- `tools/`: dependency checks and build tool version configuration.
 
-Rust 工具链由 `rust-toolchain.toml` 固定，Rust 依赖由 `Cargo.lock` 锁定。原生库要求因平台而异；CI 工作流记录 Linux 构建依赖，`.cargo/config.toml` 配置 macOS 库搜索路径。
+The Rust toolchain is pinned in `rust-toolchain.toml`, and Rust dependencies are locked in `Cargo.lock`. Native library requirements vary by platform. The CI workflow records Linux build dependencies, while `.cargo/config.toml` configures macOS library search paths.
 
-## 本地检查
+## Local checks
 
 ```sh
 cargo fmt --all -- --check
@@ -50,14 +52,14 @@ cargo xtask i18n-check
 cargo xtask design-lint
 ```
 
-提交前安装本地发布检查，需要 Python 3 和 Gitleaks：
+Before committing, install the local publication checks. Python 3 and Gitleaks are required:
 
 ```sh
 python3 tools/repository_guard.py install
 ```
 
-检查会在提交前检查暂存内容，在推送前检查待发布的完整历史。GitHub Actions 保持手动触发。
+The guard checks staged content before commits and the complete history being published before pushes. GitHub Actions remains manually triggered.
 
-## 许可与声明
+## License and acknowledgements
 
-第一方代码条款见 `LICENSE`，第三方声明见 `NOTICE`。字体、图标等资源保留各自许可证。
+See `LICENSE` for first-party terms and `NOTICE` for third-party acknowledgements. Fonts, icons, and other assets retain their respective licenses.
