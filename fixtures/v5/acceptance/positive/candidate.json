@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "purpose": "trusted-candidate-manifest; not product acceptance",
+  "sourceCommit": "52ea4d0a651b5919561aed8fd56b14fcfb4401b2",
+  "workingTreeDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "lockDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "uiDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "artifactDigest": null,
+  "platform": "macos",
+  "arch": "arm64",
+  "evidence": {}
+}

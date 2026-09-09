@@ -4819,6 +4819,7 @@ dependencies = [
  "oxc_span",
  "plist",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml",

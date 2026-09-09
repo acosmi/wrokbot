@@ -134,4 +134,4 @@ axum.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # Existing locked safe syscall wrapper; descriptor-relative backup IO, no application unsafe.
-rustix = { version = "=1.1.4", default-features = false, features = ["std", "fs"] }
+rustix.workspace = true

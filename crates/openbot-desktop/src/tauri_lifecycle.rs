@@ -198,6 +198,7 @@ impl DesktopWindowLifecycle {
         Ok(unbound)
     }
 
+    #[cfg(feature = "desktop-local-runtime")]
     pub(crate) async fn wait_local_confirmation_stopped(&self) {
         #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
         self.protocol.wait_local_confirmation_stopped().await;

@@ -35,6 +35,9 @@ pub enum DesktopVaultKeyError {
     /// Existing bytes did not match the exact versioned 256-bit format.
     #[error("desktop_vault_master_key_corrupt")]
     Corrupt,
+    /// Existing instance data was present but master key was missing from the OS key store.
+    #[error("desktop_vault_master_key_missing")]
+    Missing,
     /// Write succeeded ambiguously or immediate read-back differed.
     #[error("desktop_vault_master_key_reconciliation_required")]
     ReconciliationRequired,
@@ -153,6 +156,36 @@ impl core::fmt::Debug for DesktopApplicationKeyMaterial {
     }
 }
 
+/// Sealed disposition indicating whether master key must exist or may be freshly generated.
+#[derive(Debug, PartialEq, Eq)]
+struct DesktopVaultKeyDisposition {
+    is_existing: bool,
+    _sealed: (),
+}
+
+impl DesktopVaultKeyDisposition {
+    #[must_use]
+    const fn existing() -> Self {
+        Self {
+            is_existing: true,
+            _sealed: (),
+        }
+    }
+
+    #[must_use]
+    const fn fresh() -> Self {
+        Self {
+            is_existing: false,
+            _sealed: (),
+        }
+    }
+
+    #[must_use]
+    const fn is_existing(&self) -> bool {
+        self.is_existing
+    }
+}
+
 impl RunningDesktopLocalDataPlane {
     /// Load/create the per-instance master key while this owner still fences competing starts,
     /// then derive all non-SSO application cryptographic inputs before any native window exists.
@@ -164,7 +197,13 @@ impl RunningDesktopLocalDataPlane {
         if self.sidecar_origin().is_none() {
             return Err(DesktopVaultKeyError::DataPlaneNotRunning);
         }
-        let master = load_or_create_master_key(store, service, self.authority().instance_id())?;
+        let disposition = if self.claim_initial_vault_creation() {
+            DesktopVaultKeyDisposition::fresh()
+        } else {
+            DesktopVaultKeyDisposition::existing()
+        };
+        let master =
+            load_or_create_master_key(store, service, self.authority().instance_id(), disposition)?;
         derive_application_material(self.auth_context().tenant().clone(), master)
     }
 }
@@ -173,6 +212,7 @@ fn load_or_create_master_key<S: OsSecretStore + ?Sized>(
     store: &S,
     service: &ReviewedDesktopVaultKeyStoreService,
     instance_id: &str,
+    disposition: DesktopVaultKeyDisposition,
 ) -> Result<DesktopVaultMasterKey, DesktopVaultKeyError> {
     if !valid_instance_id(instance_id) {
         return Err(DesktopVaultKeyError::Corrupt);
@@ -183,6 +223,9 @@ fn load_or_create_master_key<S: OsSecretStore + ?Sized>(
         .map_err(|_| DesktopVaultKeyError::Unavailable)?
     {
         return decode_stored(stored);
+    }
+    if disposition.is_existing() {
+        return Err(DesktopVaultKeyError::Missing);
     }
 
     let mut bytes = vec![0_u8; MASTER_KEY_BYTES];
@@ -316,7 +359,13 @@ mod tests {
     fn first_restart_corrupt_reconciliation_and_material_are_closed() {
         let instance = "a".repeat(64);
         let store = MemoryStore::empty();
-        let first = load_or_create_master_key(&store, &service(), &instance).unwrap();
+        let first = load_or_create_master_key(
+            &store,
+            &service(),
+            &instance,
+            DesktopVaultKeyDisposition::fresh(),
+        )
+        .unwrap();
         let first_material = derive_application_material(TenantId::new("tenant-a"), first).unwrap();
         assert_eq!(store.writes.load(Ordering::Relaxed), 1);
         let secret_id = Uuid::from_u128(0x1234_5678_90ab_cdef_1234_5678_90ab_cdef);
@@ -331,7 +380,13 @@ mod tests {
                 &plaintext,
             )
             .unwrap();
-        let second = load_or_create_master_key(&store, &service(), &instance).unwrap();
+        let second = load_or_create_master_key(
+            &store,
+            &service(),
+            &instance,
+            DesktopVaultKeyDisposition::fresh(),
+        )
+        .unwrap();
         let second_material =
             derive_application_material(TenantId::new("tenant-a"), second).unwrap();
         let opened = second_material
@@ -360,7 +415,12 @@ mod tests {
             replace_on_write: false,
         };
         assert!(matches!(
-            load_or_create_master_key(&corrupt, &service(), &instance),
+            load_or_create_master_key(
+                &corrupt,
+                &service(),
+                &instance,
+                DesktopVaultKeyDisposition::fresh()
+            ),
             Err(DesktopVaultKeyError::Corrupt)
         ));
         assert_eq!(corrupt.writes.load(Ordering::Relaxed), 0);
@@ -371,7 +431,12 @@ mod tests {
             replace_on_write: true,
         };
         assert!(matches!(
-            load_or_create_master_key(&mismatch, &service(), &instance),
+            load_or_create_master_key(
+                &mismatch,
+                &service(),
+                &instance,
+                DesktopVaultKeyDisposition::fresh()
+            ),
             Err(DesktopVaultKeyError::ReconciliationRequired)
         ));
     }
@@ -388,7 +453,12 @@ mod tests {
             assert!(ReviewedDesktopVaultKeyStoreService::from_reviewed_release(rejected).is_err());
         }
         assert!(matches!(
-            load_or_create_master_key(&MemoryStore::empty(), &service(), "wrong"),
+            load_or_create_master_key(
+                &MemoryStore::empty(),
+                &service(),
+                "wrong",
+                DesktopVaultKeyDisposition::fresh()
+            ),
             Err(DesktopVaultKeyError::Corrupt)
         ));
         let bad_version = MemoryStore {
@@ -397,7 +467,12 @@ mod tests {
             replace_on_write: false,
         };
         assert!(matches!(
-            load_or_create_master_key(&bad_version, &service(), &"b".repeat(64)),
+            load_or_create_master_key(
+                &bad_version,
+                &service(),
+                &"b".repeat(64),
+                DesktopVaultKeyDisposition::fresh()
+            ),
             Err(DesktopVaultKeyError::Corrupt)
         ));
     }
@@ -423,7 +498,13 @@ mod tests {
         let store = crate::os_secret_store::MacOsKeychainSecretStore::from_keychain(keychain);
         let instance = "c".repeat(64);
         let service = service();
-        let first = load_or_create_master_key(&store, &service, &instance).unwrap();
+        let first = load_or_create_master_key(
+            &store,
+            &service,
+            &instance,
+            DesktopVaultKeyDisposition::fresh(),
+        )
+        .unwrap();
         let first = derive_application_material(TenantId::new("tenant-keychain"), first).unwrap();
         let id = Uuid::from_u128(0xfedc_ba09_8765_4321_fedc_ba09_8765_4321);
         let plaintext = SecretBytes::new(b"private-keychain-canary".to_vec());
@@ -437,7 +518,13 @@ mod tests {
                 &plaintext,
             )
             .unwrap();
-        let second = load_or_create_master_key(&store, &service, &instance).unwrap();
+        let second = load_or_create_master_key(
+            &store,
+            &service,
+            &instance,
+            DesktopVaultKeyDisposition::fresh(),
+        )
+        .unwrap();
         let second = derive_application_material(TenantId::new("tenant-keychain"), second).unwrap();
         assert_eq!(
             second
@@ -476,7 +563,13 @@ mod tests {
         let target = format!("{}:{account}", service.as_str());
         let _ = openbot_windows_sandbox::delete_generic_credential(&target);
 
-        let first = load_or_create_master_key(&store, &service, &instance).unwrap();
+        let first = load_or_create_master_key(
+            &store,
+            &service,
+            &instance,
+            DesktopVaultKeyDisposition::fresh(),
+        )
+        .unwrap();
         let first = derive_application_material(TenantId::new("tenant-windows"), first).unwrap();
         let id = Uuid::from_u128(0xaaaa_bbbb_cccc_dddd_eeee_ffff_0000_1111);
         let plaintext = SecretBytes::new(b"windows-credential-canary".to_vec());
@@ -490,7 +583,13 @@ mod tests {
                 &plaintext,
             )
             .unwrap();
-        let second = load_or_create_master_key(&store, &service, &instance).unwrap();
+        let second = load_or_create_master_key(
+            &store,
+            &service,
+            &instance,
+            DesktopVaultKeyDisposition::fresh(),
+        )
+        .unwrap();
         let second = derive_application_material(TenantId::new("tenant-windows"), second).unwrap();
         assert_eq!(
             second
@@ -508,5 +607,54 @@ mod tests {
             plaintext.expose()
         );
         assert!(openbot_windows_sandbox::delete_generic_credential(&target).unwrap());
+    }
+
+    #[test]
+    fn existing_master_key_missing_refuses_to_generate_and_keeps_writes_zero() {
+        let instance = "e".repeat(64);
+        let store = MemoryStore::empty();
+        let result = load_or_create_master_key(
+            &store,
+            &service(),
+            &instance,
+            DesktopVaultKeyDisposition::existing(),
+        );
+        assert!(matches!(result, Err(DesktopVaultKeyError::Missing)));
+        assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+
+        // Pre-populated store returns existing key without writes
+        let valid = MemoryStore {
+            value: Mutex::new(Some(
+                [vec![STORED_FORMAT_VERSION], vec![7_u8; MASTER_KEY_BYTES]].concat(),
+            )),
+            writes: AtomicUsize::new(0),
+            replace_on_write: false,
+        };
+        let loaded = load_or_create_master_key(
+            &valid,
+            &service(),
+            &instance,
+            DesktopVaultKeyDisposition::existing(),
+        )
+        .unwrap();
+        assert_eq!(loaded.0.expose(), &[7_u8; MASTER_KEY_BYTES]);
+        assert_eq!(valid.writes.load(Ordering::Relaxed), 0);
+
+        // Corrupt key under existing disposition errors closed without writes
+        let corrupt = MemoryStore {
+            value: Mutex::new(Some(vec![STORED_FORMAT_VERSION, 0x99])),
+            writes: AtomicUsize::new(0),
+            replace_on_write: false,
+        };
+        assert!(matches!(
+            load_or_create_master_key(
+                &corrupt,
+                &service(),
+                &instance,
+                DesktopVaultKeyDisposition::existing()
+            ),
+            Err(DesktopVaultKeyError::Corrupt)
+        ));
+        assert_eq!(corrupt.writes.load(Ordering::Relaxed), 0);
     }
 }

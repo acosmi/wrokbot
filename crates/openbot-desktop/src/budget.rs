@@ -95,6 +95,7 @@ impl EventQueueBudget {
         }
     }
 
+    #[cfg(any(feature = "tauri-host", test))]
     pub(crate) fn remaining(&self) -> usize {
         self.capacity
             .saturating_sub(self.in_use.load(Ordering::Acquire))

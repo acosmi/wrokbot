@@ -81,7 +81,7 @@ pub enum PostgresSidecarError {
     #[error("postgres_sidecar_signing_identity_invalid")]
     SigningIdentityInvalid,
     /// Instance data directory was non-private, partial, symlinked, or not the exact direct child.
-    #[cfg(feature = "postgres-supervisor")]
+    #[cfg(any(feature = "postgres-supervisor", feature = "postgres-key-store"))]
     #[error("postgres_sidecar_data_directory_invalid")]
     DataDirectoryInvalid,
     /// A verified program did not report the pinned PostgreSQL 17.11 version.
@@ -317,6 +317,8 @@ pub struct PostgresStartLock {
     bytes: Vec<u8>,
     instance_id: Arc<str>,
     remove_on_drop: bool,
+    #[cfg(feature = "postgres-key-store")]
+    secret_creation_attempted: std::sync::atomic::AtomicBool,
     _file: File,
 }
 
@@ -389,6 +391,8 @@ impl PostgresStartLock {
             bytes,
             instance_id: Arc::from(instance_id),
             remove_on_drop: true,
+            #[cfg(feature = "postgres-key-store")]
+            secret_creation_attempted: std::sync::atomic::AtomicBool::new(false),
             _file: file,
         })
     }
@@ -399,23 +403,59 @@ impl PostgresStartLock {
     }
 }
 
+#[cfg(any(feature = "postgres-supervisor", feature = "postgres-key-store"))]
+mod key_disposition;
+#[cfg(any(feature = "postgres-supervisor", feature = "postgres-key-store"))]
+pub use key_disposition::PostgresDataDisposition;
+
 #[cfg(feature = "postgres-key-store")]
 impl PostgresStartLock {
+    /// Inspect the data directory while holding this exclusive start lock.
+    pub fn inspect_data_directory(
+        &self,
+        data_dir: &Path,
+    ) -> Result<PostgresDataDisposition<'_>, PostgresSidecarError> {
+        PostgresDataDisposition::inspect(self, data_dir)
+    }
+
     /// Load or create the only PostgreSQL SCRAM secret while this instance lock is live.
     ///
-    /// A newly generated value is written to the OS store and immediately read back; a missing or
-    /// different read-back fails reconciliation rather than using an in-memory value that future
-    /// restarts cannot recover.
+    /// When `disposition` is `Existing`, the secret must already exist in the OS store; missing
+    /// secret returns `PostgresSecretStoreError::Missing` without writing to the store.
+    /// When `disposition` is `Fresh`, a missing secret is generated, written to the OS store,
+    /// and immediately read back and verified with constant-time comparison.
     pub fn load_or_create_scram_secret<S: PostgresSecretStore + ?Sized>(
         &self,
         store: &S,
         service: &ReviewedPostgresKeyStoreService,
+        disposition: &PostgresDataDisposition<'_>,
     ) -> Result<PostgresScramSecret, PostgresSecretStoreError> {
+        if !disposition.is_current_for(self) {
+            return Err(PostgresSecretStoreError::DispositionInvalid);
+        }
         let account = format!("postgresql-17-{}", self.instance_id);
-        if let Some(stored) = store.read(service.as_str(), &account)? {
+        let stored = store.read(service.as_str(), &account)?;
+        if !disposition.is_current_for(self) {
+            return Err(PostgresSecretStoreError::DispositionInvalid);
+        }
+        if let Some(stored) = stored {
+            self.secret_creation_attempted
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             return PostgresScramSecret::from_stored(stored);
         }
+        if disposition.is_existing() {
+            return Err(PostgresSecretStoreError::Missing);
+        }
+        if self
+            .secret_creation_attempted
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(PostgresSecretStoreError::ReconciliationRequired);
+        }
         let generated = PostgresScramSecret::generate()?;
+        if !disposition.is_current_for(self) {
+            return Err(PostgresSecretStoreError::DispositionInvalid);
+        }
         store.write(service.as_str(), &account, generated.expose())?;
         let persisted = store
             .read(service.as_str(), &account)?
@@ -452,6 +492,12 @@ pub enum PostgresSecretStoreError {
     /// Existing bytes were not the exact closed PostgreSQL SCRAM secret shape.
     #[error("postgres_key_store_secret_corrupt")]
     Corrupt,
+    /// Existing instance data was present but the PostgreSQL SCRAM secret was missing from the OS key store.
+    #[error("postgres_key_store_secret_missing")]
+    Missing,
+    /// Data observation no longer belongs to the current live owner/directory state.
+    #[error("postgres_key_store_disposition_invalid")]
+    DispositionInvalid,
     /// Write succeeded ambiguously or immediate read-back did not equal the generated value.
     #[error("postgres_key_store_reconciliation_required")]
     ReconciliationRequired,
@@ -617,7 +663,7 @@ pub type WindowsCredentialPostgresSecretStore =
     crate::os_secret_store::WindowsCredentialSecretStore;
 
 /// Whether this supervisor initialized a new cluster or opened an existing PostgreSQL 17 cluster.
-#[cfg(feature = "postgres-supervisor")]
+#[cfg(any(feature = "postgres-supervisor", feature = "postgres-key-store"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostgresSidecarOrigin {
     /// The exact instance directory was empty and `initdb` completed this start.
@@ -795,8 +841,9 @@ impl PostgresSidecarSupervisor {
             PostgresBundleDigest(bundle.manifest_sha256),
         )?;
         verify_program_versions(&bundle).await?;
-        let secret = lock.load_or_create_scram_secret(store, service)?;
-        let origin = data_directory_origin(data_dir)?;
+        let disposition = lock.inspect_data_directory(data_dir)?;
+        let secret = lock.load_or_create_scram_secret(store, service, &disposition)?;
+        let origin = disposition.origin();
         if origin == PostgresSidecarOrigin::Fresh {
             run_initdb(&bundle, data_dir, &secret).await?;
         }
@@ -821,7 +868,7 @@ impl PostgresSidecarSupervisor {
     }
 }
 
-#[cfg(feature = "postgres-supervisor")]
+#[cfg(any(feature = "postgres-supervisor", feature = "postgres-key-store"))]
 fn validate_supervisor_paths(
     app_data_root: &Path,
     instance_id: &str,
@@ -857,7 +904,7 @@ fn validate_supervisor_paths(
     Ok(())
 }
 
-#[cfg(feature = "postgres-supervisor")]
+#[cfg(any(feature = "postgres-supervisor", feature = "postgres-key-store"))]
 fn data_directory_origin(data_dir: &Path) -> Result<PostgresSidecarOrigin, PostgresSidecarError> {
     let version = data_dir.join("PG_VERSION");
     match fs::symlink_metadata(&version) {
@@ -865,9 +912,12 @@ fn data_directory_origin(data_dir: &Path) -> Result<PostgresSidecarOrigin, Postg
             if !metadata.file_type().is_file()
                 || metadata.file_type().is_symlink()
                 || metadata.len() > 16
-                || fs::read_to_string(version)
-                    .map_err(PostgresSidecarError::Io)?
-                    .trim()
+                || std::str::from_utf8(
+                    &bundle_fs::read_bytes(&version, 16)
+                        .map_err(|_| PostgresSidecarError::DataDirectoryInvalid)?,
+                )
+                .map_err(|_| PostgresSidecarError::DataDirectoryInvalid)?
+                .trim()
                     != "17"
             {
                 return Err(PostgresSidecarError::DataDirectoryInvalid);
@@ -2442,6 +2492,17 @@ mod tests {
         let correct_package =
             loaded_desktop_package(installation.authority().auth_context().tenant().as_str());
         let wrong_package = loaded_desktop_package(&format!("desktop-local-{}", "f".repeat(64)));
+        // This scenario deliberately initializes PG then fails the package check. Its later
+        // Existing startup must load a persisted key, never create one as if the cluster were new.
+        let mut persisted_test_key = vec![1_u8];
+        persisted_test_key.extend_from_slice(&[0x5a; 32]);
+        OsSecretStore::write(
+            &vault_store,
+            "com.example.product.desktop-vault.composition-test",
+            "synthetic-existing-master",
+            &persisted_test_key,
+        )
+        .unwrap();
 
         let bundle = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
         let running = PostgresSidecarSupervisor::start(
@@ -2683,6 +2744,140 @@ mod tests {
         fs::remove_dir_all(bundle_root).unwrap();
     }
 
+    #[cfg(all(feature = "desktop-vault", unix))]
+    #[tokio::test]
+    #[ignore = "requires dedicated PostgreSQL 17.11 binaries via OPENBOT_TEST_POSTGRES_BIN_DIR"]
+    async fn controller_review_real_owner_missing_keys_preserve_data_and_never_recreate() {
+        let bin_dir = PathBuf::from(std::env::var_os("OPENBOT_TEST_POSTGRES_BIN_DIR").unwrap());
+        let (bundle_root, digest) = materialize_host_postgres_bundle(&bin_dir);
+        let signing = signing_identity();
+        let app_root = root("controller-key-owner");
+        let authority = DesktopLocalAuthorityStore::new(
+            CurrentOsUserAppDataRoot::from_current_os_user_app_data(&app_root).unwrap(),
+        );
+        let installation = authority.load_or_create_installation().unwrap();
+        let data_dir = installation.sidecar_data_dir().to_owned();
+        let instance = installation.authority().instance_id().to_owned();
+        let package =
+            loaded_desktop_package(installation.authority().auth_context().tenant().as_str());
+        let scram = MemorySecretStore::empty();
+        let vault = MemoryVaultStore::empty();
+        let service =
+            ReviewedPostgresKeyStoreService::from_reviewed_release("com.example.review.postgresql")
+                .unwrap();
+        let vault_service =
+            ReviewedDesktopVaultKeyStoreService::from_reviewed_release("com.example.review.vault")
+                .unwrap();
+        let running = PostgresSidecarSupervisor::start(
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
+            &app_root,
+            &instance,
+            &data_dir,
+            &scram,
+            &service,
+        )
+        .await
+        .unwrap();
+        let owner = bootstrap_running_sidecar(installation.clone(), running, &package)
+            .await
+            .unwrap();
+        assert_eq!(owner.sidecar_origin(), Some(PostgresSidecarOrigin::Fresh));
+        let material = owner
+            .load_application_key_material(&vault, &vault_service)
+            .unwrap();
+        let id = Uuid::from_u128(0x1234);
+        let sealed = material
+            .credential_vault()
+            .seal(
+                &id,
+                SecretKind::Model,
+                SecretPrincipal::Deployment,
+                SecretPrincipal::Deployment,
+                &SecretBytes::new(b"owned-canary".to_vec()),
+            )
+            .unwrap();
+        let saved_master = vault.value.lock().unwrap().take().unwrap();
+        assert!(matches!(
+            owner.load_application_key_material(&vault, &vault_service),
+            Err(crate::desktop_vault::DesktopVaultKeyError::Missing)
+        ));
+        assert_eq!(vault.writes.load(Ordering::Relaxed), 1);
+        *vault.value.lock().unwrap() = Some(saved_master.clone());
+        drop(material);
+        owner.shutdown().await.unwrap();
+
+        let configuration = ["PG_VERSION", "pg_hba.conf", "postgresql.auto.conf"]
+            .map(|name| (name, fs::read(data_dir.join(name)).unwrap()));
+        let saved_scram = scram.value.lock().unwrap().take().unwrap();
+        let missing = PostgresSidecarSupervisor::start(
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
+            &app_root,
+            &instance,
+            &data_dir,
+            &scram,
+            &service,
+        )
+        .await;
+        assert!(matches!(
+            missing,
+            Err(PostgresSidecarError::Secret(
+                PostgresSecretStoreError::Missing
+            ))
+        ));
+        assert_eq!(scram.writes.load(Ordering::Relaxed), 1);
+        assert!(!data_dir.join("postmaster.pid").exists());
+        for (name, bytes) in configuration {
+            assert_eq!(fs::read(data_dir.join(name)).unwrap(), bytes);
+        }
+        *scram.value.lock().unwrap() = Some(saved_scram);
+        *vault.value.lock().unwrap() = None;
+        let running = PostgresSidecarSupervisor::start(
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
+            &app_root,
+            &instance,
+            &data_dir,
+            &scram,
+            &service,
+        )
+        .await
+        .unwrap();
+        let owner = bootstrap_running_sidecar(installation, running, &package)
+            .await
+            .unwrap();
+        assert_eq!(
+            owner.sidecar_origin(),
+            Some(PostgresSidecarOrigin::Existing)
+        );
+        assert!(matches!(
+            owner.load_application_key_material(&vault, &vault_service),
+            Err(crate::desktop_vault::DesktopVaultKeyError::Missing)
+        ));
+        assert_eq!(vault.writes.load(Ordering::Relaxed), 1);
+        *vault.value.lock().unwrap() = Some(saved_master);
+        let restored = owner
+            .load_application_key_material(&vault, &vault_service)
+            .unwrap();
+        assert_eq!(
+            restored
+                .credential_vault()
+                .open(
+                    &id,
+                    SecretKind::Model,
+                    SecretPrincipal::Deployment,
+                    SecretPrincipal::Deployment,
+                    &sealed
+                )
+                .unwrap()
+                .into_secret()
+                .expose(),
+            b"owned-canary"
+        );
+        drop(restored);
+        owner.shutdown().await.unwrap();
+        fs::remove_dir_all(app_root).unwrap();
+        fs::remove_dir_all(bundle_root).unwrap();
+    }
+
     #[cfg(all(feature = "postgres-supervisor", unix))]
     #[tokio::test]
     #[ignore = "需要本机PostgreSQL 17.11 binaries；设置OPENBOT_TEST_POSTGRES_BIN_DIR后运行"]
@@ -2812,6 +3007,123 @@ mod tests {
         driver.abort();
     }
 
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    fn controller_review_data_dir(root: &Path, lock: &PostgresStartLock) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = root.join(format!("postgresql-17-{}", lock.instance_id));
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn controller_review_empty_unrelated_directory_cannot_grant_creation() {
+        let (root, lock) = secret_lock("wrong-directory");
+        let data = controller_review_data_dir(&root, &lock);
+        fs::write(data.join("PG_VERSION"), b"17\n").unwrap();
+        let unrelated = root.join("unrelated");
+        fs::create_dir(&unrelated).unwrap();
+        let rejected = lock.inspect_data_directory(&unrelated).is_err();
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+        assert!(rejected);
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn controller_review_fresh_proof_cannot_cross_start_locks() {
+        let (a_root, a) = secret_lock("proof-owner-a");
+        let a_data = controller_review_data_dir(&a_root, &a);
+        let proof = a.inspect_data_directory(&a_data).unwrap();
+        let (b_root, b) = secret_lock("proof-owner-b");
+        let b_data = controller_review_data_dir(&b_root, &b);
+        fs::write(b_data.join("PG_VERSION"), b"17\n").unwrap();
+        let store = MemorySecretStore::empty();
+        let service =
+            ReviewedPostgresKeyStoreService::from_reviewed_release("com.example.review.scram")
+                .unwrap();
+        let rejected = b
+            .load_or_create_scram_secret(&store, &service, &proof)
+            .is_err();
+        let writes = store.writes.load(Ordering::Relaxed);
+        drop(a);
+        drop(b);
+        fs::remove_dir_all(a_root).unwrap();
+        fs::remove_dir_all(b_root).unwrap();
+        assert!(
+            rejected && writes == 0,
+            "cross-owner proof must write zero secrets"
+        );
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn controller_review_data_arriving_during_store_read_prevents_write() {
+        struct ArrivingData {
+            data: PathBuf,
+            memory: MemorySecretStore,
+        }
+        impl PostgresSecretStore for ArrivingData {
+            fn read(
+                &self,
+                service: &str,
+                account: &str,
+            ) -> Result<Option<PostgresStoredSecret>, PostgresSecretStoreError> {
+                fs::write(self.data.join("PG_VERSION"), b"17\n").unwrap();
+                self.memory.read(service, account)
+            }
+            fn write(
+                &self,
+                service: &str,
+                account: &str,
+                secret: &[u8],
+            ) -> Result<(), PostgresSecretStoreError> {
+                self.memory.write(service, account, secret)
+            }
+        }
+        let (root, lock) = secret_lock("stale-proof");
+        let data = controller_review_data_dir(&root, &lock);
+        let proof = lock.inspect_data_directory(&data).unwrap();
+        let store = ArrivingData {
+            data: data.clone(),
+            memory: MemorySecretStore::empty(),
+        };
+        let service =
+            ReviewedPostgresKeyStoreService::from_reviewed_release("com.example.review.scram")
+                .unwrap();
+        let rejected = lock
+            .load_or_create_scram_secret(&store, &service, &proof)
+            .is_err();
+        let writes = store.memory.writes.load(Ordering::Relaxed);
+        assert_eq!(fs::read(data.join("PG_VERSION")).unwrap(), b"17\n");
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+        assert!(rejected && writes == 0);
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn controller_review_one_owner_cannot_recreate_a_lost_persisted_secret() {
+        let (root, lock) = secret_lock("single-create");
+        let data = controller_review_data_dir(&root, &lock);
+        let proof = lock.inspect_data_directory(&data).unwrap();
+        let store = MemorySecretStore::empty();
+        let service =
+            ReviewedPostgresKeyStoreService::from_reviewed_release("com.example.review.scram")
+                .unwrap();
+        lock.load_or_create_scram_secret(&store, &service, &proof)
+            .unwrap();
+        *store.value.lock().unwrap() = None;
+        let rejected = lock
+            .load_or_create_scram_secret(&store, &service, &proof)
+            .is_err();
+        let writes = store.writes.load(Ordering::Relaxed);
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+        assert!(rejected && writes == 1);
+    }
+
     #[cfg(feature = "postgres-key-store")]
     fn secret_lock(name: &str) -> (PathBuf, PostgresStartLock) {
         let root = root(name);
@@ -2836,7 +3148,10 @@ mod tests {
         .unwrap();
         let (root, lock) = secret_lock("secret");
         let store = MemorySecretStore::empty();
-        let first = lock.load_or_create_scram_secret(&store, &service).unwrap();
+        let fresh_disp = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let first = lock
+            .load_or_create_scram_secret(&store, &service, &fresh_disp)
+            .unwrap();
         assert_eq!(first.expose().len(), 64);
         assert!(
             first
@@ -2844,7 +3159,9 @@ mod tests {
                 .iter()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
         );
-        let second = lock.load_or_create_scram_secret(&store, &service).unwrap();
+        let second = lock
+            .load_or_create_scram_secret(&store, &service, &fresh_disp)
+            .unwrap();
         assert_eq!(first.expose(), second.expose());
         assert_eq!(store.writes.load(Ordering::Relaxed), 1);
         assert!(!format!("{first:?}").contains(std::str::from_utf8(first.expose()).unwrap()));
@@ -2852,9 +3169,10 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
 
         let (root, lock) = secret_lock("corrupt-secret");
+        let fresh_disp = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
         let corrupt = MemorySecretStore::with_value(vec![b'Z'; 64]);
         assert!(matches!(
-            lock.load_or_create_scram_secret(&corrupt, &service),
+            lock.load_or_create_scram_secret(&corrupt, &service, &fresh_disp),
             Err(PostgresSecretStoreError::Corrupt)
         ));
         assert_eq!(corrupt.writes.load(Ordering::Relaxed), 0);
@@ -2862,9 +3180,10 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
 
         let (root, lock) = secret_lock("racing-secret");
+        let fresh_disp = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
         let racing = MemorySecretStore::racing();
         assert!(matches!(
-            lock.load_or_create_scram_secret(&racing, &service),
+            lock.load_or_create_scram_secret(&racing, &service, &fresh_disp),
             Err(PostgresSecretStoreError::ReconciliationRequired)
         ));
         drop(lock);
@@ -2901,8 +3220,13 @@ mod tests {
         )
         .unwrap();
         let (lock_root, lock) = secret_lock("private-keychain-lock");
-        let first = lock.load_or_create_scram_secret(&store, &service).unwrap();
-        let second = lock.load_or_create_scram_secret(&store, &service).unwrap();
+        let fresh_disp = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let first = lock
+            .load_or_create_scram_secret(&store, &service, &fresh_disp)
+            .unwrap();
+        let second = lock
+            .load_or_create_scram_secret(&store, &service, &fresh_disp)
+            .unwrap();
         assert_eq!(first.expose(), second.expose());
         let account = format!("postgresql-17-{}", lock.instance_id);
         let (_password, item) = cleanup_keychain
@@ -2915,5 +3239,161 @@ mod tests {
         drop(store);
         fs::remove_dir_all(lock_root).unwrap();
         fs::remove_dir_all(keychain_root).unwrap();
+    }
+
+    #[cfg(feature = "postgres-key-store")]
+    #[test]
+    fn secret_load_or_create_refuses_when_existing_and_missing_with_zero_writes() {
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.product.postgresql.existing",
+        )
+        .unwrap();
+        let (root, lock) = secret_lock("existing-missing-secret");
+        let store = MemorySecretStore::empty();
+        let existing_disp =
+            PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Existing);
+
+        // Missing key under existing disposition errors with Missing, writes = 0
+        let result = lock.load_or_create_scram_secret(&store, &service, &existing_disp);
+        assert!(matches!(result, Err(PostgresSecretStoreError::Missing)));
+        assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+
+        // Pre-populated store returns existing secret without writes
+        let populated = MemorySecretStore::with_value(vec![b'a'; 64]);
+        let loaded = lock
+            .load_or_create_scram_secret(&populated, &service, &existing_disp)
+            .unwrap();
+        assert_eq!(loaded.expose(), &[b'a'; 64]);
+        assert_eq!(populated.writes.load(Ordering::Relaxed), 0);
+
+        // Corrupt key under existing disposition errors with Corrupt without writes
+        let corrupt = MemorySecretStore::with_value(vec![b'Z'; 64]);
+        assert!(matches!(
+            lock.load_or_create_scram_secret(&corrupt, &service, &existing_disp),
+            Err(PostgresSecretStoreError::Corrupt)
+        ));
+        assert_eq!(corrupt.writes.load(Ordering::Relaxed), 0);
+
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
+    #[tokio::test]
+    async fn supervisor_start_with_existing_data_and_missing_secret_fails_closed_before_effects() {
+        let (bundle_root, digest) = materialize_failing_initdb_bundle();
+        let bundle =
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing_identity()).unwrap();
+        let (app_root, instance, data_dir) = supervisor_test_paths("existing-missing-secret-app");
+        // Materialize valid existing cluster with PG_VERSION=17
+        fs::write(
+            data_dir.join("PG_VERSION"),
+            "17
+",
+        )
+        .unwrap();
+
+        let store = MemorySecretStore::empty();
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.product.postgresql.existing.supervisor",
+        )
+        .unwrap();
+
+        let result = PostgresSidecarSupervisor::start(
+            bundle, &app_root, &instance, &data_dir, &store, &service,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(PostgresSidecarError::Secret(
+                PostgresSecretStoreError::Missing
+            ))
+        ));
+        assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+        assert!(store.value.lock().unwrap().is_none());
+        // Original PG_VERSION remains untouched
+        assert_eq!(
+            fs::read_to_string(data_dir.join("PG_VERSION"))
+                .unwrap()
+                .trim(),
+            "17"
+        );
+        // Start lock must be cleanly released
+        assert!(
+            !fs::read_dir(&app_root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().contains("start-lock"))
+        );
+
+        fs::remove_dir_all(app_root).unwrap();
+        fs::remove_dir_all(bundle_root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
+    #[tokio::test]
+    async fn supervisor_start_with_corrupt_data_dir_fails_before_touching_key_store() {
+        let (bundle_root, digest) = materialize_failing_initdb_bundle();
+        let bundle =
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing_identity()).unwrap();
+        let (app_root, instance, data_dir) = supervisor_test_paths("corrupt-datadir-app");
+
+        // Case 1: non-empty directory missing PG_VERSION
+        fs::write(data_dir.join("some_random_file.txt"), "unknown data").unwrap();
+        let store = MemorySecretStore::empty();
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.product.postgresql.corrupt.supervisor",
+        )
+        .unwrap();
+
+        let bundle_case1 =
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing_identity()).unwrap();
+        let result = PostgresSidecarSupervisor::start(
+            bundle_case1,
+            &app_root,
+            &instance,
+            &data_dir,
+            &store,
+            &service,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(PostgresSidecarError::DataDirectoryInvalid)
+        ));
+        assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+        // Original file intact
+        assert!(data_dir.join("some_random_file.txt").exists());
+
+        // Case 2: corrupted PG_VERSION content
+        fs::remove_file(data_dir.join("some_random_file.txt")).unwrap();
+        fs::write(
+            data_dir.join("PG_VERSION"),
+            "16
+",
+        )
+        .unwrap();
+
+        let result2 = PostgresSidecarSupervisor::start(
+            bundle, &app_root, &instance, &data_dir, &store, &service,
+        )
+        .await;
+
+        assert!(matches!(
+            result2,
+            Err(PostgresSidecarError::DataDirectoryInvalid)
+        ));
+        assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            fs::read_to_string(data_dir.join("PG_VERSION"))
+                .unwrap()
+                .trim(),
+            "16"
+        );
+
+        fs::remove_dir_all(app_root).unwrap();
+        fs::remove_dir_all(bundle_root).unwrap();
     }
 }
