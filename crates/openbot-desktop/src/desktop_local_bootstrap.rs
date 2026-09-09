@@ -34,6 +34,8 @@ pub struct RunningDesktopLocalDataPlane {
     installation: DesktopLocalInstallation,
     runtime_auth: AuthContext,
     report: DesktopLocalBootstrapReport,
+    #[cfg(feature = "desktop-vault")]
+    vault_creation_claimed: std::sync::atomic::AtomicBool,
 }
 
 impl RunningDesktopLocalDataPlane {
@@ -66,6 +68,21 @@ impl RunningDesktopLocalDataPlane {
     #[must_use]
     pub fn sidecar_origin(&self) -> Option<PostgresSidecarOrigin> {
         self.sidecar.as_ref().map(RunningPostgresSidecar::origin)
+    }
+
+    /// Whether this data plane was composed on pre-existing cluster or database data.
+    #[must_use]
+    pub fn is_existing_data(&self) -> bool {
+        matches!(self.sidecar_origin(), Some(PostgresSidecarOrigin::Existing))
+            || !matches!(self.database_origin(), DesktopLocalDatabaseOrigin::Created)
+    }
+
+    #[cfg(feature = "desktop-vault")]
+    pub(crate) fn claim_initial_vault_creation(&self) -> bool {
+        !self.is_existing_data()
+            && !self
+                .vault_creation_claimed
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Shared migration and Tenant Package synchronization report.
@@ -244,6 +261,8 @@ pub async fn bootstrap_running_sidecar(
         installation,
         runtime_auth,
         report,
+        #[cfg(feature = "desktop-vault")]
+        vault_creation_claimed: std::sync::atomic::AtomicBool::new(false),
     })
 }
 

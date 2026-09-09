@@ -208,6 +208,7 @@ impl InProcessTransport {
     }
 
     /// Open an internal route that shares the caller's aggregate event-ref budget.
+    #[cfg(feature = "tauri-host")]
     pub(crate) async fn open_session_with_budget(
         &self,
         label: WindowLabel,

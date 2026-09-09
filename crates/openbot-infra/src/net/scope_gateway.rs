@@ -59,7 +59,13 @@ pub enum GatewayError {
     /// The owning scope has retired.
     #[error("scope_gateway_closed")]
     Closed,
+    /// Required policy granularity is unsupported by available inspectors.
+    #[error("egress_policy_unsupported")]
+    EgressPolicyUnsupported,
 }
+
+mod enforcement;
+pub use enforcement::{EgressFidelity, EgressRequirement, EnforcementPlan};
 
 /// A canonical exact host or explicit subdomain rule. Ports and IP classes are checked separately.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,11 +101,12 @@ impl GatewayHostRule {
 
 /// Immutable host-owned policy. `None` explicitly allows any host surviving IP/port/deny checks;
 /// `Some([])` denies every host. There is no policy field in an inbound proxy request.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayPolicy {
     allow: Option<Vec<GatewayHostRule>>,
     deny: Vec<GatewayHostRule>,
     ports: BTreeSet<u16>,
+    requirements: BTreeSet<EgressRequirement>,
 }
 
 impl GatewayPolicy {
@@ -118,7 +125,56 @@ impl GatewayPolicy {
         {
             return Err(GatewayError::Invalid);
         }
-        Ok(Self { allow, deny, ports })
+        let mut requirements = BTreeSet::new();
+        requirements.insert(EgressRequirement::DestinationOnly);
+        Ok(Self {
+            allow,
+            deny,
+            ports,
+            requirements,
+        })
+    }
+
+    /// Require TLS inner request authority / path rules.
+    #[must_use]
+    pub fn with_tls_inner_path_enforcement(mut self) -> Self {
+        self.requirements
+            .insert(EgressRequirement::TlsInnerAuthorityPath);
+        self
+    }
+
+    /// Require multi-authority inspection across requests sharing one connection.
+    #[must_use]
+    pub fn with_same_connection_multi_authority_enforcement(mut self) -> Self {
+        self.requirements
+            .insert(EgressRequirement::TlsMultiAuthority);
+        self
+    }
+
+    /// Require encrypted redirect inspection inside TLS.
+    #[must_use]
+    pub fn with_encrypted_redirect_enforcement(mut self) -> Self {
+        self.requirements
+            .insert(EgressRequirement::TlsEncryptedRedirect);
+        self
+    }
+
+    /// Returns whether any rule requires strong TLS inner layer inspection.
+    #[must_use]
+    pub fn requires_strong_tls_enforcement(&self) -> bool {
+        self.requirements.iter().any(|r| {
+            matches!(
+                r,
+                EgressRequirement::TlsInnerAuthorityPath
+                    | EgressRequirement::TlsMultiAuthority
+                    | EgressRequirement::TlsEncryptedRedirect
+            )
+        })
+    }
+
+    /// Compile this policy into an immutable enforcement plan.
+    pub fn compile_plan(&self) -> Result<EnforcementPlan, GatewayError> {
+        EnforcementPlan::compile(self)
     }
     /// Standard web ports. The separate SafeDialer IP policy defaults to public-only; a reviewed
     /// explicit CIDR exception remains an intentional override, including with these port rules.
@@ -260,9 +316,18 @@ struct Counters {
     refused: AtomicU64,
     bytes: AtomicU64,
 }
+static BIND_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+
+/// Verifiable diagnostic count of actual proxy listener bind invocations.
+#[must_use]
+pub fn bind_attempts() -> u64 {
+    BIND_ATTEMPTS.load(Ordering::SeqCst)
+}
+
 struct Shared {
     dialer: SafeDialer,
     policy: GatewayPolicy,
+    plan: EnforcementPlan,
     budget: GatewayBudget,
     auth_key: SecretBytes,
     auth_digest: [u8; 32],
@@ -291,6 +356,21 @@ impl ScopedEgressGateway {
         policy: GatewayPolicy,
         budget: GatewayBudget,
     ) -> Result<Self, GatewayError> {
+        let plan = policy.compile_plan()?;
+        Self::start_with_plan(dialer, plan, policy, budget).await
+    }
+
+    /// Bind one local per-scope listener with an explicit compiled enforcement plan.
+    pub async fn start_with_plan(
+        dialer: SafeDialer,
+        plan: EnforcementPlan,
+        policy: GatewayPolicy,
+        budget: GatewayBudget,
+    ) -> Result<Self, GatewayError> {
+        let compiled = policy.compile_plan()?;
+        if compiled.fidelity() != plan.fidelity() || !plan.matches_policy(&policy) {
+            return Err(GatewayError::EgressPolicyUnsupported);
+        }
         let budget = budget.validate()?;
         let mut random = Zeroizing::new([0_u8; 32]);
         getrandom::fill(random.as_mut()).map_err(|_| GatewayError::Unavailable)?;
@@ -313,6 +393,8 @@ impl ScopedEgressGateway {
             Hmac::<Sha256>::new_from_slice(auth_key.expose()).map_err(|_| GatewayError::Invalid)?;
         mac.update(basic.as_bytes());
         let auth_digest = mac.finalize().into_bytes().into();
+
+        BIND_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(|_| GatewayError::Unavailable)?;
@@ -323,6 +405,7 @@ impl ScopedEgressGateway {
         let shared = Arc::new(Shared {
             dialer,
             policy,
+            plan,
             budget,
             auth_key,
             auth_digest,
@@ -345,6 +428,12 @@ impl ScopedEgressGateway {
         self.binding.clone()
     }
     /// Current bounded diagnostics.
+    /// Verifiable policy enforcement fidelity reported by this running gateway.
+    #[must_use]
+    pub fn fidelity(&self) -> EgressFidelity {
+        self.shared.plan.fidelity()
+    }
+
     pub fn stats(&self) -> GatewayStats {
         let c = &self.shared.counters;
         GatewayStats {
