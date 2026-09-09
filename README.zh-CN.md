@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="crates/openbot-ui/assets/brand/wrok-bot-motion.gif" width="160" height="160" alt="Wrok Bot 动态 Logo">
+  <img src=".github/assets/wrok-bot-banner.png" alt="Wrok Bot">
 </p>
 
 <h1 align="center">Wrok Bot</h1>
