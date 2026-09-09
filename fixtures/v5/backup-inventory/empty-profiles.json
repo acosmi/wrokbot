@@ -1,0 +1,24 @@
+{
+  "synthetic": true,
+  "testOnly": true,
+  "mode": "sameInstallation",
+  "profilesEmpty": true,
+  "workspacesEmpty": true,
+  "unknownReceipts": 1,
+  "requiresRestoreBuild": true,
+  "availableBytes": 10000,
+  "originalSiteBytes": 1000,
+  "marginBytes": 100,
+  "schemaChecksum": "schema",
+  "migrations": [["native0031", "mig"]],
+  "vaultKeyId": "vault-key-1",
+  "vaultKeyVersion": 1,
+  "vaultCanary": "canary-1",
+  "emptyCategories": [
+    ["profile_inventory", "datasetContainsNoProfiles"],
+    ["workspace_inventory", "datasetContainsNoWorkspaces"]
+  ],
+  "dropKinds": ["profile_inventory", "workspace_inventory"],
+  "newInstallationId": null,
+  "sameInstallationOnly": false
+}

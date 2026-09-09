@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "specification": "Native control and pixel consent contract v5",
+  "limits": {
+    "maxWidth": 1280,
+    "maxHeight": 800,
+    "maxPayloadBytes": 8388608,
+    "maxFrameRateFps": 5,
+    "minFrameIntervalMillis": 200,
+    "maxConsentDurationMinutes": 15
+  },
+  "protectedCategories": [
+    "KeychainPrompt",
+    "SystemAuthentication",
+    "SecretEditingField",
+    "HostSecureWindow",
+    "Indeterminate"
+  ],
+  "permissionSeparation": [
+    "os_capture_permitted",
+    "product_read_permitted",
+    "native_control_approved",
+    "pixel_consent_granted"
+  ]
+}

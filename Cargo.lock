@@ -4734,6 +4734,7 @@ dependencies = [
  "quick-xml",
  "ring",
  "rmcp",
+ "rustix",
  "rustls",
  "samael",
  "serde",

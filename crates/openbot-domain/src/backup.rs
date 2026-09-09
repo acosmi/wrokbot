@@ -1,0 +1,39 @@
+//! 备份材料清单与恢复计划的纯领域核（§14.4 / R235 / V5-BACKUP-01 基础子项）。
+//!
+//! # 范围
+//!
+//! 本模块只做**结构/材料核验**和**恢复计划**：给定未核清单、受控目标条件与实际观察，
+//! 判定材料集合是否自洽，并产出 [`plan::RestoreOutcome`]。它不读文件、时钟、随机数、
+//! 环境或数据库。实际字节观察由 infra / 未来可信恢复 owner 提供。
+//!
+//! 名称与结果故意停在 [`inventory::InventoryChecked`] / [`plan::StructuralRestorePlan`]：
+//! 摘要相符不是 AEAD/来源真实性证明，WAL 文件名齐全不是 PostgreSQL recovery 证明。
+//! 这些独立验证未完成时，计划**不能**输出 Ready / RestoreAuthorized，也不能开放
+//! Application。
+//!
+//! # 本批明确不做
+//!
+//! - 冻结对外 backup wire / archive / crypto 格式（合成 JSON 只作 test-only fixture）。
+//! - 签发 recovery epoch、写库、生成密钥、恢复 dispatch、重放工具。
+//! - 把同机目录复制称为完整恢复。
+//! - 关闭 V5-BACKUP-01 的真实加密恢复、V5-UPGRADE-01 或 A6 真机演练。
+
+pub mod inventory;
+pub mod plan;
+
+#[cfg(test)]
+mod tests;
+
+pub use inventory::{
+    AuditCheckpointClaim, BackupInventoryClaim, BarrierIdentity, BundleIdentity, CheckedMaterial,
+    CheckedReceipts, CompatibilitySet, ComponentRev, DatasetIdentity, EmptyCategoryClaim,
+    EmptyReason, InstallationIdentity, InventoryBounds, InventoryChecked, InventoryFault,
+    KeyBindingClaim, MaterialClaim, MaterialId, MaterialKind, ReceiptClaim, ReceiptSetClaim,
+    RelativePath, ScramRelationClaim, VaultKeyRefClaim, WrappingRefClaim,
+};
+pub use plan::{
+    BlockedReason, BlockedRestore, CapacityObservation, CapacityPolicy, ControlledRestoreTarget,
+    FollowUpRequirements, IdentityBinding, IncompleteReason, IncompleteRestore, PendingProofs,
+    ProofStatus, RestoreMode, RestoreObservations, RestoreOutcome, RestoreRequest,
+    StructuralRestorePlan, plan_restore,
+};

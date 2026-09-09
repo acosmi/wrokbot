@@ -131,3 +131,7 @@ openbot-agent.workspace = true
 # Real pinned RMCP Streamable HTTP server used only by local protocol E2E.
 rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
 axum.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Existing locked safe syscall wrapper; descriptor-relative backup IO, no application unsafe.
+rustix = { version = "=1.1.4", default-features = false, features = ["std", "fs"] }

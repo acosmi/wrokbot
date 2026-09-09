@@ -1,0 +1,22 @@
+{
+  "synthetic": true,
+  "testOnly": true,
+  "mode": "sameInstallation",
+  "profilesEmpty": false,
+  "workspacesEmpty": false,
+  "unknownReceipts": 1,
+  "requiresRestoreBuild": true,
+  "availableBytes": 10000,
+  "originalSiteBytes": 1000,
+  "marginBytes": 100,
+  "schemaChecksum": "schema",
+  "migrations": [["native0031", "mig"]],
+  "vaultKeyId": "vault-key-1",
+  "vaultKeyVersion": 1,
+  "vaultCanary": "canary-1",
+  "emptyCategories": [],
+  "dropKinds": [],
+  "newInstallationId": null,
+  "sameInstallationOnly": false,
+  "note": "complete controlled inventory; test-only"
+}
