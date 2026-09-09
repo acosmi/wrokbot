@@ -88,6 +88,7 @@ pub mod agent_tools;
 #[cfg(feature = "server-runtime")]
 pub mod application_assembly;
 pub mod auth;
+pub mod backup;
 #[cfg(feature = "server-runtime")]
 mod channel_activity;
 #[cfg(feature = "server-runtime")]

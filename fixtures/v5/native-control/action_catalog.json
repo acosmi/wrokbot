@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "closedActionCategories": [
+    "Pointer",
+    "Keyboard",
+    "Text",
+    "Accessibility"
+  ],
+  "permittedOperations": [
+    "MouseMove",
+    "MouseDown",
+    "MouseUp",
+    "MouseWheel",
+    "KeyDown",
+    "KeyUp",
+    "InsertText",
+    "AxAction"
+  ],
+  "forbiddenCapabilities": [
+    "free_script",
+    "arbitrary_selector",
+    "system_syscall",
+    "shell_passthrough",
+    "keylogger_raw_codes"
+  ]
+}

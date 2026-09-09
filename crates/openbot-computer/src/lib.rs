@@ -47,6 +47,7 @@ pub mod engine;
 #[cfg(target_os = "macos")]
 pub mod host_local_runtime;
 pub mod manager;
+pub mod native;
 #[cfg(any(unix, windows))]
 pub mod screen;
 
@@ -58,4 +59,11 @@ pub use manager::{
     BrowserBudgetError, BrowserDriverFuture, BrowserInstance, BrowserLease,
     BrowserRetirementReason, BrowserRuntimeBudget, BrowserRuntimeDriver, BrowserRuntimeError,
     BrowserRuntimeManager,
+};
+pub use native::{
+    ActionCapability, BootId, CoordinateTransform, InjectedInputState, LogicalRect, MouseButton,
+    NativeAction, NativeActionCategory, NativeControlError, NativeControlHolder, NativeDisplayId,
+    NativeKey, NativeModifier, NativePlatformError, NativePlatformPort, NativeReceipt,
+    NativeSessionCoordinator, NativeSessionEpoch, NativeSessionHandle, NativeSessionRegistry,
+    NativeTarget, NativeTargetHandle, NativeWindowId, ObservationGeneration, OsSessionId,
 };

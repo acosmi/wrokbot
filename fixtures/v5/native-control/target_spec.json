@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "specification": "Native control and pixel consent contract v5",
+  "nativeTargetShape": {
+    "fields": [
+      "installation_id",
+      "os_user",
+      "os_session",
+      "boot_id",
+      "pid",
+      "process_start_time",
+      "window_id",
+      "display_id",
+      "coordinate_transform",
+      "observation_generation"
+    ],
+    "opaqueHandlePrefix": "native-target-"
+  },
+  "invariants": {
+    "sameSessionMaxActingOwners": 1,
+    "maxPendingActionsPerSession": 16,
+    "maxObservationAgeSeconds": 1,
+    "maxActionExecutionSeconds": 5,
+    "maxStopCleanupSeconds": 5,
+    "humanTakeoverAutoReplay": false,
+    "retryNonIdempotentUnknown": false
+  }
+}
