@@ -703,6 +703,196 @@ async fn unpolled_response_drop_releases_driver_without_reading_body() {
     assert!(out.snapshots()[0].permit_released());
     f.stop().await;
 }
+
+#[tokio::test]
+async fn unpolled_response_cancel_isolated_from_completed_execute_closes_exact_driver() {
+    let mut blocked = ResponsePlan::ok("unread first body".into());
+    blocked.body_gate = Some(Arc::new(Semaphore::new(0)));
+    let f = TlsFixture::new(vec![
+        blocked,
+        ResponsePlan::ok(catalogue(GatewayModelWire::OpenAi)),
+    ])
+    .await;
+    let fence = Arc::new(Fence::default());
+    let out = Arc::new(Outcomes::default());
+    let t = transport(
+        &f,
+        GatewayModelWire::OpenAi,
+        fence.clone(),
+        out.clone(),
+        65536,
+        Duration::from_secs(2),
+        true,
+    );
+
+    let cancelled = CancellationToken::new();
+    let first = t
+        .execute(raw_catalogue(&f.endpoint()), cancelled.clone())
+        .await
+        .unwrap();
+    let completed = CancellationToken::new();
+    let mut second = t
+        .execute(raw_catalogue(&f.endpoint()), completed.clone())
+        .await
+        .unwrap();
+    while let Some(chunk) = second.body.next().await {
+        assert!(chunk.is_ok());
+    }
+    assert!(out.snapshots()[1].complete());
+
+    cancelled.cancel();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let facts = out.snapshots();
+            if f.closed.load(Ordering::SeqCst) == 1
+                && facts[0].failure() == Some(GatewayFailure::Cancelled)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancel must close an unpolled response's exact connection");
+    completed.cancel();
+    tokio::task::yield_now().await;
+
+    let facts = out.snapshots();
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0].failure(), Some(GatewayFailure::Cancelled));
+    assert!(!facts[0].complete());
+    assert!(facts[1].complete());
+    assert_eq!(
+        facts[1].failure(),
+        None,
+        "late watcher must not overwrite EOF"
+    );
+    assert_eq!(fence.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fence.releases.load(Ordering::SeqCst), 2);
+    assert_eq!(fence.permits.load(Ordering::SeqCst), 0);
+    drop(first);
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn unpolled_response_absolute_deadline_closes_driver_and_records_timeout() {
+    let mut blocked = ResponsePlan::ok("unread deadline body".into());
+    blocked.body_gate = Some(Arc::new(Semaphore::new(0)));
+    let f = TlsFixture::new(vec![blocked]).await;
+    let fence = Arc::new(Fence::default());
+    let out = Arc::new(Outcomes::default());
+    let t = GatewayTransportFactory::new(
+        f.dialer_with(false, true),
+        VerifiedGatewayEndpoints::new(&f.endpoint(), None, None).unwrap(),
+        GatewayTransportLimits::new(Duration::from_secs(2), 65536).unwrap(),
+    )
+    .for_operation(
+        fence.clone(),
+        out.clone(),
+        Instant::now() + Duration::from_millis(150),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let response = t
+        .execute(raw_catalogue(&f.endpoint()), CancellationToken::new())
+        .await
+        .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let facts = out.snapshots();
+            if f.closed.load(Ordering::SeqCst) == 1
+                && facts[0].failure() == Some(GatewayFailure::Timeout)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("absolute deadline must close an unpolled response's connection");
+    assert_eq!(fence.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(fence.permits.load(Ordering::SeqCst), 0);
+    drop(response);
+    assert_eq!(out.snapshots()[0].failure(), Some(GatewayFailure::Timeout));
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn parsed_oversize_header_still_confirms_permit_release_before_rejection() {
+    let mut response = ResponsePlan::ok(catalogue(GatewayModelWire::OpenAi));
+    response.extra_headers = format!("X-Oversize: {}\r\n", "a".repeat(8193));
+    let f = TlsFixture::new(vec![response]).await;
+    let fence = Arc::new(Fence::default());
+    let out = Arc::new(Outcomes::default());
+    let t = transport(
+        &f,
+        GatewayModelWire::OpenAi,
+        fence.clone(),
+        out.clone(),
+        65536,
+        Duration::from_secs(2),
+        true,
+    );
+    assert!(
+        t.execute(raw_catalogue(&f.endpoint()), CancellationToken::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(f.count(), 1);
+    assert_eq!(fence.permits.load(Ordering::SeqCst), 0);
+    assert_eq!(fence.releases.load(Ordering::SeqCst), 1);
+    let facts = out.snapshots();
+    assert_eq!(facts[0].failure(), Some(GatewayFailure::Rejected));
+    assert!(facts[0].permit_released());
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn local_tls_untrusted_ca_and_hostname_mismatch_send_no_http_bytes() {
+    for (host, trust_test_ca) in [("idp.test", false), ("wrong.test", true)] {
+        let f = TlsFixture::new(vec![]).await;
+        let base = f.endpoint_for_host(host);
+        let fence = Arc::new(Fence::default());
+        let out = Arc::new(Outcomes::default());
+        let t = GatewayTransportFactory::new(
+            f.dialer_for_host(host, false, true, trust_test_ca),
+            VerifiedGatewayEndpoints::new(&base, None, None).unwrap(),
+            GatewayTransportLimits::new(Duration::from_secs(2), 65536).unwrap(),
+        )
+        .for_operation(
+            fence.clone(),
+            out.clone(),
+            Instant::now() + Duration::from_secs(4),
+            Duration::from_millis(250),
+        )
+        .unwrap();
+        assert!(
+            t.execute(raw_catalogue(&base), CancellationToken::new())
+                .await
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while f.tls_failures.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned TLS server must observe the rejected handshake");
+        assert_eq!(f.count(), 0, "TLS failure must precede HTTP parsing");
+        assert_eq!(fence.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fence.permits.load(Ordering::SeqCst), 0);
+        assert_eq!(fence.releases.load(Ordering::SeqCst), 0);
+        let facts = out.snapshots();
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].may_have_sent(), "send stage is conservative");
+        assert_eq!(facts[0].response_status(), None);
+        assert_eq!(facts[0].failure(), Some(GatewayFailure::Body));
+        assert!(!format!("{:?}", out.0.lock().unwrap()[0]).contains(host));
+        f.stop().await;
+    }
+}
+
 #[test]
 fn verified_endpoints_and_limits_reject_unbounded_or_ambiguous_configuration() {
     for base in [

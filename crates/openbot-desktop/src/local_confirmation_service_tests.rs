@@ -662,6 +662,36 @@ async fn native_health_loss_revokes_and_recovery_does_not_restore_grant() {
 }
 
 #[tokio::test]
+async fn status_rechecks_native_health_after_pg_wait_before_projecting_fresh() {
+    let rig = Rig::new();
+    rig.success().await;
+    let old_clone = rig.grant.clone();
+    let gate = AuthorityGate::new();
+    rig.authority.push(VerifyAction::Gate(gate.clone()));
+
+    let service = Arc::clone(&rig.service);
+    let grant = rig.grant.clone();
+    let auth = rig.auth.clone();
+    let closed = rig.closed.clone();
+    let status = tokio::spawn(async move { service.status(&grant, &auth, &closed).await });
+    gate.entered().await;
+
+    // Model the owner or monitor failing while the canonical PG read is in flight, before
+    // its native notification callback has had a chance to invalidate the coordinator.
+    rig.native.available.store(false, Ordering::SeqCst);
+    gate.release.add_permits(1);
+
+    assert_eq!(
+        status.await.unwrap().unwrap(),
+        LocalConfirmationStatus {
+            state: LocalConfirmationState::Unavailable,
+            remaining_seconds: 0,
+        }
+    );
+    assert!(!old_clone.is_fresh(sample_now()));
+}
+
+#[tokio::test]
 async fn native_health_loss_while_final_job_is_queued_cannot_grant() {
     let rig = Rig::new();
     rig.window.queue_finish.store(true, Ordering::SeqCst);

@@ -28,11 +28,11 @@ use crate::desktop_agent_runtime::{
 use crate::desktop_local_bootstrap::{
     DesktopLocalCompositionError, RunningDesktopLocalDataPlane, bootstrap_running_sidecar,
 };
-use crate::desktop_vault::ReviewedDesktopVaultKeyStoreService;
-use crate::os_secret_store::OsSecretStore;
+use crate::desktop_vault::{DesktopVaultKeyError, ReviewedDesktopVaultKeyStoreService};
+use crate::os_secret_store::{OsSecretStore, OsSecretStoreError};
 use crate::postgres_sidecar::{
-    PostgresSidecarError, PostgresSidecarSupervisor, ReviewedPostgresKeyStoreService,
-    VerifiedPostgresBundle,
+    PostgresSecretStoreError, PostgresSidecarError, PostgresSidecarSupervisor,
+    ReviewedPostgresKeyStoreService, VerifiedPostgresBundle,
 };
 use crate::tauri_host::{
     DesktopTauriProtocol, DesktopTauriProtocolSlot, register_tauri_protocol_slot, valid_scheme,
@@ -74,6 +74,24 @@ pub enum DesktopLocalRuntimeError {
     /// Per-instance application key material could not be loaded from the OS store.
     #[error("desktop_local_runtime_vault_failed")]
     Vault,
+    /// The OS denied the signed process access to a required startup secret.
+    #[error("desktop_local_runtime_os_secret_store_access_denied")]
+    OsSecretStoreAccessDenied(#[source] OsSecretStoreError),
+    /// The OS rejected authentication or authorization for a required startup secret.
+    #[error("desktop_local_runtime_os_secret_store_auth_failed")]
+    OsSecretStoreAuthFailed(#[source] OsSecretStoreError),
+    /// A required startup secret needs interaction while daily startup is noninteractive.
+    #[error("desktop_local_runtime_os_secret_store_interaction_required")]
+    OsSecretStoreInteractionRequired(#[source] OsSecretStoreError),
+    /// The current-user OS secret store or backing service is unavailable.
+    #[error("desktop_local_runtime_os_secret_store_unavailable")]
+    OsSecretStoreUnavailable(#[source] OsSecretStoreError),
+    /// The OS secret store returned an unclassified, payload-free startup failure.
+    #[error("desktop_local_runtime_os_secret_store_unknown")]
+    OsSecretStoreUnknown(#[source] OsSecretStoreError),
+    /// A key-store call failed after startup entered a secret write/read-back phase.
+    #[error("desktop_local_runtime_os_secret_store_reconciliation_required")]
+    OsSecretStoreReconciliationRequired(#[source] OsSecretStoreError),
     /// The authoritative action-policy snapshot could not be loaded.
     #[error("desktop_local_runtime_policy_failed")]
     Policy,
@@ -110,6 +128,20 @@ impl DesktopLocalRuntimeError {
             Self::Package => "desktop_local_runtime_package_failed",
             Self::DataPlane => "desktop_local_runtime_data_plane_failed",
             Self::Vault => "desktop_local_runtime_vault_failed",
+            Self::OsSecretStoreAccessDenied(_) => {
+                "desktop_local_runtime_os_secret_store_access_denied"
+            }
+            Self::OsSecretStoreAuthFailed(_) => "desktop_local_runtime_os_secret_store_auth_failed",
+            Self::OsSecretStoreInteractionRequired(_) => {
+                "desktop_local_runtime_os_secret_store_interaction_required"
+            }
+            Self::OsSecretStoreUnavailable(_) => {
+                "desktop_local_runtime_os_secret_store_unavailable"
+            }
+            Self::OsSecretStoreUnknown(_) => "desktop_local_runtime_os_secret_store_unknown",
+            Self::OsSecretStoreReconciliationRequired(_) => {
+                "desktop_local_runtime_os_secret_store_reconciliation_required"
+            }
             Self::Policy => "desktop_local_runtime_policy_failed",
             Self::Application => "desktop_local_runtime_application_failed",
             Self::Agent => "desktop_local_runtime_agent_failed",
@@ -1007,8 +1039,8 @@ pub(crate) async fn prepare_desktop_local_runtime(
         .load_application_key_material(secret_store.as_ref(), &vault_key_store_service)
     {
         Ok(material) => material,
-        Err(_) => {
-            return Err(cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Vault).await);
+        Err(error) => {
+            return Err(cleanup_data_plane(data_plane, map_vault_error(error)).await);
         }
     };
     let pool = data_plane.pool().clone();
@@ -1200,8 +1232,42 @@ async fn cleanup_agent_host(
     }
 }
 
-fn map_sidecar_error(_error: PostgresSidecarError) -> DesktopLocalRuntimeError {
-    DesktopLocalRuntimeError::Sidecar
+fn map_sidecar_error(error: PostgresSidecarError) -> DesktopLocalRuntimeError {
+    match error {
+        PostgresSidecarError::Secret(PostgresSecretStoreError::OsStore(error)) => {
+            map_os_secret_store_error(error)
+        }
+        PostgresSidecarError::Secret(PostgresSecretStoreError::OsStoreReconciliationRequired(
+            error,
+        )) => DesktopLocalRuntimeError::OsSecretStoreReconciliationRequired(error),
+        _ => DesktopLocalRuntimeError::Sidecar,
+    }
+}
+
+fn map_vault_error(error: DesktopVaultKeyError) -> DesktopLocalRuntimeError {
+    match error {
+        DesktopVaultKeyError::OsStore(error) => map_os_secret_store_error(error),
+        DesktopVaultKeyError::OsStoreReconciliationRequired(error) => {
+            DesktopLocalRuntimeError::OsSecretStoreReconciliationRequired(error)
+        }
+        _ => DesktopLocalRuntimeError::Vault,
+    }
+}
+
+fn map_os_secret_store_error(error: OsSecretStoreError) -> DesktopLocalRuntimeError {
+    match error {
+        OsSecretStoreError::AccessDenied => {
+            DesktopLocalRuntimeError::OsSecretStoreAccessDenied(error)
+        }
+        OsSecretStoreError::AuthFailed => DesktopLocalRuntimeError::OsSecretStoreAuthFailed(error),
+        OsSecretStoreError::InteractionRequired => {
+            DesktopLocalRuntimeError::OsSecretStoreInteractionRequired(error)
+        }
+        OsSecretStoreError::StoreUnavailable => {
+            DesktopLocalRuntimeError::OsSecretStoreUnavailable(error)
+        }
+        OsSecretStoreError::Unknown => DesktopLocalRuntimeError::OsSecretStoreUnknown(error),
+    }
 }
 
 fn map_data_plane_error(_error: DesktopLocalCompositionError) -> DesktopLocalRuntimeError {
@@ -1345,6 +1411,67 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn os_store_categories_survive_scram_and_vault_startup_mapping() {
+        for (store_error, expected_code) in [
+            (
+                crate::os_secret_store::OsSecretStoreError::AccessDenied,
+                "desktop_local_runtime_os_secret_store_access_denied",
+            ),
+            (
+                crate::os_secret_store::OsSecretStoreError::AuthFailed,
+                "desktop_local_runtime_os_secret_store_auth_failed",
+            ),
+            (
+                crate::os_secret_store::OsSecretStoreError::InteractionRequired,
+                "desktop_local_runtime_os_secret_store_interaction_required",
+            ),
+            (
+                crate::os_secret_store::OsSecretStoreError::StoreUnavailable,
+                "desktop_local_runtime_os_secret_store_unavailable",
+            ),
+            (
+                crate::os_secret_store::OsSecretStoreError::Unknown,
+                "desktop_local_runtime_os_secret_store_unknown",
+            ),
+        ] {
+            let scram = map_sidecar_error(PostgresSidecarError::Secret(
+                crate::postgres_sidecar::PostgresSecretStoreError::OsStore(store_error),
+            ));
+            let vault = map_vault_error(crate::desktop_vault::DesktopVaultKeyError::OsStore(
+                store_error,
+            ));
+            assert_eq!(scram.code(), expected_code);
+            assert_eq!(vault.code(), expected_code);
+            assert_eq!(scram.to_string(), expected_code);
+            assert_eq!(vault.to_string(), expected_code);
+        }
+
+        let source = crate::os_secret_store::OsSecretStoreError::AuthFailed;
+        for startup in [
+            map_sidecar_error(PostgresSidecarError::Secret(
+                crate::postgres_sidecar::PostgresSecretStoreError::OsStoreReconciliationRequired(
+                    source,
+                ),
+            )),
+            map_vault_error(
+                crate::desktop_vault::DesktopVaultKeyError::OsStoreReconciliationRequired(source),
+            ),
+        ] {
+            assert_eq!(
+                startup.code(),
+                "desktop_local_runtime_os_secret_store_reconciliation_required"
+            );
+            assert_eq!(
+                std::error::Error::source(&startup).map(|source| source.to_string()),
+                Some("desktop_os_secret_store_auth_failed".to_owned())
+            );
+            let rendered = format!("{startup:?} {startup}");
+            assert!(!rendered.contains("-25293"));
+            assert!(!rendered.to_ascii_lowercase().contains("locked"));
+        }
     }
 
     #[test]

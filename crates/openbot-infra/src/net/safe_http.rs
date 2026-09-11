@@ -604,6 +604,12 @@ impl SafeHttpStreamResponse {
         std::mem::take(&mut self.headers)
     }
 
+    /// Narrow cancellation control for the gateway's unpolled-body deadline watcher.
+    /// Aborting this handle drops only this response's HTTP/1 driver; it never reads the body.
+    pub(crate) fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self._driver.0.abort_handle()
+    }
+
     /// HTTP status。
     #[must_use]
     pub const fn status(&self) -> StatusCode {

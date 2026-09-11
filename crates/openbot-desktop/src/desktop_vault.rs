@@ -16,7 +16,7 @@ use openbot_domain::vault::{
 use openbot_infra::vault::CredentialRecordVault;
 
 use crate::desktop_local_bootstrap::RunningDesktopLocalDataPlane;
-use crate::os_secret_store::OsSecretStore;
+use crate::os_secret_store::{OsSecretStore, OsSecretStoreError};
 
 const STORED_FORMAT_VERSION: u8 = 1;
 const MASTER_KEY_BYTES: usize = 32;
@@ -29,9 +29,15 @@ pub enum DesktopVaultKeyError {
     /// Reviewed external key-store service identity was malformed or prohibited.
     #[error("desktop_vault_key_store_identity_invalid")]
     IdentityInvalid,
-    /// OS key store or CSPRNG was unavailable.
+    /// CSPRNG generation was unavailable before any store write.
     #[error("desktop_vault_key_store_unavailable")]
     Unavailable,
+    /// OS key-store access failed with one of the frozen, payload-free platform categories.
+    #[error(transparent)]
+    OsStore(#[from] OsSecretStoreError),
+    /// A platform failure after entering the write phase left persistence unknown.
+    #[error("desktop_vault_master_key_reconciliation_required")]
+    OsStoreReconciliationRequired(#[source] OsSecretStoreError),
     /// Existing bytes did not match the exact versioned 256-bit format.
     #[error("desktop_vault_master_key_corrupt")]
     Corrupt,
@@ -218,10 +224,7 @@ fn load_or_create_master_key<S: OsSecretStore + ?Sized>(
         return Err(DesktopVaultKeyError::Corrupt);
     }
     let account = format!("{ACCOUNT_PREFIX}{instance_id}");
-    if let Some(stored) = store
-        .read(service.as_str(), &account)
-        .map_err(|_| DesktopVaultKeyError::Unavailable)?
-    {
+    if let Some(stored) = store.read(service.as_str(), &account)? {
         return decode_stored(stored);
     }
     if disposition.is_existing() {
@@ -237,10 +240,10 @@ fn load_or_create_master_key<S: OsSecretStore + ?Sized>(
     let framed = SecretBytes::new(framed);
     store
         .write(service.as_str(), &account, framed.expose())
-        .map_err(|_| DesktopVaultKeyError::Unavailable)?;
+        .map_err(DesktopVaultKeyError::OsStoreReconciliationRequired)?;
     let persisted = store
         .read(service.as_str(), &account)
-        .map_err(|_| DesktopVaultKeyError::Unavailable)?
+        .map_err(DesktopVaultKeyError::OsStoreReconciliationRequired)?
         .ok_or(DesktopVaultKeyError::ReconciliationRequired)
         .and_then(decode_stored)?;
     if !generated.0.ct_eq(&persisted.0) {
@@ -311,6 +314,31 @@ mod tests {
         value: Mutex<Option<Vec<u8>>>,
         writes: AtomicUsize,
         replace_on_write: bool,
+    }
+
+    struct FailingOsStore {
+        error: crate::os_secret_store::OsSecretStoreError,
+        writes: AtomicUsize,
+    }
+
+    impl OsSecretStore for FailingOsStore {
+        fn read(
+            &self,
+            _service: &str,
+            _account: &str,
+        ) -> Result<Option<SecretBytes>, crate::os_secret_store::OsSecretStoreError> {
+            Err(self.error)
+        }
+
+        fn write(
+            &self,
+            _service: &str,
+            _account: &str,
+            _secret: &[u8],
+        ) -> Result<(), crate::os_secret_store::OsSecretStoreError> {
+            self.writes.fetch_add(1, Ordering::Relaxed);
+            panic!("a failed key-store read must not enter the write path")
+        }
     }
 
     impl MemoryStore {
@@ -656,5 +684,93 @@ mod tests {
             Err(DesktopVaultKeyError::Corrupt)
         ));
         assert_eq!(corrupt.writes.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn os_store_error_categories_reach_vault_callers_without_writes() {
+        let instance = "f".repeat(64);
+        for error in [
+            crate::os_secret_store::OsSecretStoreError::AccessDenied,
+            crate::os_secret_store::OsSecretStoreError::AuthFailed,
+            crate::os_secret_store::OsSecretStoreError::InteractionRequired,
+            crate::os_secret_store::OsSecretStoreError::StoreUnavailable,
+            crate::os_secret_store::OsSecretStoreError::Unknown,
+        ] {
+            let store = FailingOsStore {
+                error,
+                writes: AtomicUsize::new(0),
+            };
+            assert!(matches!(
+                load_or_create_master_key(
+                    &store,
+                    &service(),
+                    &instance,
+                    DesktopVaultKeyDisposition::existing()
+                ),
+                Err(DesktopVaultKeyError::OsStore(actual)) if actual == error
+            ));
+            assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn vault_os_failure_after_write_entry_requires_reconciliation() {
+        struct AmbiguousOsStore {
+            fail_write: bool,
+            reads: AtomicUsize,
+            writes: AtomicUsize,
+        }
+        impl OsSecretStore for AmbiguousOsStore {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<SecretBytes>, crate::os_secret_store::OsSecretStoreError>
+            {
+                if self.reads.fetch_add(1, Ordering::Relaxed) == 0 {
+                    Ok(None)
+                } else {
+                    Err(crate::os_secret_store::OsSecretStoreError::StoreUnavailable)
+                }
+            }
+
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                _secret: &[u8],
+            ) -> Result<(), crate::os_secret_store::OsSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::Relaxed);
+                if self.fail_write {
+                    Err(crate::os_secret_store::OsSecretStoreError::StoreUnavailable)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        for fail_write in [true, false] {
+            let store = AmbiguousOsStore {
+                fail_write,
+                reads: AtomicUsize::new(0),
+                writes: AtomicUsize::new(0),
+            };
+            assert!(matches!(
+                load_or_create_master_key(
+                    &store,
+                    &service(),
+                    &"1".repeat(64),
+                    DesktopVaultKeyDisposition::fresh()
+                ),
+                Err(DesktopVaultKeyError::OsStoreReconciliationRequired(
+                    crate::os_secret_store::OsSecretStoreError::StoreUnavailable
+                ))
+            ));
+            assert_eq!(store.writes.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                store.reads.load(Ordering::Relaxed),
+                usize::from(!fail_write) + 1
+            );
+        }
     }
 }

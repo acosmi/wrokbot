@@ -25,11 +25,11 @@ impl InteractionControl for SecurityInteraction {
     type Disabled = KeychainUserInteractionLock;
 
     fn interaction_allowed(&self) -> Result<bool, OsSecretStoreError> {
-        SecKeychain::user_interaction_allowed().map_err(|error| unavailable(error.code()))
+        SecKeychain::user_interaction_allowed().map_err(|error| platform_error(error.code()))
     }
 
     fn disable_interaction(&self) -> Result<Self::Disabled, OsSecretStoreError> {
-        SecKeychain::disable_user_interaction().map_err(|error| unavailable(error.code()))
+        SecKeychain::disable_user_interaction().map_err(|error| platform_error(error.code()))
     }
 }
 
@@ -44,7 +44,9 @@ fn with_interaction_gate<I: InteractionControl, T>(
     interaction: &I,
     operation: impl FnOnce() -> Result<T, OsSecretStoreError>,
 ) -> Result<T, OsSecretStoreError> {
-    let _permit = gate.lock().map_err(|_| OsSecretStoreError::Unavailable)?;
+    let _permit = gate
+        .lock()
+        .map_err(|_| OsSecretStoreError::StoreUnavailable)?;
     let restore = if interaction.interaction_allowed()? {
         Some(interaction.disable_interaction()?)
     } else {
@@ -61,7 +63,7 @@ pub(super) fn lookup<T>(result: Result<T, i32>) -> Result<Option<T>, OsSecretSto
     match result {
         Ok(item) => Ok(Some(item)),
         Err(security_framework_sys::base::errSecItemNotFound) => Ok(None),
-        Err(code) => Err(unavailable(code)),
+        Err(code) => Err(platform_error(code)),
     }
 }
 
@@ -76,12 +78,28 @@ pub(super) fn write_after_lookup<T>(
     }
 }
 
-pub(super) fn unavailable(platform_code: i32) -> OsSecretStoreError {
-    tracing::warn!(
-        platform_code,
-        "macOS noninteractive Keychain operation failed"
-    );
-    OsSecretStoreError::Unavailable
+pub(super) fn platform_error(platform_code: i32) -> OsSecretStoreError {
+    let error = classify_platform_error(platform_code);
+    tracing::warn!(category = %error, "macOS noninteractive Keychain operation failed");
+    error
+}
+
+// Values are fixed by the locally installed Apple Security.framework SecBase.h. The
+// security-framework-sys crate intentionally exports only a subset of these legacy Keychain
+// statuses, so the narrow adapter owns the remaining reviewed mapping without exposing OSStatus.
+fn classify_platform_error(platform_code: i32) -> OsSecretStoreError {
+    match platform_code {
+        // Permission/ACL/signing capability failures.
+        -61 | -25292 | -25243 | -25244 | -25309 | -25317 | -34018 | -34020 => {
+            OsSecretStoreError::AccessDenied
+        }
+        security_framework_sys::base::errSecAuthFailed => OsSecretStoreError::AuthFailed,
+        // Both Security.framework spellings, plus dark wake where UI cannot be presented.
+        -25308 | -25315 | -25320 => OsSecretStoreError::InteractionRequired,
+        // No usable current-user Keychain/default/storage service.
+        -25291 | -25294 | -25307 | -25312 | -67585 => OsSecretStoreError::StoreUnavailable,
+        _ => OsSecretStoreError::Unknown,
+    }
 }
 
 #[cfg(test)]
@@ -93,6 +111,29 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn keychain_statuses_map_to_the_frozen_closed_error_set() {
+        for (status, expected) in [
+            (-34018, OsSecretStoreError::AccessDenied),
+            (-34020, OsSecretStoreError::AccessDenied),
+            (-25243, OsSecretStoreError::AccessDenied),
+            (-25293, OsSecretStoreError::AuthFailed),
+            (-25308, OsSecretStoreError::InteractionRequired),
+            (-25315, OsSecretStoreError::InteractionRequired),
+            (-25291, OsSecretStoreError::StoreUnavailable),
+            (-25307, OsSecretStoreError::StoreUnavailable),
+            (-50, OsSecretStoreError::Unknown),
+            (-128, OsSecretStoreError::Unknown),
+        ] {
+            assert_eq!(classify_platform_error(status), expected);
+        }
+        assert_eq!(
+            classify_platform_error(-25293),
+            OsSecretStoreError::AuthFailed,
+            "errSecAuthFailed must never be reported as a locked Keychain"
+        );
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Event {
@@ -164,7 +205,7 @@ mod tests {
             let mut state = self.state.lock().unwrap();
             state.events.push(Event::Inspect);
             if state.inspect_fails {
-                Err(OsSecretStoreError::Unavailable)
+                Err(OsSecretStoreError::StoreUnavailable)
             } else {
                 Ok(state.allowed)
             }
@@ -175,7 +216,7 @@ mod tests {
             let mut state = self.state.lock().unwrap();
             state.events.push(Event::Disable);
             if state.disable_fails {
-                Err(OsSecretStoreError::Unavailable)
+                Err(OsSecretStoreError::StoreUnavailable)
             } else {
                 state.allowed = false;
                 Ok(FakeDisabled(self.clone()))
@@ -223,7 +264,7 @@ mod tests {
             let result = with_interaction_gate(&fake.gate, &fake, || {
                 panic!("failed UI control must not enter the OS operation")
             });
-            assert_eq!(result, Err::<(), _>(OsSecretStoreError::Unavailable));
+            assert_eq!(result, Err::<(), _>(OsSecretStoreError::StoreUnavailable));
             let state = fake.state.lock().unwrap();
             assert!(state.allowed);
             assert_eq!(
@@ -242,9 +283,9 @@ mod tests {
         let fake = FakeInteraction::new(true);
         let result = with_interaction_gate(&fake.gate, &fake, || {
             fake.operation(1);
-            Err::<(), _>(OsSecretStoreError::Unavailable)
+            Err::<(), _>(OsSecretStoreError::StoreUnavailable)
         });
-        assert_eq!(result, Err(OsSecretStoreError::Unavailable));
+        assert_eq!(result, Err(OsSecretStoreError::StoreUnavailable));
         let state = fake.state.lock().unwrap();
         assert!(state.allowed);
         assert_eq!(
@@ -328,7 +369,7 @@ mod tests {
             .is_err()
         );
         let result = with_interaction_gate(&fake.gate, &fake, || panic!("poisoned gate"));
-        assert_eq!(result, Err::<(), _>(OsSecretStoreError::Unavailable));
+        assert_eq!(result, Err::<(), _>(OsSecretStoreError::StoreUnavailable));
         assert!(fake.state.lock().unwrap().events.is_empty());
     }
 
@@ -350,7 +391,7 @@ mod tests {
                     assert_eq!(item, 9);
                     self.operations.borrow_mut().push("update");
                     if self.update_fails {
-                        Err(OsSecretStoreError::Unavailable)
+                        Err(OsSecretStoreError::StoreUnavailable)
                     } else {
                         Ok(())
                     }
@@ -358,7 +399,7 @@ mod tests {
                 || {
                     self.operations.borrow_mut().push("add");
                     if self.add_fails {
-                        Err(OsSecretStoreError::Unavailable)
+                        Err(OsSecretStoreError::StoreUnavailable)
                     } else {
                         Ok(())
                     }
@@ -376,7 +417,7 @@ mod tests {
                 add_fails: false,
                 operations: RefCell::new(Vec::new()),
             };
-            assert_eq!(fake.write(), Err(OsSecretStoreError::Unavailable));
+            assert_eq!(fake.write(), Err(classify_platform_error(code)));
             assert_eq!(*fake.operations.borrow(), ["find"]);
         }
         for (result, expected) in [
@@ -406,7 +447,7 @@ mod tests {
                 add_fails: true,
                 operations: RefCell::new(Vec::new()),
             };
-            assert_eq!(fake.write(), Err(OsSecretStoreError::Unavailable));
+            assert_eq!(fake.write(), Err(OsSecretStoreError::StoreUnavailable));
             assert_eq!(*fake.operations.borrow(), ["find", expected]);
         }
     }
