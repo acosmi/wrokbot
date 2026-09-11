@@ -62,7 +62,11 @@ pub mod policy;
 pub mod remote_callback;
 pub mod routing;
 pub mod run;
+/// Pure internal runtime capability projection.
+pub mod runtime_capabilities;
 pub mod text;
 pub mod thread;
 pub mod tool;
+/// Pure internal update compatibility preflight.
+pub mod upgrade_preflight;
 pub mod vault;

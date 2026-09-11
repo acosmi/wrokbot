@@ -9,7 +9,8 @@
 //! 名称与结果故意停在 [`inventory::InventoryChecked`] / [`plan::StructuralRestorePlan`]：
 //! 摘要相符不是 AEAD/来源真实性证明，WAL 文件名齐全不是 PostgreSQL recovery 证明。
 //! 这些独立验证未完成时，计划**不能**输出 Ready / RestoreAuthorized，也不能开放
-//! Application。
+//! Application。恢复后的旧授权失效与历史保留由 [`post_restore`] 继续细化为逐对象计划，
+//! 仍然不授予 RestoreAuthorized，也不签发 recovery epoch。
 //!
 //! # 本批明确不做
 //!
@@ -20,6 +21,7 @@
 
 pub mod inventory;
 pub mod plan;
+pub mod post_restore;
 
 #[cfg(test)]
 mod tests;
@@ -36,4 +38,10 @@ pub use plan::{
     FollowUpRequirements, IdentityBinding, IncompleteReason, IncompleteRestore, PendingProofs,
     ProofStatus, RestoreMode, RestoreObservations, RestoreOutcome, RestoreRequest,
     StructuralRestorePlan, plan_restore,
+};
+pub use post_restore::{
+    AuthMaterialKind, AuthObjectClaim, CategoryRule, GlobalObligations, HistoricalDecryptRef,
+    ObjectDisposition, ObjectDispositionKind, PostRestoreBounds, PostRestoreFault, PostRestorePlan,
+    PostRestoreRequest, ReceiptClass, ReceiptRetention, RecoveryEpochDerivation,
+    RecoveryEpochObligation, plan_post_restore,
 };
