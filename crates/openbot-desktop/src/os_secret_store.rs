@@ -13,9 +13,21 @@ mod macos_interaction;
 /// Stable platform-store failures with no service, account, path, or secret payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum OsSecretStoreError {
-    /// The current-user platform store could not complete the operation.
+    /// The current process is not permitted to access the requested store operation.
+    #[error("desktop_os_secret_store_access_denied")]
+    AccessDenied,
+    /// The platform rejected authentication or authorization material.
+    #[error("desktop_os_secret_store_auth_failed")]
+    AuthFailed,
+    /// The operation requires user interaction that daily startup deliberately disables.
+    #[error("desktop_os_secret_store_interaction_required")]
+    InteractionRequired,
+    /// The current-user platform store or its backing service is unavailable.
     #[error("desktop_os_secret_store_unavailable")]
-    Unavailable,
+    StoreUnavailable,
+    /// The platform returned a failure outside the reviewed closed mapping.
+    #[error("desktop_os_secret_store_unknown")]
+    Unknown,
 }
 
 /// Opaque current-user generic-secret port. Reads transfer their unique allocation directly into
@@ -42,7 +54,7 @@ impl MacOsKeychainSecretStore {
         macos_interaction::non_interactive(|| {
             security_framework::os::macos::keychain::SecKeychain::default()
                 .map(|keychain| Self { keychain })
-                .map_err(|error| macos_interaction::unavailable(error.code()))
+                .map_err(|error| macos_interaction::platform_error(error.code()))
         })
     }
 
@@ -86,12 +98,12 @@ impl OsSecretStore for MacOsKeychainSecretStore {
                 },
                 |mut item| {
                     item.set_password(secret)
-                        .map_err(|error| macos_interaction::unavailable(error.code()))
+                        .map_err(|error| macos_interaction::platform_error(error.code()))
                 },
                 || {
                     self.keychain
                         .add_generic_password(service, account, secret)
-                        .map_err(|error| macos_interaction::unavailable(error.code()))
+                        .map_err(|error| macos_interaction::platform_error(error.code()))
                 },
             )
         })
@@ -115,7 +127,7 @@ impl OsSecretStore for WindowsCredentialSecretStore {
             .map(|secret| secret.map(|secret| SecretBytes::new(secret.into_bytes())))
             .map_err(|error| {
                 tracing::warn!(?error, "Windows Credential Manager read failed");
-                OsSecretStoreError::Unavailable
+                OsSecretStoreError::StoreUnavailable
             })
     }
 
@@ -123,7 +135,7 @@ impl OsSecretStore for WindowsCredentialSecretStore {
         let target = format!("{service}:{account}");
         openbot_windows_sandbox::write_generic_credential(&target, secret).map_err(|error| {
             tracing::warn!(?error, "Windows Credential Manager write failed");
-            OsSecretStoreError::Unavailable
+            OsSecretStoreError::StoreUnavailable
         })
     }
 }

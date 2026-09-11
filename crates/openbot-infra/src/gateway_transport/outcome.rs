@@ -53,8 +53,14 @@ impl GatewayAttemptSnapshot {
 /// Transport-minted read handle. Observers cannot alter facts or supply a shared mutable slot.
 #[derive(Clone)]
 pub struct GatewayAttempt {
-    state: Arc<Mutex<GatewayAttemptSnapshot>>,
+    state: Arc<Mutex<AttemptState>>,
     request: Option<GatewayRequestDescriptor>,
+}
+
+#[derive(Default)]
+struct AttemptState {
+    snapshot: GatewayAttemptSnapshot,
+    settled: bool,
 }
 impl GatewayAttempt {
     /// None means framing failed before a closed destination could be established.
@@ -63,10 +69,10 @@ impl GatewayAttempt {
     }
     /// Copy current facts; no identity or request data is retained here.
     pub fn snapshot(&self) -> GatewayAttemptSnapshot {
-        *self
-            .state
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot
     }
 }
 impl std::fmt::Debug for GatewayAttempt {
@@ -83,30 +89,48 @@ pub trait GatewayHttpOutcomes: Send + Sync {
     fn started(&self, attempt: GatewayAttempt);
 }
 pub(super) struct AttemptGuard {
-    attempt: GatewayAttempt,
-    settled: bool,
+    state: Arc<Mutex<AttemptState>>,
+}
+
+pub(super) struct AttemptWatch {
+    state: Arc<Mutex<AttemptState>>,
 }
 impl AttemptGuard {
     pub(super) fn new(
         request: Option<GatewayRequestDescriptor>,
         sink: &dyn GatewayHttpOutcomes,
     ) -> Self {
+        let state = Arc::new(Mutex::new(AttemptState::default()));
         let attempt = GatewayAttempt {
-            state: Arc::new(Mutex::new(GatewayAttemptSnapshot::default())),
+            state: state.clone(),
             request,
         };
         sink.started(attempt.clone());
-        Self {
-            attempt,
-            settled: false,
-        }
+        Self { state }
     }
     fn update(&self, f: impl FnOnce(&mut GatewayAttemptSnapshot)) {
         f(&mut self
-            .attempt
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner));
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot);
+    }
+    fn settle(&self, f: impl FnOnce(&mut GatewayAttemptSnapshot)) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.settled {
+            return false;
+        }
+        f(&mut state.snapshot);
+        state.settled = true;
+        true
+    }
+    pub(super) fn watch(&self) -> AttemptWatch {
+        AttemptWatch {
+            state: self.state.clone(),
+        }
     }
     pub(super) fn dispatched(&self) {
         self.update(|s| s.may_have_sent = true);
@@ -117,15 +141,13 @@ impl AttemptGuard {
     pub(super) fn released(&self) {
         self.update(|s| s.permit_released = true);
     }
-    pub(super) fn completed(&mut self) {
-        self.update(|s| s.complete = true);
-        self.settled = true;
+    pub(super) fn completed(&self) -> bool {
+        self.settle(|s| s.complete = true)
     }
-    pub(super) fn fail(&mut self, failure: GatewayFailure) {
-        self.update(|s| s.failure = Some(failure));
-        self.settled = true;
+    pub(super) fn fail(&self, failure: GatewayFailure) -> bool {
+        self.settle(|s| s.failure = Some(failure))
     }
-    pub(super) fn fence_failed(&mut self, error: GatewayFenceError) {
+    pub(super) fn fence_failed(&self, error: GatewayFenceError) {
         self.fail(match error {
             GatewayFenceError::Refused => GatewayFailure::Rejected,
             GatewayFenceError::Unavailable => GatewayFailure::Unavailable,
@@ -133,10 +155,22 @@ impl AttemptGuard {
         });
     }
 }
+impl AttemptWatch {
+    pub(super) fn fail(&self, failure: GatewayFailure) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.settled {
+            return false;
+        }
+        state.snapshot.failure = Some(failure);
+        state.settled = true;
+        true
+    }
+}
 impl Drop for AttemptGuard {
     fn drop(&mut self) {
-        if !self.settled {
-            self.fail(GatewayFailure::Cancelled);
-        }
+        self.fail(GatewayFailure::Cancelled);
     }
 }

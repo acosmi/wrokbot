@@ -29,6 +29,7 @@ struct Capture {
 }
 struct LocalResolver {
     address: SocketAddr,
+    expected_host: String,
     calls: AtomicUsize,
     fail_after_first: bool,
 }
@@ -36,7 +37,10 @@ struct LocalResolver {
 impl DnsResolver for LocalResolver {
     async fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, DnsUnavailable> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        if host != "idp.test" || port != self.address.port() || (self.fail_after_first && n > 0) {
+        if host != self.expected_host
+            || port != self.address.port()
+            || (self.fail_after_first && n > 0)
+        {
             return Err(DnsUnavailable);
         }
         Ok(vec![self.address])
@@ -49,6 +53,7 @@ struct TlsFixture {
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
     closed: Arc<AtomicUsize>,
+    tls_failures: Arc<AtomicUsize>,
 }
 impl TlsFixture {
     async fn new(plans: Vec<ResponsePlan>) -> Self {
@@ -75,6 +80,8 @@ impl TlsFixture {
         let (stop, mut stopped) = oneshot::channel();
         let closed = Arc::new(AtomicUsize::new(0));
         let closed_task = closed.clone();
+        let tls_failures = Arc::new(AtomicUsize::new(0));
+        let tls_failures_task = tls_failures.clone();
         let task = tokio::spawn(async move {
             let mut children = JoinSet::new();
             loop {
@@ -86,8 +93,15 @@ impl TlsFixture {
                         let seen = seen.clone();
                         let planned = planned.clone();
                         let closed = closed_task.clone();
+                        let tls_failures = tls_failures_task.clone();
                         children.spawn(async move {
-                            let Ok(mut stream) = tls.accept(stream).await else { return; };
+                            let mut stream = match tls.accept(stream).await {
+                                Ok(stream) => stream,
+                                Err(_) => {
+                                    tls_failures.fetch_add(1, Ordering::SeqCst);
+                                    return;
+                                }
+                            };
                             let Some(capture) = read_http(&mut stream).await else { return; };
                             let mut plan = planned.lock().unwrap().pop_front()
                                 .expect("owned fixture has no planned response");
@@ -132,25 +146,38 @@ impl TlsFixture {
             stop: Some(stop),
             task: Some(task),
             closed,
+            tls_failures,
         }
     }
     fn endpoint(&self) -> String {
-        format!("https://idp.test:{}", self.address.port())
+        self.endpoint_for_host("idp.test")
+    }
+    fn endpoint_for_host(&self, host: &str) -> String {
+        format!("https://{host}:{}", self.address.port())
     }
     fn dialer_with(&self, fail_after_first: bool, allow: bool) -> SafeDialer {
-        SafeDialer::with_extra_roots(
-            EgressPolicy::new(
-                CidrAllowlist::parse_exact(if allow { vec!["127.0.0.1/32"] } else { vec![] })
-                    .unwrap(),
-            ),
-            Arc::new(LocalResolver {
-                address: self.address,
-                calls: AtomicUsize::new(0),
-                fail_after_first,
-            }),
-            [self.root.clone()],
-        )
-        .unwrap()
+        self.dialer_for_host("idp.test", fail_after_first, allow, true)
+    }
+    fn dialer_for_host(
+        &self,
+        host: &str,
+        fail_after_first: bool,
+        allow: bool,
+        trust_test_ca: bool,
+    ) -> SafeDialer {
+        let policy = EgressPolicy::new(
+            CidrAllowlist::parse_exact(if allow { vec!["127.0.0.1/32"] } else { vec![] }).unwrap(),
+        );
+        let resolver = Arc::new(LocalResolver {
+            address: self.address,
+            expected_host: host.to_owned(),
+            calls: AtomicUsize::new(0),
+            fail_after_first,
+        });
+        if !trust_test_ca {
+            return SafeDialer::with_resolver(policy, resolver);
+        }
+        SafeDialer::with_extra_roots(policy, resolver, [self.root.clone()]).unwrap()
     }
     fn count(&self) -> usize {
         self.captures.lock().unwrap().len()

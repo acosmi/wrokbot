@@ -33,7 +33,7 @@ use tokio::process::{Child, Command};
 use tokio_postgres::NoTls;
 
 #[cfg(feature = "postgres-key-store")]
-use crate::os_secret_store::OsSecretStore;
+use crate::os_secret_store::{OsSecretStore, OsSecretStoreError};
 
 /// Exact PGDG source release used to build the first PostgreSQL sidecar epoch.
 pub const POSTGRES_VERSION: &str = "17.11";
@@ -456,15 +456,28 @@ impl PostgresStartLock {
         if !disposition.is_current_for(self) {
             return Err(PostgresSecretStoreError::DispositionInvalid);
         }
-        store.write(service.as_str(), &account, generated.expose())?;
+        store
+            .write(service.as_str(), &account, generated.expose())
+            .map_err(mark_os_store_write_ambiguous)?;
         let persisted = store
-            .read(service.as_str(), &account)?
+            .read(service.as_str(), &account)
+            .map_err(mark_os_store_write_ambiguous)?
             .ok_or(PostgresSecretStoreError::ReconciliationRequired)
             .and_then(PostgresScramSecret::from_stored)?;
         if !generated.0.ct_eq(&persisted.0) {
             return Err(PostgresSecretStoreError::ReconciliationRequired);
         }
         Ok(persisted)
+    }
+}
+
+#[cfg(feature = "postgres-key-store")]
+fn mark_os_store_write_ambiguous(error: PostgresSecretStoreError) -> PostgresSecretStoreError {
+    match error {
+        PostgresSecretStoreError::OsStore(error) => {
+            PostgresSecretStoreError::OsStoreReconciliationRequired(error)
+        }
+        other => other,
     }
 }
 
@@ -486,9 +499,15 @@ pub enum PostgresSecretStoreError {
     /// Reviewed external key-store service identity was malformed or prohibited.
     #[error("postgres_key_store_identity_invalid")]
     IdentityInvalid,
-    /// OS key store or CSPRNG was unavailable.
+    /// CSPRNG generation was unavailable before any store write.
     #[error("postgres_key_store_unavailable")]
     Unavailable,
+    /// OS key-store access failed with one of the frozen, payload-free platform categories.
+    #[error(transparent)]
+    OsStore(#[from] OsSecretStoreError),
+    /// A platform failure after entering the write phase left persistence unknown.
+    #[error("postgres_key_store_reconciliation_required")]
+    OsStoreReconciliationRequired(#[source] OsSecretStoreError),
     /// Existing bytes were not the exact closed PostgreSQL SCRAM secret shape.
     #[error("postgres_key_store_secret_corrupt")]
     Corrupt,
@@ -639,7 +658,7 @@ impl<T: OsSecretStore + ?Sized> PostgresSecretStore for T {
     ) -> Result<Option<PostgresStoredSecret>, PostgresSecretStoreError> {
         OsSecretStore::read(self, service, account)
             .map(|secret| secret.map(PostgresStoredSecret::from_secret_bytes))
-            .map_err(|_| PostgresSecretStoreError::Unavailable)
+            .map_err(PostgresSecretStoreError::from)
     }
 
     fn write(
@@ -648,8 +667,7 @@ impl<T: OsSecretStore + ?Sized> PostgresSecretStore for T {
         account: &str,
         secret: &[u8],
     ) -> Result<(), PostgresSecretStoreError> {
-        OsSecretStore::write(self, service, account, secret)
-            .map_err(|_| PostgresSecretStoreError::Unavailable)
+        OsSecretStore::write(self, service, account, secret).map_err(PostgresSecretStoreError::from)
     }
 }
 
@@ -3276,6 +3294,126 @@ mod tests {
 
         drop(lock);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "postgres-key-store")]
+    #[test]
+    fn os_store_error_categories_reach_scram_callers_without_writes() {
+        struct FailingOsStore {
+            error: OsSecretStoreError,
+            writes: AtomicUsize,
+        }
+        impl OsSecretStore for FailingOsStore {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<SecretBytes>, OsSecretStoreError> {
+                Err(self.error)
+            }
+
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                _secret: &[u8],
+            ) -> Result<(), OsSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::Relaxed);
+                panic!("a failed key-store read must not enter the write path")
+            }
+        }
+
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.product.postgresql.closed-errors",
+        )
+        .unwrap();
+        for error in [
+            OsSecretStoreError::AccessDenied,
+            OsSecretStoreError::AuthFailed,
+            OsSecretStoreError::InteractionRequired,
+            OsSecretStoreError::StoreUnavailable,
+            OsSecretStoreError::Unknown,
+        ] {
+            let (root, lock) = secret_lock("closed-os-store-errors");
+            let disposition =
+                PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Existing);
+            let store = FailingOsStore {
+                error,
+                writes: AtomicUsize::new(0),
+            };
+            assert!(matches!(
+                lock.load_or_create_scram_secret(&store, &service, &disposition),
+                Err(PostgresSecretStoreError::OsStore(actual)) if actual == error
+            ));
+            assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+            drop(lock);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(feature = "postgres-key-store")]
+    #[test]
+    fn scram_os_failure_after_write_entry_requires_reconciliation() {
+        struct AmbiguousOsStore {
+            fail_write: bool,
+            reads: AtomicUsize,
+            writes: AtomicUsize,
+        }
+        impl OsSecretStore for AmbiguousOsStore {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<SecretBytes>, OsSecretStoreError> {
+                if self.reads.fetch_add(1, Ordering::Relaxed) == 0 {
+                    Ok(None)
+                } else {
+                    Err(OsSecretStoreError::StoreUnavailable)
+                }
+            }
+
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                _secret: &[u8],
+            ) -> Result<(), OsSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::Relaxed);
+                if self.fail_write {
+                    Err(OsSecretStoreError::StoreUnavailable)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.product.postgresql.ambiguous",
+        )
+        .unwrap();
+        for fail_write in [true, false] {
+            let (root, lock) = secret_lock("ambiguous-os-store-write");
+            let disposition =
+                PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+            let store = AmbiguousOsStore {
+                fail_write,
+                reads: AtomicUsize::new(0),
+                writes: AtomicUsize::new(0),
+            };
+            assert!(matches!(
+                lock.load_or_create_scram_secret(&store, &service, &disposition),
+                Err(PostgresSecretStoreError::OsStoreReconciliationRequired(
+                    OsSecretStoreError::StoreUnavailable
+                ))
+            ));
+            assert_eq!(store.writes.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                store.reads.load(Ordering::Relaxed),
+                usize::from(!fail_write) + 1
+            );
+            drop(lock);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]

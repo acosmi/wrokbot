@@ -179,7 +179,7 @@ impl HttpTransport for GatewayTransport {
                     remaining,
                 )
             });
-        let mut attempt = AttemptGuard::new(
+        let attempt = AttemptGuard::new(
             framed.as_ref().ok().map(|f| f.descriptor),
             self.outcomes.as_ref(),
         );
@@ -229,10 +229,6 @@ impl HttpTransport for GatewayTransport {
         let status = response.status();
         attempt.headers(status.as_u16());
         let headers = response.take_headers();
-        if !valid_response_headers(&headers) {
-            attempt.fail(GatewayFailure::Rejected);
-            return Err(TransportError::Rejected);
-        }
         let release = tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(GatewayFenceError::CleanupUnknown),
@@ -244,12 +240,36 @@ impl HttpTransport for GatewayTransport {
             return Err(TransportError::Rejected);
         }
         attempt.released();
+        // Once HTTP headers exist, confirm authority cleanup even if the Gateway-specific header
+        // budget rejects them. Permit Drop alone cannot prove a required PG rollback ACK.
+        if !valid_response_headers(&headers) {
+            attempt.fail(GatewayFailure::Rejected);
+            return Err(TransportError::Rejected);
+        }
         let body_deadline = if framed.descriptor.streaming {
             self.deadline
         } else {
             deadline
         };
+        let watcher = BodyWatch(tokio::spawn({
+            let cancel = cancel.clone();
+            let attempt = attempt.watch();
+            let driver = response.abort_handle();
+            async move {
+                let failure = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => GatewayFailure::Cancelled,
+                    _ = tokio::time::sleep_until(body_deadline) => GatewayFailure::Timeout,
+                };
+                // Settle exactly once before waking a concurrent body poll through driver abort;
+                // EOF/completion and watcher causes therefore cannot overwrite each other.
+                if attempt.fail(failure) {
+                    driver.abort();
+                }
+            }
+        }));
         let state = BodyState {
+            _watcher: watcher,
             response: Some(response),
             cancel,
             attempt,
@@ -271,8 +291,12 @@ impl HttpTransport for GatewayTransport {
             match next {
                 Ok(Some(bytes)) => Some((Ok(bytes), state)),
                 Ok(None) => {
-                    state.attempt.completed();
-                    None
+                    if state.attempt.completed() {
+                        None
+                    } else {
+                        state.terminal = true;
+                        Some((Err(TransportError::Body), state))
+                    }
                 }
                 Err(error) => {
                     state.response.take();
@@ -290,12 +314,21 @@ impl HttpTransport for GatewayTransport {
     }
 }
 struct BodyState {
+    _watcher: BodyWatch,
     response: Option<SafeHttpStreamResponse>,
     cancel: CancellationToken,
     attempt: AttemptGuard,
     deadline: Instant,
     stall: Duration,
     terminal: bool,
+}
+
+struct BodyWatch(tokio::task::JoinHandle<()>);
+
+impl Drop for BodyWatch {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 fn valid_response_headers(headers: &HeaderMap) -> bool {
     let mut count = 0usize;

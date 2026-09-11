@@ -380,6 +380,10 @@ impl LocalConfirmationService {
         let budget = self.budget()?;
         self.is_native_available();
         self.verify(expected, closed, &budget, None).await?;
+        // The canonical authority read may wait. Owner/monitor health can fail in that gap
+        // before its native invalidation callback is delivered, so intersect freshness with a
+        // new health observation immediately before reading the shared grant.
+        self.is_native_available();
         self.read_status(grant, closed, &budget)
     }
 
