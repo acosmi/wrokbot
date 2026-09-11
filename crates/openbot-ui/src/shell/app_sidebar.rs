@@ -134,8 +134,11 @@ pub fn AppSidebar() -> impl IntoView {
     let chat_location = location.clone();
     let roster_location = location.clone();
     let agents_location = location.clone();
-    let library_location = location.clone();
+    let bot_location = location.clone();
     let approvals_location = location.clone();
+    let skills_location = location.clone();
+    let memory_location = location.clone();
+    let library_location = location.clone();
     let plugins_location = location.clone();
     let admin_location = location;
     let search_open = RwSignal::new(false);
@@ -154,28 +157,22 @@ pub fn AppSidebar() -> impl IntoView {
             </button>
         </SidebarHeader>
         <SidebarContent>
-            <SidebarNavList>
-                <SidebarNavLink href="/".to_owned() icon=Icon::Pencil
-                    label=move || t_string!(i18n, shell.nav_chat).to_owned()
-                    current=Signal::derive(move || chat_location.pathname.get() == "/") />
-                <SidebarNavLink href="/agents".to_owned() icon=Icon::Bot
-                    label=move || t_string!(i18n, shell.nav_agents).to_owned()
-                    current=Signal::derive(move || agents_location.pathname.get() == "/agents") />
-                <SidebarNavLink href="/settings/components-gallery".to_owned() icon=Icon::Archive
-                    label=move || t_string!(i18n, shell.nav_library).to_owned()
-                    current=Signal::derive(move || library_location.pathname.get().starts_with("/settings/components-gallery")) />
-                <SidebarNavLink href="/approvals".to_owned() icon=Icon::Clock
-                    label=move || t_string!(i18n, admin.nav_approvals).to_owned()
-                    current=Signal::derive(move || approvals_location.pathname.get() == "/approvals") />
-            </SidebarNavList>
-            <details class="ob-workspace-disclosure" on:keydown=crate::primitives::dismiss_disclosure on:click=crate::primitives::dismiss_disclosure_link>
-                <summary>{move || t!(i18n, shell.workspace)}<IconView icon=Icon::ChevronDown size=IconSize::Inline /></summary>
-                <a class="ob-sidebar-secondary-link" href="/bot"><IconView icon=Icon::Globe size=IconSize::Inline />{move || t!(i18n, shell.nav_bot)}</a>
-                <a class="ob-sidebar-secondary-link" href="/skills"><IconView icon=Icon::FileText size=IconSize::Inline />{move || t!(i18n, shell.nav_skills)}</a>
-                <a class="ob-sidebar-secondary-link" href="/settings/memory"><IconView icon=Icon::Brain size=IconSize::Inline />{move || t!(i18n, shell.nav_memory)}</a>
-                <a class="ob-sidebar-secondary-link" href="/channel/new"><IconView icon=Icon::Plus size=IconSize::Inline />{move || t!(i18n, shell.new_channel)}</a>
-            </details>
             <SidebarGroup>
+                <SidebarGroupLabel>{move || t!(i18n, shell.tier_daily_work)}</SidebarGroupLabel>
+                <SidebarNavList>
+                    <SidebarNavLink href="/".to_owned() icon=Icon::Pencil
+                        label=move || t_string!(i18n, shell.nav_chat).to_owned()
+                        current=Signal::derive(move || chat_location.pathname.get() == "/") />
+                    <SidebarNavLink href="/agents".to_owned() icon=Icon::Bot
+                        label=move || t_string!(i18n, shell.nav_agents).to_owned()
+                        current=Signal::derive(move || agents_location.pathname.get() == "/agents") />
+                    <SidebarNavLink href="/bot".to_owned() icon=Icon::Globe
+                        label=move || t_string!(i18n, shell.nav_bot).to_owned()
+                        current=Signal::derive(move || bot_location.pathname.get() == "/bot") />
+                    <SidebarNavLink href="/approvals".to_owned() icon=Icon::Clock
+                        label=move || t_string!(i18n, admin.nav_approvals).to_owned()
+                        current=Signal::derive(move || approvals_location.pathname.get() == "/approvals") />
+                </SidebarNavList>
                 <div class="ob-sidebar-chats-heading">
                     <SidebarGroupLabel>{move || t!(i18n, shell.chats)}</SidebarGroupLabel>
                     <a href="/channel/new" aria-label=move || t_string!(i18n, shell.new_channel).to_owned()>
@@ -212,11 +209,25 @@ pub fn AppSidebar() -> impl IntoView {
                     <Button variant=ButtonVariant::Ghost size=ButtonSize::Medium loading=loading_more on_activate=load_more>{move || t!(i18n, channels.load_more)}</Button>
                 </Show>
             </SidebarGroup>
+            <SidebarGroup>
+                <SidebarGroupLabel>{move || t!(i18n, shell.tier_capabilities)}</SidebarGroupLabel>
+                <SidebarNavList>
+                    <SidebarNavLink href="/skills".to_owned() icon=Icon::FileText
+                        label=move || t_string!(i18n, shell.nav_skills).to_owned()
+                        current=Signal::derive(move || skills_location.pathname.get().starts_with("/skills")) />
+                    <SidebarNavLink href="/settings/memory".to_owned() icon=Icon::Brain
+                        label=move || t_string!(i18n, shell.nav_memory).to_owned()
+                        current=Signal::derive(move || memory_location.pathname.get().starts_with("/settings/memory")) />
+                    <SidebarNavLink href="/settings/components-gallery".to_owned() icon=Icon::Archive
+                        label=move || t_string!(i18n, shell.nav_library).to_owned()
+                        current=Signal::derive(move || library_location.pathname.get().starts_with("/settings/components-gallery")) />
+                </SidebarNavList>
+            </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
             <SidebarNavList>
                 <SidebarNavLink href="/settings/connected-accounts".to_owned() icon=Icon::Puzzle
-                    label=move || t_string!(i18n, plugins.title).to_owned()
+                    label=move || t_string!(i18n, shell.nav_tool_connections).to_owned()
                     current=Signal::derive(move || plugins_location.pathname.get().starts_with("/settings/connected-accounts")) />
             </SidebarNavList>
             <details class="ob-account-disclosure" on:keydown=crate::primitives::dismiss_disclosure on:click=crate::primitives::dismiss_disclosure_link>

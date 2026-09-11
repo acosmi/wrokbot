@@ -3060,7 +3060,8 @@ textarea:focus-visible,
   font-size: var(--text-xs);
 }
 
-.ob-home-routing-hint {
+.ob-home-routing-hint,
+.ob-home-model-preset-note {
   margin: calc(var(--spacing) * 2) 0 0;
   color: var(--fg-muted);
   font-size: var(--text-xs);
@@ -3232,7 +3233,7 @@ textarea:focus-visible,
   inset-block-start: 0;
   z-index: var(--z-sidebar);
   display: flex;
-  width: clamp(var(--size-sidebar-min), 24vw, var(--size-sidebar-max));
+  width: var(--size-sidebar);
   height: 100dvh;
   min-width: 0;
   flex: 0 0 auto;
@@ -3280,6 +3281,12 @@ textarea:focus-visible,
   min-height: 0;
   flex: 1 1 auto;
   padding: 0 calc(var(--spacing) * 3);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 
 .ob-sidebar-group {
@@ -4767,7 +4774,7 @@ textarea:focus-visible,
 .ob-sidebar-provider[data-state="expanded"] .ob-shell-topbar > .ob-sidebar-trigger {
   position: fixed;
   inset-block-start: calc((var(--size-topbar) - var(--size-control-md)) / 2);
-  inset-inline-start: calc(clamp(var(--size-sidebar-min), 24vw, var(--size-sidebar-max)) - var(--spacing) * 13);
+  inset-inline-start: calc(var(--size-sidebar) - var(--spacing) * 13);
   z-index: var(--z-sidebar);
 }
 .ob-sidebar-chats-heading {
@@ -4786,25 +4793,6 @@ textarea:focus-visible,
 .ob-sidebar-chats-heading > a:hover {
   background: var(--bg-chip);
   color: var(--fg);
-}
-.ob-workspace-disclosure {
-  margin-block: calc(var(--spacing) * 7) calc(var(--spacing) * 4);
-}
-.ob-workspace-disclosure > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
-  color: var(--fg-muted);
-  font-size: var(--text-lg);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-}
-.ob-workspace-disclosure > summary .ob-icon {
-  opacity: 0;
-}
-.ob-workspace-disclosure:is(:hover, [open], :focus-within) > summary .ob-icon {
-  opacity: 1;
 }
 summary {
   list-style: none;
@@ -4883,7 +4871,7 @@ summary:focus-visible {
   justify-content: center;
   padding-inline: 0;
 }
-.ob-sidebar[data-state="rail"] :is(.ob-sidebar-search-toggle, .ob-workspace-disclosure, .ob-sidebar-chats-heading, .ob-account-chevron) {
+.ob-sidebar[data-state="rail"] :is(.ob-sidebar-search-toggle, .ob-sidebar-chats-heading, .ob-account-chevron) {
   display: none;
 }
 .ob-sidebar[data-state="rail"] .ob-account-disclosure > summary {
@@ -5070,17 +5058,15 @@ summary:focus-visible {
 .ob-sidebar-content {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
-.ob-sidebar-content > .ob-sidebar-list, .ob-workspace-disclosure {
+.ob-sidebar-content > .ob-sidebar-list {
   flex: 0 0 auto;
 }
 .ob-sidebar-content > .ob-sidebar-group {
   display: block;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
+  flex: 0 0 auto;
 }
 .ob-sidebar-chats-heading {
   position: sticky;
@@ -5172,7 +5158,7 @@ summary:focus-visible {
 html[data-window-chrome="macos-overlay"] {
   --size-topbar: var(--size-native-toolbar);
   --size-brand-mark: var(--size-avatar-md);
-  --window-toolbar-start: calc(var(--spacing) * 24);
+  --window-toolbar-start: calc(var(--spacing) * 22);
   --window-sidebar-start: calc(var(--spacing) * 22);
 }
 html[data-window-chrome="macos-overlay"] .ob-sidebar[data-state="rail"] .ob-sidebar-brand {
