@@ -53,10 +53,16 @@ pub fn AppLayout(children: Children) -> impl IntoView {
                                 <crate::primitives::BrandMark/>
                                 <span class="ob-brand-wordmark" aria-hidden="true"></span>
                             </a>
-                            <a class="ob-shell-context" href="/settings/connected-accounts" aria-label=move || t_string!(i18n, shell.connections).to_owned()>
-                                <IconView icon=Icon::Plug size=IconSize::Navigation />
-                                <span class="ob-shell-context-label">{move || t!(i18n, shell.connections)}</span>
-                            </a>
+                            <div class="ob-shell-context"
+                                role="status"
+                                aria-label=move || t_string!(i18n, shell.env_tooltip).to_owned()
+                                title=move || t_string!(i18n, shell.env_tooltip).to_owned()
+                            >
+                                <IconView icon=Icon::Monitor size=IconSize::Navigation />
+                                <span class="ob-shell-context-label">
+                                    {move || format!("{}: {}", t_string!(i18n, shell.env_summary), t_string!(i18n, shell.env_unassigned))}
+                                </span>
+                            </div>
                         </div>
                     </header>
                     <main id="main-content" class="ob-main" tabindex="-1">

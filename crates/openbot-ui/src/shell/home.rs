@@ -311,6 +311,7 @@ pub fn HomePage() -> impl IntoView {
                         </Button>
                     </div>
                 </div>
+                <p class="ob-home-model-preset-note" role="note">{move || t!(i18n, home.model_preset_note)}</p>
                 <Show when=move || !loading.get() && !load_error.get() && fallback.get().is_none()>
                     <p class="ob-home-routing-hint" role="status">
                         <a href="/agents">{move || t!(i18n, home.no_agents)}</a>

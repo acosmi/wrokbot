@@ -265,8 +265,8 @@ outline_offset = "2px"
 # 控件高度与固定尺寸（单位 px）。
 [size]
 css_prefix = "size"
-sidebar_min = 264
-sidebar_max = 344
+sidebar_min = 280
+sidebar_max = 280
 home_top_min = 72
 home_top_max = 200
 home_pad_min = 24
@@ -300,7 +300,7 @@ table_row = 36
 sidebar_item = 44
 topbar = 80
 native_toolbar = 56    # macOS unified title/toolbar; host-authored overlay mode only
-sidebar = 304            # §5.1
+sidebar = 280            # §5.1
 sidebar_rail = 64
 detail_panel = 360
 subnav = 184             # admin / settings 二级侧栏
