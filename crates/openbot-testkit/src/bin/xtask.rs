@@ -20,7 +20,7 @@
 //! - `postgres`     —— 获取并校验 PGDG 17.11 官方 source archive；不作首次运行下载。
 //! - `electron-shim-check` —— 在 P1 写 shim 前先锁定文件、LOC 与 API allowlist。
 //! - `first-source-check` —— 只读核第一真源版本/R 行/PA/引擎/GUI 指针与冻结历史。
-//! - `acceptance-check` —— 核 macOS 候选验收记录结构、必需项与证据归属；不认证发行。
+//! - `acceptance-check` —— 核 v5/macOS 与 v6 M0/M1/full_v6 收集记录；不认证产品或发行。
 //! - `ci`           —— 按 v3 §16.3 的固定顺序跑本机可执行的那一段闸门。
 //!
 //! 用法（`.cargo/config.toml` 已配 alias）：
@@ -318,8 +318,9 @@ xtask —— OpenBot 仓库闸门驱动器
   cargo xtask electron-shim-check    校验 shim 文件/LOC/API allowlist；P1 代码未落时校验规则与空目录
   cargo xtask first-source-check --root <repo> --baseline <manifest> [--json]
                                       只读核第一真源结构/入口/引擎/GUI/冻结 R 行；不认证产品或发行
-  cargo xtask acceptance-check --record <json> --candidate <manifest> --evidence-root <dir> [--json]
-                                      核 macOS 候选验收记录结构/必需项/证据归属；full_v5 明确未支持
+  cargo xtask acceptance-check --record <json> --candidate <manifest> --evidence-root <dir> [--spec <first-source.md>] [--json]
+                                      核 v5/macOS 与 v6 M0/M1/full_v6 收集集合；v6 必须绑定 --spec，
+                                      full_v5 及 full_v6 聚合关闭准入明确未支持
   cargo xtask ci                      按 v3 §16.3 顺序跑本机可执行的闸门段
   cargo xtask help                    打印本帮助
 "
