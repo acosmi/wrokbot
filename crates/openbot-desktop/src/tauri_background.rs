@@ -6,6 +6,7 @@
 //! unavailable until that sequence succeeds, and the first window is created last.
 
 use std::future::Future;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -49,6 +50,7 @@ type PackageFactory = Box<
 >;
 
 const DESKTOP_UI_PREFERENCES_FILE: &str = "ui-preferences-v1";
+const STARTUP_DIAGNOSTIC_MAX_BYTES: usize = 256;
 
 /// Stable startup/shutdown failures with no path, secret, package prose, or platform diagnostics.
 #[derive(Debug, thiserror::Error)]
@@ -92,6 +94,18 @@ pub enum DesktopLocalRuntimeError {
     /// A key-store call failed after startup entered a secret write/read-back phase.
     #[error("desktop_local_runtime_os_secret_store_reconciliation_required")]
     OsSecretStoreReconciliationRequired(#[source] OsSecretStoreError),
+    /// Another verified process currently owns this instance's startup guard.
+    #[error("desktop_local_runtime_startup_busy")]
+    StartupBusy,
+    /// Existing instance evidence requires an explicit, separately authorized recovery flow.
+    #[error("desktop_local_runtime_recovery_required")]
+    RecoveryRequired,
+    /// Persistent initialization evidence was corrupt, inconsistent, or no longer authoritative.
+    #[error("desktop_local_runtime_initialization_evidence_invalid")]
+    InitializationEvidenceInvalid,
+    /// A payload-free initialization write/read-back result requires reconciliation.
+    #[error("desktop_local_runtime_initialization_reconciliation_required")]
+    InitializationReconciliationRequired,
     /// The authoritative action-policy snapshot could not be loaded.
     #[error("desktop_local_runtime_policy_failed")]
     Policy,
@@ -142,6 +156,14 @@ impl DesktopLocalRuntimeError {
             Self::OsSecretStoreReconciliationRequired(_) => {
                 "desktop_local_runtime_os_secret_store_reconciliation_required"
             }
+            Self::StartupBusy => "desktop_local_runtime_startup_busy",
+            Self::RecoveryRequired => "desktop_local_runtime_recovery_required",
+            Self::InitializationEvidenceInvalid => {
+                "desktop_local_runtime_initialization_evidence_invalid"
+            }
+            Self::InitializationReconciliationRequired => {
+                "desktop_local_runtime_initialization_reconciliation_required"
+            }
             Self::Policy => "desktop_local_runtime_policy_failed",
             Self::Application => "desktop_local_runtime_application_failed",
             Self::Agent => "desktop_local_runtime_agent_failed",
@@ -152,6 +174,69 @@ impl DesktopLocalRuntimeError {
             Self::Build => "desktop_local_runtime_build_failed",
         }
     }
+
+    fn os_code(&self) -> Option<&'static str> {
+        let source = match self {
+            Self::OsSecretStoreAccessDenied(source)
+            | Self::OsSecretStoreAuthFailed(source)
+            | Self::OsSecretStoreInteractionRequired(source)
+            | Self::OsSecretStoreUnavailable(source)
+            | Self::OsSecretStoreUnknown(source)
+            | Self::OsSecretStoreReconciliationRequired(source) => source,
+            _ => return None,
+        };
+        Some(match source {
+            OsSecretStoreError::AccessDenied => "desktop_os_secret_store_access_denied",
+            OsSecretStoreError::AuthFailed => "desktop_os_secret_store_auth_failed",
+            OsSecretStoreError::InteractionRequired => {
+                "desktop_os_secret_store_interaction_required"
+            }
+            OsSecretStoreError::StoreUnavailable => "desktop_os_secret_store_unavailable",
+            OsSecretStoreError::Unknown => "desktop_os_secret_store_unknown",
+        })
+    }
+}
+
+fn startup_failure_diagnostic(error: &DesktopLocalRuntimeError) -> String {
+    let mut diagnostic = format!("wrok_bot_desktop_startup_failed code={}", error.code());
+    if let Some(os_code) = error.os_code() {
+        diagnostic.push_str(" os_code=");
+        diagnostic.push_str(os_code);
+    }
+    diagnostic.push('\n');
+    debug_assert!(diagnostic.len() <= STARTUP_DIAGNOSTIC_MAX_BYTES);
+    diagnostic
+}
+
+fn report_startup_failure_to<W: Write + ?Sized>(error: &DesktopLocalRuntimeError, sink: &mut W) {
+    let diagnostic = startup_failure_diagnostic(error);
+    if diagnostic.len() <= STARTUP_DIAGNOSTIC_MAX_BYTES {
+        // One write attempt only. A partial or broken stderr must not retry, panic, or replace the
+        // startup failure that has already completed its unique-owner cleanup.
+        if let Ok(written) = sink.write(diagnostic.as_bytes()) {
+            debug_assert!(written <= diagnostic.len());
+        }
+    }
+}
+
+fn report_preparation_result_to<T, W: Write + ?Sized>(
+    result: Result<T, DesktopLocalRuntimeError>,
+    sink: &mut W,
+) -> Result<T, DesktopLocalRuntimeError> {
+    result.inspect_err(|error| report_startup_failure_to(error, sink))
+}
+
+fn report_preparation_result<T>(
+    result: Result<T, DesktopLocalRuntimeError>,
+) -> Result<T, DesktopLocalRuntimeError> {
+    let result = {
+        let stderr = std::io::stderr();
+        let mut sink = stderr.lock();
+        report_preparation_result_to(result, &mut sink)
+    };
+    result.inspect_err(|error| {
+        tracing::error!(code = error.code(), "Desktop Local startup failed");
+    })
 }
 
 /// Reviewed release resources that remain independent from the current user's app-data path.
@@ -716,11 +801,12 @@ pub fn register_desktop_local_runtime(
                     exit_if_live(&setup_state, &app_handle, 0);
                     return;
                 }
-                let prepared = prepare_desktop_local_runtime(app_data_root, config).await;
+                let prepared = report_preparation_result(
+                    prepare_desktop_local_runtime(app_data_root, config).await,
+                );
                 let prepared = match prepared {
                     Ok(prepared) => prepared,
-                    Err(error) => {
-                        tracing::error!(code = error.code(), "Desktop Local startup failed");
+                    Err(_) => {
                         setup_state.fail_startup();
                         exit_if_live(&setup_state, &app_handle, 1);
                         return;
@@ -1234,12 +1320,29 @@ async fn cleanup_agent_host(
 
 fn map_sidecar_error(error: PostgresSidecarError) -> DesktopLocalRuntimeError {
     match error {
+        PostgresSidecarError::StartLockHeld => DesktopLocalRuntimeError::StartupBusy,
+        PostgresSidecarError::StartLockRecoveryRequired => {
+            DesktopLocalRuntimeError::RecoveryRequired
+        }
+        PostgresSidecarError::StartLockGuardInvalid => {
+            DesktopLocalRuntimeError::InitializationEvidenceInvalid
+        }
+        PostgresSidecarError::ShutdownFailed => DesktopLocalRuntimeError::FailureCleanup,
         PostgresSidecarError::Secret(PostgresSecretStoreError::OsStore(error)) => {
             map_os_secret_store_error(error)
         }
         PostgresSidecarError::Secret(PostgresSecretStoreError::OsStoreReconciliationRequired(
             error,
         )) => DesktopLocalRuntimeError::OsSecretStoreReconciliationRequired(error),
+        PostgresSidecarError::Secret(PostgresSecretStoreError::Missing) => {
+            DesktopLocalRuntimeError::RecoveryRequired
+        }
+        PostgresSidecarError::Secret(
+            PostgresSecretStoreError::Corrupt | PostgresSecretStoreError::DispositionInvalid,
+        ) => DesktopLocalRuntimeError::InitializationEvidenceInvalid,
+        PostgresSidecarError::Secret(PostgresSecretStoreError::ReconciliationRequired) => {
+            DesktopLocalRuntimeError::InitializationReconciliationRequired
+        }
         _ => DesktopLocalRuntimeError::Sidecar,
     }
 }
@@ -1249,6 +1352,15 @@ fn map_vault_error(error: DesktopVaultKeyError) -> DesktopLocalRuntimeError {
         DesktopVaultKeyError::OsStore(error) => map_os_secret_store_error(error),
         DesktopVaultKeyError::OsStoreReconciliationRequired(error) => {
             DesktopLocalRuntimeError::OsSecretStoreReconciliationRequired(error)
+        }
+        DesktopVaultKeyError::Missing => DesktopLocalRuntimeError::RecoveryRequired,
+        DesktopVaultKeyError::Corrupt
+        | DesktopVaultKeyError::MaterialInvalid
+        | DesktopVaultKeyError::DataPlaneNotRunning => {
+            DesktopLocalRuntimeError::InitializationEvidenceInvalid
+        }
+        DesktopVaultKeyError::ReconciliationRequired => {
+            DesktopLocalRuntimeError::InitializationReconciliationRequired
         }
         _ => DesktopLocalRuntimeError::Vault,
     }
@@ -1447,6 +1559,11 @@ mod tests {
             assert_eq!(vault.code(), expected_code);
             assert_eq!(scram.to_string(), expected_code);
             assert_eq!(vault.to_string(), expected_code);
+            let os_code = store_error.to_string();
+            assert_eq!(scram.os_code(), Some(os_code.as_str()));
+            assert_eq!(vault.os_code(), Some(os_code.as_str()));
+            assert!(startup_failure_diagnostic(&scram).contains(&format!(" os_code={os_code}\n")));
+            assert!(startup_failure_diagnostic(&vault).contains(&format!(" os_code={os_code}\n")));
         }
 
         let source = crate::os_secret_store::OsSecretStoreError::AuthFailed;
@@ -1472,6 +1589,211 @@ mod tests {
             assert!(!rendered.contains("-25293"));
             assert!(!rendered.to_ascii_lowercase().contains("locked"));
         }
+    }
+
+    #[test]
+    fn r274_runtime_codes_and_display_are_identical() {
+        for (error, expected) in [
+            (
+                DesktopLocalRuntimeError::StartupBusy,
+                "desktop_local_runtime_startup_busy",
+            ),
+            (
+                DesktopLocalRuntimeError::RecoveryRequired,
+                "desktop_local_runtime_recovery_required",
+            ),
+            (
+                DesktopLocalRuntimeError::InitializationEvidenceInvalid,
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                DesktopLocalRuntimeError::InitializationReconciliationRequired,
+                "desktop_local_runtime_initialization_reconciliation_required",
+            ),
+        ] {
+            assert_eq!(error.code(), expected);
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn r274_sidecar_and_master_failures_map_to_the_frozen_runtime_classes() {
+        for (error, expected) in [
+            (
+                PostgresSidecarError::StartLockHeld,
+                "desktop_local_runtime_startup_busy",
+            ),
+            (
+                PostgresSidecarError::StartLockRecoveryRequired,
+                "desktop_local_runtime_recovery_required",
+            ),
+            (
+                PostgresSidecarError::StartLockGuardInvalid,
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                PostgresSidecarError::Secret(PostgresSecretStoreError::Missing),
+                "desktop_local_runtime_recovery_required",
+            ),
+            (
+                PostgresSidecarError::Secret(PostgresSecretStoreError::Corrupt),
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                PostgresSidecarError::Secret(PostgresSecretStoreError::DispositionInvalid),
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                PostgresSidecarError::Secret(PostgresSecretStoreError::ReconciliationRequired),
+                "desktop_local_runtime_initialization_reconciliation_required",
+            ),
+            (
+                PostgresSidecarError::ShutdownFailed,
+                "desktop_local_runtime_failure_cleanup_failed",
+            ),
+        ] {
+            let mapped = map_sidecar_error(error);
+            assert_eq!(mapped.code(), expected);
+            assert_eq!(mapped.to_string(), expected);
+        }
+
+        for (error, expected) in [
+            (
+                DesktopVaultKeyError::Missing,
+                "desktop_local_runtime_recovery_required",
+            ),
+            (
+                DesktopVaultKeyError::Corrupt,
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                DesktopVaultKeyError::MaterialInvalid,
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                DesktopVaultKeyError::DataPlaneNotRunning,
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                DesktopVaultKeyError::ReconciliationRequired,
+                "desktop_local_runtime_initialization_reconciliation_required",
+            ),
+        ] {
+            let mapped = map_vault_error(error);
+            assert_eq!(mapped.code(), expected);
+            assert_eq!(mapped.to_string(), expected);
+        }
+
+        assert!(matches!(
+            map_sidecar_error(PostgresSidecarError::Secret(
+                PostgresSecretStoreError::IdentityInvalid
+            )),
+            DesktopLocalRuntimeError::Sidecar
+        ));
+        assert!(matches!(
+            map_vault_error(DesktopVaultKeyError::IdentityInvalid),
+            DesktopLocalRuntimeError::Vault
+        ));
+    }
+
+    #[test]
+    fn startup_diagnostic_is_closed_bounded_and_preserves_only_os_category() {
+        let ordinary = startup_failure_diagnostic(&DesktopLocalRuntimeError::RecoveryRequired);
+        assert_eq!(
+            ordinary,
+            "wrok_bot_desktop_startup_failed code=desktop_local_runtime_recovery_required\n"
+        );
+        assert!(
+            !startup_failure_diagnostic(
+                &DesktopLocalRuntimeError::InitializationReconciliationRequired
+            )
+            .contains(" os_code=")
+        );
+
+        let with_os_source = startup_failure_diagnostic(
+            &DesktopLocalRuntimeError::OsSecretStoreReconciliationRequired(
+                OsSecretStoreError::AuthFailed,
+            ),
+        );
+        assert_eq!(
+            with_os_source,
+            "wrok_bot_desktop_startup_failed code=desktop_local_runtime_os_secret_store_reconciliation_required os_code=desktop_os_secret_store_auth_failed\n"
+        );
+        for diagnostic in [ordinary, with_os_source] {
+            assert!(diagnostic.len() <= STARTUP_DIAGNOSTIC_MAX_BYTES);
+            assert_eq!(diagnostic.bytes().filter(|byte| *byte == b'\n').count(), 1);
+            assert!(diagnostic.ends_with('\n'));
+        }
+
+        let source_canary = "SECRET=/Users/alice/private/account-token";
+        let mapped = map_sidecar_error(PostgresSidecarError::Io(std::io::Error::other(
+            source_canary,
+        )));
+        let diagnostic = startup_failure_diagnostic(&mapped);
+        assert!(!diagnostic.contains(source_canary));
+        assert!(!diagnostic.contains("/Users/alice"));
+        assert_eq!(
+            diagnostic,
+            "wrok_bot_desktop_startup_failed code=desktop_local_runtime_sidecar_failed\n"
+        );
+    }
+
+    struct BrokenDiagnosticSink {
+        writes: usize,
+    }
+
+    impl std::io::Write for BrokenDiagnosticSink {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "test-only broken diagnostic sink",
+            ))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn async_prepare_result_uses_one_non_masking_diagnostic_write() {
+        let mut captured = Vec::new();
+        let result: Result<(), DesktopLocalRuntimeError> = report_preparation_result_to(
+            Err(DesktopLocalRuntimeError::RecoveryRequired),
+            &mut captured,
+        );
+        assert!(matches!(
+            result,
+            Err(DesktopLocalRuntimeError::RecoveryRequired)
+        ));
+        assert_eq!(
+            captured,
+            b"wrok_bot_desktop_startup_failed code=desktop_local_runtime_recovery_required\n"
+        );
+
+        let mut sink = BrokenDiagnosticSink { writes: 0 };
+        let result: Result<(), DesktopLocalRuntimeError> =
+            report_preparation_result_to(Err(DesktopLocalRuntimeError::FailureCleanup), &mut sink);
+        assert!(matches!(
+            result,
+            Err(DesktopLocalRuntimeError::FailureCleanup)
+        ));
+        assert_eq!(sink.writes, 1);
+
+        let result = report_preparation_result_to(Ok(17_u8), &mut sink);
+        assert_eq!(result.unwrap(), 17);
+        assert_eq!(sink.writes, 1);
+    }
+
+    #[test]
+    fn cleanup_failure_replaces_the_original_startup_class() {
+        let failed = map_sidecar_error(PostgresSidecarError::ShutdownFailed);
+        assert!(matches!(failed, DesktopLocalRuntimeError::FailureCleanup));
+        assert_eq!(
+            startup_failure_diagnostic(&failed),
+            "wrok_bot_desktop_startup_failed code=desktop_local_runtime_failure_cleanup_failed\n"
+        );
     }
 
     #[test]
