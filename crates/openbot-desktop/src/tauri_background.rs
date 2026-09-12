@@ -20,6 +20,7 @@ use openbot_infra::application_assembly::{
 use openbot_infra::auth::single_user::desktop_local::{
     CurrentOsUserAppDataRoot, DesktopLocalAuthority, DesktopLocalAuthorityStore,
 };
+use openbot_infra::db::desktop_local::DesktopLocalDatabaseError;
 use openbot_infra::policy::PolicyStore;
 use tauri::{App, Builder, Context, Manager, RunEvent, Runtime, Wry};
 
@@ -1393,8 +1394,15 @@ fn map_os_secret_store_error(error: OsSecretStoreError) -> DesktopLocalRuntimeEr
     }
 }
 
-fn map_data_plane_error(_error: DesktopLocalCompositionError) -> DesktopLocalRuntimeError {
-    DesktopLocalRuntimeError::DataPlane
+fn map_data_plane_error(error: DesktopLocalCompositionError) -> DesktopLocalRuntimeError {
+    match error {
+        DesktopLocalCompositionError::FailureCleanup
+        | DesktopLocalCompositionError::SidecarShutdown => DesktopLocalRuntimeError::FailureCleanup,
+        DesktopLocalCompositionError::Database(DesktopLocalDatabaseError::Missing) => {
+            DesktopLocalRuntimeError::RecoveryRequired
+        }
+        _ => DesktopLocalRuntimeError::DataPlane,
+    }
 }
 
 fn valid_window_label(value: &str) -> bool {
@@ -1625,6 +1633,46 @@ mod tests {
             assert_eq!(error.code(), expected);
             assert_eq!(error.to_string(), expected);
         }
+    }
+
+    #[test]
+    fn r279_data_plane_errors_preserve_cleanup_and_missing_database_classes() {
+        for error in [
+            DesktopLocalCompositionError::FailureCleanup,
+            DesktopLocalCompositionError::SidecarShutdown,
+        ] {
+            let mapped = map_data_plane_error(error);
+            assert!(matches!(mapped, DesktopLocalRuntimeError::FailureCleanup));
+            assert_eq!(
+                mapped.code(),
+                "desktop_local_runtime_failure_cleanup_failed"
+            );
+            assert_eq!(
+                startup_failure_diagnostic(&mapped),
+                "wrok_bot_desktop_startup_failed code=desktop_local_runtime_failure_cleanup_failed\n"
+            );
+        }
+
+        let missing = map_data_plane_error(DesktopLocalCompositionError::Database(
+            DesktopLocalDatabaseError::Missing,
+        ));
+        assert!(matches!(
+            missing,
+            DesktopLocalRuntimeError::RecoveryRequired
+        ));
+        assert_eq!(missing.code(), "desktop_local_runtime_recovery_required");
+        assert_eq!(
+            startup_failure_diagnostic(&missing),
+            "wrok_bot_desktop_startup_failed code=desktop_local_runtime_recovery_required\n"
+        );
+
+        let fallback = map_data_plane_error(DesktopLocalCompositionError::InstallationMismatch);
+        assert!(matches!(fallback, DesktopLocalRuntimeError::DataPlane));
+        assert_eq!(fallback.code(), "desktop_local_runtime_data_plane_failed");
+        assert_eq!(
+            startup_failure_diagnostic(&fallback),
+            "wrok_bot_desktop_startup_failed code=desktop_local_runtime_data_plane_failed\n"
+        );
     }
 
     #[test]

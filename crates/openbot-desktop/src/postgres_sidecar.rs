@@ -1597,7 +1597,7 @@ mod tests {
     #[cfg(all(feature = "desktop-local-runtime", unix))]
     use crate::tauri_background::{
         DesktopLocalApplicationInput, DesktopLocalReleaseInput, DesktopLocalRuntimeConfig,
-        prepare_desktop_local_runtime,
+        DesktopLocalRuntimeError, prepare_desktop_local_runtime,
     };
     #[cfg(all(feature = "desktop-local-runtime", unix))]
     use crate::{DesktopAgentBudgets, DesktopOpenAiProviderInput};
@@ -2568,6 +2568,103 @@ mod tests {
             .expect("probe driver task join")
             .expect("probe driver close");
         exists
+    }
+
+    #[cfg(all(feature = "desktop-local-runtime", unix))]
+    #[tokio::test]
+    #[ignore = "需要本机PostgreSQL 17.11 binaries；设置OPENBOT_TEST_POSTGRES_BIN_DIR后运行"]
+    async fn existing_cluster_without_business_database_maps_recovery_and_writes_nothing_new() {
+        let bin_dir = PathBuf::from(std::env::var_os("OPENBOT_TEST_POSTGRES_BIN_DIR").unwrap());
+        let (bundle_root, digest) = materialize_host_postgres_bundle(&bin_dir);
+        let signing = signing_identity();
+        let app_root = root("tauri-background-missing-database");
+        let dist = materialize_desktop_dist();
+        let authority_store = DesktopLocalAuthorityStore::new(
+            CurrentOsUserAppDataRoot::from_current_os_user_app_data(&app_root).unwrap(),
+        );
+        let installation = authority_store.load_or_create_installation().unwrap();
+        let instance = installation.authority().instance_id().to_owned();
+        let data_dir = installation.sidecar_data_dir().to_owned();
+        let store = Arc::new(RuntimeMemorySecretStore::empty());
+        let postgres_service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.product.postgresql.missing-database",
+        )
+        .unwrap();
+
+        let sidecar = PostgresSidecarSupervisor::start(
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
+            &app_root,
+            &instance,
+            &data_dir,
+            store.as_ref(),
+            &postgres_service,
+        )
+        .await
+        .unwrap();
+        assert_eq!(sidecar.origin(), PostgresSidecarOrigin::Fresh);
+        assert!(!fixed_application_database_exists(&sidecar).await);
+        sidecar.shutdown().await.unwrap();
+        assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+
+        let os_store: Arc<dyn OsSecretStore> = store.clone();
+        let release = DesktopLocalReleaseInput::new(
+            &dist,
+            "openbot",
+            "main",
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
+            postgres_service.clone(),
+            ReviewedDesktopVaultKeyStoreService::from_reviewed_release(
+                "com.example.product.desktop-vault.missing-database",
+            )
+            .unwrap(),
+            os_store,
+        )
+        .unwrap();
+        let application = DesktopLocalApplicationInput::new(
+            DesktopOpenAiProviderInput::new("https://api.example.test/v1", Vec::new()).unwrap(),
+            DesktopAgentBudgets::new(
+                Some(Duration::from_secs(2)),
+                Some(Duration::from_secs(1_800)),
+                16_384,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let config = DesktopLocalRuntimeConfig::new(release, application, |authority| {
+            Ok(loaded_desktop_package(
+                authority.auth_context().tenant().as_str(),
+            ))
+        });
+        let root = CurrentOsUserAppDataRoot::from_current_os_user_app_data(&app_root).unwrap();
+        assert!(matches!(
+            prepare_desktop_local_runtime(root, config).await,
+            Err(DesktopLocalRuntimeError::RecoveryRequired)
+        ));
+        assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+        assert!(
+            !fs::read_dir(&app_root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().contains("start-lock"))
+        );
+
+        let sidecar = PostgresSidecarSupervisor::start(
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
+            &app_root,
+            &instance,
+            &data_dir,
+            store.as_ref(),
+            &postgres_service,
+        )
+        .await
+        .unwrap();
+        assert_eq!(sidecar.origin(), PostgresSidecarOrigin::Existing);
+        assert!(!fixed_application_database_exists(&sidecar).await);
+        sidecar.shutdown().await.unwrap();
+        assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+        fs::remove_dir_all(app_root).unwrap();
+        fs::remove_dir_all(bundle_root).unwrap();
+        fs::remove_dir_all(dist).unwrap();
     }
 
     #[cfg(all(feature = "desktop-local-runtime", unix))]
