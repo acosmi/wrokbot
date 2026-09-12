@@ -175,7 +175,7 @@ pub fn open_v2(
 /// - [`VaultError::KeyLength`]：长度不是 16 / 24 / 32。
 /// - [`VaultError::PlaintextTooLarge`]：明文超过 GCM 单条消息上限。这是加密侧唯一现实存在的
 ///   失败模式，理由见 [`VaultError::PlaintextTooLarge`]。
-fn aes_gcm_encrypt(
+pub(super) fn aes_gcm_encrypt(
     key: &[u8],
     nonce: Nonce,
     aad: &[u8],
@@ -194,7 +194,7 @@ fn aes_gcm_encrypt(
 /// # Errors
 ///
 /// [`VaultError::KeyLength`] / [`VaultError::CiphertextTooShort`] / [`VaultError::Decrypt`]。
-fn aes_gcm_decrypt(
+pub(super) fn aes_gcm_decrypt(
     key: &[u8],
     nonce: Nonce,
     aad: &[u8],

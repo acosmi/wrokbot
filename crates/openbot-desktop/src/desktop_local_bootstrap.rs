@@ -18,10 +18,14 @@ use openbot_infra::db::desktop_local::{
     DesktopLocalDatabase, DesktopLocalDatabaseError, DesktopLocalDatabaseOrigin,
     connect_for_attestation,
 };
+use openbot_infra::db::desktop_vault_canary::VerifiedDesktopVaultCanary;
+use openbot_infra::db::initialization::DatabaseOrigin;
 use openbot_infra::db::pool::DatabasePool;
 use openbot_infra::thread_listener::ThreadListenerDatabase;
 
 use crate::postgres_sidecar::{PostgresSidecarOrigin, RunningPostgresSidecar};
+
+const STARTUP_DB_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// One running PostgreSQL child plus the exact verified business pool and app-instance authority.
 ///
@@ -34,8 +38,15 @@ pub struct RunningDesktopLocalDataPlane {
     installation: DesktopLocalInstallation,
     runtime_auth: AuthContext,
     report: DesktopLocalBootstrapReport,
+}
+
+/// PG-attested data plane that exposes no runtime authority before Vault canary verification.
+pub struct PreparedDesktopLocalDataPlane {
+    database: DesktopLocalDatabase,
+    sidecar: Option<RunningPostgresSidecar>,
+    installation: DesktopLocalInstallation,
     #[cfg(feature = "desktop-vault")]
-    vault_creation_claimed: std::sync::atomic::AtomicBool,
+    pub(crate) vault_creation_attempted: std::sync::atomic::AtomicBool,
 }
 
 impl RunningDesktopLocalDataPlane {
@@ -70,21 +81,6 @@ impl RunningDesktopLocalDataPlane {
         self.sidecar.as_ref().map(RunningPostgresSidecar::origin)
     }
 
-    /// Whether this data plane was composed on pre-existing cluster or database data.
-    #[must_use]
-    pub fn is_existing_data(&self) -> bool {
-        matches!(self.sidecar_origin(), Some(PostgresSidecarOrigin::Existing))
-            || !matches!(self.database_origin(), DesktopLocalDatabaseOrigin::Created)
-    }
-
-    #[cfg(feature = "desktop-vault")]
-    pub(crate) fn claim_initial_vault_creation(&self) -> bool {
-        !self.is_existing_data()
-            && !self
-                .vault_creation_claimed
-                .swap(true, std::sync::atomic::Ordering::SeqCst)
-    }
-
     /// Shared migration and Tenant Package synchronization report.
     #[must_use]
     pub const fn bootstrap_report(&self) -> &DesktopLocalBootstrapReport {
@@ -115,6 +111,169 @@ impl RunningDesktopLocalDataPlane {
             .shutdown()
             .await
             .map_err(|_| DesktopLocalCompositionError::SidecarShutdown)
+    }
+}
+
+impl PreparedDesktopLocalDataPlane {
+    pub(crate) fn authority(&self) -> &DesktopLocalAuthority {
+        self.installation.authority()
+    }
+
+    pub(crate) fn pool(&self) -> &DatabasePool {
+        self.database.pool()
+    }
+
+    pub(crate) fn database(&self) -> &DesktopLocalDatabase {
+        &self.database
+    }
+
+    pub(crate) fn database_origin(&self) -> DesktopLocalDatabaseOrigin {
+        self.database.origin()
+    }
+
+    pub(crate) fn sidecar_origin(&self) -> Option<PostgresSidecarOrigin> {
+        self.sidecar.as_ref().map(RunningPostgresSidecar::origin)
+    }
+
+    pub(crate) fn data_dir(&self) -> &std::path::Path {
+        self.installation.sidecar_data_dir()
+    }
+
+    pub(crate) fn ensure_owner_current(&self) -> Result<(), DesktopLocalCompositionError> {
+        self.sidecar
+            .as_ref()
+            .ok_or(DesktopLocalCompositionError::InstallationMismatch)?
+            .ensure_owner_current()
+            .map_err(|_| DesktopLocalCompositionError::InstallationMismatch)
+    }
+
+    pub(crate) async fn initialize_fresh_schema(
+        &self,
+        package: &LoadedTenantPackage,
+    ) -> Result<DatabaseOrigin, DesktopLocalCompositionError> {
+        if self.sidecar_origin() != Some(PostgresSidecarOrigin::Fresh)
+            || self.database_origin() != DesktopLocalDatabaseOrigin::Created
+        {
+            return Err(DesktopLocalCompositionError::Bootstrap(
+                DesktopLocalBootstrapError::VaultCanaryMismatch,
+            ));
+        }
+        self.ensure_owner_current()?;
+        let fresh = self.database.fresh_initialization_proof().ok_or_else(|| {
+            DesktopLocalCompositionError::Bootstrap(DesktopLocalBootstrapError::VaultCanaryMismatch)
+        })?;
+        let origin = tokio::time::timeout(
+            STARTUP_DB_STEP_TIMEOUT,
+            self.installation
+                .initialize_postgres_schema(&self.database, package, &fresh),
+        )
+        .await
+        .map_err(|_| {
+            DesktopLocalCompositionError::Bootstrap(
+                DesktopLocalBootstrapError::PostgresAttestationUnavailable,
+            )
+        })?
+        .map_err(DesktopLocalCompositionError::Bootstrap)?;
+        self.ensure_owner_current()?;
+        if origin != DatabaseOrigin::Fresh {
+            return Err(DesktopLocalCompositionError::Bootstrap(
+                DesktopLocalBootstrapError::VaultCanaryMismatch,
+            ));
+        }
+        Ok(origin)
+    }
+
+    pub(crate) async fn complete_after_vault(
+        mut self,
+        package: &LoadedTenantPackage,
+        database_origin: DatabaseOrigin,
+        proof: &VerifiedDesktopVaultCanary,
+    ) -> Result<RunningDesktopLocalDataPlane, DesktopLocalCompositionError> {
+        if let Err(error) = self.ensure_owner_current() {
+            return Err(self.cleanup_with(error).await);
+        }
+        let report = match tokio::time::timeout(
+            STARTUP_DB_STEP_TIMEOUT,
+            self.installation.complete_postgres_after_vault(
+                &self.database,
+                package,
+                database_origin,
+                proof,
+            ),
+        )
+        .await
+        .map_err(|_| DesktopLocalBootstrapError::PostgresAttestationUnavailable)
+        .and_then(std::convert::identity)
+        {
+            Ok(report) => report,
+            Err(error) => {
+                return Err(self
+                    .cleanup_with(DesktopLocalCompositionError::Bootstrap(error))
+                    .await);
+            }
+        };
+        if let Err(error) = self.ensure_owner_current() {
+            return Err(self.cleanup_with(error).await);
+        }
+        let runtime_auth = match tokio::time::timeout(
+            STARTUP_DB_STEP_TIMEOUT,
+            self.installation
+                .authority()
+                .load_runtime_auth_context(self.database.pool()),
+        )
+        .await
+        .map_err(|_| {
+            openbot_infra::db::InfraError::repository_invariant(
+                "desktop_local_runtime_auth_timeout",
+            )
+        })
+        .and_then(std::convert::identity)
+        {
+            Ok(auth) => auth,
+            Err(error) => {
+                return Err(self
+                    .cleanup_with(DesktopLocalCompositionError::Bootstrap(
+                        DesktopLocalBootstrapError::Principal(error),
+                    ))
+                    .await);
+            }
+        };
+        if let Err(error) = self.ensure_owner_current() {
+            return Err(self.cleanup_with(error).await);
+        }
+        Ok(RunningDesktopLocalDataPlane {
+            database: self.database,
+            sidecar: self.sidecar.take(),
+            installation: self.installation,
+            runtime_auth,
+            report,
+        })
+    }
+
+    pub(crate) async fn shutdown(mut self) -> Result<(), DesktopLocalCompositionError> {
+        self.database.close();
+        self.sidecar
+            .take()
+            .ok_or(DesktopLocalCompositionError::SidecarShutdown)?
+            .shutdown()
+            .await
+            .map_err(|_| DesktopLocalCompositionError::SidecarShutdown)
+    }
+
+    async fn cleanup_with(
+        mut self,
+        original: DesktopLocalCompositionError,
+    ) -> DesktopLocalCompositionError {
+        self.database.close();
+        let result = match self.sidecar.take() {
+            Some(sidecar) => sidecar.shutdown().await,
+            None => return DesktopLocalCompositionError::FailureCleanup,
+        };
+        if result.is_ok() {
+            original
+        } else {
+            DesktopLocalCompositionError::FailureCleanup
+        }
     }
 }
 
@@ -164,11 +323,11 @@ pub enum DesktopLocalCompositionError {
 
 /// Consume one SCRAM-ready child and close the full Batch79 bootstrap before any window authority
 /// can be issued.
-pub async fn bootstrap_running_sidecar(
+pub async fn prepare_running_sidecar(
     installation: DesktopLocalInstallation,
     sidecar: RunningPostgresSidecar,
     package: &LoadedTenantPackage,
-) -> Result<RunningDesktopLocalDataPlane, DesktopLocalCompositionError> {
+) -> Result<PreparedDesktopLocalDataPlane, DesktopLocalCompositionError> {
     if sidecar.data_dir() != installation.sidecar_data_dir() {
         return Err(cleanup_after_failure(
             sidecar,
@@ -184,6 +343,14 @@ pub async fn bootstrap_running_sidecar(
         .await);
     }
 
+    if sidecar.ensure_owner_current().is_err() {
+        return Err(cleanup_after_failure(
+            sidecar,
+            DesktopLocalCompositionError::InstallationMismatch,
+        )
+        .await);
+    }
+
     let (port, password) = {
         let connection = sidecar.connection();
         (
@@ -191,7 +358,13 @@ pub async fn bootstrap_running_sidecar(
             SecretBytes::new(connection.expose_password().to_vec()),
         )
     };
-    let admin = connect_for_attestation(port, password).await;
+    let admin = tokio::time::timeout(
+        STARTUP_DB_STEP_TIMEOUT,
+        connect_for_attestation(port, password),
+    )
+    .await
+    .map_err(|_| DesktopLocalDatabaseError::ShapeInvalid)
+    .and_then(std::convert::identity);
     let admin = match admin {
         Ok(admin) => admin,
         Err(error) => {
@@ -202,7 +375,21 @@ pub async fn bootstrap_running_sidecar(
             .await);
         }
     };
-    let admin = match installation.attest_postgres_admin(admin).await {
+    if sidecar.ensure_owner_current().is_err() {
+        return Err(cleanup_after_failure(
+            sidecar,
+            DesktopLocalCompositionError::InstallationMismatch,
+        )
+        .await);
+    }
+    let admin = match tokio::time::timeout(
+        STARTUP_DB_STEP_TIMEOUT,
+        installation.attest_postgres_admin(admin),
+    )
+    .await
+    .map_err(|_| DesktopLocalBootstrapError::PostgresAttestationUnavailable)
+    .and_then(std::convert::identity)
+    {
         Ok(admin) => admin,
         Err(error) => {
             return Err(cleanup_after_failure(
@@ -212,7 +399,22 @@ pub async fn bootstrap_running_sidecar(
             .await);
         }
     };
-    let database = match admin.connect_application().await {
+    if sidecar.ensure_owner_current().is_err() {
+        return Err(cleanup_after_failure(
+            sidecar,
+            DesktopLocalCompositionError::InstallationMismatch,
+        )
+        .await);
+    }
+    let allow_create = sidecar.origin() == PostgresSidecarOrigin::Fresh;
+    let database = match tokio::time::timeout(
+        STARTUP_DB_STEP_TIMEOUT,
+        admin.connect_application(allow_create),
+    )
+    .await
+    .map_err(|_| DesktopLocalDatabaseError::ShapeInvalid)
+    .and_then(std::convert::identity)
+    {
         Ok(database) => database,
         Err(error) => {
             return Err(cleanup_after_failure(
@@ -222,47 +424,20 @@ pub async fn bootstrap_running_sidecar(
             .await);
         }
     };
-    let report = match installation
-        .bootstrap_postgres(database.pool(), package)
-        .await
-    {
-        Ok(report) => report,
-        Err(error) => {
-            database.close();
-            return Err(cleanup_after_failure(
-                sidecar,
-                DesktopLocalCompositionError::Bootstrap(error),
-            )
-            .await);
-        }
-    };
-
-    let runtime_auth = match installation
-        .authority()
-        .load_runtime_auth_context(database.pool())
-        .await
-    {
-        Ok(auth) => auth,
-        Err(error) => {
-            database.close();
-            return Err(cleanup_after_failure(
-                sidecar,
-                DesktopLocalCompositionError::Bootstrap(DesktopLocalBootstrapError::Principal(
-                    error,
-                )),
-            )
-            .await);
-        }
-    };
-
-    Ok(RunningDesktopLocalDataPlane {
+    if sidecar.ensure_owner_current().is_err() {
+        database.close();
+        return Err(cleanup_after_failure(
+            sidecar,
+            DesktopLocalCompositionError::InstallationMismatch,
+        )
+        .await);
+    }
+    Ok(PreparedDesktopLocalDataPlane {
         database,
         sidecar: Some(sidecar),
         installation,
-        runtime_auth,
-        report,
         #[cfg(feature = "desktop-vault")]
-        vault_creation_claimed: std::sync::atomic::AtomicBool::new(false),
+        vault_creation_attempted: std::sync::atomic::AtomicBool::new(false),
     })
 }
 

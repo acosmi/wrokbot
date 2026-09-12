@@ -14,6 +14,8 @@ pub enum ApplicationKeyPurpose {
     AuditCheckpoint,
     /// MCP OAuth state ticket authentication.
     McpOauthState,
+    /// Desktop dataset/key identity canary encryption.
+    DesktopVaultCanary,
 }
 
 impl ApplicationKeyPurpose {
@@ -21,6 +23,7 @@ impl ApplicationKeyPurpose {
         match self {
             Self::AuditCheckpoint => b"openbot:audit-checkpoint:v1",
             Self::McpOauthState => b"openbot:mcp-oauth-state:v1",
+            Self::DesktopVaultCanary => b"openbot:desktop-vault-canary:v1",
         }
     }
 }
@@ -35,7 +38,9 @@ pub fn derive_application_key(
     master: &SecretBytes,
     purpose: ApplicationKeyPurpose,
 ) -> Result<SecretBytes, VaultError> {
-    if master.is_empty() {
+    if master.is_empty()
+        || (purpose == ApplicationKeyPurpose::DesktopVaultCanary && master.len() != 32)
+    {
         return Err(VaultError::KeyLength);
     }
     let mut hmac =

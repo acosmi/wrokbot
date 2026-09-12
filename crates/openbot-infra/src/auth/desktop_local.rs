@@ -23,7 +23,11 @@ use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 
 use super::{initialize_canonical_principal, load_canonical_generation};
 use crate::db::InfraError;
-use crate::db::desktop_local::{AttestedDesktopLocalAdmin, UnattestedDesktopLocalAdmin};
+use crate::db::desktop_local::{
+    AttestedDesktopLocalAdmin, DesktopLocalDatabase, FreshDesktopDatabaseProof,
+    UnattestedDesktopLocalAdmin,
+};
+use crate::db::desktop_vault_canary::VerifiedDesktopVaultCanary;
 use crate::db::initialization::{
     DatabaseInitializationError, DatabaseOrigin, initialize as initialize_database,
 };
@@ -227,22 +231,52 @@ impl DesktopLocalInstallation {
         Ok(())
     }
 
-    /// Verify the connected sidecar, initialize the shared schema, provision the principal, and
-    /// materialize the same authority's Tenant Package memberships in that exact order.
+    /// Verify the connected sidecar and initialize the shared schema, stopping before business
+    /// principal/package writes so Desktop Vault canary verification can run.
     ///
     /// # Errors
     ///
     /// Fails closed when PostgreSQL is not version 17, is not local-only, does not use SCRAM for
     /// new passwords, reports a different data directory, cannot initialize the shared schema,
     /// cannot provision the canonical principal, or cannot synchronize the exact-tenant package.
-    pub async fn bootstrap_postgres(
+    pub async fn initialize_postgres_schema(
         &self,
-        pool: &Pool,
+        database: &DesktopLocalDatabase,
         package: &LoadedTenantPackage,
+        fresh: &FreshDesktopDatabaseProof,
+    ) -> Result<DatabaseOrigin, DesktopLocalBootstrapError> {
+        self.validate_package_scope(package)?;
+        if !fresh.matches(database) {
+            return Err(DesktopLocalBootstrapError::VaultCanaryMismatch);
+        }
+        let pool = database.pool();
+        verify_postgres_sidecar(pool, &self.sidecar_data_dir).await?;
+        initialize_database(pool).await.map_err(Into::into)
+    }
+
+    /// Provision the principal/package only after an unforgeable verified canary proof.
+    pub async fn complete_postgres_after_vault(
+        &self,
+        database: &DesktopLocalDatabase,
+        package: &LoadedTenantPackage,
+        database_origin: DatabaseOrigin,
+        proof: &VerifiedDesktopVaultCanary,
     ) -> Result<DesktopLocalBootstrapReport, DesktopLocalBootstrapError> {
         self.validate_package_scope(package)?;
+        if proof.deployment_id() != self.authority.auth_context().deployment().as_str()
+            || proof.tenant_id() != self.authority.auth_context().tenant().as_str()
+        {
+            return Err(DesktopLocalBootstrapError::VaultCanaryMismatch);
+        }
+        if !proof
+            .matches_database(database)
+            .await
+            .map_err(|_| DesktopLocalBootstrapError::VaultCanaryMismatch)?
+        {
+            return Err(DesktopLocalBootstrapError::VaultCanaryMismatch);
+        }
+        let pool = database.pool();
         verify_postgres_sidecar(pool, &self.sidecar_data_dir).await?;
-        let database_origin = initialize_database(pool).await?;
         self.authority
             .provision_postgres(pool)
             .await
@@ -303,6 +337,9 @@ pub enum DesktopLocalBootstrapError {
     /// Tenant Package synchronization failed.
     #[error(transparent)]
     Package(#[from] TenantPackageApplyError),
+    /// The cryptographic dataset proof did not match this installation authority.
+    #[error("desktop_local_vault_canary_mismatch")]
+    VaultCanaryMismatch,
 }
 
 /// Persistent authority source for one current-user application data root.

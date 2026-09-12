@@ -5,6 +5,7 @@
 //! the shared schema/principal/package bootstrap. It accepts a zeroizing password owner; there is
 //! no second public [`super::pool::DatabaseConfig`] containing a long-lived password `String`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use openbot_contracts::desktop::DESKTOP_LOCAL_POSTGRES_ADMIN_USER;
@@ -44,6 +45,12 @@ pub enum DesktopLocalDatabaseOrigin {
 pub struct DesktopLocalDatabase {
     pool: DatabasePool,
     origin: DesktopLocalDatabaseOrigin,
+    owner: Arc<()>,
+}
+
+/// Non-transferable proof that this attested owner created the fixed business database now.
+pub struct FreshDesktopDatabaseProof {
+    owner: Arc<()>,
 }
 
 /// Administrative pool that can only be used for the R153 live-sidecar attestation.
@@ -95,6 +102,7 @@ impl AttestedDesktopLocalAdmin {
     /// application pool. No durable database write is reachable on the unattested type.
     pub async fn connect_application(
         self,
+        allow_create: bool,
     ) -> Result<DesktopLocalDatabase, DesktopLocalDatabaseError> {
         let client = self.pool.get().await.map_err(|source| {
             DesktopLocalDatabaseError::Connect(InfraError::connect(
@@ -102,7 +110,16 @@ impl AttestedDesktopLocalAdmin {
                 source,
             ))
         })?;
-        let origin = ensure_application_database(&client).await;
+        let origin = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            ensure_application_database(&client, allow_create),
+        )
+        .await
+        .map_err(|_| {
+            DesktopLocalDatabaseError::Inspect(InfraError::repository_invariant(
+                "desktop_local_database_inspection_timeout",
+            ))
+        })?;
         drop(client);
         self.pool.close();
         let origin = origin?;
@@ -119,7 +136,11 @@ impl AttestedDesktopLocalAdmin {
         )
         .await
         .map_err(DesktopLocalDatabaseError::Connect)?;
-        Ok(DesktopLocalDatabase { pool, origin })
+        Ok(DesktopLocalDatabase {
+            pool,
+            origin,
+            owner: Arc::new(()),
+        })
     }
 }
 
@@ -148,9 +169,29 @@ impl DesktopLocalDatabase {
         self.origin
     }
 
+    pub fn fresh_initialization_proof(&self) -> Option<FreshDesktopDatabaseProof> {
+        (self.origin == DesktopLocalDatabaseOrigin::Created).then(|| FreshDesktopDatabaseProof {
+            owner: Arc::clone(&self.owner),
+        })
+    }
+
+    pub(crate) fn owner_token(&self) -> Arc<()> {
+        Arc::clone(&self.owner)
+    }
+
+    pub(crate) fn owns_token(&self, token: &Arc<()>) -> bool {
+        Arc::ptr_eq(&self.owner, token)
+    }
+
     /// Stop admitting new checkouts before the owning sidecar is shut down.
     pub fn close(&self) {
         self.pool.close();
+    }
+}
+
+impl FreshDesktopDatabaseProof {
+    pub(crate) fn matches(&self, database: &DesktopLocalDatabase) -> bool {
+        database.owns_token(&self.owner)
     }
 }
 
@@ -182,6 +223,9 @@ pub enum DesktopLocalDatabaseError {
     /// An existing/reconciled database had an unexpected owner, encoding, locale or access shape.
     #[error("desktop_local_database_shape_invalid")]
     ShapeInvalid,
+    /// Existing sidecar data had no fixed business database; ordinary startup may not create it.
+    #[error("desktop_local_database_missing")]
+    Missing,
 }
 
 /// Connect through exact numeric loopback for the pre-write live-sidecar attestation.
@@ -251,12 +295,17 @@ fn valid_scram_secret(secret: &[u8]) -> bool {
 
 async fn ensure_application_database(
     client: &Client,
+    allow_create: bool,
 ) -> Result<DesktopLocalDatabaseOrigin, DesktopLocalDatabaseError> {
     if let Some(facts) = read_database_facts(client).await? {
         return facts
             .is_exact()
             .then_some(DesktopLocalDatabaseOrigin::Existing)
             .ok_or(DesktopLocalDatabaseError::ShapeInvalid);
+    }
+
+    if !allow_create {
+        return Err(DesktopLocalDatabaseError::Missing);
     }
 
     let create_error = client
