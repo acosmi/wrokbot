@@ -22,7 +22,7 @@ async fn post_0031_preserves_all_old_facts_and_fresh_matches_upgrade() {
         let before=schema_facts::fetch(&c).await.map_err(|e|e.to_string())?;
         let prior:SchemaFacts=serde_json::from_str(include_str!("../../../fixtures/db/schema-0030.json")).unwrap();
         assert_eq!(before,prior);
-        assert_eq!(native::apply(&mut c).await.unwrap(),native::ApplyOutcome::Applied);
+        assert_eq!(native::apply_through(&mut c,native::NATIVE_0031_VERSION).await.unwrap(),native::ApplyOutcome::Applied);
         let after=schema_facts::fetch(&c).await.unwrap();
         assert_eq!(after.enums,before.enums);assert_eq!(after.extensions,before.extensions);assert_eq!(after.functions,before.functions);
         assert_eq!(after.tables.len(),before.tables.len()+1);
@@ -42,7 +42,7 @@ async fn post_0031_preserves_all_old_facts_and_fresh_matches_upgrade() {
         } else {let expected:SchemaFacts=serde_json::from_str(&std::fs::read_to_string(fixture()).unwrap()).unwrap();assert_eq!(after,expected);}
         let ledger:i64=c.query_one("SELECT count(*) FROM openbot_internal.schema_migrations",&[]).await.unwrap().get(0);assert_eq!(ledger,19);
         let checksum:String=c.query_one("SELECT checksum FROM openbot_internal.schema_migrations WHERE version=31",&[]).await.unwrap().get(0);assert_eq!(checksum,native::native_0031_checksum());
-        assert_eq!(native::apply(&mut c).await.unwrap(),native::ApplyOutcome::AlreadyApplied);
+        assert_eq!(native::apply_through(&mut c,native::NATIVE_0031_VERSION).await.unwrap(),native::ApplyOutcome::AlreadyApplied);
         c.batch_execute("UPDATE openbot_internal.schema_migrations SET checksum=repeat('0',64) WHERE version=31").await.unwrap();
         assert!(native::apply(&mut c).await.is_err());
         println!("native0031 old_tables={} old_columns={} old_constraints={} unchanged; new_columns=12; ledger=19",before.tables.len(),before.tables.iter().map(|t|t.columns.len()).sum::<usize>(),before.tables.iter().map(|t|t.constraints.len()).sum::<usize>());

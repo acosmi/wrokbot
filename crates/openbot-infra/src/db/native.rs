@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0031_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0032_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -202,6 +202,13 @@ pub const NATIVE_0031_VERSION: i32 = 31;
 pub const NATIVE_0031_NAME: &str = "native_0031_run_model_selections";
 /// 0031 expand-only SQL source.
 pub const NATIVE_0031_SQL: &str = include_str!("../../sql/native_0031.sql");
+
+/// Dataset-bound Desktop Vault canary version.
+pub const NATIVE_0032_VERSION: i32 = 32;
+/// 0032 stable migration name.
+pub const NATIVE_0032_NAME: &str = "native_0032_desktop_vault_canary";
+/// 0032 expand-only SQL source.
+pub const NATIVE_0032_SQL: &str = include_str!("../../sql/native_0032.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -312,6 +319,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0031_VERSION,
         name: NATIVE_0031_NAME,
         sql: NATIVE_0031_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0032_VERSION,
+        name: NATIVE_0032_NAME,
+        sql: NATIVE_0032_SQL,
     },
 ];
 
@@ -481,6 +493,12 @@ pub fn native_0031_checksum() -> String {
     Sha256Digest::of(NATIVE_0031_SQL.as_bytes()).to_hex()
 }
 
+/// SHA-256 of the exact native 0032 SQL bytes.
+#[must_use]
+pub fn native_0032_checksum() -> String {
+    Sha256Digest::of(NATIVE_0032_SQL.as_bytes()).to_hex()
+}
+
 /// 在一个已到 0012 的数据库上施加当前二进制认识的全部 Rust-owned migrations。
 ///
 /// # Errors
@@ -525,6 +543,74 @@ pub async fn ledger_exists(client: &Client) -> Result<bool, InfraError> {
         .map_err(|source| InfraError::query("探测 native schema migration 账本", source))?
         .try_get(0)
         .map_err(|source| RowDecodeError::column("(to_regclass)", "exists", source).into())
+}
+
+/// Read-only verification that every currently known native migration is present with exact
+/// name/checksum and that no future version is recorded.
+pub async fn validate_current(client: &Client) -> Result<(), InfraError> {
+    if !ledger_exists(client).await? {
+        return Err(InfraError::repository_invariant(
+            "native_migration_ledger_missing",
+        ));
+    }
+    for migration in MIGRATIONS {
+        let row = client
+            .query_opt(
+                "SELECT name,checksum FROM openbot_internal.schema_migrations WHERE version=$1",
+                &[&migration.version],
+            )
+            .await
+            .map_err(|source| InfraError::query("只读核验 native migration", source))?
+            .ok_or_else(|| {
+                InfraError::repository_invariant("native_migration_ledger_incomplete")
+            })?;
+        let name: String = row
+            .try_get(0)
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "name", source))?;
+        let checksum: String = row
+            .try_get(1)
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "checksum", source))?;
+        if name != migration.name || checksum != Sha256Digest::of(migration.sql.as_bytes()).to_hex()
+        {
+            return Err(NativeMigrationViolation::LedgerDrift {
+                version: migration.version,
+                expected_name: migration.name,
+                expected_checksum: Sha256Digest::of(migration.sql.as_bytes()).to_hex(),
+                actual_name: name,
+                actual_checksum: checksum,
+            }
+            .into());
+        }
+    }
+    let ledger_count: i64 = client
+        .query_one(
+            "SELECT count(*)::bigint FROM openbot_internal.schema_migrations",
+            &[],
+        )
+        .await
+        .map_err(|source| InfraError::query("只读核验 native migration 数量", source))?
+        .try_get(0)
+        .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "count", source))?;
+    if ledger_count != NATIVE_MIGRATION_COUNT as i64 {
+        return Err(InfraError::repository_invariant(
+            "native_migration_ledger_unknown_row",
+        ));
+    }
+    let future: bool = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM openbot_internal.schema_migrations WHERE version>$1)",
+            &[&NATIVE_LATEST_VERSION],
+        )
+        .await
+        .map_err(|source| InfraError::query("只读核验 future native migration", source))?
+        .try_get(0)
+        .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "future", source))?;
+    if future {
+        return Err(InfraError::repository_invariant(
+            "future_native_migration_present",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) async fn apply_through_in_transaction(
@@ -652,6 +738,7 @@ mod tests {
             .chain(statement_lines(NATIVE_0026_SQL))
             .chain(statement_lines(NATIVE_0030_SQL))
             .chain(statement_lines(NATIVE_0031_SQL))
+            .chain(statement_lines(NATIVE_0032_SQL))
         {
             let uppercase = line.to_ascii_uppercase();
             assert!(
@@ -773,6 +860,7 @@ mod tests {
                 .chain(statement_lines(NATIVE_0029_SQL))
                 .chain(statement_lines(NATIVE_0030_SQL))
                 .chain(statement_lines(NATIVE_0031_SQL))
+                .chain(statement_lines(NATIVE_0032_SQL))
                 .any(|line| line.contains("IF NOT EXISTS"))
         );
         assert!(LEDGER_BOOTSTRAP_SQL.contains("IF NOT EXISTS"));
@@ -844,7 +932,10 @@ mod tests {
         let run_model_selections = native_0031_checksum();
         assert_eq!(run_model_selections.len(), 64);
         assert_ne!(personal_model_connections, run_model_selections);
-        assert_eq!(MIGRATIONS.len(), 19);
-        assert_eq!(MIGRATIONS[18].version, NATIVE_LATEST_VERSION);
+        let desktop_vault_canary = native_0032_checksum();
+        assert_eq!(desktop_vault_canary.len(), 64);
+        assert_ne!(run_model_selections, desktop_vault_canary);
+        assert_eq!(MIGRATIONS.len(), 20);
+        assert_eq!(MIGRATIONS[19].version, NATIVE_LATEST_VERSION);
     }
 }

@@ -26,7 +26,7 @@ use crate::desktop_agent_runtime::{
     DesktopAgentHost, DesktopAgentHostInput, start_desktop_agent_host,
 };
 use crate::desktop_local_bootstrap::{
-    DesktopLocalCompositionError, RunningDesktopLocalDataPlane, bootstrap_running_sidecar,
+    DesktopLocalCompositionError, RunningDesktopLocalDataPlane, prepare_running_sidecar,
 };
 use crate::desktop_vault::{DesktopVaultKeyError, ReviewedDesktopVaultKeyStoreService};
 use crate::os_secret_store::{OsSecretStore, OsSecretStoreError};
@@ -1025,7 +1025,26 @@ pub(crate) async fn prepare_desktop_local_runtime(
     )
     .await
     .map_err(map_sidecar_error)?;
-    let data_plane = bootstrap_running_sidecar(installation, sidecar, &package)
+    let prepared_data_plane = prepare_running_sidecar(installation, sidecar, &package)
+        .await
+        .map_err(map_data_plane_error)?;
+    let vault_ready = match prepared_data_plane
+        .verify_application_key_material(secret_store.as_ref(), &vault_key_store_service, &package)
+        .await
+    {
+        Ok(material) => material,
+        Err(error) => {
+            let original = map_vault_error(error);
+            return Err(if prepared_data_plane.shutdown().await.is_ok() {
+                original
+            } else {
+                DesktopLocalRuntimeError::FailureCleanup
+            });
+        }
+    };
+    let (key_material, proof, database_origin) = vault_ready.into_parts();
+    let data_plane = prepared_data_plane
+        .complete_after_vault(&package, database_origin, &proof)
         .await
         .map_err(map_data_plane_error)?;
 
@@ -1033,14 +1052,6 @@ pub(crate) async fn prepare_desktop_local_runtime(
         Ok(listener) => listener,
         Err(_) => {
             return Err(cleanup_data_plane(data_plane, DesktopLocalRuntimeError::DataPlane).await);
-        }
-    };
-    let key_material = match data_plane
-        .load_application_key_material(secret_store.as_ref(), &vault_key_store_service)
-    {
-        Ok(material) => material,
-        Err(error) => {
-            return Err(cleanup_data_plane(data_plane, map_vault_error(error)).await);
         }
     };
     let pool = data_plane.pool().clone();

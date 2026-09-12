@@ -12,16 +12,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use openbot_application::tenant::package::{
     LoadedTenantPackage, TenantPackageFiles, validate_tenant_package,
 };
+use openbot_domain::vault::{
+    DesktopVaultCanaryBinding, KeyVersion, NONCE_BYTES, Nonce, SecretBytes,
+    seal_desktop_vault_canary,
+};
 use openbot_infra::auth::single_user::desktop_local::{
     CurrentOsUserAppDataRoot, DESKTOP_LOCAL_ACTOR_ID, DesktopLocalAuthorityStore,
     DesktopLocalBootstrapError,
 };
+use openbot_infra::db::desktop_local::{DesktopLocalDatabase, connect_for_attestation};
 use openbot_infra::db::initialization::DatabaseOrigin;
-use openbot_infra::db::pool::{self, DatabaseConfig};
+use openbot_infra::db::{desktop_vault_canary, initialization};
 
 static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-const TEST_USER: &str = "openbot_admin";
-const TEST_PASSWORD: &str = "openbot-desktop-bootstrap-test-only";
+const TEST_USER: &str = "desktop_admin";
+const TEST_PASSWORD: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn test_root() -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -107,6 +112,47 @@ fn loaded_package(tenant_id: &str) -> LoadedTenantPackage {
         "d".repeat(64),
     )
     .unwrap()
+}
+
+async fn verified_canary(
+    database: &DesktopLocalDatabase,
+    installation: &openbot_infra::auth::single_user::desktop_local::DesktopLocalInstallation,
+) -> desktop_vault_canary::VerifiedDesktopVaultCanary {
+    let dataset = format!("{:032x}", TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1);
+    let key_id = format!("{:032x}", TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1);
+    let deployment = installation
+        .authority()
+        .auth_context()
+        .deployment()
+        .as_str();
+    let tenant = installation.authority().auth_context().tenant().as_str();
+    let master = SecretBytes::new(vec![0x5a; 32]);
+    let binding =
+        DesktopVaultCanaryBinding::new(&dataset, deployment, tenant, &key_id, KeyVersion::new(1))
+            .unwrap();
+    let envelope =
+        seal_desktop_vault_canary(&master, &binding, Nonce::from_array([0x33; NONCE_BYTES]))
+            .unwrap();
+    let row = desktop_vault_canary::DesktopVaultCanaryRow::new(
+        &dataset,
+        deployment,
+        tenant,
+        &key_id,
+        envelope.to_column_value(),
+    )
+    .unwrap();
+    if desktop_vault_canary::read(database.pool(), deployment, tenant)
+        .await
+        .unwrap()
+        .is_none()
+    {
+        desktop_vault_canary::insert_once(database.pool(), &row)
+            .await
+            .unwrap();
+    }
+    desktop_vault_canary::verify_persisted(database, &master, &dataset, deployment, tenant, &key_id)
+        .await
+        .unwrap()
 }
 
 fn append_postgres_config(data_dir: &Path, socket_dir: &Path, port: u16) -> Result<(), String> {
@@ -203,24 +249,43 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
         stopped: false,
     };
 
-    let base = DatabaseConfig::new("127.0.0.1", port, TEST_USER, "postgres")
-        .with_password(TEST_PASSWORD)
-        .with_application_name("openbot-desktop-bootstrap-test")
-        .with_max_pool_size(4);
-    let admin = pool::connect(&base).await.unwrap();
-    admin
-        .get()
-        .await
-        .unwrap()
-        .batch_execute("CREATE DATABASE openbot")
+    let admin = connect_for_attestation(port, SecretBytes::new(TEST_PASSWORD.as_bytes().to_vec()))
         .await
         .unwrap();
-    admin.close();
-
-    let pool = pool::connect(&base.with_dbname("openbot")).await.unwrap();
+    let admin = installation.attest_postgres_admin(admin).await.unwrap();
+    let database = admin.connect_application(true).await.unwrap();
+    let pool = database.pool();
     let package = loaded_package(installation.authority().auth_context().tenant().as_str());
+    let fresh = database.fresh_initialization_proof().unwrap();
+    let first_origin = installation
+        .initialize_postgres_schema(&database, &package, &fresh)
+        .await
+        .unwrap();
+    let proof = verified_canary(&database, &installation).await;
+    let second_admin =
+        connect_for_attestation(port, SecretBytes::new(TEST_PASSWORD.as_bytes().to_vec()))
+            .await
+            .unwrap();
+    let second_admin = installation
+        .attest_postgres_admin(second_admin)
+        .await
+        .unwrap();
+    let second_database_owner = second_admin.connect_application(false).await.unwrap();
+    assert!(matches!(
+        installation
+            .initialize_postgres_schema(&second_database_owner, &package, &fresh)
+            .await,
+        Err(DesktopLocalBootstrapError::VaultCanaryMismatch)
+    ));
+    assert!(matches!(
+        installation
+            .complete_postgres_after_vault(&second_database_owner, &package, first_origin, &proof,)
+            .await,
+        Err(DesktopLocalBootstrapError::VaultCanaryMismatch)
+    ));
+    second_database_owner.close();
     let first = installation
-        .bootstrap_postgres(&pool, &package)
+        .complete_postgres_after_vault(&database, &package, first_origin, &proof)
         .await
         .unwrap();
     assert_eq!(first.database_origin, DatabaseOrigin::Fresh);
@@ -255,8 +320,9 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
     assert_eq!(callback_columns, 2, "T-TEST-0912 schema columns drifted");
     drop(client);
 
+    let second_origin = initialization::initialize(pool).await.unwrap();
     let second = installation
-        .bootstrap_postgres(&pool, &package)
+        .complete_postgres_after_vault(&database, &package, second_origin, &proof)
         .await
         .unwrap();
     assert_eq!(second.database_origin, DatabaseOrigin::RustManaged);
@@ -269,12 +335,20 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
     .load_or_create_installation()
     .unwrap();
     let other_package = loaded_package(other.authority().auth_context().tenant().as_str());
+    let other_proof = verified_canary(&database, &other).await;
     assert!(matches!(
-        other.bootstrap_postgres(&pool, &other_package).await,
+        other
+            .complete_postgres_after_vault(
+                &database,
+                &other_package,
+                DatabaseOrigin::RustManaged,
+                &other_proof,
+            )
+            .await,
         Err(DesktopLocalBootstrapError::PostgresDataDirectoryMismatch)
     ));
     fs::remove_dir_all(other_root).unwrap();
 
-    pool.close();
+    database.close();
     running.stop().unwrap();
 }

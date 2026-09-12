@@ -24,6 +24,7 @@
 pub mod baseline;
 pub mod compat;
 pub mod desktop_local;
+pub mod desktop_vault_canary;
 pub mod fresh;
 pub mod initialization;
 pub mod native;

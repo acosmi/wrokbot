@@ -853,6 +853,14 @@ impl core::fmt::Debug for RunningPostgresSidecar {
 
 #[cfg(feature = "postgres-supervisor")]
 impl RunningPostgresSidecar {
+    /// Revalidate the exact live kernel/evidence owner before another startup effect.
+    pub(crate) fn ensure_owner_current(&self) -> Result<(), PostgresSidecarError> {
+        self.lock
+            .as_ref()
+            .ok_or(PostgresSidecarError::StartLockGuardInvalid)?
+            .ensure_current()
+    }
+
     /// Fresh/existing result proved before process start.
     #[must_use]
     pub const fn origin(&self) -> PostgresSidecarOrigin {
@@ -1567,9 +1575,10 @@ mod tests {
     #[cfg(all(feature = "desktop-vault", unix))]
     use openbot_infra::auth::single_user::desktop_local::{
         CurrentOsUserAppDataRoot, DESKTOP_LOCAL_ACTOR_ID, DesktopLocalAuthorityStore,
+        DesktopLocalInstallation,
     };
     #[cfg(all(feature = "desktop-vault", unix))]
-    use openbot_infra::db::desktop_local::DesktopLocalDatabaseOrigin;
+    use openbot_infra::db::desktop_local::{DesktopLocalDatabaseError, DesktopLocalDatabaseOrigin};
     #[cfg(all(feature = "desktop-vault", unix))]
     use openbot_infra::db::initialization::DatabaseOrigin;
     use serde_json::{Value, json};
@@ -1578,7 +1587,9 @@ mod tests {
 
     use super::*;
     #[cfg(all(feature = "desktop-vault", unix))]
-    use crate::desktop_local_bootstrap::{DesktopLocalCompositionError, bootstrap_running_sidecar};
+    use crate::desktop_local_bootstrap::{
+        DesktopLocalCompositionError, PreparedDesktopLocalDataPlane, prepare_running_sidecar,
+    };
     #[cfg(all(feature = "desktop-vault", unix))]
     use crate::desktop_vault::ReviewedDesktopVaultKeyStoreService;
     #[cfg(all(feature = "desktop-vault", unix))]
@@ -2412,6 +2423,111 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(all(feature = "desktop-vault", unix))]
+    struct MasterJournalPgFixture {
+        bundle_root: PathBuf,
+        digest: PostgresBundleDigest,
+        signing: ReviewedPostgresSigningIdentity,
+        app_root: PathBuf,
+        installation: DesktopLocalInstallation,
+        instance: String,
+        data_dir: PathBuf,
+        package: LoadedTenantPackage,
+        scram: MemorySecretStore,
+        scram_service: ReviewedPostgresKeyStoreService,
+        vault_service: ReviewedDesktopVaultKeyStoreService,
+    }
+
+    #[cfg(all(feature = "desktop-vault", unix))]
+    impl MasterJournalPgFixture {
+        async fn new(label: &str) -> Self {
+            let bin_dir = PathBuf::from(std::env::var_os("OPENBOT_TEST_POSTGRES_BIN_DIR").unwrap());
+            let (bundle_root, digest) = materialize_host_postgres_bundle(&bin_dir);
+            let signing = signing_identity();
+            let app_root = root(label);
+            let installation = DesktopLocalAuthorityStore::new(
+                CurrentOsUserAppDataRoot::from_current_os_user_app_data(&app_root).unwrap(),
+            )
+            .load_or_create_installation()
+            .unwrap();
+            let instance = installation.authority().instance_id().to_owned();
+            let data_dir = installation.sidecar_data_dir().to_owned();
+            let package =
+                loaded_desktop_package(installation.authority().auth_context().tenant().as_str());
+            Self {
+                bundle_root,
+                digest,
+                signing,
+                app_root,
+                installation,
+                instance,
+                data_dir,
+                package,
+                scram: MemorySecretStore::empty(),
+                scram_service: ReviewedPostgresKeyStoreService::from_reviewed_release(
+                    "com.example.review.master-journal-scram",
+                )
+                .unwrap(),
+                vault_service: ReviewedDesktopVaultKeyStoreService::from_reviewed_release(
+                    "com.example.review.master-journal-vault",
+                )
+                .unwrap(),
+            }
+        }
+
+        async fn prepare(&self) -> PreparedDesktopLocalDataPlane {
+            let running = PostgresSidecarSupervisor::start(
+                VerifiedPostgresBundle::open(&self.bundle_root, self.digest, &self.signing)
+                    .unwrap(),
+                &self.app_root,
+                &self.instance,
+                &self.data_dir,
+                &self.scram,
+                &self.scram_service,
+            )
+            .await
+            .unwrap();
+            prepare_running_sidecar(self.installation.clone(), running, &self.package)
+                .await
+                .unwrap()
+        }
+
+        fn journal_path(&self) -> PathBuf {
+            self.app_root.join(format!(
+                ".desktop-vault-{}.master-init-v1.json",
+                self.instance
+            ))
+        }
+
+        fn phase(&self) -> String {
+            serde_json::from_slice::<Value>(&fs::read(self.journal_path()).unwrap()).unwrap()
+                ["phase"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+
+        fn set_phase(&self, phase: &str) {
+            let path = self.journal_path();
+            let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            value["phase"] = Value::String(phase.to_owned());
+            let mut file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(&serde_json::to_vec(&value).unwrap())
+                .unwrap();
+            file.sync_all().unwrap();
+            File::open(&self.app_root).unwrap().sync_all().unwrap();
+        }
+
+        fn cleanup(self) {
+            fs::remove_dir_all(self.app_root).unwrap();
+            fs::remove_dir_all(self.bundle_root).unwrap();
+        }
+    }
+
     #[cfg(all(feature = "desktop-local-runtime", unix))]
     fn materialize_desktop_dist() -> PathBuf {
         let dist = root("tauri-background-dist");
@@ -2600,7 +2716,6 @@ mod tests {
         )
         .unwrap();
         let secret_store = MemorySecretStore::empty();
-        let vault_store = MemoryVaultStore::empty();
         let vault_service = ReviewedDesktopVaultKeyStoreService::from_reviewed_release(
             "com.example.product.desktop-vault.composition-test",
         )
@@ -2615,18 +2730,6 @@ mod tests {
         let correct_package =
             loaded_desktop_package(installation.authority().auth_context().tenant().as_str());
         let wrong_package = loaded_desktop_package(&format!("desktop-local-{}", "f".repeat(64)));
-        // This scenario deliberately initializes PG then fails the package check. Its later
-        // Existing startup must load a persisted key, never create one as if the cluster were new.
-        let mut persisted_test_key = vec![1_u8];
-        persisted_test_key.extend_from_slice(&[0x5a; 32]);
-        OsSecretStore::write(
-            &vault_store,
-            "com.example.product.desktop-vault.composition-test",
-            "synthetic-existing-master",
-            &persisted_test_key,
-        )
-        .unwrap();
-
         let bundle = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
         let running = PostgresSidecarSupervisor::start(
             bundle,
@@ -2639,7 +2742,7 @@ mod tests {
         .await
         .unwrap();
         assert!(matches!(
-            bootstrap_running_sidecar(installation.clone(), running, &wrong_package).await,
+            prepare_running_sidecar(installation.clone(), running, &wrong_package).await,
             Err(DesktopLocalCompositionError::PackageScope(_))
         ));
         assert!(
@@ -2664,7 +2767,25 @@ mod tests {
             !fixed_application_database_exists(&running).await,
             "tenant mismatch must precede CREATE DATABASE"
         );
-        running.shutdown().await.unwrap();
+        assert!(matches!(
+            prepare_running_sidecar(installation, running, &correct_package).await,
+            Err(DesktopLocalCompositionError::Database(
+                DesktopLocalDatabaseError::Missing
+            ))
+        ));
+        fs::remove_dir_all(&app_root).unwrap();
+
+        let secret_store = MemorySecretStore::empty();
+        let vault_store = MemoryVaultStore::empty();
+        let app_root = root("bootstrap-composition-fresh-app");
+        let authority_store = DesktopLocalAuthorityStore::new(
+            CurrentOsUserAppDataRoot::from_current_os_user_app_data(&app_root).unwrap(),
+        );
+        let installation = authority_store.load_or_create_installation().unwrap();
+        let instance = installation.authority().instance_id().to_owned();
+        let data_dir = installation.sidecar_data_dir().to_owned();
+        let correct_package =
+            loaded_desktop_package(installation.authority().auth_context().tenant().as_str());
 
         let bundle = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
         let running = PostgresSidecarSupervisor::start(
@@ -2677,12 +2798,21 @@ mod tests {
         )
         .await
         .unwrap();
-        let data_plane = bootstrap_running_sidecar(installation.clone(), running, &correct_package)
+        let prepared = prepare_running_sidecar(installation.clone(), running, &correct_package)
+            .await
+            .unwrap();
+        let ready = prepared
+            .verify_application_key_material(&vault_store, &vault_service, &correct_package)
+            .await
+            .unwrap();
+        let (first_material, proof, database_origin) = ready.into_parts();
+        let data_plane = prepared
+            .complete_after_vault(&correct_package, database_origin, &proof)
             .await
             .unwrap();
         assert_eq!(
             data_plane.sidecar_origin(),
-            Some(PostgresSidecarOrigin::Existing)
+            Some(PostgresSidecarOrigin::Fresh)
         );
         assert_eq!(
             data_plane.database_origin(),
@@ -2739,9 +2869,6 @@ mod tests {
             .await
             .unwrap();
         drop(client);
-        let first_material = data_plane
-            .load_application_key_material(&vault_store, &vault_service)
-            .unwrap();
         assert_eq!(vault_store.writes.load(Ordering::Relaxed), 1);
         let credential_id = Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
         let credential_plaintext = SecretBytes::new(b"composition-vault-canary".to_vec());
@@ -2770,7 +2897,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let restarted = bootstrap_running_sidecar(installation.clone(), running, &correct_package)
+        let prepared = prepare_running_sidecar(installation.clone(), running, &correct_package)
+            .await
+            .unwrap();
+        let ready = prepared
+            .verify_application_key_material(&vault_store, &vault_service, &correct_package)
+            .await
+            .unwrap();
+        let (restarted_material, proof, database_origin) = ready.into_parts();
+        let restarted = prepared
+            .complete_after_vault(&correct_package, database_origin, &proof)
             .await
             .unwrap();
         assert_eq!(
@@ -2808,9 +2944,6 @@ mod tests {
             0,
             "installation is not the runtime generation source"
         );
-        let restarted_material = restarted
-            .load_application_key_material(&vault_store, &vault_service)
-            .unwrap();
         assert_eq!(vault_store.writes.load(Ordering::Relaxed), 1);
         assert_eq!(
             restarted_material
@@ -2847,7 +2980,23 @@ mod tests {
         .unwrap();
         assert!(
             matches!(
-                bootstrap_running_sidecar(installation, running, &correct_package).await,
+                {
+                    let prepared = prepare_running_sidecar(installation, running, &correct_package)
+                        .await
+                        .unwrap();
+                    let ready = prepared
+                        .verify_application_key_material(
+                            &vault_store,
+                            &vault_service,
+                            &correct_package,
+                        )
+                        .await
+                        .unwrap();
+                    let (_, proof, database_origin) = ready.into_parts();
+                    prepared
+                        .complete_after_vault(&correct_package, database_origin, &proof)
+                        .await
+                },
                 Err(DesktopLocalCompositionError::Bootstrap(
                     openbot_infra::auth::single_user::desktop_local::DesktopLocalBootstrapError::Principal(
                         openbot_infra::db::InfraError::RepositoryInvariant { code: "canonical_principal_refused" }
@@ -2865,6 +3014,378 @@ mod tests {
         );
         fs::remove_dir_all(app_root).unwrap();
         fs::remove_dir_all(bundle_root).unwrap();
+    }
+
+    #[cfg(all(feature = "desktop-vault", unix))]
+    #[tokio::test]
+    #[ignore = "requires dedicated PostgreSQL 17.11 binaries via OPENBOT_TEST_POSTGRES_BIN_DIR"]
+    async fn master_journal_os_write_and_confirmation_failures_persist_write_entered() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        struct FaultStore {
+            root: PathBuf,
+            fail_write: bool,
+            block_confirmation: bool,
+            reads: AtomicUsize,
+            writes: AtomicUsize,
+            value: Mutex<Option<Vec<u8>>>,
+        }
+        impl OsSecretStore for FaultStore {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<SecretBytes>, OsSecretStoreError> {
+                let read = self.reads.fetch_add(1, Ordering::SeqCst);
+                let value = self.value.lock().unwrap().clone();
+                if self.block_confirmation && read == 1 {
+                    fs::set_permissions(&self.root, fs::Permissions::from_mode(0o500)).unwrap();
+                }
+                Ok(value.map(SecretBytes::new))
+            }
+
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                secret: &[u8],
+            ) -> Result<(), OsSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                *self.value.lock().unwrap() = Some(secret.to_vec());
+                if self.fail_write {
+                    Err(OsSecretStoreError::StoreUnavailable)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        for (label, fail_write, block_confirmation) in [
+            ("master-write-unknown", true, false),
+            ("master-confirm-fsync", false, true),
+        ] {
+            let fixture = MasterJournalPgFixture::new(label).await;
+            let store = FaultStore {
+                root: fixture.app_root.clone(),
+                fail_write,
+                block_confirmation,
+                reads: AtomicUsize::new(0),
+                writes: AtomicUsize::new(0),
+                value: Mutex::new(None),
+            };
+            let prepared = fixture.prepare().await;
+            let result = prepared
+                .verify_application_key_material(&store, &fixture.vault_service, &fixture.package)
+                .await;
+            assert!(result.is_err(), "fault={label}");
+            if block_confirmation {
+                fs::set_permissions(&fixture.app_root, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            assert_eq!(fixture.phase(), "write_entered");
+            assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+            prepared.shutdown().await.unwrap();
+
+            let restarted = fixture.prepare().await;
+            assert!(matches!(
+                restarted
+                    .verify_application_key_material(
+                        &store,
+                        &fixture.vault_service,
+                        &fixture.package,
+                    )
+                    .await,
+                Err(crate::desktop_vault::DesktopVaultKeyError::ReconciliationRequired)
+            ));
+            assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+            restarted.shutdown().await.unwrap();
+            fixture.cleanup();
+        }
+    }
+
+    #[cfg(all(feature = "desktop-vault", unix))]
+    #[tokio::test]
+    #[ignore = "requires dedicated PostgreSQL 17.11 binaries via OPENBOT_TEST_POSTGRES_BIN_DIR"]
+    async fn master_journal_canary_entered_reconciles_exact_row_and_never_reinserts_missing_or_wrong()
+     {
+        for state in ["exact", "missing", "wrong"] {
+            let fixture = MasterJournalPgFixture::new(&format!("master-canary-{state}")).await;
+            let store = MemoryVaultStore::empty();
+            let prepared = fixture.prepare().await;
+            let ready = prepared
+                .verify_application_key_material(&store, &fixture.vault_service, &fixture.package)
+                .await
+                .unwrap();
+            drop(ready);
+            assert_eq!(fixture.phase(), "canary_confirmed");
+            fixture.set_phase("canary_write_entered");
+            let client = prepared.pool().get().await.unwrap();
+            match state {
+                "exact" => {}
+                "missing" => {
+                    client
+                        .batch_execute("DELETE FROM openbot_internal.desktop_vault_canaries")
+                        .await
+                        .unwrap();
+                }
+                "wrong" => {
+                    client
+                        .execute(
+                            "UPDATE openbot_internal.desktop_vault_canaries SET key_id=$1",
+                            &[&"f".repeat(32)],
+                        )
+                        .await
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let before: i64 = client
+                .query_one(
+                    "SELECT count(*)::bigint FROM openbot_internal.desktop_vault_canaries",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            drop(client);
+            prepared.shutdown().await.unwrap();
+
+            let restarted = fixture.prepare().await;
+            let result = restarted
+                .verify_application_key_material(&store, &fixture.vault_service, &fixture.package)
+                .await;
+            assert_eq!(result.is_ok(), state == "exact", "state={state}");
+            assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+            let after: i64 = restarted
+                .pool()
+                .get()
+                .await
+                .unwrap()
+                .query_one(
+                    "SELECT count(*)::bigint FROM openbot_internal.desktop_vault_canaries",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(after, before, "state={state}");
+            if state == "exact" {
+                assert_eq!(fixture.phase(), "canary_confirmed");
+            } else {
+                assert_eq!(fixture.phase(), "canary_write_entered");
+            }
+            restarted.shutdown().await.unwrap();
+            fixture.cleanup();
+        }
+    }
+
+    #[cfg(all(feature = "desktop-vault", unix))]
+    #[tokio::test]
+    #[ignore = "requires dedicated PostgreSQL 17.11 binaries via OPENBOT_TEST_POSTGRES_BIN_DIR"]
+    async fn master_journal_prepared_and_readback_confirmed_resume_only_empty_business() {
+        for phase in ["prepared", "readback_confirmed"] {
+            let fixture = MasterJournalPgFixture::new(&format!("master-resume-{phase}")).await;
+            let store = MemoryVaultStore::empty();
+            let prepared = fixture.prepare().await;
+            let ready = prepared
+                .verify_application_key_material(&store, &fixture.vault_service, &fixture.package)
+                .await
+                .unwrap();
+            drop(ready);
+            prepared
+                .pool()
+                .get()
+                .await
+                .unwrap()
+                .batch_execute("DELETE FROM openbot_internal.desktop_vault_canaries")
+                .await
+                .unwrap();
+            fixture.set_phase(phase);
+            if phase == "prepared" {
+                *store.value.lock().unwrap() = None;
+            }
+            let writes_before = store.writes.load(Ordering::SeqCst);
+            prepared.shutdown().await.unwrap();
+
+            let restarted = fixture.prepare().await;
+            let result = restarted
+                .verify_application_key_material(&store, &fixture.vault_service, &fixture.package)
+                .await;
+            assert!(result.is_ok(), "phase={phase}");
+            assert_eq!(fixture.phase(), "canary_confirmed");
+            assert_eq!(
+                store.writes.load(Ordering::SeqCst),
+                writes_before + usize::from(phase == "prepared")
+            );
+            restarted.shutdown().await.unwrap();
+            fixture.cleanup();
+        }
+    }
+
+    #[cfg(all(feature = "desktop-vault", unix))]
+    #[tokio::test]
+    #[ignore = "requires dedicated PostgreSQL 17.11 binaries via OPENBOT_TEST_POSTGRES_BIN_DIR"]
+    async fn master_journal_same_owner_concurrency_enters_os_write_at_most_once() {
+        let fixture = MasterJournalPgFixture::new("master-same-owner").await;
+        let store = MemoryVaultStore::empty();
+        let prepared = fixture.prepare().await;
+        let (first, second) = tokio::join!(
+            prepared.verify_application_key_material(
+                &store,
+                &fixture.vault_service,
+                &fixture.package,
+            ),
+            prepared.verify_application_key_material(
+                &store,
+                &fixture.vault_service,
+                &fixture.package,
+            )
+        );
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+        prepared.shutdown().await.unwrap();
+        fixture.cleanup();
+    }
+
+    #[cfg(all(feature = "desktop-vault", unix))]
+    #[tokio::test]
+    #[ignore = "requires dedicated PostgreSQL 17.11 binaries via OPENBOT_TEST_POSTGRES_BIN_DIR"]
+    async fn master_journal_store_read_mutation_and_nonempty_resume_are_rejected_before_write() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        struct MutatingReadStore {
+            journal: PathBuf,
+            reads: AtomicUsize,
+            writes: AtomicUsize,
+        }
+        impl OsSecretStore for MutatingReadStore {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<SecretBytes>, OsSecretStoreError> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                let mut value: Value =
+                    serde_json::from_slice(&fs::read(&self.journal).unwrap()).unwrap();
+                value["phase"] = Value::String("write_entered".to_owned());
+                fs::write(&self.journal, serde_json::to_vec(&value).unwrap()).unwrap();
+                fs::set_permissions(&self.journal, fs::Permissions::from_mode(0o600)).unwrap();
+                Ok(None)
+            }
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                _secret: &[u8],
+            ) -> Result<(), OsSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let fixture = MasterJournalPgFixture::new("master-read-mutation").await;
+        let seed = MemoryVaultStore::empty();
+        let prepared = fixture.prepare().await;
+        let ready = prepared
+            .verify_application_key_material(&seed, &fixture.vault_service, &fixture.package)
+            .await
+            .unwrap();
+        drop(ready);
+        prepared
+            .pool()
+            .get()
+            .await
+            .unwrap()
+            .batch_execute("DELETE FROM openbot_internal.desktop_vault_canaries")
+            .await
+            .unwrap();
+        fixture.set_phase("prepared");
+        prepared.shutdown().await.unwrap();
+        let mutating = MutatingReadStore {
+            journal: fixture.journal_path(),
+            reads: AtomicUsize::new(0),
+            writes: AtomicUsize::new(0),
+        };
+        let restarted = fixture.prepare().await;
+        assert!(matches!(
+            restarted
+                .verify_application_key_material(
+                    &mutating,
+                    &fixture.vault_service,
+                    &fixture.package,
+                )
+                .await,
+            Err(crate::desktop_vault::DesktopVaultKeyError::ReconciliationRequired)
+        ));
+        assert_eq!(mutating.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(mutating.writes.load(Ordering::SeqCst), 0);
+        restarted.shutdown().await.unwrap();
+        fixture.cleanup();
+
+        struct CountingStore {
+            reads: AtomicUsize,
+            value: Vec<u8>,
+        }
+        impl OsSecretStore for CountingStore {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<SecretBytes>, OsSecretStoreError> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(SecretBytes::new(self.value.clone())))
+            }
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                _secret: &[u8],
+            ) -> Result<(), OsSecretStoreError> {
+                panic!("nonempty initialization resume must not write the OS store")
+            }
+        }
+
+        let fixture = MasterJournalPgFixture::new("master-nonempty-resume").await;
+        let seed = MemoryVaultStore::empty();
+        let prepared = fixture.prepare().await;
+        let ready = prepared
+            .verify_application_key_material(&seed, &fixture.vault_service, &fixture.package)
+            .await
+            .unwrap();
+        let (material, proof, origin) = ready.into_parts();
+        drop(material);
+        let running = prepared
+            .complete_after_vault(&fixture.package, origin, &proof)
+            .await
+            .unwrap();
+        running.shutdown().await.unwrap();
+        let stored = seed.value.lock().unwrap().clone().unwrap();
+        let prepared = fixture.prepare().await;
+        prepared
+            .pool()
+            .get()
+            .await
+            .unwrap()
+            .batch_execute("DELETE FROM openbot_internal.desktop_vault_canaries")
+            .await
+            .unwrap();
+        fixture.set_phase("readback_confirmed");
+        let counting = CountingStore {
+            reads: AtomicUsize::new(0),
+            value: stored,
+        };
+        assert!(matches!(
+            prepared
+                .verify_application_key_material(
+                    &counting,
+                    &fixture.vault_service,
+                    &fixture.package,
+                )
+                .await,
+            Err(crate::desktop_vault::DesktopVaultKeyError::ReconciliationRequired)
+        ));
+        assert_eq!(counting.reads.load(Ordering::SeqCst), 0);
+        prepared.shutdown().await.unwrap();
+        fixture.cleanup();
     }
 
     #[cfg(all(feature = "desktop-vault", unix))]
@@ -2901,12 +3422,21 @@ mod tests {
         )
         .await
         .unwrap();
-        let owner = bootstrap_running_sidecar(installation.clone(), running, &package)
+        let prepared = prepare_running_sidecar(installation.clone(), running, &package)
             .await
             .unwrap();
-        assert_eq!(owner.sidecar_origin(), Some(PostgresSidecarOrigin::Fresh));
-        let material = owner
-            .load_application_key_material(&vault, &vault_service)
+        assert_eq!(
+            prepared.sidecar_origin(),
+            Some(PostgresSidecarOrigin::Fresh)
+        );
+        let ready = prepared
+            .verify_application_key_material(&vault, &vault_service, &package)
+            .await
+            .unwrap();
+        let (material, proof, database_origin) = ready.into_parts();
+        let owner = prepared
+            .complete_after_vault(&package, database_origin, &proof)
+            .await
             .unwrap();
         let id = Uuid::from_u128(0x1234);
         let sealed = material
@@ -2920,10 +3450,6 @@ mod tests {
             )
             .unwrap();
         let saved_master = vault.value.lock().unwrap().take().unwrap();
-        assert!(matches!(
-            owner.load_application_key_material(&vault, &vault_service),
-            Err(crate::desktop_vault::DesktopVaultKeyError::Missing)
-        ));
         assert_eq!(vault.writes.load(Ordering::Relaxed), 1);
         *vault.value.lock().unwrap() = Some(saved_master.clone());
         drop(material);
@@ -2931,6 +3457,10 @@ mod tests {
 
         let configuration = ["PG_VERSION", "pg_hba.conf", "postgresql.auto.conf"]
             .map(|name| (name, fs::read(data_dir.join(name)).unwrap()));
+        let scram_journal = app_root.join(format!(".postgresql-17-{instance}.scram-init-v1.json"));
+        let scram_journal: Value =
+            serde_json::from_slice(&fs::read(scram_journal).unwrap()).unwrap();
+        assert_eq!(scram_journal["phase"], "readback_confirmed");
         let saved_scram = scram.value.lock().unwrap().take().unwrap();
         let missing = PostgresSidecarSupervisor::start(
             VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
@@ -2944,7 +3474,9 @@ mod tests {
         assert!(matches!(
             missing,
             Err(PostgresSidecarError::Secret(
-                PostgresSecretStoreError::Missing
+                // R270: a confirmed creation whose key disappeared is an unknown result;
+                // `Missing` remains reserved for Existing data with no creation journal.
+                PostgresSecretStoreError::ReconciliationRequired
             ))
         ));
         assert_eq!(scram.writes.load(Ordering::Relaxed), 1);
@@ -2964,21 +3496,43 @@ mod tests {
         )
         .await
         .unwrap();
-        let owner = bootstrap_running_sidecar(installation, running, &package)
+        let prepared = prepare_running_sidecar(installation.clone(), running, &package)
             .await
             .unwrap();
         assert_eq!(
-            owner.sidecar_origin(),
+            prepared.sidecar_origin(),
             Some(PostgresSidecarOrigin::Existing)
         );
         assert!(matches!(
-            owner.load_application_key_material(&vault, &vault_service),
+            prepared
+                .verify_application_key_material(&vault, &vault_service, &package)
+                .await,
             Err(crate::desktop_vault::DesktopVaultKeyError::Missing)
         ));
         assert_eq!(vault.writes.load(Ordering::Relaxed), 1);
+        prepared.shutdown().await.unwrap();
         *vault.value.lock().unwrap() = Some(saved_master);
-        let restored = owner
-            .load_application_key_material(&vault, &vault_service)
+        let running = PostgresSidecarSupervisor::start(
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
+            &app_root,
+            &instance,
+            &data_dir,
+            &scram,
+            &service,
+        )
+        .await
+        .unwrap();
+        let prepared = prepare_running_sidecar(installation, running, &package)
+            .await
+            .unwrap();
+        let ready = prepared
+            .verify_application_key_material(&vault, &vault_service, &package)
+            .await
+            .unwrap();
+        let (restored, proof, database_origin) = ready.into_parts();
+        let owner = prepared
+            .complete_after_vault(&package, database_origin, &proof)
+            .await
             .unwrap();
         assert_eq!(
             restored

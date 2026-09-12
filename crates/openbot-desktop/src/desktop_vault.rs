@@ -2,21 +2,31 @@
 //!
 //! v4 §6.4 requires the Desktop master key to live in Keychain / Credential Manager / Secret
 //! Service, never an environment variable or app-data file. The only production entry point is a
-//! live [`RunningDesktopLocalDataPlane`], which still owns the single-instance PostgreSQL start
-//! lock. Platform calls are blocking; the Desktop runtime calls this module from its Tauri runtime
-//! worker before creating any window.
+//! [`PreparedDesktopLocalDataPlane`] that still owns the single-instance PostgreSQL start lock and
+//! asynchronously verifies the durable master journal plus PG canary before it can become Running.
+//! Platform calls are blocking; the Desktop runtime calls this module from its Tauri runtime worker
+//! before creating any window.
 
 use std::sync::Arc;
 
 use openbot_contracts::ids::TenantId;
 use openbot_domain::remote_callback::RemoteRunAssertionSigner;
 use openbot_domain::vault::{
-    ApplicationKeyPurpose, KeyVersion, SecretBytes, WrappingKey, derive_application_key,
+    ApplicationKeyPurpose, DesktopVaultCanaryBinding, KeyVersion, NONCE_BYTES, Nonce, SecretBytes,
+    WrappingKey, derive_application_key, seal_desktop_vault_canary,
 };
+use openbot_infra::db::desktop_local::DesktopLocalDatabaseOrigin;
+use openbot_infra::db::desktop_vault_canary::{
+    self, DesktopVaultCanaryRow, VerifiedDesktopVaultCanary,
+};
+use openbot_infra::db::initialization::DatabaseOrigin;
 use openbot_infra::vault::CredentialRecordVault;
 
-use crate::desktop_local_bootstrap::RunningDesktopLocalDataPlane;
+use crate::desktop_local_bootstrap::PreparedDesktopLocalDataPlane;
 use crate::os_secret_store::{OsSecretStore, OsSecretStoreError};
+
+mod initialization_journal;
+use initialization_journal::{JournalError, MasterInitializationJournal, MasterJournalPhase};
 
 const STORED_FORMAT_VERSION: u8 = 1;
 const MASTER_KEY_BYTES: usize = 32;
@@ -162,58 +172,297 @@ impl core::fmt::Debug for DesktopApplicationKeyMaterial {
     }
 }
 
-/// Sealed disposition indicating whether master key must exist or may be freshly generated.
+/// Private proof bundle consumed by the bootstrap completion typestate.
+pub(crate) struct VaultReadyDesktopMaterial {
+    material: DesktopApplicationKeyMaterial,
+    proof: VerifiedDesktopVaultCanary,
+    database_origin: DatabaseOrigin,
+}
+
+impl VaultReadyDesktopMaterial {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        DesktopApplicationKeyMaterial,
+        VerifiedDesktopVaultCanary,
+        DatabaseOrigin,
+    ) {
+        (self.material, self.proof, self.database_origin)
+    }
+}
+
+impl PreparedDesktopLocalDataPlane {
+    /// Establish or verify the durable master+dataset canary before business bootstrap.
+    pub(crate) async fn verify_application_key_material<S: OsSecretStore + ?Sized>(
+        &self,
+        store: &S,
+        service: &ReviewedDesktopVaultKeyStoreService,
+        package: &openbot_application::tenant::package::LoadedTenantPackage,
+    ) -> Result<VaultReadyDesktopMaterial, DesktopVaultKeyError> {
+        self.ensure_owner_current()
+            .map_err(|_| DesktopVaultKeyError::DataPlaneNotRunning)?;
+        let mut journal = MasterInitializationJournal::load(self).map_err(map_journal)?;
+        let created_database = self.database_origin() == DesktopLocalDatabaseOrigin::Created;
+        let fresh = created_database
+            && self.sidecar_origin() == Some(crate::postgres_sidecar::PostgresSidecarOrigin::Fresh);
+        let database_origin = if fresh {
+            if journal.is_some() {
+                return Err(DesktopVaultKeyError::ReconciliationRequired);
+            }
+            let origin = self
+                .initialize_fresh_schema(package)
+                .await
+                .map_err(|_| DesktopVaultKeyError::ReconciliationRequired)?;
+            desktop_vault_canary::verify_current_layout(self.pool())
+                .await
+                .map_err(|_| DesktopVaultKeyError::ReconciliationRequired)?;
+            self.ensure_owner_current()
+                .map_err(|_| DesktopVaultKeyError::DataPlaneNotRunning)?;
+            MasterInitializationJournal::revalidate_absent(self).map_err(map_journal)?;
+            origin
+        } else {
+            let phase = journal
+                .as_ref()
+                .map(MasterInitializationJournal::phase)
+                .ok_or(DesktopVaultKeyError::ReconciliationRequired)?;
+            match phase {
+                MasterJournalPhase::Prepared | MasterJournalPhase::ReadbackConfirmed => {
+                    desktop_vault_canary::verify_empty_initializing(self.pool())
+                        .await
+                        .map_err(|_| DesktopVaultKeyError::ReconciliationRequired)?;
+                }
+                MasterJournalPhase::WriteEntered => {
+                    return Err(DesktopVaultKeyError::ReconciliationRequired);
+                }
+                MasterJournalPhase::CanaryWriteEntered | MasterJournalPhase::CanaryConfirmed => {
+                    desktop_vault_canary::verify_current_layout(self.pool())
+                        .await
+                        .map_err(|_| DesktopVaultKeyError::ReconciliationRequired)?;
+                }
+            }
+            DatabaseOrigin::RustManaged
+        };
+
+        if journal
+            .as_ref()
+            .is_some_and(|value| value.phase() == MasterJournalPhase::WriteEntered)
+        {
+            return Err(DesktopVaultKeyError::ReconciliationRequired);
+        }
+        self.ensure_owner_current()
+            .map_err(|_| DesktopVaultKeyError::DataPlaneNotRunning)?;
+        match journal.as_ref() {
+            Some(value) => value.revalidate(self).map_err(map_journal)?,
+            None => MasterInitializationJournal::revalidate_absent(self).map_err(map_journal)?,
+        }
+        let account = format!("{ACCOUNT_PREFIX}{}", self.authority().instance_id());
+        let stored = store.read(service.as_str(), &account)?;
+        match journal.as_ref() {
+            Some(value) => value.revalidate(self).map_err(map_journal)?,
+            None => MasterInitializationJournal::revalidate_absent(self).map_err(map_journal)?,
+        }
+
+        let master = match journal.as_ref().map(MasterInitializationJournal::phase) {
+            None => {
+                if stored.is_some() || !fresh {
+                    return Err(DesktopVaultKeyError::ReconciliationRequired);
+                }
+                if self
+                    .vault_creation_attempted
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Err(DesktopVaultKeyError::ReconciliationRequired);
+                }
+                journal = Some(MasterInitializationJournal::prepare(self).map_err(map_journal)?);
+                create_master(store, service, &account, self, journal.as_mut().unwrap())?
+            }
+            Some(MasterJournalPhase::Prepared) => {
+                if stored.is_some()
+                    || self
+                        .vault_creation_attempted
+                        .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Err(DesktopVaultKeyError::ReconciliationRequired);
+                }
+                create_master(store, service, &account, self, journal.as_mut().unwrap())?
+            }
+            Some(MasterJournalPhase::ReadbackConfirmed)
+            | Some(MasterJournalPhase::CanaryWriteEntered)
+            | Some(MasterJournalPhase::CanaryConfirmed) => {
+                decode_stored(stored.ok_or(DesktopVaultKeyError::Missing)?)?
+            }
+            Some(MasterJournalPhase::WriteEntered) => unreachable!(),
+        };
+
+        let journal = journal
+            .as_mut()
+            .ok_or(DesktopVaultKeyError::ReconciliationRequired)?;
+        journal.revalidate(self).map_err(map_journal)?;
+        let proof = match journal.phase() {
+            MasterJournalPhase::ReadbackConfirmed => {
+                if desktop_vault_canary::read(
+                    self.pool(),
+                    journal.deployment_id(),
+                    journal.tenant_id(),
+                )
+                .await
+                .map_err(|_| DesktopVaultKeyError::ReconciliationRequired)?
+                .is_some()
+                {
+                    return Err(DesktopVaultKeyError::ReconciliationRequired);
+                }
+                journal.enter_canary_write(self).map_err(map_journal)?;
+                self.ensure_owner_current()
+                    .map_err(|_| DesktopVaultKeyError::DataPlaneNotRunning)?;
+                let row = new_canary_row(&master, journal)?;
+                desktop_vault_canary::insert_once(self.pool(), &row)
+                    .await
+                    .map_err(|_| DesktopVaultKeyError::ReconciliationRequired)?;
+                let proof = verify_canary(self, journal, &master).await?;
+                journal.confirm_canary(self).map_err(map_journal)?;
+                proof
+            }
+            MasterJournalPhase::CanaryWriteEntered => {
+                let proof = verify_canary(self, journal, &master).await?;
+                journal.confirm_canary(self).map_err(map_journal)?;
+                proof
+            }
+            MasterJournalPhase::CanaryConfirmed => verify_canary(self, journal, &master).await?,
+            _ => return Err(DesktopVaultKeyError::ReconciliationRequired),
+        };
+        journal.revalidate(self).map_err(map_journal)?;
+        let material =
+            derive_application_material(self.authority().auth_context().tenant().clone(), master)?;
+        Ok(VaultReadyDesktopMaterial {
+            material,
+            proof,
+            database_origin,
+        })
+    }
+}
+
+fn create_master<S: OsSecretStore + ?Sized>(
+    store: &S,
+    service: &ReviewedDesktopVaultKeyStoreService,
+    account: &str,
+    owner: &PreparedDesktopLocalDataPlane,
+    journal: &mut MasterInitializationJournal,
+) -> Result<DesktopVaultMasterKey, DesktopVaultKeyError> {
+    let mut bytes = vec![0_u8; MASTER_KEY_BYTES];
+    getrandom::fill(&mut bytes).map_err(|_| DesktopVaultKeyError::Unavailable)?;
+    let generated = DesktopVaultMasterKey(SecretBytes::new(bytes));
+    journal.enter_write(owner).map_err(map_journal)?;
+    owner
+        .ensure_owner_current()
+        .map_err(|_| DesktopVaultKeyError::DataPlaneNotRunning)?;
+    journal.revalidate(owner).map_err(map_journal)?;
+    let mut framed = Vec::with_capacity(STORED_BYTES);
+    framed.push(STORED_FORMAT_VERSION);
+    framed.extend_from_slice(generated.0.expose());
+    let framed = SecretBytes::new(framed);
+    store
+        .write(service.as_str(), account, framed.expose())
+        .map_err(DesktopVaultKeyError::OsStoreReconciliationRequired)?;
+    owner
+        .ensure_owner_current()
+        .map_err(|_| DesktopVaultKeyError::DataPlaneNotRunning)?;
+    journal.revalidate(owner).map_err(map_journal)?;
+    let persisted = store
+        .read(service.as_str(), account)
+        .map_err(DesktopVaultKeyError::OsStoreReconciliationRequired)?
+        .ok_or(DesktopVaultKeyError::ReconciliationRequired)
+        .and_then(decode_stored)?;
+    owner
+        .ensure_owner_current()
+        .map_err(|_| DesktopVaultKeyError::DataPlaneNotRunning)?;
+    journal.revalidate(owner).map_err(map_journal)?;
+    if !generated.0.ct_eq(&persisted.0) {
+        return Err(DesktopVaultKeyError::ReconciliationRequired);
+    }
+    journal.confirm_readback(owner).map_err(map_journal)?;
+    Ok(persisted)
+}
+
+fn new_canary_row(
+    master: &DesktopVaultMasterKey,
+    journal: &MasterInitializationJournal,
+) -> Result<DesktopVaultCanaryRow, DesktopVaultKeyError> {
+    let binding = DesktopVaultCanaryBinding::new(
+        journal.dataset_id(),
+        journal.deployment_id(),
+        journal.tenant_id(),
+        journal.key_id(),
+        KeyVersion::new(1),
+    )
+    .map_err(|_| DesktopVaultKeyError::MaterialInvalid)?;
+    let mut nonce = [0_u8; NONCE_BYTES];
+    getrandom::fill(&mut nonce).map_err(|_| DesktopVaultKeyError::Unavailable)?;
+    let envelope = seal_desktop_vault_canary(&master.0, &binding, Nonce::from_array(nonce))
+        .map_err(|_| DesktopVaultKeyError::MaterialInvalid)?;
+    DesktopVaultCanaryRow::new(
+        journal.dataset_id(),
+        journal.deployment_id(),
+        journal.tenant_id(),
+        journal.key_id(),
+        envelope.to_column_value(),
+    )
+    .map_err(|_| DesktopVaultKeyError::MaterialInvalid)
+}
+
+async fn verify_canary(
+    owner: &PreparedDesktopLocalDataPlane,
+    journal: &MasterInitializationJournal,
+    master: &DesktopVaultMasterKey,
+) -> Result<VerifiedDesktopVaultCanary, DesktopVaultKeyError> {
+    owner
+        .ensure_owner_current()
+        .map_err(|_| DesktopVaultKeyError::DataPlaneNotRunning)?;
+    let proof = desktop_vault_canary::verify_persisted(
+        owner.database(),
+        &master.0,
+        journal.dataset_id(),
+        journal.deployment_id(),
+        journal.tenant_id(),
+        journal.key_id(),
+    )
+    .await
+    .map_err(|error| match error {
+        desktop_vault_canary::DesktopVaultCanaryError::MaterialInvalid => {
+            DesktopVaultKeyError::MaterialInvalid
+        }
+        _ => DesktopVaultKeyError::ReconciliationRequired,
+    })?;
+    journal.revalidate(owner).map_err(map_journal)?;
+    Ok(proof)
+}
+
+fn map_journal(error: JournalError) -> DesktopVaultKeyError {
+    match error {
+        JournalError::Unavailable => DesktopVaultKeyError::Unavailable,
+        JournalError::ReconciliationRequired => DesktopVaultKeyError::ReconciliationRequired,
+    }
+}
+
+#[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 struct DesktopVaultKeyDisposition {
     is_existing: bool,
-    _sealed: (),
 }
 
+#[cfg(test)]
 impl DesktopVaultKeyDisposition {
-    #[must_use]
     const fn existing() -> Self {
-        Self {
-            is_existing: true,
-            _sealed: (),
-        }
+        Self { is_existing: true }
     }
-
-    #[must_use]
     const fn fresh() -> Self {
-        Self {
-            is_existing: false,
-            _sealed: (),
-        }
+        Self { is_existing: false }
     }
-
-    #[must_use]
     const fn is_existing(&self) -> bool {
         self.is_existing
     }
 }
 
-impl RunningDesktopLocalDataPlane {
-    /// Load/create the per-instance master key while this owner still fences competing starts,
-    /// then derive all non-SSO application cryptographic inputs before any native window exists.
-    pub fn load_application_key_material<S: OsSecretStore + ?Sized>(
-        &self,
-        store: &S,
-        service: &ReviewedDesktopVaultKeyStoreService,
-    ) -> Result<DesktopApplicationKeyMaterial, DesktopVaultKeyError> {
-        if self.sidecar_origin().is_none() {
-            return Err(DesktopVaultKeyError::DataPlaneNotRunning);
-        }
-        let disposition = if self.claim_initial_vault_creation() {
-            DesktopVaultKeyDisposition::fresh()
-        } else {
-            DesktopVaultKeyDisposition::existing()
-        };
-        let master =
-            load_or_create_master_key(store, service, self.authority().instance_id(), disposition)?;
-        derive_application_material(self.auth_context().tenant().clone(), master)
-    }
-}
-
+#[cfg(test)]
 fn load_or_create_master_key<S: OsSecretStore + ?Sized>(
     store: &S,
     service: &ReviewedDesktopVaultKeyStoreService,
@@ -290,6 +539,7 @@ fn derive_application_material(
     })
 }
 
+#[cfg(test)]
 fn valid_instance_id(value: &str) -> bool {
     value.len() == 64
         && value
