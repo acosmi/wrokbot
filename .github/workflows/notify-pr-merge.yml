@@ -1,5 +1,6 @@
 name: Notify on PR merge
 
+# Only merged pull requests notify the webhook; unmerged closures are skipped.
 on:
   pull_request:
     types: [closed]
