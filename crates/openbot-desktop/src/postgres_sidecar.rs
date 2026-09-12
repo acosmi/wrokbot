@@ -419,6 +419,10 @@ impl PostgresStartLock {
 mod key_disposition;
 #[cfg(any(feature = "postgres-supervisor", feature = "postgres-key-store"))]
 pub use key_disposition::PostgresDataDisposition;
+#[cfg(feature = "postgres-key-store")]
+mod initialization_journal;
+#[cfg(feature = "postgres-key-store")]
+use initialization_journal::{ScramCreationJournal, ScramJournalError, ScramJournalPhase};
 
 #[cfg(feature = "postgres-key-store")]
 impl PostgresStartLock {
@@ -445,18 +449,58 @@ impl PostgresStartLock {
         if !disposition.is_current_for(self) {
             return Err(PostgresSecretStoreError::DispositionInvalid);
         }
-        let account = format!("postgresql-17-{}", self.instance_id);
-        let stored = store.read(service.as_str(), &account)?;
-        if !disposition.is_current_for(self) {
-            return Err(PostgresSecretStoreError::DispositionInvalid);
-        }
-        if let Some(stored) = stored {
+        let mut journal =
+            ScramCreationJournal::load(self, disposition).map_err(map_scram_journal_error)?;
+        if journal
+            .as_ref()
+            .is_some_and(|journal| journal.phase() == ScramJournalPhase::WriteEntered)
+        {
             self.secret_creation_attempted
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            return PostgresScramSecret::from_stored(stored);
+            return Err(PostgresSecretStoreError::ReconciliationRequired);
         }
-        if disposition.is_existing() {
-            return Err(PostgresSecretStoreError::Missing);
+        if disposition.is_existing()
+            && journal
+                .as_ref()
+                .is_some_and(|journal| journal.phase() == ScramJournalPhase::Prepared)
+        {
+            self.secret_creation_attempted
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Err(PostgresSecretStoreError::ReconciliationRequired);
+        }
+        let account = format!("postgresql-17-{}", self.instance_id);
+        let stored = store.read(service.as_str(), &account)?;
+        match journal.as_ref() {
+            Some(journal) => journal
+                .revalidate(self, disposition)
+                .map_err(map_scram_journal_error)?,
+            None => ScramCreationJournal::revalidate_absent(self, disposition)
+                .map_err(map_scram_journal_error)?,
+        }
+        match journal.as_ref().map(ScramCreationJournal::phase) {
+            Some(ScramJournalPhase::Prepared) if stored.is_some() => {
+                self.secret_creation_attempted
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return Err(PostgresSecretStoreError::ReconciliationRequired);
+            }
+            Some(ScramJournalPhase::ReadbackConfirmed) => {
+                self.secret_creation_attempted
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                let stored = stored.ok_or(PostgresSecretStoreError::ReconciliationRequired)?;
+                return PostgresScramSecret::from_stored(stored);
+            }
+            Some(ScramJournalPhase::WriteEntered) => unreachable!("handled before store read"),
+            Some(ScramJournalPhase::Prepared) => {}
+            None => {
+                if let Some(stored) = stored {
+                    self.secret_creation_attempted
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    return PostgresScramSecret::from_stored(stored);
+                }
+                if disposition.is_existing() {
+                    return Err(PostgresSecretStoreError::Missing);
+                }
+            }
         }
         if self
             .secret_creation_attempted
@@ -464,7 +508,22 @@ impl PostgresStartLock {
         {
             return Err(PostgresSecretStoreError::ReconciliationRequired);
         }
+        if journal.is_none() {
+            journal = Some(
+                ScramCreationJournal::prepare(self, disposition)
+                    .map_err(map_scram_journal_error)?,
+            );
+        }
+        let journal = journal
+            .as_mut()
+            .ok_or(PostgresSecretStoreError::ReconciliationRequired)?;
         let generated = PostgresScramSecret::generate()?;
+        if !disposition.is_current_for(self) {
+            return Err(PostgresSecretStoreError::DispositionInvalid);
+        }
+        journal
+            .enter_write(self, disposition)
+            .map_err(map_scram_journal_error)?;
         if !disposition.is_current_for(self) {
             return Err(PostgresSecretStoreError::DispositionInvalid);
         }
@@ -475,11 +534,28 @@ impl PostgresStartLock {
             .read(service.as_str(), &account)
             .map_err(mark_os_store_write_ambiguous)?
             .ok_or(PostgresSecretStoreError::ReconciliationRequired)
-            .and_then(PostgresScramSecret::from_stored)?;
+            .and_then(|stored| {
+                PostgresScramSecret::from_stored(stored)
+                    .map_err(|_| PostgresSecretStoreError::ReconciliationRequired)
+            })?;
         if !generated.0.ct_eq(&persisted.0) {
             return Err(PostgresSecretStoreError::ReconciliationRequired);
         }
+        journal
+            .confirm_readback(self, disposition)
+            .map_err(map_scram_journal_error)?;
         Ok(persisted)
+    }
+}
+
+#[cfg(feature = "postgres-key-store")]
+fn map_scram_journal_error(error: ScramJournalError) -> PostgresSecretStoreError {
+    match error {
+        ScramJournalError::DispositionInvalid => PostgresSecretStoreError::DispositionInvalid,
+        ScramJournalError::ReconciliationRequired => {
+            PostgresSecretStoreError::ReconciliationRequired
+        }
+        ScramJournalError::Unavailable => PostgresSecretStoreError::Unavailable,
     }
 }
 
@@ -3260,6 +3336,548 @@ mod tests {
         drop(lock);
         fs::remove_dir_all(root).unwrap();
         assert!(rejected && writes == 1);
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn scram_journal_is_write_entered_before_store_and_confirmed_across_restart() {
+        struct InspectingStore {
+            journal_path: PathBuf,
+            memory: MemorySecretStore,
+        }
+        impl PostgresSecretStore for InspectingStore {
+            fn read(
+                &self,
+                service: &str,
+                account: &str,
+            ) -> Result<Option<PostgresStoredSecret>, PostgresSecretStoreError> {
+                self.memory.read(service, account)
+            }
+
+            fn write(
+                &self,
+                service: &str,
+                account: &str,
+                secret: &[u8],
+            ) -> Result<(), PostgresSecretStoreError> {
+                let journal: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&self.journal_path).unwrap()).unwrap();
+                assert_eq!(journal["phase"], "write_entered");
+                assert!(
+                    !String::from_utf8_lossy(&fs::read(&self.journal_path).unwrap())
+                        .contains(std::str::from_utf8(secret).unwrap())
+                );
+                self.memory.write(service, account, secret)
+            }
+        }
+
+        let (root, lock) = secret_lock("journal-positive");
+        let instance = lock.instance_id.to_string();
+        let journal_path = root.join(format!(".postgresql-17-{instance}.scram-init-v1.json"));
+        let disposition = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let store = InspectingStore {
+            journal_path: journal_path.clone(),
+            memory: MemorySecretStore::empty(),
+        };
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.review.scram-journal",
+        )
+        .unwrap();
+        let first = lock
+            .load_or_create_scram_secret(&store, &service, &disposition)
+            .unwrap();
+        let journal: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+        assert_eq!(journal["phase"], "readback_confirmed");
+        assert_eq!(journal["schema"], "openbot-postgres-scram-creation");
+        assert_eq!(journal["schemaVersion"], 1);
+        assert_eq!(journal["instanceId"], instance);
+        assert_eq!(journal["dataDirName"], format!("postgresql-17-{instance}"));
+        assert_eq!(journal["attemptId"].as_str().unwrap().len(), 32);
+        assert_eq!(journal["keyId"].as_str().unwrap().len(), 32);
+        drop(lock);
+
+        let restarted =
+            PostgresStartLock::acquire(&root, &instance, PostgresBundleDigest([0x55; 32])).unwrap();
+        let restarted_disposition =
+            PostgresDataDisposition::for_test(&restarted, PostgresSidecarOrigin::Fresh);
+        let second = restarted
+            .load_or_create_scram_secret(&store, &service, &restarted_disposition)
+            .unwrap();
+        assert_eq!(first.expose(), second.expose());
+        assert_eq!(store.memory.writes.load(Ordering::Relaxed), 1);
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn prepared_journal_continues_same_attempt_after_restart() {
+        let (root, lock) = secret_lock("journal-prepared");
+        let instance = lock.instance_id.to_string();
+        let disposition = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let prepared = ScramCreationJournal::prepare(&lock, &disposition).unwrap();
+        let journal_path = root.join(format!(".postgresql-17-{instance}.scram-init-v1.json"));
+        let before: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+        assert_eq!(before["phase"], "prepared");
+        let attempt = before["attemptId"].clone();
+        let key = before["keyId"].clone();
+        drop(prepared);
+        drop(lock);
+
+        let restarted =
+            PostgresStartLock::acquire(&root, &instance, PostgresBundleDigest([0x55; 32])).unwrap();
+        let restarted_disposition =
+            PostgresDataDisposition::for_test(&restarted, PostgresSidecarOrigin::Fresh);
+        let store = MemorySecretStore::empty();
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.review.scram-prepared",
+        )
+        .unwrap();
+        restarted
+            .load_or_create_scram_secret(&store, &service, &restarted_disposition)
+            .unwrap();
+        let after: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+        assert_eq!(after["phase"], "readback_confirmed");
+        assert_eq!(after["attemptId"], attempt);
+        assert_eq!(after["keyId"], key);
+        assert_eq!(store.writes.load(Ordering::Relaxed), 1);
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn existing_disposition_cannot_prepare_a_scram_creation_journal() {
+        let (root, lock) = secret_lock("journal-existing-prepare");
+        let instance = lock.instance_id.to_string();
+        let disposition = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Existing);
+        assert!(matches!(
+            ScramCreationJournal::prepare(&lock, &disposition),
+            Err(ScramJournalError::DispositionInvalid)
+        ));
+        assert!(
+            !root
+                .join(format!(".postgresql-17-{instance}.scram-init-v1.json"))
+                .exists()
+        );
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn confirmed_journal_missing_secret_never_rewrites_across_restart() {
+        let (root, lock) = secret_lock("journal-confirmed-missing");
+        let instance = lock.instance_id.to_string();
+        let disposition = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let store = MemorySecretStore::empty();
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.review.scram-confirmed-missing",
+        )
+        .unwrap();
+        lock.load_or_create_scram_secret(&store, &service, &disposition)
+            .unwrap();
+        *store.value.lock().unwrap() = None;
+        drop(lock);
+
+        let restarted =
+            PostgresStartLock::acquire(&root, &instance, PostgresBundleDigest([0x55; 32])).unwrap();
+        let restarted_disposition =
+            PostgresDataDisposition::for_test(&restarted, PostgresSidecarOrigin::Fresh);
+        assert!(matches!(
+            restarted.load_or_create_scram_secret(&store, &service, &restarted_disposition),
+            Err(PostgresSecretStoreError::ReconciliationRequired)
+        ));
+        assert_eq!(store.writes.load(Ordering::Relaxed), 1);
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn invalid_scram_journal_shapes_are_preserved_with_zero_store_writes() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let instance = "b".repeat(64);
+        let valid = |phase: &str| {
+            format!(
+                "{{\"schema\":\"openbot-postgres-scram-creation\",\"schemaVersion\":1,\"instanceId\":\"{instance}\",\"dataDirName\":\"postgresql-17-{instance}\",\"attemptId\":\"{}\",\"keyId\":\"{}\",\"phase\":\"{phase}\"}}",
+                "1".repeat(32),
+                "2".repeat(32)
+            )
+        };
+        for shape in [
+            "bad-json",
+            "unknown-field",
+            "wrong-instance",
+            "oversize",
+            "permission",
+            "hardlink",
+            "symlink",
+            "fifo",
+        ] {
+            let (root, lock) = secret_lock(shape);
+            let disposition =
+                PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+            let path = root.join(format!(".postgresql-17-{instance}.scram-init-v1.json"));
+            match shape {
+                "bad-json" => fs::write(&path, b"{").unwrap(),
+                "unknown-field" => {
+                    let bytes =
+                        valid("prepared").replace("\"phase\":", "\"unexpected\":true,\"phase\":");
+                    fs::write(&path, bytes).unwrap();
+                }
+                "wrong-instance" => {
+                    fs::write(&path, valid("prepared").replace(&instance, &"c".repeat(64)))
+                        .unwrap();
+                }
+                "oversize" => fs::write(&path, vec![b'x'; 1025]).unwrap(),
+                "permission" => {
+                    fs::write(&path, valid("prepared")).unwrap();
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+                }
+                "hardlink" => {
+                    fs::write(&path, valid("prepared")).unwrap();
+                    fs::hard_link(&path, root.join("journal-alias")).unwrap();
+                }
+                "symlink" => {
+                    let target = root.join("journal-target");
+                    fs::write(&target, valid("prepared")).unwrap();
+                    symlink(&target, &path).unwrap();
+                }
+                "fifo" => {
+                    assert!(
+                        std::process::Command::new("mkfifo")
+                            .arg(&path)
+                            .status()
+                            .unwrap()
+                            .success()
+                    );
+                }
+                _ => unreachable!(),
+            }
+            if !matches!(shape, "permission" | "symlink" | "fifo") {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            let store = MemorySecretStore::empty();
+            let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+                "com.example.review.scram-invalid-journal",
+            )
+            .unwrap();
+            assert!(matches!(
+                lock.load_or_create_scram_secret(&store, &service, &disposition),
+                Err(PostgresSecretStoreError::ReconciliationRequired)
+            ));
+            assert_eq!(store.writes.load(Ordering::Relaxed), 0, "shape={shape}");
+            assert!(path.exists() || shape == "symlink");
+            drop(lock);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn journal_rewrite_during_store_read_prevents_secret_write() {
+        struct RewritingRead {
+            path: PathBuf,
+            writes: AtomicUsize,
+        }
+        impl PostgresSecretStore for RewritingRead {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<PostgresStoredSecret>, PostgresSecretStoreError> {
+                let mut bytes = fs::read(&self.path).unwrap();
+                let position = bytes
+                    .windows(32)
+                    .position(|window| window.iter().all(|byte| byte.is_ascii_hexdigit()))
+                    .unwrap();
+                bytes[position] = if bytes[position] == b'0' { b'1' } else { b'0' };
+                fs::write(&self.path, bytes).unwrap();
+                Ok(None)
+            }
+
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                _secret: &[u8],
+            ) -> Result<(), PostgresSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+        }
+
+        let (root, lock) = secret_lock("journal-rewrite");
+        let instance = lock.instance_id.to_string();
+        let disposition = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let prepared = ScramCreationJournal::prepare(&lock, &disposition).unwrap();
+        drop(prepared);
+        let path = root.join(format!(".postgresql-17-{instance}.scram-init-v1.json"));
+        let store = RewritingRead {
+            path,
+            writes: AtomicUsize::new(0),
+        };
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.review.scram-rewrite",
+        )
+        .unwrap();
+        assert!(matches!(
+            lock.load_or_create_scram_secret(&store, &service, &disposition),
+            Err(PostgresSecretStoreError::ReconciliationRequired)
+        ));
+        assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn confirmed_or_absent_journal_observation_cannot_cross_store_read_mutation() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        struct MutatingRead {
+            path: PathBuf,
+            replacement: Vec<u8>,
+            value: Vec<u8>,
+            writes: AtomicUsize,
+        }
+        impl PostgresSecretStore for MutatingRead {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<PostgresStoredSecret>, PostgresSecretStoreError> {
+                fs::write(&self.path, &self.replacement).unwrap();
+                fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600)).unwrap();
+                Ok(Some(PostgresStoredSecret::from_owned_bytes(
+                    self.value.clone(),
+                )))
+            }
+
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                _secret: &[u8],
+            ) -> Result<(), PostgresSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+        }
+
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.review.scram-read-race",
+        )
+        .unwrap();
+
+        let (root, first) = secret_lock("journal-confirmed-read-race");
+        let instance = first.instance_id.to_string();
+        let first_disposition =
+            PostgresDataDisposition::for_test(&first, PostgresSidecarOrigin::Fresh);
+        let memory = MemorySecretStore::empty();
+        first
+            .load_or_create_scram_secret(&memory, &service, &first_disposition)
+            .unwrap();
+        let value = memory.value.lock().unwrap().clone().unwrap();
+        drop(first);
+        let confirmed_path = root.join(format!(".postgresql-17-{instance}.scram-init-v1.json"));
+        let replacement = fs::read(&confirmed_path)
+            .unwrap()
+            .windows("readback_confirmed".len())
+            .position(|window| window == b"readback_confirmed")
+            .map(|position| {
+                let mut bytes = fs::read(&confirmed_path).unwrap();
+                bytes.splice(
+                    position..position + "readback_confirmed".len(),
+                    b"write_entered".iter().copied(),
+                );
+                bytes
+            })
+            .unwrap();
+        let restarted =
+            PostgresStartLock::acquire(&root, &instance, PostgresBundleDigest([0x55; 32])).unwrap();
+        let restarted_disposition =
+            PostgresDataDisposition::for_test(&restarted, PostgresSidecarOrigin::Fresh);
+        let mutating = MutatingRead {
+            path: confirmed_path,
+            replacement,
+            value,
+            writes: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            restarted.load_or_create_scram_secret(&mutating, &service, &restarted_disposition),
+            Err(PostgresSecretStoreError::ReconciliationRequired)
+        ));
+        assert_eq!(mutating.writes.load(Ordering::Relaxed), 0);
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+
+        let (root, lock) = secret_lock("journal-absent-read-race");
+        let instance = lock.instance_id.to_string();
+        let disposition = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let path = root.join(format!(".postgresql-17-{instance}.scram-init-v1.json"));
+        let replacement = format!(
+            "{{\"schema\":\"openbot-postgres-scram-creation\",\"schemaVersion\":1,\"instanceId\":\"{instance}\",\"dataDirName\":\"postgresql-17-{instance}\",\"attemptId\":\"{}\",\"keyId\":\"{}\",\"phase\":\"write_entered\"}}",
+            "3".repeat(32),
+            "4".repeat(32)
+        )
+        .into_bytes();
+        let emerging = MutatingRead {
+            path,
+            replacement,
+            value: vec![b'a'; 64],
+            writes: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            lock.load_or_create_scram_secret(&emerging, &service, &disposition),
+            Err(PostgresSecretStoreError::ReconciliationRequired)
+        ));
+        assert_eq!(emerging.writes.load(Ordering::Relaxed), 0);
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn same_owner_concurrency_enters_store_write_at_most_once() {
+        use std::sync::Barrier;
+
+        struct CoordinatedStore {
+            first_reads: Barrier,
+            reads: AtomicUsize,
+            writes: AtomicUsize,
+            value: Mutex<Option<Vec<u8>>>,
+        }
+        impl PostgresSecretStore for CoordinatedStore {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<PostgresStoredSecret>, PostgresSecretStoreError> {
+                if self.reads.fetch_add(1, Ordering::SeqCst) < 2 {
+                    self.first_reads.wait();
+                }
+                Ok(self
+                    .value
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .map(PostgresStoredSecret::from_owned_bytes))
+            }
+
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                secret: &[u8],
+            ) -> Result<(), PostgresSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                *self.value.lock().unwrap() = Some(secret.to_vec());
+                Ok(())
+            }
+        }
+
+        let (root, lock) = secret_lock("journal-concurrent-owner");
+        let disposition = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.review.scram-concurrent",
+        )
+        .unwrap();
+        let store = CoordinatedStore {
+            first_reads: Barrier::new(2),
+            reads: AtomicUsize::new(0),
+            writes: AtomicUsize::new(0),
+            value: Mutex::new(None),
+        };
+        std::thread::scope(|scope| {
+            let first =
+                scope.spawn(|| lock.load_or_create_scram_secret(&store, &service, &disposition));
+            let second =
+                scope.spawn(|| lock.load_or_create_scram_secret(&store, &service, &disposition));
+            let results = [first.join().unwrap(), second.join().unwrap()];
+            assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        });
+        assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn confirmation_persistence_failure_keeps_write_entered_across_owner_restart() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        struct ConfirmationBlockedStore {
+            root: PathBuf,
+            reads: AtomicUsize,
+            writes: AtomicUsize,
+            value: Mutex<Option<Vec<u8>>>,
+        }
+        impl PostgresSecretStore for ConfirmationBlockedStore {
+            fn read(
+                &self,
+                _service: &str,
+                _account: &str,
+            ) -> Result<Option<PostgresStoredSecret>, PostgresSecretStoreError> {
+                let value = self.value.lock().unwrap().clone();
+                if self.reads.fetch_add(1, Ordering::SeqCst) == 1 {
+                    fs::set_permissions(&self.root, fs::Permissions::from_mode(0o500)).unwrap();
+                }
+                Ok(value.map(PostgresStoredSecret::from_owned_bytes))
+            }
+
+            fn write(
+                &self,
+                _service: &str,
+                _account: &str,
+                secret: &[u8],
+            ) -> Result<(), PostgresSecretStoreError> {
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                *self.value.lock().unwrap() = Some(secret.to_vec());
+                Ok(())
+            }
+        }
+
+        let (root, lock) = secret_lock("journal-confirm-failure");
+        let instance = lock.instance_id.to_string();
+        let disposition = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
+        let store = ConfirmationBlockedStore {
+            root: root.clone(),
+            reads: AtomicUsize::new(0),
+            writes: AtomicUsize::new(0),
+            value: Mutex::new(None),
+        };
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.review.scram-confirm-failure",
+        )
+        .unwrap();
+        assert!(matches!(
+            lock.load_or_create_scram_secret(&store, &service, &disposition),
+            Err(PostgresSecretStoreError::ReconciliationRequired)
+        ));
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let journal_path = root.join(format!(".postgresql-17-{instance}.scram-init-v1.json"));
+        let journal: serde_json::Value =
+            serde_json::from_slice(&fs::read(journal_path).unwrap()).unwrap();
+        assert_eq!(journal["phase"], "write_entered");
+        drop(lock);
+
+        let restarted =
+            PostgresStartLock::acquire(&root, &instance, PostgresBundleDigest([0x55; 32])).unwrap();
+        let restarted_disposition =
+            PostgresDataDisposition::for_test(&restarted, PostgresSidecarOrigin::Fresh);
+        assert!(matches!(
+            restarted.load_or_create_scram_secret(&store, &service, &restarted_disposition),
+            Err(PostgresSecretStoreError::ReconciliationRequired)
+        ));
+        assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(feature = "postgres-key-store")]
