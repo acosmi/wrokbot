@@ -1,0 +1,33 @@
+name: Notify on PR merge
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  notify:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST merge event to webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.CURSOR_WEBHOOK_URL }}
+          WEBHOOK_AUTH: ${{ secrets.CURSOR_WEBHOOK_AUTH }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK_URL}" ] || [ -z "${WEBHOOK_AUTH}" ]; then
+            echo "Missing CURSOR_WEBHOOK_URL or CURSOR_WEBHOOK_AUTH secret"
+            exit 1
+          fi
+          HTTP_CODE=$(curl -sS -o /tmp/webhook-body.txt -w "%{http_code}" \
+            -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: ${WEBHOOK_AUTH}" \
+            --data-binary @"$GITHUB_EVENT_PATH"
+          )
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/webhook-body.txt || true
+          case "$HTTP_CODE" in
+            2??) exit 0 ;;
+            *) exit 1 ;;
+          esac
