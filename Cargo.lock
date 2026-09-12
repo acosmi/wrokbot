@@ -4678,6 +4678,7 @@ dependencies = [
  "url",
  "uuid",
  "wrok-bot-macos-local-auth",
+ "wrok-bot-macos-process",
 ]
 
 [[package]]
@@ -9127,6 +9128,14 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-local-authentication",
+]
+
+[[package]]
+name = "wrok-bot-macos-process"
+version = "0.0.0"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
 ]
 
 [[package]]

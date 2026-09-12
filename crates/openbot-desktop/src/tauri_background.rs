@@ -1336,7 +1336,8 @@ fn map_sidecar_error(error: PostgresSidecarError) -> DesktopLocalRuntimeError {
         PostgresSidecarError::StartLockRecoveryRequired => {
             DesktopLocalRuntimeError::RecoveryRequired
         }
-        PostgresSidecarError::StartLockGuardInvalid => {
+        PostgresSidecarError::StartLockGuardInvalid
+        | PostgresSidecarError::ProcessIdentityInvalid => {
             DesktopLocalRuntimeError::InitializationEvidenceInvalid
         }
         PostgresSidecarError::ShutdownFailed => DesktopLocalRuntimeError::FailureCleanup,
@@ -1688,6 +1689,10 @@ mod tests {
             ),
             (
                 PostgresSidecarError::StartLockGuardInvalid,
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                PostgresSidecarError::ProcessIdentityInvalid,
                 "desktop_local_runtime_initialization_evidence_invalid",
             ),
             (
