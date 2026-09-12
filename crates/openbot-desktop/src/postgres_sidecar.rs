@@ -8,8 +8,12 @@
 
 mod bundle_fs;
 mod kernel_start_lock;
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+mod startup_journal;
 
 use kernel_start_lock::{KernelStartLock, path_matches_open_file};
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+use startup_journal::{StartupJournal, StartupJournalError, StartupJournalPreparation};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -123,6 +127,18 @@ pub enum PostgresSidecarError {
     #[cfg(feature = "postgres-supervisor")]
     #[error("postgres_sidecar_process_identity_invalid")]
     ProcessIdentityInvalid,
+    /// A live or interrupted startup journal requires an explicit future recovery flow.
+    #[cfg(feature = "postgres-supervisor")]
+    #[error("postgres_sidecar_startup_journal_recovery_required")]
+    StartupJournalRecoveryRequired,
+    /// Startup journal shape, binding, or persistent identity was invalid.
+    #[cfg(feature = "postgres-supervisor")]
+    #[error("postgres_sidecar_startup_journal_invalid")]
+    StartupJournalInvalid,
+    /// A startup journal write/read-back result was not durably knowable.
+    #[cfg(feature = "postgres-supervisor")]
+    #[error("postgres_sidecar_startup_journal_reconciliation_required")]
+    StartupJournalReconciliationRequired,
     /// OS key-store secret acquisition failed before process launch.
     #[cfg(feature = "postgres-supervisor")]
     #[error(transparent)]
@@ -418,6 +434,11 @@ impl PostgresStartLock {
     #[cfg(feature = "postgres-supervisor")]
     fn preserve_on_drop(&mut self) {
         self.remove_on_drop = false;
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    fn remove_after_confirmed_exit(&mut self) {
+        self.remove_on_drop = true;
     }
 }
 
@@ -843,6 +864,8 @@ pub struct RunningPostgresSidecar {
     origin: PostgresSidecarOrigin,
     #[cfg(target_os = "macos")]
     process_identity: ProcessIdentity,
+    #[cfg(target_os = "macos")]
+    startup_journal: StartupJournal,
 }
 
 #[cfg(feature = "postgres-supervisor")]
@@ -871,6 +894,14 @@ impl RunningPostgresSidecar {
         self.process_identity
             .revalidate()
             .map_err(|_| PostgresSidecarError::ProcessIdentityInvalid)?;
+        #[cfg(target_os = "macos")]
+        self.startup_journal
+            .revalidate(
+                self.lock
+                    .as_ref()
+                    .ok_or(PostgresSidecarError::StartLockGuardInvalid)?,
+            )
+            .map_err(map_startup_journal_error)?;
         Ok(())
     }
 
@@ -916,6 +947,24 @@ impl RunningPostgresSidecar {
                 Err(PostgresSidecarError::ShutdownFailed)
             };
         }
+        #[cfg(target_os = "macos")]
+        if let Err(error) = self.startup_journal.mark_stop(
+            self.lock
+                .as_ref()
+                .ok_or(PostgresSidecarError::ShutdownFailed)?,
+        ) {
+            self.preserve_lock();
+            let terminated = match self.child.as_mut() {
+                Some(child) => terminate_child(child).await,
+                None => Err(PostgresSidecarError::ShutdownFailed),
+            };
+            return if terminated.is_ok() {
+                self.child.take();
+                Err(map_startup_journal_error(error))
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
+        }
         let status = run_pg_ctl_stop(&self.bundle, &self.data_dir).await;
         if !matches!(status, Ok(status) if status.success()) {
             self.preserve_lock();
@@ -932,6 +981,16 @@ impl RunningPostgresSidecar {
         let waited = tokio::time::timeout(SHUTDOWN_DEADLINE, child.wait()).await;
         match waited {
             Ok(Ok(status)) if status.success() => {
+                #[cfg(target_os = "macos")]
+                {
+                    let Some(lock) = self.lock.as_mut() else {
+                        return Err(PostgresSidecarError::ShutdownFailed);
+                    };
+                    if let Err(error) = self.startup_journal.confirm_exit(lock) {
+                        return Err(map_startup_journal_error(error));
+                    }
+                    lock.remove_after_confirmed_exit();
+                }
                 drop(self.lock.take());
                 Ok(())
             }
@@ -986,8 +1045,19 @@ impl PostgresSidecarSupervisor {
             PostgresBundleDigest(bundle.manifest_sha256),
         )?;
         lock.ensure_current()?;
+        #[cfg(target_os = "macos")]
+        let startup_preparation = StartupJournalPreparation::inspect(&lock, data_dir)
+            .map_err(map_startup_journal_error)?;
         verify_program_versions(&bundle).await?;
+        #[cfg(target_os = "macos")]
+        startup_preparation
+            .revalidate(&lock)
+            .map_err(map_startup_journal_error)?;
         let disposition = lock.inspect_data_directory(data_dir)?;
+        #[cfg(target_os = "macos")]
+        if startup_preparation.requires_existing_data() && !disposition.is_existing() {
+            return Err(PostgresSidecarError::StartupJournalRecoveryRequired);
+        }
         let secret = lock.load_or_create_scram_secret(store, service, &disposition)?;
         let origin = disposition.origin();
         if origin == PostgresSidecarOrigin::Fresh {
@@ -998,6 +1068,16 @@ impl PostgresSidecarSupervisor {
         let port = reserve_loopback_port()?;
         write_runtime_configuration(data_dir, port)?;
         lock.ensure_current()?;
+        #[cfg(target_os = "macos")]
+        startup_preparation
+            .revalidate(&lock)
+            .map_err(map_startup_journal_error)?;
+        #[cfg(target_os = "macos")]
+        lock.preserve_on_drop();
+        #[cfg(target_os = "macos")]
+        let mut startup_journal = startup_preparation
+            .begin_spawn(&lock)
+            .map_err(map_startup_journal_error)?;
         let mut child = spawn_postgres(&bundle, data_dir)?;
         #[cfg(target_os = "macos")]
         let process_identity = match child
@@ -1017,6 +1097,14 @@ impl PostgresSidecarSupervisor {
                 };
             }
         };
+        #[cfg(target_os = "macos")]
+        if let Err(error) = startup_journal.record_child(&lock, &process_identity) {
+            return if terminate_child(&mut child).await.is_ok() {
+                Err(map_startup_journal_error(error))
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
+        }
         if let Err(error) = lock.ensure_current() {
             lock.preserve_on_drop();
             return if terminate_child(&mut child).await.is_ok() {
@@ -1028,6 +1116,15 @@ impl PostgresSidecarSupervisor {
         if let Err(error) = wait_until_ready(&mut child, port, &secret).await {
             if terminate_child(&mut child).await.is_err() {
                 lock.preserve_on_drop();
+                #[cfg(target_os = "macos")]
+                return Err(PostgresSidecarError::ShutdownFailed);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(journal_error) = startup_journal.confirm_exit(&lock) {
+                    return Err(map_startup_journal_error(journal_error));
+                }
+                lock.remove_after_confirmed_exit();
             }
             return Err(error);
         }
@@ -1036,6 +1133,30 @@ impl PostgresSidecarSupervisor {
             lock.preserve_on_drop();
             return if terminate_child(&mut child).await.is_ok() {
                 Err(PostgresSidecarError::ProcessIdentityInvalid)
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
+        }
+        #[cfg(target_os = "macos")]
+        if let Err(error) = startup_journal.mark_ready(&lock) {
+            return if terminate_child(&mut child).await.is_ok() {
+                Err(map_startup_journal_error(error))
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
+        }
+        #[cfg(target_os = "macos")]
+        if process_identity.revalidate().is_err() {
+            return if terminate_child(&mut child).await.is_ok() {
+                Err(PostgresSidecarError::ProcessIdentityInvalid)
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
+        }
+        #[cfg(target_os = "macos")]
+        if let Err(error) = startup_journal.revalidate(&lock) {
+            return if terminate_child(&mut child).await.is_ok() {
+                Err(map_startup_journal_error(error))
             } else {
                 Err(PostgresSidecarError::ShutdownFailed)
             };
@@ -1058,7 +1179,22 @@ impl PostgresSidecarSupervisor {
             origin,
             #[cfg(target_os = "macos")]
             process_identity,
+            #[cfg(target_os = "macos")]
+            startup_journal,
         })
+    }
+}
+
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+fn map_startup_journal_error(error: StartupJournalError) -> PostgresSidecarError {
+    match error {
+        StartupJournalError::RecoveryRequired => {
+            PostgresSidecarError::StartupJournalRecoveryRequired
+        }
+        StartupJournalError::Invalid => PostgresSidecarError::StartupJournalInvalid,
+        StartupJournalError::ReconciliationRequired => {
+            PostgresSidecarError::StartupJournalReconciliationRequired
+        }
     }
 }
 
@@ -1646,7 +1782,7 @@ mod tests {
 
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    fn root(name: &str) -> PathBuf {
+    pub(super) fn root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "openbot-postgres-bundle-{name}-{}-{}",
             std::process::id(),
@@ -1654,7 +1790,7 @@ mod tests {
         ))
     }
 
-    fn signing_identity() -> ReviewedPostgresSigningIdentity {
+    pub(super) fn signing_identity() -> ReviewedPostgresSigningIdentity {
         ReviewedPostgresSigningIdentity::from_reviewed_release(
             "Developer ID Application: Example Product (ABCDE12345)",
         )
@@ -1686,7 +1822,7 @@ mod tests {
         (root, digest)
     }
 
-    fn write_manifest(root: &Path) -> PostgresBundleDigest {
+    pub(super) fn write_manifest(root: &Path) -> PostgresBundleDigest {
         let mut files = BTreeMap::new();
         for relative in inventory_files(root).unwrap() {
             files.insert(
@@ -1967,7 +2103,7 @@ mod tests {
     }
 
     #[cfg(feature = "postgres-key-store")]
-    struct MemorySecretStore {
+    pub(super) struct MemorySecretStore {
         value: Mutex<Option<Vec<u8>>>,
         writes: AtomicUsize,
         replace_on_write: bool,
@@ -1975,12 +2111,16 @@ mod tests {
 
     #[cfg(feature = "postgres-key-store")]
     impl MemorySecretStore {
-        fn empty() -> Self {
+        pub(super) fn empty() -> Self {
             Self {
                 value: Mutex::new(None),
                 writes: AtomicUsize::new(0),
                 replace_on_write: false,
             }
+        }
+
+        pub(super) fn write_count(&self) -> usize {
+            self.writes.load(Ordering::Relaxed)
         }
 
         fn with_value(value: Vec<u8>) -> Self {
@@ -2119,7 +2259,7 @@ mod tests {
     }
 
     #[cfg(feature = "postgres-supervisor")]
-    fn supervisor_test_paths(name: &str) -> (PathBuf, String, PathBuf) {
+    pub(super) fn supervisor_test_paths(name: &str) -> (PathBuf, String, PathBuf) {
         let app_root = root(name);
         let instance = "e".repeat(64);
         let data_dir = app_root.join(format!("postgresql-17-{instance}"));
@@ -2255,7 +2395,15 @@ mod tests {
             VerifiedPostgresBundle::open(&bundle_root, digest, &signing_identity()).unwrap();
         let (app_root, instance, data_dir) = supervisor_test_paths("bad-control-owned-child");
         let lock = PostgresStartLock::acquire(&app_root, &instance, digest).unwrap();
+        #[cfg(target_os = "macos")]
+        let mut lock = lock;
         let lock_path = lock.path.clone();
+        #[cfg(target_os = "macos")]
+        let startup_preparation = StartupJournalPreparation::inspect(&lock, &data_dir).unwrap();
+        #[cfg(target_os = "macos")]
+        lock.preserve_on_drop();
+        #[cfg(target_os = "macos")]
+        let mut startup_journal = startup_preparation.begin_spawn(&lock).unwrap();
         // Trusted OS sleep is solely an owned-child cleanup probe, never a PostgreSQL fixture.
         let mut child = Command::new("/bin/sleep")
             .env_clear()
@@ -2267,6 +2415,12 @@ mod tests {
             .unwrap();
         #[cfg(target_os = "macos")]
         let process_identity = ProcessIdentity::capture(child.id().unwrap()).unwrap();
+        #[cfg(target_os = "macos")]
+        startup_journal
+            .record_child(&lock, &process_identity)
+            .unwrap();
+        #[cfg(target_os = "macos")]
+        startup_journal.mark_ready(&lock).unwrap();
         let mut output = child.stdout.take().unwrap();
         let marker = bundle_root.with_extension("bad-control-marker");
         fs::write(bundle.pg_ctl(), replacement_canary(&marker, "pg_ctl")).unwrap();
@@ -2280,6 +2434,8 @@ mod tests {
             origin: PostgresSidecarOrigin::Existing,
             #[cfg(target_os = "macos")]
             process_identity,
+            #[cfg(target_os = "macos")]
+            startup_journal,
         };
         assert!(matches!(
             running.shutdown().await,
@@ -2331,7 +2487,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
-    fn materialize_failing_initdb_bundle() -> (PathBuf, PostgresBundleDigest) {
+    pub(super) fn materialize_failing_initdb_bundle() -> (PathBuf, PostgresBundleDigest) {
         let root = root("failing-initdb");
         fs::create_dir_all(root.join("bin")).unwrap();
         use std::os::unix::fs::PermissionsExt as _;
@@ -2441,7 +2597,9 @@ mod tests {
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
-    fn materialize_host_postgres_bundle(bin_dir: &Path) -> (PathBuf, PostgresBundleDigest) {
+    pub(super) fn materialize_host_postgres_bundle(
+        bin_dir: &Path,
+    ) -> (PathBuf, PostgresBundleDigest) {
         let root = root("host-postgres");
         fs::create_dir_all(root.join("bin")).unwrap();
         for relative in expected_program_paths() {
@@ -3797,7 +3955,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
-    async fn probe_running_sidecar(running: &RunningPostgresSidecar) {
+    pub(super) async fn probe_running_sidecar(running: &RunningPostgresSidecar) {
         let connection = running.connection();
         let mut config = tokio_postgres::Config::new();
         config
