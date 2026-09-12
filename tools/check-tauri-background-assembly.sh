@@ -45,13 +45,9 @@ window_line=$(line_of 'let window = lifecycle\.create_verified_window')
 [[ $prepared_line -lt $slot_line && $slot_line -lt $owner_line && $owner_line -lt $window_line ]] \
   || fail "prepare→protocol→owner→window order drift"
 
-authority_stop=$(line_of 'shutdown_authority\(\)')
-transport_stop=$(line_of 'self\.transport\.shutdown\(\)')
-agent_stop=$(line_of 'agent_host\.stop\(\)')
-assembly_stop=$(line_of 'assembly\.shutdown\(\)')
-sidecar_stop=$(line_of 'data_plane\.shutdown\(\)')
-[[ $authority_stop -lt $transport_stop && $transport_stop -lt $agent_stop && $agent_stop -lt $assembly_stop && $assembly_stop -lt $sidecar_stop ]] \
-  || fail "authority→transport→Agent→reconciler→sidecar shutdown order drift"
+python3 tools/tauri_background_assembly_guard.py \
+  crates/openbot-desktop/src/tauri_background.rs \
+  || fail "production Desktop Local staged shutdown structure drift"
 
 grep -Fq 'desktop-local-runtime = [' crates/openbot-desktop/Cargo.toml \
   || fail "desktop-local-runtime feature missing"
@@ -85,4 +81,4 @@ slot_source=$(awk '/^mod tests \{/{exit} {print}' crates/openbot-desktop/src/tau
 [[ $(rg -c 'ProtocolAlreadyReady' <<<"$slot_source") -ge 3 ]] \
   || fail "protocol slot no longer rejects replacement"
 
-echo "Tauri background assembly guard: ok (app_data=1; sidecar=1; shared-app=1; Agent+relay=1; window-last=1; local-prefs=1; ordered shutdown; SSO=0)"
+echo "Tauri background assembly guard: ok (app_data=1; sidecar=1; shared-app=1; Agent+relay=1; window-last=1; local-prefs=1; concurrent staged shutdown; SSO=0)"
