@@ -70,6 +70,10 @@ impl<'a> PostgresDataDisposition<'a> {
         matches!(self.origin, PostgresSidecarOrigin::Fresh)
     }
 
+    pub(super) fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(owner: &'a PostgresStartLock, origin: PostgresSidecarOrigin) -> Self {
         let data = owner
