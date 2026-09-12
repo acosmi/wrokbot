@@ -7,10 +7,13 @@
 //! No PATH-resolved development PostgreSQL is a production fallback.
 
 mod bundle_fs;
+mod kernel_start_lock;
+
+use kernel_start_lock::{KernelStartLock, path_matches_open_file};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Write as _};
 use std::path::{Component, Path, PathBuf};
 #[cfg(feature = "postgres-supervisor")]
 use std::process::Stdio;
@@ -74,9 +77,15 @@ pub enum PostgresSidecarError {
     /// A named bundle file did not match its manifest SHA-256.
     #[error("postgres_sidecar_file_digest")]
     FileDigest,
-    /// Another process or a crash residue already owns the instance start lock.
+    /// Another process currently holds the instance's persistent kernel guard.
     #[error("postgres_sidecar_start_lock_held")]
     StartLockHeld,
+    /// A kernel owner was acquired, but prior dynamic evidence requires explicit recovery.
+    #[error("postgres_sidecar_start_lock_recovery_required")]
+    StartLockRecoveryRequired,
+    /// The persistent kernel guard could not be proved private, exact, and uniquely owned.
+    #[error("postgres_sidecar_start_lock_guard_invalid")]
+    StartLockGuardInvalid,
     /// A caller-supplied release signing identity was not a reviewed closed value.
     #[error("postgres_sidecar_signing_identity_invalid")]
     SigningIdentityInvalid,
@@ -320,6 +329,7 @@ pub struct PostgresStartLock {
     #[cfg(feature = "postgres-key-store")]
     secret_creation_attempted: std::sync::atomic::AtomicBool,
     _file: File,
+    kernel_guard: KernelStartLock,
 }
 
 impl core::fmt::Debug for PostgresStartLock {
@@ -329,7 +339,7 @@ impl core::fmt::Debug for PostgresStartLock {
 }
 
 impl PostgresStartLock {
-    /// Atomically acquire the direct app-data lock for one instance and verified bundle digest.
+    /// Acquire the persistent kernel guard, then atomically publish this start's evidence.
     ///
     /// Existing files are never auto-recovered by PID guess. A future supervisor may add
     /// platform-authenticated process identity recovery; until then crash residue requires an
@@ -339,20 +349,7 @@ impl PostgresStartLock {
         instance_id: &str,
         bundle_digest: PostgresBundleDigest,
     ) -> Result<Self, PostgresSidecarError> {
-        if !app_data_root.is_absolute() || !valid_instance_id(instance_id) {
-            return Err(PostgresSidecarError::BundleShape);
-        }
-        let root_metadata = fs::symlink_metadata(app_data_root)?;
-        if !root_metadata.file_type().is_dir() || root_metadata.file_type().is_symlink() {
-            return Err(PostgresSidecarError::BundleShape);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            if root_metadata.permissions().mode() & 0o077 != 0 {
-                return Err(PostgresSidecarError::BundleShape);
-            }
-        }
+        let kernel_guard = KernelStartLock::acquire(app_data_root, instance_id)?;
         let path = app_data_root.join(format!(".postgresql-17-{instance_id}.start-lock-v1"));
         let mut nonce = [0_u8; LOCK_NONCE_BYTES];
         getrandom::fill(&mut nonce).map_err(|error| {
@@ -367,7 +364,7 @@ impl PostgresStartLock {
         .into_bytes();
 
         let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
+        options.read(true).write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -376,17 +373,16 @@ impl PostgresStartLock {
         let mut file = match options.open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                return Err(PostgresSidecarError::StartLockHeld);
+                return Err(PostgresSidecarError::StartLockRecoveryRequired);
             }
             Err(error) => return Err(error.into()),
         };
         let written = file.write_all(&bytes).and_then(|()| file.sync_all());
         if let Err(error) = written {
-            let _ = fs::remove_file(&path);
             return Err(error.into());
         }
         sync_directory(app_data_root)?;
-        Ok(Self {
+        let lock = Self {
             path,
             bytes,
             instance_id: Arc::from(instance_id),
@@ -394,7 +390,23 @@ impl PostgresStartLock {
             #[cfg(feature = "postgres-key-store")]
             secret_creation_attempted: std::sync::atomic::AtomicBool::new(false),
             _file: file,
-        })
+            kernel_guard,
+        };
+        lock.ensure_current()?;
+        Ok(lock)
+    }
+
+    fn ownership_is_current(&self) -> bool {
+        self.kernel_guard.is_current()
+            && path_matches_open_file(&self.path, &self._file, &self.bytes, true)
+    }
+
+    fn ensure_current(&self) -> Result<(), PostgresSidecarError> {
+        if self.ownership_is_current() {
+            Ok(())
+        } else {
+            Err(PostgresSidecarError::StartLockGuardInvalid)
+        }
     }
 
     #[cfg(feature = "postgres-supervisor")]
@@ -483,7 +495,7 @@ fn mark_os_store_write_ambiguous(error: PostgresSecretStoreError) -> PostgresSec
 
 impl Drop for PostgresStartLock {
     fn drop(&mut self) {
-        if self.remove_on_drop && lock_file_matches(&self.path, &self.bytes) {
+        if self.remove_on_drop && self.ownership_is_current() {
             let _ = fs::remove_file(&self.path);
             if let Some(parent) = self.path.parent() {
                 let _ = sync_directory(parent);
@@ -789,6 +801,24 @@ impl RunningPostgresSidecar {
     /// Stop through the verified `pg_ctl`, then wait for the exact owned child before releasing
     /// the start lock. Failure preserves a stale lock and kills the child best-effort.
     pub async fn shutdown(mut self) -> Result<(), PostgresSidecarError> {
+        let ownership = self
+            .lock
+            .as_ref()
+            .ok_or(PostgresSidecarError::ShutdownFailed)
+            .and_then(PostgresStartLock::ensure_current);
+        if let Err(error) = ownership {
+            self.preserve_lock();
+            let terminated = match self.child.as_mut() {
+                Some(child) => terminate_child(child).await,
+                None => Err(PostgresSidecarError::ShutdownFailed),
+            };
+            return if terminated.is_ok() {
+                self.child.take();
+                Err(error)
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
+        }
         let status = run_pg_ctl_stop(&self.bundle, &self.data_dir).await;
         if !matches!(status, Ok(status) if status.success()) {
             self.preserve_lock();
@@ -858,21 +888,41 @@ impl PostgresSidecarSupervisor {
             instance_id,
             PostgresBundleDigest(bundle.manifest_sha256),
         )?;
+        lock.ensure_current()?;
         verify_program_versions(&bundle).await?;
         let disposition = lock.inspect_data_directory(data_dir)?;
         let secret = lock.load_or_create_scram_secret(store, service, &disposition)?;
         let origin = disposition.origin();
         if origin == PostgresSidecarOrigin::Fresh {
+            lock.ensure_current()?;
             run_initdb(&bundle, data_dir, &secret).await?;
         }
+        lock.ensure_current()?;
         let port = reserve_loopback_port()?;
         write_runtime_configuration(data_dir, port)?;
+        lock.ensure_current()?;
         let mut child = spawn_postgres(&bundle, data_dir)?;
+        if let Err(error) = lock.ensure_current() {
+            lock.preserve_on_drop();
+            return if terminate_child(&mut child).await.is_ok() {
+                Err(error)
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
+        }
         if let Err(error) = wait_until_ready(&mut child, port, &secret).await {
             if terminate_child(&mut child).await.is_err() {
                 lock.preserve_on_drop();
             }
             return Err(error);
+        }
+        if let Err(error) = lock.ensure_current() {
+            lock.preserve_on_drop();
+            return if terminate_child(&mut child).await.is_ok() {
+                Err(error)
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
         }
         Ok(RunningPostgresSidecar {
             child: Some(child),
@@ -1358,33 +1408,6 @@ fn sha256_file(path: &Path) -> Result<[u8; 32], PostgresSidecarError> {
     bundle_fs::hash_file(path, BUNDLE_MAX_BYTES).map(|(digest, _)| digest)
 }
 
-fn lock_file_matches(path: &Path, expected: &[u8]) -> bool {
-    let Ok(expected_len) = u64::try_from(expected.len()) else {
-        return false;
-    };
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        return false;
-    };
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.len() != expected_len
-    {
-        return false;
-    }
-    let Ok(mut file) = File::open(path) else {
-        return false;
-    };
-    let mut actual = Vec::with_capacity(expected.len());
-    if std::io::Read::by_ref(&mut file)
-        .take(expected_len.saturating_add(1))
-        .read_to_end(&mut actual)
-        .is_err()
-    {
-        return false;
-    }
-    actual == expected
-}
-
 fn parse_sha256(value: &str) -> Option<[u8; 32]> {
     if value.len() != 64 {
         return None;
@@ -1705,6 +1728,7 @@ mod tests {
         let digest = PostgresBundleDigest([0x42; 32]);
         let first = PostgresStartLock::acquire(&lock_root, &instance, digest).unwrap();
         let lock_path = first.path.clone();
+        let guard_path = lock_root.join(format!(".postgresql-17-{instance}.owner-guard-v1"));
         assert!(matches!(
             PostgresStartLock::acquire(&lock_root, &instance, digest),
             Err(PostgresSidecarError::StartLockHeld)
@@ -1719,6 +1743,7 @@ mod tests {
         }
         drop(first);
         assert!(!lock_path.exists());
+        assert!(guard_path.is_file());
 
         let replacement_guard = PostgresStartLock::acquire(&lock_root, &instance, digest).unwrap();
         let replacement_path = replacement_guard.path.clone();
@@ -1736,7 +1761,7 @@ mod tests {
             fs::set_permissions(&wide, fs::Permissions::from_mode(0o755)).unwrap();
             assert!(matches!(
                 PostgresStartLock::acquire(&wide, &instance, digest),
-                Err(PostgresSidecarError::BundleShape)
+                Err(PostgresSidecarError::StartLockGuardInvalid)
             ));
             fs::remove_dir_all(wide).unwrap();
         }
@@ -1791,6 +1816,10 @@ mod tests {
         stale.preserve_on_drop();
         drop(stale);
         assert!(stale_path.is_file());
+        assert!(matches!(
+            PostgresStartLock::acquire(&app_root, &instance, PostgresBundleDigest([0x66; 32])),
+            Err(PostgresSidecarError::StartLockRecoveryRequired)
+        ));
         let source = include_str!("postgres_sidecar.rs");
         let production = source.split("\nmod tests {").next().unwrap();
         for forbidden in [
@@ -2987,7 +3016,7 @@ mod tests {
                 bundle, &app_root, &instance, &data_dir, &store, &service,
             )
             .await,
-            Err(PostgresSidecarError::StartLockHeld)
+            Err(PostgresSidecarError::StartLockRecoveryRequired)
         ));
         fs::remove_file(stale_lock).unwrap();
         fs::remove_dir_all(app_root).unwrap();
@@ -3118,6 +3147,97 @@ mod tests {
         drop(lock);
         fs::remove_dir_all(root).unwrap();
         assert!(rejected && writes == 0);
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn replacing_either_owner_path_blocks_a_second_start_and_invalidates_secret_write() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        for replaced in ["guard", "evidence"] {
+            let (root, lock) = secret_lock(replaced);
+            let data = controller_review_data_dir(&root, &lock);
+            let disposition = lock.inspect_data_directory(&data).unwrap();
+            let guard_path = root.join(format!(
+                ".postgresql-17-{}.owner-guard-v1",
+                lock.instance_id
+            ));
+            let expected_second = if replaced == "guard" {
+                fs::remove_file(&guard_path).unwrap();
+                fs::write(
+                    &guard_path,
+                    format!(
+                        "openbot-postgres-owner-guard-v1\ninstance={}\n",
+                        lock.instance_id
+                    ),
+                )
+                .unwrap();
+                fs::set_permissions(&guard_path, fs::Permissions::from_mode(0o600)).unwrap();
+                PostgresSidecarError::StartLockRecoveryRequired
+            } else {
+                fs::remove_file(&lock.path).unwrap();
+                fs::write(&lock.path, &lock.bytes).unwrap();
+                fs::set_permissions(&lock.path, fs::Permissions::from_mode(0o600)).unwrap();
+                PostgresSidecarError::StartLockHeld
+            };
+
+            let second = PostgresStartLock::acquire(
+                &root,
+                &lock.instance_id,
+                PostgresBundleDigest([0x55; 32]),
+            );
+            assert!(matches!(
+                (second, expected_second),
+                (
+                    Err(PostgresSidecarError::StartLockRecoveryRequired),
+                    PostgresSidecarError::StartLockRecoveryRequired
+                ) | (
+                    Err(PostgresSidecarError::StartLockHeld),
+                    PostgresSidecarError::StartLockHeld
+                )
+            ));
+
+            let store = MemorySecretStore::empty();
+            let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+                "com.example.review.replaced-owner",
+            )
+            .unwrap();
+            assert!(matches!(
+                lock.load_or_create_scram_secret(&store, &service, &disposition),
+                Err(PostgresSecretStoreError::DispositionInvalid)
+            ));
+            assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+            drop(lock);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(all(feature = "postgres-key-store", unix))]
+    #[test]
+    fn replacing_app_root_invalidates_secret_write() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (root, lock) = secret_lock("replaced-root");
+        let data = controller_review_data_dir(&root, &lock);
+        let disposition = lock.inspect_data_directory(&data).unwrap();
+        let moved = root.with_extension("moved");
+        fs::rename(&root, &moved).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let store = MemorySecretStore::empty();
+        let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
+            "com.example.review.replaced-root",
+        )
+        .unwrap();
+        assert!(matches!(
+            lock.load_or_create_scram_secret(&store, &service, &disposition),
+            Err(PostgresSecretStoreError::DispositionInvalid)
+        ));
+        assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(moved).unwrap();
     }
 
     #[cfg(all(feature = "postgres-key-store", unix))]

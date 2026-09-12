@@ -27,6 +27,7 @@ impl<'a> PostgresDataDisposition<'a> {
         owner: &'a PostgresStartLock,
         data_dir: &Path,
     ) -> Result<Self, PostgresSidecarError> {
+        owner.ensure_current()?;
         let root = owner
             .path
             .parent()
@@ -41,7 +42,7 @@ impl<'a> PostgresDataDisposition<'a> {
     }
 
     pub(super) fn is_current_for(&self, owner: &PostgresStartLock) -> bool {
-        if !std::ptr::eq(self.owner, owner) {
+        if !std::ptr::eq(self.owner, owner) || !owner.ownership_is_current() {
             return false;
         }
         let Some(root) = owner.path.parent() else {
@@ -49,25 +50,6 @@ impl<'a> PostgresDataDisposition<'a> {
         };
         if validate_supervisor_paths(root, &owner.instance_id, &self.data_dir).is_err() {
             return false;
-        }
-        let Ok(metadata) = std::fs::symlink_metadata(&owner.path) else {
-            return false;
-        };
-        if !metadata.is_file()
-            || metadata.file_type().is_symlink()
-            || metadata.len() != owner.bytes.len() as u64
-        {
-            return false;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            let Ok(held) = owner._file.metadata() else {
-                return false;
-            };
-            if metadata.dev() != held.dev() || metadata.ino() != held.ino() {
-                return false;
-            }
         }
         data_directory_origin(&self.data_dir).is_ok_and(|origin| origin == self.origin)
     }
