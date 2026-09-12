@@ -1,7 +1,7 @@
 # OpenBot Rust workspace —— Phase 0 骨架（v3 §19.3 / §24 G0）。
 #
-# 成员集合由 v3 §5.1〈精简 workspace〉的十个核心 crate，加 R127 唯一批准的
-# Windows 与 R228 macOS 窄 OS 安全边界组成。新增 crate 的四个允许理由（v4 §5.1）：
+# 成员集合由 v3 §5.1〈精简 workspace〉的十个核心 crate，加 R127 Windows、R228 macOS
+# LocalAuthentication 与 R282 macOS 进程观察三个窄 OS 安全边界组成。新增 crate 的四个允许理由（v4 §5.1）：
 #   1) 独立安全边界  2) 独立发布单元  3) 明显不同的 feature graph  4) 可单独复用的纯协议
 # 其余一律以 module 组织 —— 细粒度 crate 会放大编译时间、循环依赖与跨 crate 重构成本。
 #
@@ -28,6 +28,7 @@ members = [
     "crates/openbot-testkit",
     "crates/openbot-windows-sandbox",
     "crates/wrok-bot-macos-local-auth",
+    "crates/wrok-bot-macos-process",
 ]
 
 [workspace.package]
@@ -58,6 +59,11 @@ block2 = { version = "=0.6.2", default-features = false, features = ["std"] }
 objc2-local-authentication = { version = "=0.3.2", default-features = false, features = ["std", "LAContext", "LAError", "block2"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWorkspace"] }
 wrok-bot-macos-local-auth = { path = "crates/wrok-bot-macos-local-auth" }
+# R282: isolated macOS process-birth/boot observation boundary. Both registry packages are already
+# locked; only the Desktop PostgreSQL supervisor's macOS feature graph consumes this member.
+libc = "=0.2.189"
+core-foundation-sys = "=0.8.7"
+wrok-bot-macos-process = { path = "crates/wrok-bot-macos-process" }
 # R230: one Infra-owned SDK transport; existing SafeDialer remains the only network stack.
 acosmi-sdk = { version = "=4.0.0", default-features = false, features = ["custom-transport", "sanitize"] }
 # SDK HttpTransport names this existing dependency's token in its public trait signature.

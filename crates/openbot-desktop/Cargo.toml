@@ -39,7 +39,11 @@ postgres-key-store = [
     "os-key-store",
 ]
 # Verified process lifecycle through SCRAM-authenticated readiness and graceful pg_ctl shutdown.
-postgres-supervisor = ["postgres-key-store", "dep:tokio-postgres"]
+postgres-supervisor = [
+    "postgres-key-store",
+    "dep:tokio-postgres",
+    "dep:wrok-bot-macos-process",
+]
 # Compose the verified child with the shared Batch79 PostgreSQL bootstrap. Infra defaults are
 # intentionally disabled: Desktop Local does not ship Server SAML/xmlsec/OpenSSL.
 desktop-local-bootstrap = ["postgres-supervisor", "dep:openbot-infra"]
@@ -116,6 +120,7 @@ sys-locale = { workspace = true, optional = true }
 tauri = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+wrok-bot-macos-process = { workspace = true, optional = true }
 wrok-bot-macos-local-auth = { workspace = true, optional = true }
 security-framework = { workspace = true, optional = true }
 security-framework-sys = { workspace = true, optional = true }

@@ -34,6 +34,8 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::process::{Child, Command};
 #[cfg(feature = "postgres-supervisor")]
 use tokio_postgres::NoTls;
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+use wrok_bot_macos_process::ProcessIdentity;
 
 #[cfg(feature = "postgres-key-store")]
 use crate::os_secret_store::{OsSecretStore, OsSecretStoreError};
@@ -117,6 +119,10 @@ pub enum PostgresSidecarError {
     #[cfg(feature = "postgres-supervisor")]
     #[error("postgres_sidecar_shutdown_failed")]
     ShutdownFailed,
+    /// The spawned macOS child no longer matched its captured PID/start/boot observation.
+    #[cfg(feature = "postgres-supervisor")]
+    #[error("postgres_sidecar_process_identity_invalid")]
+    ProcessIdentityInvalid,
     /// OS key-store secret acquisition failed before process launch.
     #[cfg(feature = "postgres-supervisor")]
     #[error(transparent)]
@@ -835,6 +841,8 @@ pub struct RunningPostgresSidecar {
     data_dir: PathBuf,
     port: u16,
     origin: PostgresSidecarOrigin,
+    #[cfg(target_os = "macos")]
+    process_identity: ProcessIdentity,
 }
 
 #[cfg(feature = "postgres-supervisor")]
@@ -858,7 +866,12 @@ impl RunningPostgresSidecar {
         self.lock
             .as_ref()
             .ok_or(PostgresSidecarError::StartLockGuardInvalid)?
-            .ensure_current()
+            .ensure_current()?;
+        #[cfg(target_os = "macos")]
+        self.process_identity
+            .revalidate()
+            .map_err(|_| PostgresSidecarError::ProcessIdentityInvalid)?;
+        Ok(())
     }
 
     /// Fresh/existing result proved before process start.
@@ -885,11 +898,11 @@ impl RunningPostgresSidecar {
     /// Stop through the verified `pg_ctl`, then wait for the exact owned child before releasing
     /// the start lock. Failure preserves a stale lock and kills the child best-effort.
     pub async fn shutdown(mut self) -> Result<(), PostgresSidecarError> {
-        let ownership = self
-            .lock
-            .as_ref()
-            .ok_or(PostgresSidecarError::ShutdownFailed)
-            .and_then(PostgresStartLock::ensure_current);
+        let ownership = if self.lock.is_some() {
+            self.ensure_owner_current()
+        } else {
+            Err(PostgresSidecarError::ShutdownFailed)
+        };
         if let Err(error) = ownership {
             self.preserve_lock();
             let terminated = match self.child.as_mut() {
@@ -986,6 +999,24 @@ impl PostgresSidecarSupervisor {
         write_runtime_configuration(data_dir, port)?;
         lock.ensure_current()?;
         let mut child = spawn_postgres(&bundle, data_dir)?;
+        #[cfg(target_os = "macos")]
+        let process_identity = match child
+            .id()
+            .ok_or(PostgresSidecarError::ProcessIdentityInvalid)
+            .and_then(|pid| {
+                ProcessIdentity::capture(pid)
+                    .map_err(|_| PostgresSidecarError::ProcessIdentityInvalid)
+            }) {
+            Ok(identity) => identity,
+            Err(error) => {
+                lock.preserve_on_drop();
+                return if terminate_child(&mut child).await.is_ok() {
+                    Err(error)
+                } else {
+                    Err(PostgresSidecarError::ShutdownFailed)
+                };
+            }
+        };
         if let Err(error) = lock.ensure_current() {
             lock.preserve_on_drop();
             return if terminate_child(&mut child).await.is_ok() {
@@ -999,6 +1030,15 @@ impl PostgresSidecarSupervisor {
                 lock.preserve_on_drop();
             }
             return Err(error);
+        }
+        #[cfg(target_os = "macos")]
+        if process_identity.revalidate().is_err() {
+            lock.preserve_on_drop();
+            return if terminate_child(&mut child).await.is_ok() {
+                Err(PostgresSidecarError::ProcessIdentityInvalid)
+            } else {
+                Err(PostgresSidecarError::ShutdownFailed)
+            };
         }
         if let Err(error) = lock.ensure_current() {
             lock.preserve_on_drop();
@@ -1016,6 +1056,8 @@ impl PostgresSidecarSupervisor {
             data_dir: data_dir.to_owned(),
             port,
             origin,
+            #[cfg(target_os = "macos")]
+            process_identity,
         })
     }
 }
@@ -2223,6 +2265,8 @@ mod tests {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
+        #[cfg(target_os = "macos")]
+        let process_identity = ProcessIdentity::capture(child.id().unwrap()).unwrap();
         let mut output = child.stdout.take().unwrap();
         let marker = bundle_root.with_extension("bad-control-marker");
         fs::write(bundle.pg_ctl(), replacement_canary(&marker, "pg_ctl")).unwrap();
@@ -2234,6 +2278,8 @@ mod tests {
             data_dir,
             port: 0,
             origin: PostgresSidecarOrigin::Existing,
+            #[cfg(target_os = "macos")]
+            process_identity,
         };
         assert!(matches!(
             running.shutdown().await,
