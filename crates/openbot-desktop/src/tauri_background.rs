@@ -1336,9 +1336,16 @@ fn map_sidecar_error(error: PostgresSidecarError) -> DesktopLocalRuntimeError {
         PostgresSidecarError::StartLockRecoveryRequired => {
             DesktopLocalRuntimeError::RecoveryRequired
         }
+        PostgresSidecarError::StartupJournalRecoveryRequired => {
+            DesktopLocalRuntimeError::RecoveryRequired
+        }
         PostgresSidecarError::StartLockGuardInvalid
-        | PostgresSidecarError::ProcessIdentityInvalid => {
+        | PostgresSidecarError::ProcessIdentityInvalid
+        | PostgresSidecarError::StartupJournalInvalid => {
             DesktopLocalRuntimeError::InitializationEvidenceInvalid
+        }
+        PostgresSidecarError::StartupJournalReconciliationRequired => {
+            DesktopLocalRuntimeError::InitializationReconciliationRequired
         }
         PostgresSidecarError::ShutdownFailed => DesktopLocalRuntimeError::FailureCleanup,
         PostgresSidecarError::Secret(PostgresSecretStoreError::OsStore(error)) => {
@@ -1694,6 +1701,18 @@ mod tests {
             (
                 PostgresSidecarError::ProcessIdentityInvalid,
                 "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                PostgresSidecarError::StartupJournalRecoveryRequired,
+                "desktop_local_runtime_recovery_required",
+            ),
+            (
+                PostgresSidecarError::StartupJournalInvalid,
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                PostgresSidecarError::StartupJournalReconciliationRequired,
+                "desktop_local_runtime_initialization_reconciliation_required",
             ),
             (
                 PostgresSidecarError::Secret(PostgresSecretStoreError::Missing),

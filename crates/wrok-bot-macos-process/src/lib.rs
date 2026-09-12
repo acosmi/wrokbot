@@ -65,10 +65,29 @@ impl ProcessIdentity {
         Ok(())
     }
 
+    /// Return the exact private journal evidence after a fresh four-read revalidation.
+    #[cfg(target_os = "macos")]
+    pub fn evidence_bytes(&self) -> Result<[u8; 32], ProcessObservationError> {
+        self.revalidate()?;
+        let pid = u32::try_from(self.pid).map_err(|_| ProcessObservationError::InvalidPid)?;
+        let mut evidence = [0_u8; 32];
+        evidence[..4].copy_from_slice(&pid.to_be_bytes());
+        evidence[4..12].copy_from_slice(&self.start_seconds.to_be_bytes());
+        evidence[12..16].copy_from_slice(&self.start_microseconds.to_be_bytes());
+        evidence[16..].copy_from_slice(&self.boot_session);
+        Ok(evidence)
+    }
+
     /// Revalidation is unavailable off macOS.
     #[cfg(not(target_os = "macos"))]
     pub fn revalidate(&self) -> Result<(), ProcessObservationError> {
         let _ = self.unsupported;
+        Err(ProcessObservationError::UnsupportedPlatform)
+    }
+
+    /// No process evidence is fabricated off macOS.
+    #[cfg(not(target_os = "macos"))]
+    pub fn evidence_bytes(&self) -> Result<[u8; 32], ProcessObservationError> {
         Err(ProcessObservationError::UnsupportedPlatform)
     }
 }
