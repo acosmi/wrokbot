@@ -1,6 +1,6 @@
-//! macOS candidate acceptance-record checker (v5 §24.2–§24.4 / PA-08).
+//! Candidate acceptance-record checker (v5 §24.2–§24.4 and v6 §24.5a / PA-08).
 //!
-//! Required IDs come from the v5 body plus tool policy, never from the record.
+//! Required IDs come from the v5 body or frozen v6 tool policy, never from the record.
 //! Matching files and digests do not certify signatures, notarization, real
 //! accounts, OS operations, or product release. Synthetic fixtures are test-only.
 
@@ -53,6 +53,35 @@ const FULL_V5_REMAINING: [&str; 8] = [
     "G8 production-scale backup/legacy drills, signing/notarization, and operator attestation",
     "formal golden / AX / reduced-motion matrix (GUI first source, not this checker)",
 ];
+const V6_MIN_SPEC_REVISION: u32 = 268;
+const V6_MACOS_ALWAYS: [&str; 2] = ["AR6-04", "AR6-10"];
+const V6_EVENT_GATES: [&str; 6] = ["E0", "E1", "E2", "E3", "E4", "E5"];
+const V6_WORKFLOWS: [&str; 10] = [
+    "V6-AUTO-01",
+    "V6-EVENT-01",
+    "V6-CONNECTOR-01",
+    "V6-NODE-01",
+    "V6-SUBAGENT-01",
+    "V6-BUDGET-01",
+    "V6-ARTIFACT-01",
+    "V6-PREFERENCE-01",
+    "V6-TERMINAL-01",
+    "V6-SPEC-01",
+];
+const V6_M1_WORKFLOWS: [&str; 9] = [
+    "V6-AUTO-01",
+    "V6-EVENT-01",
+    "V6-CONNECTOR-01",
+    "V6-SUBAGENT-01",
+    "V6-BUDGET-01",
+    "V6-ARTIFACT-01",
+    "V6-PREFERENCE-01",
+    "V6-TERMINAL-01",
+    "V6-SPEC-01",
+];
+const V6_M1_AR6: [&str; 7] = [
+    "AR6-02", "AR6-04", "AR6-05", "AR6-06", "AR6-07", "AR6-08", "AR6-10",
+];
 
 #[derive(Debug, Serialize, Clone)]
 pub(crate) struct AcceptanceReport {
@@ -63,6 +92,10 @@ pub(crate) struct AcceptanceReport {
     pub product_certified: bool,
     pub release_certified: bool,
     pub scope: String,
+    pub scope_recognized: bool,
+    pub collection_supported: bool,
+    pub full_admission_supported: bool,
+    pub v6_policy_verified: bool,
     pub full_v5_supported: bool,
     pub full_v5_remaining_sources: Vec<String>,
     pub required_ids: Vec<String>,
@@ -85,6 +118,8 @@ pub(crate) struct Diagnostic {
 struct Record {
     schema_version: u32,
     scope: String,
+    #[serde(default)]
+    spec_digest: Option<String>,
     source_commit: String,
     working_tree_digest: String,
     lock_digest: String,
@@ -143,9 +178,64 @@ struct CandidateManifest {
     platform: String,
     arch: String,
     #[serde(default)]
+    v6_policy: Option<V6Policy>,
+    #[serde(default)]
     evidence: BTreeMap<String, PackedEvidence>,
     #[serde(default)]
     artifact_file: Option<ArtifactFile>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct V6Policy {
+    schema_version: u32,
+    scope: String,
+    spec_version: String,
+    spec_revision: u32,
+    spec_digest: String,
+    conditional_paths: ConditionalPaths,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConditionalPaths {
+    oauth_rotation: bool,
+    shared_profile: bool,
+    remote_server_tls: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentSpecMetadata {
+    version: String,
+    last_revision: u32,
+}
+
+struct SpecDocument {
+    path: PathBuf,
+    text: String,
+    digest: String,
+}
+
+#[derive(Clone, Copy)]
+struct ReportSupport {
+    scope_recognized: bool,
+    collection_supported: bool,
+    full_admission_supported: bool,
+    v6_policy_verified: bool,
+}
+
+impl ReportSupport {
+    fn for_scope(scope: &str, v6_policy_verified: bool) -> Self {
+        Self {
+            scope_recognized: is_known_scope(scope),
+            collection_supported: matches!(
+                scope,
+                "macos_first_release" | "event_workflows_v6" | "full_v6"
+            ),
+            full_admission_supported: matches!(scope, "macos_first_release" | "event_workflows_v6"),
+            v6_policy_verified,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,9 +320,9 @@ fn parse_args(args: &[String]) -> Result<Opts> {
         i += 1;
     }
     Ok(Opts {
-        record: record.ok_or_else(|| anyhow!("usage: cargo xtask acceptance-check --record <json> --candidate <trusted-candidate-manifest> --evidence-root <dir> [--spec <v5.md>] [--json]"))?,
-        candidate: candidate.ok_or_else(|| anyhow!("usage: cargo xtask acceptance-check --record <json> --candidate <trusted-candidate-manifest> --evidence-root <dir> [--spec <v5.md>] [--json]"))?,
-        evidence_root: evidence_root.ok_or_else(|| anyhow!("usage: cargo xtask acceptance-check --record <json> --candidate <trusted-candidate-manifest> --evidence-root <dir> [--spec <v5.md>] [--json]"))?,
+        record: record.ok_or_else(|| anyhow!("usage: cargo xtask acceptance-check --record <json> --candidate <trusted-candidate-manifest> --evidence-root <dir> [--spec <v5-or-v6-first-source.md>] [--json]"))?,
+        candidate: candidate.ok_or_else(|| anyhow!("usage: cargo xtask acceptance-check --record <json> --candidate <trusted-candidate-manifest> --evidence-root <dir> [--spec <v5-or-v6-first-source.md>] [--json]"))?,
+        evidence_root: evidence_root.ok_or_else(|| anyhow!("usage: cargo xtask acceptance-check --record <json> --candidate <trusted-candidate-manifest> --evidence-root <dir> [--spec <v5-or-v6-first-source.md>] [--json]"))?,
         spec,
         json,
     })
@@ -250,15 +340,6 @@ pub(crate) fn evaluate(opts: &Opts) -> AcceptanceReport {
         "evidence_root".into(),
         opts.evidence_root.display().to_string(),
     );
-    oracles.insert(
-        "required_set_policy".into(),
-        "v5 §24.2 A0–A7 + §24.4 macOS V5 IDs excluding V5-DEVICE-01 + three model sources + three product stories".into(),
-    );
-    oracles.insert(
-        "spec_default".into(),
-        "controlled built-in requirement policy; optional --spec is explicit".into(),
-    );
-
     if same_path(&opts.record, &opts.candidate) {
         push_error(
             &mut diagnostics,
@@ -269,20 +350,103 @@ pub(crate) fn evaluate(opts: &Opts) -> AcceptanceReport {
         );
     }
 
-    let required = required_macos_ids(opts.spec.as_deref(), &mut diagnostics, &mut oracles);
-    let record = match load_json::<Record>(&opts.record, "record") {
+    let fallback_required = required_macos_ids(None, &mut diagnostics, &mut oracles);
+    let (record, record_value) = match load_json_with_value::<Record>(&opts.record, "record") {
         Ok(value) => value,
         Err(diag) => {
             diagnostics.push(diag);
-            return finish("unknown", &required, diagnostics, oracles, false, false);
+            return finish(
+                "unknown",
+                &fallback_required,
+                diagnostics,
+                oracles,
+                false,
+                false,
+                ReportSupport::for_scope("unknown", false),
+            );
         }
     };
-    let candidate = match load_json::<CandidateManifest>(&opts.candidate, "candidate") {
+    let (candidate, candidate_value) = match load_json_with_value::<CandidateManifest>(
+        &opts.candidate,
+        "candidate",
+    ) {
         Ok(value) => value,
         Err(diag) => {
             diagnostics.push(diag);
-            return finish(&record.scope, &required, diagnostics, oracles, false, false);
+            if record.scope == "full_v6" {
+                push_error(
+                    &mut diagnostics,
+                    "full_v6_aggregate_closure_unimplemented",
+                    "record",
+                    "scope",
+                    "full_v6 required-item collection is supported, but parity/fixtures/overlay/platform aggregate closure is not implemented",
+                );
+            }
+            let required = if matches!(record.scope.as_str(), "event_workflows_v6" | "full_v6") {
+                required_v6_ids(&record.scope, None)
+            } else {
+                fallback_required
+            };
+            return finish(
+                &record.scope,
+                &required,
+                diagnostics,
+                oracles,
+                false,
+                false,
+                ReportSupport::for_scope(&record.scope, false),
+            );
         }
+    };
+    let spec_document = opts
+        .spec
+        .as_deref()
+        .and_then(|path| load_spec_document(path, &mut diagnostics, &mut oracles));
+    let v6_mode = matches!(record.scope.as_str(), "event_workflows_v6" | "full_v6")
+        || record_value.get("specDigest").is_some()
+        || candidate.v6_policy.is_some()
+        || candidate_value.get("v6Policy").is_some()
+        || spec_document.as_ref().is_some_and(spec_declares_v6);
+    let required = if v6_mode {
+        required_v6_ids(&record.scope, candidate.v6_policy.as_ref())
+    } else {
+        required_macos_ids(
+            spec_document
+                .as_ref()
+                .map(|document| (document.path.as_path(), document.text.as_str())),
+            &mut diagnostics,
+            &mut oracles,
+        )
+    };
+    oracles.insert(
+        "required_set_policy".into(),
+        if v6_mode {
+            "v6 §24.5a tool policy + trusted candidate v6Policy conditional paths; never the record"
+                .into()
+        } else {
+            "v5 §24.2 A0–A7 + §24.4 macOS V5 IDs excluding V5-DEVICE-01 + three model sources + three product stories".into()
+        },
+    );
+    oracles.insert(
+        "spec_default".into(),
+        if v6_mode {
+            "v6 requires an explicit --spec bound by exact SHA-256 and current metadata".into()
+        } else {
+            "controlled built-in v5 requirement policy; optional --spec is explicit".into()
+        },
+    );
+    let v6_policy_verified = if v6_mode {
+        check_v6_contract(
+            &record,
+            &candidate,
+            &record_value,
+            &candidate_value,
+            spec_document.as_ref(),
+            &mut diagnostics,
+            &mut oracles,
+        )
+    } else {
+        false
     };
 
     oracles.insert(
@@ -316,14 +480,16 @@ pub(crate) fn evaluate(opts: &Opts) -> AcceptanceReport {
     }
 
     let full_v5 = record.scope == "full_v5";
-    if record.scope != "macos_first_release" && !full_v5 {
+    let full_v6 = record.scope == "full_v6";
+    let support = ReportSupport::for_scope(&record.scope, v6_policy_verified);
+    if !support.scope_recognized {
         push_error(
             &mut diagnostics,
             "unknown_scope",
             "record",
             "scope",
             &format!(
-                "scope must be macos_first_release or full_v5, found {}",
+                "scope must be macos_first_release, full_v5, event_workflows_v6, or full_v6; found {}",
                 record.scope
             ),
         );
@@ -335,6 +501,15 @@ pub(crate) fn evaluate(opts: &Opts) -> AcceptanceReport {
             "record",
             "scope",
             "full_v5 required set is not implemented; macos_first_release collection must not be reused, and todo=0 is not complete v5",
+        );
+    }
+    if full_v6 {
+        push_error(
+            &mut diagnostics,
+            "full_v6_aggregate_closure_unimplemented",
+            "record",
+            "scope",
+            "full_v6 required-item collection is supported, but parity/fixtures/overlay/platform aggregate closure is not implemented",
         );
     }
 
@@ -360,8 +535,11 @@ pub(crate) fn evaluate(opts: &Opts) -> AcceptanceReport {
         .artifact_digest
         .as_ref()
         .is_some_and(|d| is_sha256(d));
+    let platform_matches_scope =
+        record.scope != "macos_first_release" || record.platform == "macos";
     let admission_conditions_present = structure_valid
-        && !full_v5
+        && support.full_admission_supported
+        && (!v6_mode || v6_policy_verified)
         && all_required_passed
         && record
             .requirements
@@ -371,7 +549,7 @@ pub(crate) fn evaluate(opts: &Opts) -> AcceptanceReport {
         && no_blocking_findings
         && has_artifact
         && evidence_ok
-        && record.platform == "macos";
+        && platform_matches_scope;
 
     finish(
         &record.scope,
@@ -380,14 +558,59 @@ pub(crate) fn evaluate(opts: &Opts) -> AcceptanceReport {
         oracles,
         structure_valid,
         admission_conditions_present,
+        support,
     )
 }
 
 fn required_macos_ids(
-    spec: Option<&Path>,
+    spec: Option<(&Path, &str)>,
     diagnostics: &mut Vec<Diagnostic>,
     oracles: &mut BTreeMap<String, String>,
 ) -> Vec<String> {
+    let mut ids = base_macos_ids(false);
+    if let Some((path, text)) = spec {
+        oracles.insert("spec".into(), path.display().to_string());
+        if ["### 24.2 ", "### 24.4 ", "## 25."]
+            .iter()
+            .any(|heading| text.matches(heading).count() != 1)
+        {
+            push_error(
+                diagnostics,
+                "truncated_input",
+                &path.display().to_string(),
+                "spec",
+                "supplied specification must contain the unambiguous acceptance sections",
+            );
+        }
+        let section = text.split("### 24.2 ").nth(1).unwrap_or("");
+        let gate_re = Regex::new(r"(?m)^\s*\|\s*(A[0-7])\s").expect("A-gate regex");
+        for cap in gate_re.captures_iter(section) {
+            ids.insert(cap[1].to_string());
+        }
+        if let Some(work) = text
+            .split("### 24.4 ")
+            .nth(1)
+            .and_then(|s| s.split("## 25.").next())
+        {
+            let id_re = Regex::new(r"V5-[A-Z]+-\d+").expect("V5 id regex");
+            for m in id_re.find_iter(work) {
+                if SUBSEQUENT_IDS.iter().all(|skip| m.as_str() != *skip) {
+                    ids.insert(m.as_str().to_string());
+                }
+            }
+        }
+    }
+    ids.into_iter().collect()
+}
+
+fn is_known_scope(scope: &str) -> bool {
+    matches!(
+        scope,
+        "macos_first_release" | "full_v5" | "event_workflows_v6" | "full_v6"
+    )
+}
+
+fn base_macos_ids(include_device: bool) -> BTreeSet<String> {
     let mut ids: BTreeSet<String> = MACOS_GATES
         .iter()
         .chain(MACOS_V5_IDS.iter())
@@ -395,60 +618,532 @@ fn required_macos_ids(
         .chain(PRODUCT_STORIES.iter())
         .map(|s| (*s).to_string())
         .collect();
-    if let Some(path) = spec {
-        oracles.insert("spec".into(), path.display().to_string());
-        match super::checked_input::read_argument(path, 8 * 1024 * 1024) {
-            Ok(bytes) => {
-                if let Ok(text) = String::from_utf8(bytes) {
-                    if ["### 24.2 ", "### 24.4 ", "## 25."]
-                        .iter()
-                        .any(|heading| text.matches(heading).count() != 1)
-                    {
-                        push_error(
-                            diagnostics,
-                            "truncated_input",
-                            &path.display().to_string(),
-                            "spec",
-                            "supplied specification must contain the unambiguous acceptance sections",
-                        );
-                    }
-                    let section = text.split("### 24.2 ").nth(1).unwrap_or("");
-                    let gate_re = Regex::new(r"(?m)^\s*\|\s*(A[0-7])\s").expect("A-gate regex");
-                    for cap in gate_re.captures_iter(section) {
-                        ids.insert(cap[1].to_string());
-                    }
-                    if let Some(work) = text
-                        .split("### 24.4 ")
-                        .nth(1)
-                        .and_then(|s| s.split("## 25.").next())
-                    {
-                        let id_re = Regex::new(r"V5-[A-Z]+-\d+").expect("V5 id regex");
-                        for m in id_re.find_iter(work) {
-                            if SUBSEQUENT_IDS.iter().all(|skip| m.as_str() != *skip) {
-                                ids.insert(m.as_str().to_string());
-                            }
-                        }
-                    }
-                } else {
-                    push_error(
-                        diagnostics,
-                        "invalid_utf8",
-                        &path.display().to_string(),
-                        "spec",
-                        "v5 spec is not valid UTF-8; falling back to tool policy required set",
-                    );
-                }
-            }
-            Err(_) => push_error(
+    if include_device {
+        ids.insert("V5-DEVICE-01".into());
+    }
+    ids
+}
+
+fn required_v6_ids(scope: &str, policy: Option<&V6Policy>) -> Vec<String> {
+    let mut ids = match scope {
+        "macos_first_release" => base_macos_ids(false),
+        "event_workflows_v6" => V6_EVENT_GATES
+            .iter()
+            .chain(V6_M1_WORKFLOWS.iter())
+            .chain(V6_M1_AR6.iter())
+            .map(|id| (*id).to_string())
+            .collect(),
+        "full_v6" => {
+            let mut full = base_macos_ids(true);
+            full.extend((0..=8).map(|n| format!("G{n}")));
+            full.extend(V6_EVENT_GATES.iter().map(|id| (*id).to_string()));
+            full.extend(V6_WORKFLOWS.iter().map(|id| (*id).to_string()));
+            full.extend((1..=10).map(|n| format!("AR6-{n:02}")));
+            full.extend((1..=10).map(|n| format!("DOD-{n:02}")));
+            full.extend(
+                [
+                    "parity.identity",
+                    "parity.closure",
+                    "fixtures.closure",
+                    "overlay.closure",
+                    "R212.ios",
+                    "R212.android",
+                    "R212.harmonyos",
+                    "R212.wechat",
+                    "platform.windows",
+                    "platform.linux_server",
+                ]
+                .map(str::to_string),
+            );
+            full
+        }
+        _ => BTreeSet::new(),
+    };
+    if scope == "macos_first_release" {
+        ids.extend(V6_MACOS_ALWAYS.iter().map(|id| (*id).to_string()));
+    }
+    if matches!(scope, "macos_first_release" | "event_workflows_v6")
+        && let Some(policy) = policy
+    {
+        if policy.conditional_paths.oauth_rotation {
+            ids.insert("AR6-01".into());
+        }
+        if policy.conditional_paths.shared_profile {
+            ids.insert("AR6-03".into());
+        }
+        if policy.conditional_paths.remote_server_tls {
+            ids.insert("AR6-09".into());
+        }
+    }
+    ids.into_iter().collect()
+}
+
+fn load_spec_document(
+    path: &Path,
+    diagnostics: &mut Vec<Diagnostic>,
+    oracles: &mut BTreeMap<String, String>,
+) -> Option<SpecDocument> {
+    oracles.insert("spec".into(), path.display().to_string());
+    let bytes = match super::checked_input::read_argument(path, 8 * 1024 * 1024) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            push_error(
                 diagnostics,
                 "missing_file",
                 &path.display().to_string(),
                 "spec",
                 "optional --spec was given but could not be read; tool policy still applies",
-            ),
+            );
+            return None;
+        }
+    };
+    let digest = sha256_hex(&bytes);
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(_) => {
+            push_error(
+                diagnostics,
+                "invalid_utf8",
+                &path.display().to_string(),
+                "spec",
+                "supplied specification is not valid UTF-8",
+            );
+            return None;
+        }
+    };
+    Some(SpecDocument {
+        path: path.to_path_buf(),
+        text,
+        digest,
+    })
+}
+
+fn spec_declares_v6(document: &SpecDocument) -> bool {
+    if document.text.contains("### 24.5a ") {
+        return true;
+    }
+    let marker_count = Regex::new(r"<!--\s*first-source-current\b")
+        .expect("metadata starts")
+        .find_iter(&document.text)
+        .count();
+    if marker_count == 0 {
+        return false;
+    }
+    let re =
+        Regex::new(r"(?s)<!--\s*first-source-current\s+(\{.*?\})\s*-->").expect("metadata regex");
+    let captures: Vec<_> = re.captures_iter(&document.text).collect();
+    if marker_count != 1 || captures.len() != 1 {
+        return true;
+    }
+    match super::checked_input::json::<CurrentSpecMetadata>(captures[0][1].as_bytes()) {
+        Ok(metadata) => metadata.version != "v5" || metadata.last_revision == 0,
+        Err(_) => true,
+    }
+}
+
+fn check_v6_contract(
+    record: &Record,
+    candidate: &CandidateManifest,
+    record_value: &serde_json::Value,
+    candidate_value: &serde_json::Value,
+    spec: Option<&SpecDocument>,
+    diagnostics: &mut Vec<Diagnostic>,
+    oracles: &mut BTreeMap<String, String>,
+) -> bool {
+    let before = diagnostics.len();
+    check_closed_v6_json(record_value, candidate_value, diagnostics);
+    let spec_metadata = if let Some(spec) = spec {
+        for heading in ["### 3.6 ", "### 24.3 ", "### 24.4 ", "### 24.5 ", "## 25."] {
+            if spec.text.matches(heading).count() != 1 {
+                push_error(
+                    diagnostics,
+                    "spec_section_identity",
+                    &spec.path.display().to_string(),
+                    heading.trim(),
+                    "v6 specification requires each controlled acceptance section exactly once",
+                );
+            }
+        }
+        parse_current_spec_metadata(spec, diagnostics)
+    } else {
+        None
+    };
+    let Some(policy) = candidate.v6_policy.as_ref() else {
+        push_error(
+            diagnostics,
+            "missing_v6_policy",
+            "candidate",
+            "v6Policy",
+            "v6 scopes require the independently supplied closed v6Policy object",
+        );
+        if record.spec_digest.is_none() {
+            push_error(
+                diagnostics,
+                "missing_field",
+                "record",
+                "specDigest",
+                "v6 record requires specDigest",
+            );
+        }
+        if spec.is_none() {
+            push_error(
+                diagnostics,
+                "missing_spec",
+                "--spec",
+                "spec",
+                "v6 validation requires the actual first-source file through --spec",
+            );
+        }
+        return false;
+    };
+    oracles.insert(
+        "v6_policy_scope".into(),
+        if policy.scope.len() <= 64 {
+            policy.scope.clone()
+        } else {
+            "(overlong)".into()
+        },
+    );
+    oracles.insert(
+        "v6_policy_spec_revision".into(),
+        policy.spec_revision.to_string(),
+    );
+    oracles.insert(
+        "v6_policy_spec_digest".into(),
+        if policy.spec_digest.len() == 64 {
+            policy.spec_digest.clone()
+        } else {
+            "(invalid shape)".into()
+        },
+    );
+
+    if policy.scope.len() > 64 || policy.spec_version.len() > 16 {
+        push_error(
+            diagnostics,
+            "budget",
+            "candidate",
+            "v6Policy",
+            "v6Policy scope/version strings exceed their bounded contract",
+        );
+    }
+    if policy.schema_version != 1 {
+        push_error(
+            diagnostics,
+            "schema_version",
+            "candidate",
+            "v6Policy.schemaVersion",
+            "v6Policy.schemaVersion must be 1",
+        );
+    }
+    if !matches!(
+        policy.scope.as_str(),
+        "macos_first_release" | "event_workflows_v6" | "full_v6"
+    ) {
+        push_error(
+            diagnostics,
+            "unknown_scope",
+            "candidate",
+            "v6Policy.scope",
+            "v6Policy.scope is outside the v6 closed scope set",
+        );
+    }
+    if policy.scope != record.scope {
+        push_error(
+            diagnostics,
+            "scope_mismatch",
+            "record",
+            "scope",
+            "record.scope must exactly match trusted candidate v6Policy.scope",
+        );
+    }
+    if policy.spec_version != "v6" {
+        push_error(
+            diagnostics,
+            "spec_version_mismatch",
+            "candidate",
+            "v6Policy.specVersion",
+            "v6Policy.specVersion must be exactly v6",
+        );
+    }
+    if policy.spec_revision < V6_MIN_SPEC_REVISION {
+        push_error(
+            diagnostics,
+            "spec_revision_mismatch",
+            "candidate",
+            "v6Policy.specRevision",
+            &format!("v6Policy.specRevision must be at least {V6_MIN_SPEC_REVISION}"),
+        );
+    }
+    if !is_sha256(&policy.spec_digest) {
+        push_error(
+            diagnostics,
+            "digest_shape",
+            "candidate",
+            "v6Policy.specDigest",
+            "v6Policy.specDigest must be 64 lowercase hex characters",
+        );
+    }
+    let Some(record_digest) = record.spec_digest.as_deref() else {
+        push_error(
+            diagnostics,
+            "missing_field",
+            "record",
+            "specDigest",
+            "v6 record requires specDigest",
+        );
+        return false;
+    };
+    if !is_sha256(record_digest) {
+        push_error(
+            diagnostics,
+            "digest_shape",
+            "record",
+            "specDigest",
+            "record.specDigest must be 64 lowercase hex characters",
+        );
+    }
+    if record_digest != policy.spec_digest {
+        push_error(
+            diagnostics,
+            "spec_digest_mismatch",
+            "record",
+            "specDigest",
+            "record.specDigest must exactly match trusted candidate v6Policy.specDigest",
+        );
+    }
+    let Some(spec) = spec else {
+        push_error(
+            diagnostics,
+            "missing_spec",
+            "--spec",
+            "spec",
+            "v6 validation requires the actual first-source file through --spec",
+        );
+        return false;
+    };
+    oracles.insert("actual_spec_digest".into(), spec.digest.clone());
+    if spec.digest != policy.spec_digest || spec.digest != record_digest {
+        push_error(
+            diagnostics,
+            "spec_digest_mismatch",
+            &spec.path.display().to_string(),
+            "sha256",
+            "actual --spec bytes must match both record.specDigest and v6Policy.specDigest",
+        );
+    }
+    if let Some(metadata) = spec_metadata {
+        if metadata.version != policy.spec_version {
+            push_error(
+                diagnostics,
+                "spec_version_mismatch",
+                &spec.path.display().to_string(),
+                "first-source-current.version",
+                "actual specification version must match v6Policy.specVersion",
+            );
+        }
+        if metadata.last_revision != policy.spec_revision {
+            push_error(
+                diagnostics,
+                "spec_revision_mismatch",
+                &spec.path.display().to_string(),
+                "first-source-current.last_revision",
+                "actual specification revision must match v6Policy.specRevision",
+            );
         }
     }
-    ids.into_iter().collect()
+    diagnostics.len() == before
+}
+
+fn parse_current_spec_metadata(
+    spec: &SpecDocument,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<CurrentSpecMetadata> {
+    let re =
+        Regex::new(r"(?s)<!--\s*first-source-current\s+(\{.*?\})\s*-->").expect("metadata regex");
+    let captures: Vec<_> = re.captures_iter(&spec.text).collect();
+    let starts = Regex::new(r"<!--\s*first-source-current\b")
+        .expect("metadata starts")
+        .find_iter(&spec.text)
+        .count();
+    if captures.len() != 1 || starts != 1 {
+        push_error(
+            diagnostics,
+            if captures.is_empty() {
+                "truncated_input"
+            } else {
+                "duplicate_metadata"
+            },
+            &spec.path.display().to_string(),
+            "first-source-current",
+            "v6 specification must contain exactly one parseable first-source-current block",
+        );
+        return None;
+    }
+    match super::checked_input::json::<CurrentSpecMetadata>(captures[0][1].as_bytes()) {
+        Ok(metadata) => Some(metadata),
+        Err(_) => {
+            push_error(
+                diagnostics,
+                "invalid_json",
+                &spec.path.display().to_string(),
+                "first-source-current",
+                "first-source-current metadata must be valid JSON with unique fields",
+            );
+            None
+        }
+    }
+}
+
+fn check_closed_v6_json(
+    record: &serde_json::Value,
+    candidate: &serde_json::Value,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    check_object_keys(
+        record,
+        &[
+            "schemaVersion",
+            "scope",
+            "specDigest",
+            "sourceCommit",
+            "workingTreeDigest",
+            "lockDigest",
+            "uiDigest",
+            "artifactDigest",
+            "platform",
+            "arch",
+            "osVersion",
+            "enabledCapabilities",
+            "requirements",
+            "findings",
+        ],
+        "record",
+        diagnostics,
+    );
+    if let Some(requirements) = record.get("requirements").and_then(|v| v.as_array()) {
+        for (index, requirement) in requirements.iter().enumerate() {
+            let path = format!("record.requirements[{index}]");
+            check_object_keys(
+                requirement,
+                &[
+                    "clause",
+                    "id",
+                    "applicable",
+                    "owner",
+                    "status",
+                    "command",
+                    "scenario",
+                    "evidence",
+                    "result",
+                    "limits",
+                ],
+                &path,
+                diagnostics,
+            );
+            if let Some(evidence) = requirement.get("evidence").and_then(|v| v.as_array()) {
+                for (evidence_index, item) in evidence.iter().enumerate() {
+                    check_object_keys(
+                        item,
+                        &["path", "sha256"],
+                        &format!("{path}.evidence[{evidence_index}]"),
+                        diagnostics,
+                    );
+                }
+            }
+        }
+    }
+    if let Some(findings) = record.get("findings").and_then(|v| v.as_array()) {
+        for (index, finding) in findings.iter().enumerate() {
+            check_object_keys(
+                finding,
+                &["id", "severity", "status", "summary", "waiver"],
+                &format!("record.findings[{index}]"),
+                diagnostics,
+            );
+        }
+    }
+    check_object_keys(
+        candidate,
+        &[
+            "schemaVersion",
+            "purpose",
+            "sourceCommit",
+            "workingTreeDigest",
+            "lockDigest",
+            "uiDigest",
+            "artifactDigest",
+            "platform",
+            "arch",
+            "evidence",
+            "artifactFile",
+            "v6Policy",
+        ],
+        "candidate",
+        diagnostics,
+    );
+    if let Some(entries) = candidate.get("evidence").and_then(|v| v.as_object()) {
+        for (path, entry) in entries {
+            check_object_keys(
+                entry,
+                &["bytes", "sha256"],
+                &format!("candidate.evidence.{path}"),
+                diagnostics,
+            );
+        }
+    }
+    if let Some(artifact) = candidate.get("artifactFile") {
+        check_object_keys(
+            artifact,
+            &["path", "bytes", "sha256"],
+            "candidate.artifactFile",
+            diagnostics,
+        );
+    }
+    if let Some(policy) = candidate.get("v6Policy") {
+        check_object_keys(
+            policy,
+            &[
+                "schemaVersion",
+                "scope",
+                "specVersion",
+                "specRevision",
+                "specDigest",
+                "conditionalPaths",
+            ],
+            "candidate.v6Policy",
+            diagnostics,
+        );
+        if let Some(paths) = policy.get("conditionalPaths") {
+            check_object_keys(
+                paths,
+                &["oauthRotation", "sharedProfile", "remoteServerTls"],
+                "candidate.v6Policy.conditionalPaths",
+                diagnostics,
+            );
+        }
+    }
+}
+
+fn check_object_keys(
+    value: &serde_json::Value,
+    allowed: &[&str],
+    path: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            push_error(
+                diagnostics,
+                "unknown_field",
+                path,
+                key,
+                "v6 input object contains a field outside its closed contract",
+            );
+        }
+    }
 }
 
 fn check_identity_fields(record: &Record, diagnostics: &mut Vec<Diagnostic>) {
@@ -705,7 +1400,7 @@ fn check_requirements(record: &Record, required: &[String], diagnostics: &mut Ve
                 "required_marked_inapplicable",
                 "record",
                 &req.id,
-                "required macOS first-release item cannot be waived as inapplicable",
+                "tool-policy required item cannot be waived as inapplicable",
             );
         }
     }
@@ -716,7 +1411,7 @@ fn check_requirements(record: &Record, required: &[String], diagnostics: &mut Ve
                 "missing_required",
                 "record",
                 id,
-                "required macOS first-release item is missing; the required set is not taken from the record",
+                "tool-policy required item is missing; the required set is not taken from the record or enabledCapabilities",
             );
         }
     }
@@ -1062,21 +1757,31 @@ fn finish(
     oracles: BTreeMap<String, String>,
     structure_valid: bool,
     admission_conditions_present: bool,
+    support: ReportSupport,
 ) -> AcceptanceReport {
     let errors = diagnostics.iter().any(|d| d.severity == "error");
-    let full_v5 = scope == "full_v5";
+    let required_set_source = oracles
+        .get("required_set_policy")
+        .cloned()
+        .unwrap_or_else(|| "tool policy; not the record".into());
     AcceptanceReport {
         ok: !errors,
         structure_valid: structure_valid && !errors,
-        admission_conditions_present: admission_conditions_present && !errors && !full_v5,
+        admission_conditions_present: admission_conditions_present
+            && !errors
+            && support.full_admission_supported,
         controller_verified: false,
         product_certified: false,
         release_certified: false,
         scope: scope.to_string(),
+        scope_recognized: support.scope_recognized,
+        collection_supported: support.collection_supported,
+        full_admission_supported: support.full_admission_supported,
+        v6_policy_verified: support.v6_policy_verified,
         full_v5_supported: false,
         full_v5_remaining_sources: FULL_V5_REMAINING.iter().map(|s| (*s).to_string()).collect(),
         required_ids: required.to_vec(),
-        required_set_source: "v5 body + tool policy; not the record".into(),
+        required_set_source,
         diagnostics,
         oracles,
     }
@@ -1085,8 +1790,13 @@ fn finish(
 fn print_human(report: &AcceptanceReport) {
     println!("acceptance-check: scope={}", report.scope);
     println!(
-        "structure_valid={} admission_conditions_present={} controller_verified=false product_certified=false release_certified=false full_v5_supported=false",
-        report.structure_valid, report.admission_conditions_present
+        "structure_valid={} admission_conditions_present={} scope_recognized={} collection_supported={} full_admission_supported={} v6_policy_verified={} controller_verified=false product_certified=false release_certified=false full_v5_supported=false",
+        report.structure_valid,
+        report.admission_conditions_present,
+        report.scope_recognized,
+        report.collection_supported,
+        report.full_admission_supported,
+        report.v6_policy_verified,
     );
     println!("required_set_source={}", report.required_set_source);
     println!("required_ids={}", report.required_ids.join(","));
@@ -1110,7 +1820,10 @@ fn print_human(report: &AcceptanceReport) {
     );
 }
 
-fn load_json<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result<T, Diagnostic> {
+fn load_json_with_value<T: for<'de> Deserialize<'de>>(
+    path: &Path,
+    label: &str,
+) -> Result<(T, serde_json::Value), Diagnostic> {
     let bytes = super::checked_input::read_argument(path, MAX_JSON_BYTES)
         .map_err(|e| input_diagnostic(e, path))?;
     if bytes.is_empty() {
@@ -1121,14 +1834,23 @@ fn load_json<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result<T
             "JSON input is empty",
         ));
     }
-    super::checked_input::json(&bytes).map_err(|_| {
+    let value: serde_json::Value = super::checked_input::json(&bytes).map_err(|_| {
         diag(
             "invalid_json",
             &path.display().to_string(),
             label,
             "invalid JSON or duplicate object member",
         )
-    })
+    })?;
+    let typed = serde_json::from_value(value.clone()).map_err(|_| {
+        diag(
+            "invalid_json",
+            &path.display().to_string(),
+            label,
+            "JSON fields do not match the bounded acceptance schema",
+        )
+    })?;
+    Ok((typed, value))
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -1180,12 +1902,14 @@ fn diag(code: &str, path: &str, locator: &str, message: &str) -> Diagnostic {
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const COMMIT: &str = "52ea4d0a651b5919561aed8fd56b14fcfb4401b2";
     const TREE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const LOCK: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const UI: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     struct TempTree {
         root: PathBuf,
@@ -1193,16 +1917,22 @@ mod tests {
 
     impl TempTree {
         fn new(tag: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos();
-            let root = std::env::temp_dir().join(format!(
-                "openbot-acceptance-{tag}-{}-{nanos}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&root).expect("temp");
-            Self { root }
+            loop {
+                let nanos = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("clock")
+                    .as_nanos();
+                let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                let root = std::env::temp_dir().join(format!(
+                    "openbot-acceptance-{tag}-{}-{nanos}-{sequence}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&root) {
+                    Ok(()) => return Self { root },
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("temp: {error}"),
+                }
+            }
         }
 
         fn write(&self, rel: &str, bytes: impl AsRef<[u8]>) {
@@ -1290,8 +2020,6 @@ mod tests {
                     vec![serde_json::json!({"path":"../../etc/passwd","sha256":evidence_hash})]
                 } else if passed {
                     vec![serde_json::json!({"path":"a0.log","sha256":evidence_hash})]
-                } else if scene.passed_no_evidence && scene.status == "passed" {
-                    Vec::new()
                 } else {
                     Vec::new()
                 };
@@ -1308,10 +2036,10 @@ mod tests {
                     "limits": "test-only"
                 }));
             }
-            if scene.duplicate {
-                if let Some(first) = requirements.first().cloned() {
-                    requirements.push(first);
-                }
+            if scene.duplicate
+                && let Some(first) = requirements.first().cloned()
+            {
+                requirements.push(first);
             }
             let findings = if scene.risk_p1 {
                 vec![serde_json::json!({
@@ -1391,6 +2119,166 @@ mod tests {
         fn evaluate(&self) -> AcceptanceReport {
             evaluate(&self.opts)
         }
+    }
+
+    #[derive(Clone, Copy, Default)]
+    struct V6Conditions {
+        oauth_rotation: bool,
+        shared_profile: bool,
+        remote_server_tls: bool,
+    }
+
+    struct V6Harness {
+        _tree: TempTree,
+        opts: Opts,
+    }
+
+    impl V6Harness {
+        fn new(scope: &str, conditions: V6Conditions) -> Self {
+            let tree = TempTree::new("v6-case");
+            let spec = b"# synthetic v6 specification\n\
+### 3.6 Grok workflows\n\
+### 24.3 Acceptance records\n\
+### 24.4 v5 obligations\n\
+### 24.5 v6 admission\n\
+### 24.5a v6 collection\n\
+## 25. Definition of Done\n\
+<!-- first-source-current {\"version\":\"v6\",\"last_revision\":268} -->\n";
+            let spec_digest = sha256_hex(spec);
+            tree.write("spec.md", spec);
+            let evidence_body = b"synthetic-v6-evidence\n";
+            let evidence_hash = sha256_hex(evidence_body);
+            tree.write("evidence/run.log", evidence_body);
+            let artifact_body = b"synthetic-v6-artifact\n";
+            let artifact_hash = sha256_hex(artifact_body);
+            tree.write("evidence/artifact.bin", artifact_body);
+            let policy = V6Policy {
+                schema_version: 1,
+                scope: scope.to_string(),
+                spec_version: "v6".into(),
+                spec_revision: 268,
+                spec_digest: spec_digest.clone(),
+                conditional_paths: ConditionalPaths {
+                    oauth_rotation: conditions.oauth_rotation,
+                    shared_profile: conditions.shared_profile,
+                    remote_server_tls: conditions.remote_server_tls,
+                },
+            };
+            let requirements = required_v6_ids(scope, Some(&policy))
+                .into_iter()
+                .map(|id| {
+                    serde_json::json!({
+                        "clause": "§24.5a",
+                        "id": id,
+                        "applicable": true,
+                        "owner": "backend",
+                        "status": "passed",
+                        "command": "synthetic-check",
+                        "scenario": "synthetic contract fixture",
+                        "evidence": [{"path":"run.log","sha256":evidence_hash}],
+                        "result": "synthetic pass",
+                        "limits": "checker behavior only"
+                    })
+                })
+                .collect::<Vec<_>>();
+            let record = serde_json::json!({
+                "schemaVersion": 1,
+                "scope": scope,
+                "specDigest": spec_digest,
+                "sourceCommit": COMMIT,
+                "workingTreeDigest": TREE,
+                "lockDigest": LOCK,
+                "uiDigest": UI,
+                "artifactDigest": artifact_hash,
+                "platform": "macos",
+                "arch": "arm64",
+                "osVersion": "15.0",
+                "enabledCapabilities": [],
+                "requirements": requirements,
+                "findings": []
+            });
+            let candidate = serde_json::json!({
+                "schemaVersion": 1,
+                "purpose": "trusted-candidate-manifest; synthetic checker fixture",
+                "sourceCommit": COMMIT,
+                "workingTreeDigest": TREE,
+                "lockDigest": LOCK,
+                "uiDigest": UI,
+                "artifactDigest": artifact_hash,
+                "platform": "macos",
+                "arch": "arm64",
+                "v6Policy": {
+                    "schemaVersion": 1,
+                    "scope": scope,
+                    "specVersion": "v6",
+                    "specRevision": 268,
+                    "specDigest": spec_digest,
+                    "conditionalPaths": {
+                        "oauthRotation": conditions.oauth_rotation,
+                        "sharedProfile": conditions.shared_profile,
+                        "remoteServerTls": conditions.remote_server_tls
+                    }
+                },
+                "evidence": {
+                    "run.log": {"bytes": evidence_body.len(), "sha256": evidence_hash}
+                },
+                "artifactFile": {
+                    "path": "artifact.bin",
+                    "bytes": artifact_body.len(),
+                    "sha256": artifact_hash
+                }
+            });
+            tree.write("record.json", serde_json::to_vec_pretty(&record).unwrap());
+            tree.write(
+                "candidate.json",
+                serde_json::to_vec_pretty(&candidate).unwrap(),
+            );
+            let opts = Opts {
+                record: tree.path("record.json"),
+                candidate: tree.path("candidate.json"),
+                evidence_root: tree.path("evidence"),
+                spec: Some(tree.path("spec.md")),
+                json: true,
+            };
+            Self { _tree: tree, opts }
+        }
+
+        fn evaluate(&self) -> AcceptanceReport {
+            evaluate(&self.opts)
+        }
+
+        fn edit_record(&self, edit: impl FnOnce(&mut serde_json::Value)) {
+            edit_json(&self.opts.record, edit);
+        }
+
+        fn edit_candidate(&self, edit: impl FnOnce(&mut serde_json::Value)) {
+            edit_json(&self.opts.candidate, edit);
+        }
+
+        fn bind_current_spec_digest(&self) {
+            let digest = sha256_hex(&fs::read(self.opts.spec.as_ref().unwrap()).unwrap());
+            self.edit_record(|record| record["specDigest"] = digest.clone().into());
+            self.edit_candidate(|candidate| candidate["v6Policy"]["specDigest"] = digest.into());
+        }
+    }
+
+    fn edit_json(path: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        edit(&mut value);
+        fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn temp_tree_names_are_unique_under_parallel_creation() {
+        let handles = (0..64)
+            .map(|_| std::thread::spawn(|| TempTree::new("parallel").root.clone()))
+            .collect::<Vec<_>>();
+        let paths = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(paths.len(), 64);
     }
 
     #[test]
@@ -1552,6 +2440,10 @@ mod tests {
         assert!(!report.product_certified);
         assert!(!report.release_certified);
         assert!(!report.full_v5_supported);
+        assert!(report.scope_recognized);
+        assert!(report.collection_supported);
+        assert!(report.full_admission_supported);
+        assert!(!report.v6_policy_verified);
         assert!(report.required_ids.iter().any(|id| id == "A4"));
         assert!(report.required_ids.iter().any(|id| id == "model.custom"));
         assert!(report.full_v5_remaining_sources.len() >= 8);
@@ -1760,6 +2652,268 @@ mod tests {
                 .any(|s| s.contains("§25"))
         );
         let _ = &harness.tree;
+    }
+
+    #[test]
+    fn acceptance_v6_m1_complete_collection_is_admissible_but_not_certified() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        let report = harness.evaluate();
+        assert!(report.ok, "{:?}", report.diagnostics);
+        assert!(report.structure_valid);
+        assert!(report.admission_conditions_present);
+        assert!(report.scope_recognized);
+        assert!(report.collection_supported);
+        assert!(report.full_admission_supported);
+        assert!(report.v6_policy_verified);
+        assert!(report.required_ids.iter().any(|id| id == "E5"));
+        assert!(report.required_ids.iter().any(|id| id == "V6-AUTO-01"));
+        assert!(report.required_ids.iter().any(|id| id == "AR6-08"));
+        assert!(!report.required_ids.iter().any(|id| id == "V6-NODE-01"));
+        assert_eq!(report.required_ids.len(), 22);
+        assert!(!report.controller_verified);
+        assert!(!report.product_certified);
+        assert!(!report.release_certified);
+    }
+
+    #[test]
+    fn acceptance_v6_macos_uses_all_explicit_conditional_paths() {
+        let harness = V6Harness::new(
+            "macos_first_release",
+            V6Conditions {
+                oauth_rotation: true,
+                shared_profile: true,
+                remote_server_tls: true,
+            },
+        );
+        let report = harness.evaluate();
+        assert!(report.ok, "{:?}", report.diagnostics);
+        assert!(report.admission_conditions_present);
+        for id in ["AR6-01", "AR6-03", "AR6-04", "AR6-09", "AR6-10"] {
+            assert!(report.required_ids.iter().any(|required| required == id));
+        }
+        assert!(report.required_ids.iter().any(|id| id == "A0"));
+        assert!(report.required_ids.iter().any(|id| id == "V5-SPEC-01"));
+        assert_eq!(report.required_ids.len(), 33);
+    }
+
+    #[test]
+    fn acceptance_full_v6_collects_complete_ids_but_never_admits() {
+        let harness = V6Harness::new("full_v6", V6Conditions::default());
+        let report = harness.evaluate();
+        assert_has(&report, "full_v6_aggregate_closure_unimplemented");
+        assert!(report.scope_recognized);
+        assert!(report.collection_supported);
+        assert!(!report.full_admission_supported);
+        assert!(!report.admission_conditions_present);
+        for id in [
+            "A7",
+            "G8",
+            "E5",
+            "V5-DEVICE-01",
+            "V6-NODE-01",
+            "AR6-10",
+            "DOD-10",
+            "parity.identity",
+            "fixtures.closure",
+            "R212.harmonyos",
+            "platform.linux_server",
+        ] {
+            assert!(report.required_ids.iter().any(|required| required == id));
+        }
+        assert_eq!(report.required_ids.len(), 84);
+    }
+
+    #[test]
+    fn acceptance_v6_missing_workflow_cannot_be_hidden_by_capabilities() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        harness.edit_record(|record| {
+            record["enabledCapabilities"] = serde_json::json!([]);
+            record["requirements"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|requirement| requirement["id"] != "V6-EVENT-01");
+        });
+        assert_has(&harness.evaluate(), "missing_required");
+    }
+
+    #[test]
+    fn acceptance_v6_scope_cannot_relabel_an_m1_record_as_m0() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        harness.edit_record(|record| record["scope"] = "macos_first_release".into());
+        let report = harness.evaluate();
+        assert_has(&report, "scope_mismatch");
+        assert_has(&report, "missing_required");
+    }
+
+    #[test]
+    fn acceptance_v6_unknown_scope_is_rejected() {
+        let harness = V6Harness::new("future_v6_scope", V6Conditions::default());
+        let report = harness.evaluate();
+        assert_has(&report, "unknown_scope");
+        assert!(!report.scope_recognized);
+        assert!(!report.collection_supported);
+        assert!(!report.full_admission_supported);
+    }
+
+    #[test]
+    fn acceptance_v6_conditional_paths_have_no_implicit_false_default() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        harness.edit_candidate(|candidate| {
+            candidate["v6Policy"]["conditionalPaths"]
+                .as_object_mut()
+                .unwrap()
+                .remove("oauthRotation");
+        });
+        assert_has(&harness.evaluate(), "invalid_json");
+    }
+
+    #[test]
+    fn acceptance_v6_scope_requires_policy_and_spec() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        harness.edit_candidate(|candidate| {
+            candidate.as_object_mut().unwrap().remove("v6Policy");
+        });
+        assert_has(&harness.evaluate(), "missing_v6_policy");
+
+        let mut harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        let _ = harness.opts.spec.take();
+        assert_has(&harness.evaluate(), "missing_spec");
+    }
+
+    #[test]
+    fn acceptance_v6_new_field_signals_cannot_downgrade_macos_to_legacy() {
+        let mut harness = V6Harness::new("macos_first_release", V6Conditions::default());
+        harness.edit_candidate(|candidate| {
+            candidate.as_object_mut().unwrap().remove("v6Policy");
+        });
+        let _ = harness.opts.spec.take();
+        let report = harness.evaluate();
+        assert_has(&report, "missing_v6_policy");
+        assert_has(&report, "missing_spec");
+
+        let mut harness = V6Harness::new("macos_first_release", V6Conditions::default());
+        harness.edit_record(|record| {
+            record.as_object_mut().unwrap().remove("specDigest");
+        });
+        harness.edit_candidate(|candidate| candidate["v6Policy"] = serde_json::Value::Null);
+        let _ = harness.opts.spec.take();
+        let report = harness.evaluate();
+        assert_has(&report, "missing_v6_policy");
+        assert_has(&report, "missing_field");
+    }
+
+    #[test]
+    fn acceptance_malformed_current_marker_cannot_fall_back_to_v5() {
+        let mut harness = Harness::new(Scene::default());
+        harness.tree.write(
+            "malformed-current.md",
+            b"### 24.2 macOS\n### 24.4 v5\n## 25. DoD\n<!-- first-source-current {\"version\":\"v6\",\"version\":\"v5\",\"last_revision\":268} -->\n",
+        );
+        harness.opts.spec = Some(harness.tree.path("malformed-current.md"));
+        let report = harness.evaluate();
+        assert_has(&report, "invalid_json");
+        assert_has(&report, "missing_v6_policy");
+    }
+
+    #[test]
+    fn acceptance_valid_v5_current_metadata_stays_legacy() {
+        let mut harness = Harness::new(Scene::default());
+        harness.tree.write(
+            "v5-spec.md",
+            b"### 24.2 macOS\n| A0 | gate |\n### 24.4 v5\n## 25. DoD\n<!-- first-source-current {\"version\":\"v5\",\"last_revision\":267} -->\n",
+        );
+        harness.opts.spec = Some(harness.tree.path("v5-spec.md"));
+        let report = harness.evaluate();
+        assert!(report.ok, "{:?}", report.diagnostics);
+        assert!(!report.v6_policy_verified);
+        assert!(!report.admission_conditions_present);
+    }
+
+    #[test]
+    fn acceptance_v6_applicable_ar6_cannot_be_removed_or_waived() {
+        let harness = V6Harness::new("macos_first_release", V6Conditions::default());
+        harness.edit_record(|record| {
+            record["requirements"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|requirement| requirement["id"] != "AR6-04");
+        });
+        assert_has(&harness.evaluate(), "missing_required");
+
+        let harness = V6Harness::new(
+            "event_workflows_v6",
+            V6Conditions {
+                oauth_rotation: true,
+                ..V6Conditions::default()
+            },
+        );
+        harness.edit_record(|record| {
+            record["requirements"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|requirement| requirement["id"] != "AR6-01");
+        });
+        assert_has(&harness.evaluate(), "missing_required");
+
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        harness.edit_record(|record| {
+            let ar6 = record["requirements"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|requirement| requirement["id"] == "AR6-02")
+                .unwrap();
+            ar6["applicable"] = false.into();
+        });
+        assert_has(&harness.evaluate(), "required_marked_inapplicable");
+    }
+
+    #[test]
+    fn acceptance_v6_binds_record_policy_and_actual_spec_digest() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        harness.edit_record(|record| record["specDigest"] = TREE.into());
+        assert_has(&harness.evaluate(), "spec_digest_mismatch");
+    }
+
+    #[test]
+    fn acceptance_v6_rejects_duplicate_current_metadata_even_when_rehashed() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        let spec_path = harness.opts.spec.as_ref().unwrap();
+        let mut spec = fs::read(spec_path).unwrap();
+        spec.extend_from_slice(
+            b"<!-- first-source-current {\"version\":\"v6\",\"last_revision\":268} -->\n",
+        );
+        fs::write(spec_path, spec).unwrap();
+        harness.bind_current_spec_digest();
+        assert_has(&harness.evaluate(), "duplicate_metadata");
+    }
+
+    #[test]
+    fn acceptance_v6_accepts_later_frozen_revision_when_exactly_bound() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        let spec_path = harness.opts.spec.as_ref().unwrap();
+        let spec = fs::read_to_string(spec_path)
+            .unwrap()
+            .replace("\"last_revision\":268", "\"last_revision\":270");
+        fs::write(spec_path, spec).unwrap();
+        harness.edit_candidate(|candidate| candidate["v6Policy"]["specRevision"] = 270.into());
+        harness.bind_current_spec_digest();
+        let report = harness.evaluate();
+        assert!(report.ok, "{:?}", report.diagnostics);
+        assert!(report.v6_policy_verified);
+    }
+
+    #[test]
+    fn acceptance_v6_record_and_policy_objects_are_closed() {
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        harness.edit_record(|record| record["candidateRequiredIds"] = serde_json::json!([]));
+        assert_has(&harness.evaluate(), "unknown_field");
+
+        let harness = V6Harness::new("event_workflows_v6", V6Conditions::default());
+        harness.edit_candidate(|candidate| {
+            candidate["v6Policy"]["conditionalPaths"]["defaultFalse"] = false.into()
+        });
+        assert_has(&harness.evaluate(), "invalid_json");
     }
 
     #[test]
