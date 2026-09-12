@@ -1,0 +1,854 @@
+#!/usr/bin/env python3
+"""Structural guard for the production Desktop Local staged shutdown."""
+
+from __future__ import annotations
+
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+class GuardError(ValueError):
+    """Raised when the production shutdown structure is not the reviewed shape."""
+
+
+TOKEN = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*|(?:0[xob])?[0-9][0-9A-Za-z_]*|"
+    r"::|->|=>|&&|\|\||==|!=|<=|>=|\.\.=|\.\.|[^\s]"
+)
+
+
+def _blank_literals_and_comments(source: str) -> str:
+    """Remove Rust comments and literals while preserving offsets and newlines."""
+
+    chars = list(source)
+    size = len(source)
+    index = 0
+
+    def blank(start: int, end: int) -> None:
+        for position in range(start, end):
+            if chars[position] != "\n":
+                chars[position] = " "
+
+    while index < size:
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = size if end < 0 else end
+            blank(index, end)
+            index = end
+            continue
+        if source.startswith("/*", index):
+            depth = 1
+            end = index + 2
+            while end < size and depth:
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            if depth:
+                raise GuardError("unterminated Rust block comment")
+            blank(index, end)
+            index = end
+            continue
+
+        raw = re.match(r"(?:br|r)(?P<hashes>#{0,16})\"", source[index:])
+        if raw:
+            delimiter = '"' + raw.group("hashes")
+            content_start = index + raw.end()
+            end = source.find(delimiter, content_start)
+            if end < 0:
+                raise GuardError("unterminated Rust raw string")
+            end += len(delimiter)
+            blank(index, end)
+            index = end
+            continue
+
+        prefix = 1 if source[index:index + 2] in {'b"', 'c"'} else 0
+        if source[index + prefix:index + prefix + 1] == '"':
+            end = index + prefix + 1
+            escaped = False
+            while end < size:
+                char = source[end]
+                end += 1
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    break
+            else:
+                raise GuardError("unterminated Rust string")
+            blank(index, end)
+            index = end
+            continue
+
+        if source[index] == "'":
+            # Distinguish a character literal from a Rust lifetime.
+            end = index + 1
+            escaped = False
+            while end < min(size, index + 10):
+                char = source[end]
+                end += 1
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == "'":
+                    blank(index, end)
+                    index = end
+                    break
+            else:
+                index += 1
+            continue
+        index += 1
+    return "".join(chars)
+
+
+def _tokens(source: str) -> list[str]:
+    return TOKEN.findall(_blank_literals_and_comments(source))
+
+
+def _matches(tokens: list[str], start: int, sequence: tuple[str, ...]) -> bool:
+    return tokens[start:start + len(sequence)] == list(sequence)
+
+
+def _find_all(tokens: list[str], sequence: tuple[str, ...]) -> list[int]:
+    return [
+        index
+        for index in range(0, len(tokens) - len(sequence) + 1)
+        if _matches(tokens, index, sequence)
+    ]
+
+
+def _paired(tokens: list[str], start: int, opening: str, closing: str) -> int:
+    if start >= len(tokens) or tokens[start] != opening:
+        raise GuardError(f"expected {opening}")
+    depth = 0
+    for index in range(start, len(tokens)):
+        if tokens[index] == opening:
+            depth += 1
+        elif tokens[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+    raise GuardError(f"unclosed {opening}")
+
+
+def _unique(tokens: list[str], sequence: tuple[str, ...], label: str) -> int:
+    matches = _find_all(tokens, sequence)
+    if len(matches) != 1:
+        raise GuardError(f"expected one {label}, found {len(matches)}")
+    return matches[0]
+
+
+def _split_arguments(tokens: list[str]) -> list[list[str]]:
+    result: list[list[str]] = []
+    start = 0
+    stack: list[str] = []
+    pairs = {')': '(', '}': '{', ']': '['}
+    for index, token in enumerate(tokens):
+        if token in "({[":
+            stack.append(token)
+        elif token in ")}]":
+            if not stack or stack.pop() != pairs[token]:
+                raise GuardError("unbalanced expression")
+        elif token == "," and not stack:
+            result.append(tokens[start:index])
+            start = index + 1
+    if stack:
+        raise GuardError("unbalanced expression")
+    result.append(tokens[start:])
+    return [argument for argument in result if argument]
+
+
+def _match_arms(tokens: list[str]) -> list[tuple[tuple[str, ...], list[str]]]:
+    arms: list[tuple[tuple[str, ...], list[str]]] = []
+    cursor = 0
+    while cursor < len(tokens):
+        if tokens[cursor] == ",":
+            cursor += 1
+            continue
+        try:
+            arrow = tokens.index("=>", cursor)
+        except ValueError as error:
+            raise GuardError("match arm is missing =>") from error
+        pattern = tuple(tokens[cursor:arrow])
+        if arrow + 1 >= len(tokens) or tokens[arrow + 1] != "{":
+            raise GuardError("match arm must use an explicit block")
+        close = _paired(tokens, arrow + 1, "{", "}")
+        arms.append((pattern, tokens[arrow + 2:close]))
+        cursor = close + 1
+    return arms
+
+
+def _block_after(tokens: list[str], marker: tuple[str, ...], label: str) -> list[str]:
+    marker_at = _unique(tokens, marker, label)
+    try:
+        opening = tokens.index("{", marker_at + len(marker))
+    except ValueError as error:
+        raise GuardError(f"{label} has no body") from error
+    closing = _paired(tokens, opening, "{", "}")
+    return tokens[opening + 1:closing]
+
+
+def _impl_shutdown(tokens: list[str]) -> list[str]:
+    implementation = _block_after(
+        tokens,
+        ("impl", "RuntimeShutdownOwner", "for", "DesktopLocalBackgroundOwner"),
+        "production DesktopLocalBackgroundOwner RuntimeShutdownOwner impl",
+    )
+    return _block_after(
+        implementation,
+        ("async", "fn", "shutdown"),
+        "production DesktopLocalBackgroundOwner::shutdown",
+    )
+
+
+def _simple_aliases(
+    tokens: list[str], seeds: dict[str, str] | None = None
+) -> dict[str, str]:
+    aliases: dict[str, str] = dict(seeds or {})
+    fields = {"lifecycle", "transport", "agent_host", "assembly", "data_plane"}
+    for index, token in enumerate(tokens):
+        if token == "let":
+            cursor = index + 1
+            if cursor < len(tokens) and tokens[cursor] == "mut":
+                cursor += 1
+            if cursor >= len(tokens) or not tokens[cursor].isidentifier():
+                continue
+            name = tokens[cursor]
+            try:
+                equals = tokens.index("=", cursor + 1)
+                end = tokens.index(";", equals + 1)
+            except ValueError:
+                aliases.pop(name, None)
+                continue
+            rhs = tokens[equals + 1:end]
+            resources = {
+                rhs[pos + 2]
+                for pos in range(len(rhs) - 2)
+                if rhs[pos:pos + 2] == ["self", "."] and rhs[pos + 2] in fields
+            }
+            if rhs == ["crate", "::", "cancel", "::", "SHUTDOWN_DEADLINE"]:
+                resources.add("shared_shutdown_deadline")
+            resources.update(aliases[value] for value in rhs if value in aliases)
+            if len(resources) == 1:
+                aliases[name] = next(iter(resources))
+            else:
+                aliases.pop(name, None)
+        if _matches(tokens, index, ("if", "let", "Some", "(")):
+            inner = index + 4
+            if inner + 3 < len(tokens) and tokens[inner].isidentifier():
+                close = inner + 1
+                if tokens[close:close + 2] == [")", "="]:
+                    outer = tokens[close + 2]
+                    if outer in aliases:
+                        aliases[tokens[inner]] = aliases[outer]
+                    else:
+                        aliases.pop(tokens[inner], None)
+    return aliases
+
+
+def _value_aliases(tokens: list[str], seeds: dict[str, str]) -> dict[str, str]:
+    aliases = dict(seeds)
+    for index, token in enumerate(tokens):
+        if token != "let" or index + 3 >= len(tokens):
+            continue
+        cursor = index + 1
+        if tokens[cursor] == "mut":
+            cursor += 1
+        if not tokens[cursor].isidentifier():
+            continue
+        name = tokens[cursor]
+        try:
+            equals = tokens.index("=", cursor + 1)
+            end = tokens.index(";", equals + 1)
+        except ValueError:
+            aliases.pop(name, None)
+            continue
+        rhs = tokens[equals + 1:end]
+        if len(rhs) == 1 and rhs[0] in aliases:
+            aliases[name] = aliases[rhs[0]]
+        else:
+            aliases.pop(name, None)
+    return aliases
+
+
+def _stage_aliases(tokens: list[str]) -> dict[str, str]:
+    """Track async stage bindings and simple aliases with lexical shadowing."""
+
+    aliases: dict[str, str] = {}
+    index = 0
+    while index < len(tokens):
+        if tokens[index] != "let":
+            index += 1
+            continue
+        cursor = index + 1
+        if cursor < len(tokens) and tokens[cursor] == "mut":
+            cursor += 1
+        if cursor >= len(tokens) or not tokens[cursor].isidentifier():
+            index += 1
+            continue
+        name = tokens[cursor]
+        try:
+            equals = tokens.index("=", cursor + 1)
+        except ValueError:
+            aliases.pop(name, None)
+            break
+        rhs = equals + 1
+        if rhs < len(tokens) and tokens[rhs] == "async":
+            opening = rhs + 1
+            if opening < len(tokens) and tokens[opening] == "move":
+                opening += 1
+            if opening < len(tokens) and tokens[opening] == "{":
+                closing = _paired(tokens, opening, "{", "}")
+                aliases[name] = name
+                index = closing + 1
+                continue
+        try:
+            end = tokens.index(";", rhs)
+        except ValueError:
+            aliases.pop(name, None)
+            break
+        expression = tokens[rhs:end]
+        if len(expression) == 1 and expression[0] in aliases:
+            aliases[name] = aliases[expression[0]]
+        else:
+            aliases.pop(name, None)
+        index = end + 1
+    return aliases
+
+
+def _receiver_resource(tokens: list[str], method_at: int, aliases: dict[str, str]) -> str | None:
+    if method_at >= 4 and tokens[method_at - 4:method_at] == [
+        "self",
+        ".",
+        tokens[method_at - 2],
+        ".",
+    ]:
+        return tokens[method_at - 2]
+    if method_at >= 2 and tokens[method_at - 1] == ".":
+        return aliases.get(tokens[method_at - 2])
+    return None
+
+
+def _method_calls(
+    tokens: list[str], method: str, aliases: dict[str, str]
+) -> list[tuple[int, str | None]]:
+    return [
+        (index, _receiver_resource(tokens, index, aliases))
+        for index, token in enumerate(tokens)
+        if token == method and index + 1 < len(tokens) and tokens[index + 1] == "("
+    ]
+
+
+def _assigned_async_blocks(tokens: list[str]) -> dict[str, list[str]]:
+    blocks: dict[str, list[str]] = {}
+    for index in range(len(tokens) - 4):
+        if tokens[index] != "let":
+            continue
+        cursor = index + 1
+        if tokens[cursor] == "mut":
+            cursor += 1
+        if not tokens[cursor].isidentifier() or tokens[cursor + 1:cursor + 3] != ["=", "async"]:
+            continue
+        opening = cursor + 3
+        if tokens[opening] == "move":
+            opening += 1
+        if tokens[opening] != "{":
+            continue
+        closing = _paired(tokens, opening, "{", "}")
+        blocks[tokens[cursor]] = tokens[opening + 1:closing]
+    return blocks
+
+
+def _call_arguments(tokens: list[str], marker: tuple[str, ...], label: str) -> list[list[str]]:
+    call_at = _unique(tokens, marker, label)
+    opening = call_at + len(marker) - 1
+    closing = _paired(tokens, opening, "(", ")")
+    return _split_arguments(tokens[opening + 1:closing])
+
+
+def _brace_depths(tokens: list[str]) -> list[int]:
+    depths: list[int] = []
+    depth = 0
+    for token in tokens:
+        depths.append(depth)
+        if token == "{":
+            depth += 1
+        elif token == "}":
+            depth -= 1
+    return depths
+
+
+def _strip_parentheses(tokens: list[str]) -> list[str]:
+    result = tokens
+    while (
+        len(result) >= 2
+        and result[0] == "("
+        and _paired(result, 0, "(", ")") == len(result) - 1
+    ):
+        result = result[1:-1]
+    return result
+
+
+def _check_database_future(tokens: list[str], aliases: dict[str, str]) -> None:
+    depths = _brace_depths(tokens)
+    matches = [
+        index for index, token in enumerate(tokens) if token == "match" and depths[index] == 0
+    ]
+    if len(matches) != 1:
+        raise GuardError("database stage must retain one top-level owner match")
+    match_at = matches[0]
+    try:
+        match_open = tokens.index("{", match_at + 1)
+    except ValueError as error:
+        raise GuardError("database owner match has no body") from error
+    scrutinee = _strip_parentheses(tokens[match_at + 1:match_open])
+    if len(scrutinee) != 1 or aliases.get(scrutinee[0]) != "data_plane":
+        raise GuardError("database match no longer consumes the trusted data-plane owner")
+    match_close = _paired(tokens, match_open, "{", "}")
+    if match_close != len(tokens) - 1:
+        raise GuardError("database owner match is not the stage's final result expression")
+    arms = _split_arguments(tokens[match_open + 1:match_close])
+    if len(arms) != 2:
+        raise GuardError("database owner match must retain exactly Some and None branches")
+
+    some_seen = False
+    none_seen = False
+    for arm in arms:
+        if "=>" not in arm:
+            raise GuardError("database owner match arm is malformed")
+        arrow = arm.index("=>")
+        pattern = arm[:arrow]
+        expression = _strip_parentheses(arm[arrow + 1:])
+        if (
+            len(pattern) == 4
+            and pattern[:2] == ["Some", "("]
+            and pattern[2].isidentifier()
+            and pattern[3] == ")"
+        ):
+            if some_seen:
+                raise GuardError("database owner match duplicated its Some branch")
+            some_seen = True
+            binding = pattern[2]
+            expected = [
+                binding,
+                ".",
+                "shutdown",
+                "(",
+                ")",
+                ".",
+                "await",
+                ".",
+                "is_ok",
+                "(",
+                ")",
+            ]
+            if expression != expected:
+                raise GuardError("database Some branch no longer returns its shutdown result")
+        elif pattern == ["None"]:
+            if none_seen:
+                raise GuardError("database owner match duplicated its None branch")
+            none_seen = True
+            if expression != ["false"]:
+                raise GuardError("database None branch must remain a failed shutdown stage")
+        else:
+            raise GuardError("database owner match pattern drift")
+    if not some_seen or not none_seen:
+        raise GuardError("database owner match lost a required branch")
+
+
+@dataclass(frozen=True)
+class HelperShape:
+    non_database_parameter: str
+    database_parameter: str
+    deadline_parameter: str
+
+
+def _check_helper(tokens: list[str]) -> HelperShape:
+    function_at = _unique(
+        tokens,
+        ("async", "fn", "finish_shutdown_stages", "("),
+        "finish_shutdown_stages helper",
+    )
+    parameters_open = function_at + 3
+    parameters_close = _paired(tokens, parameters_open, "(", ")")
+    parameters = _split_arguments(tokens[parameters_open + 1:parameters_close])
+    if len(parameters) != 3:
+        raise GuardError("finish_shutdown_stages must retain three bounded stage parameters")
+    names = []
+    for parameter in parameters:
+        if ":" not in parameter:
+            raise GuardError("finish_shutdown_stages parameter shape drift")
+        names.append(parameter[0])
+    shape = HelperShape(*names)
+    try:
+        body_open = tokens.index("{", parameters_close + 1)
+    except ValueError as error:
+        raise GuardError("finish_shutdown_stages has no body") from error
+    body_close = _paired(tokens, body_open, "{", "}")
+    body = tokens[body_open + 1:body_close]
+    aliases = _simple_aliases(body, {name: name for name in names})
+
+    timeout_at = _unique(
+        body,
+        ("tokio", "::", "time", "::", "timeout", "("),
+        "non-database timeout",
+    )
+    timeout_open = timeout_at + 5
+    timeout_close = _paired(body, timeout_open, "(", ")")
+    timeout_arguments = _split_arguments(body[timeout_open + 1:timeout_close])
+    if len(timeout_arguments) != 2:
+        raise GuardError("non-database timeout argument shape drift")
+    if (
+        len(timeout_arguments[0]) != 1
+        or aliases.get(timeout_arguments[0][0]) != shape.deadline_parameter
+    ):
+        raise GuardError("non-database timeout no longer uses its reviewed deadline parameter")
+    if (
+        len(timeout_arguments[1]) != 1
+        or aliases.get(timeout_arguments[1][0]) != shape.non_database_parameter
+    ):
+        raise GuardError("non-database stage no longer runs inside the reviewed timeout")
+    if body[timeout_close + 1:timeout_close + 3] != [".", "await"]:
+        raise GuardError("non-database timeout is not awaited")
+    match_open = timeout_close + 3
+    if match_open >= len(body) or body[match_open] != "{":
+        raise GuardError("non-database timeout must retain its closed result match")
+    match_close = _paired(body, match_open, "{", "}")
+    arms = _match_arms(body[match_open + 1:match_close])
+    expected_arms = {
+        ("Ok", "(", "true", ")"): "true",
+        ("Ok", "(", "false", ")"): "false",
+        ("Err", "(", "_", ")"): "false",
+    }
+    observed_arms: dict[tuple[str, ...], str] = {}
+    for pattern, arm_body in arms:
+        if not arm_body:
+            raise GuardError("non-database timeout match arm shape drift")
+        terminal = arm_body[-1]
+        if pattern in observed_arms:
+            raise GuardError("duplicate non-database timeout match arm")
+        observed_arms[pattern] = terminal
+    if observed_arms != expected_arms:
+        raise GuardError("non-database timeout success/failure projection drift")
+
+    database_awaits = [
+        index
+        for index in range(len(body) - 2)
+        if body[index].isidentifier()
+        and aliases.get(body[index]) == shape.database_parameter
+        and body[index + 1:index + 3] == [".", "await"]
+    ]
+    if len(database_awaits) != 1:
+        raise GuardError("database stage must be awaited exactly once")
+    database_await = database_awaits[0]
+    if database_await <= timeout_close:
+        raise GuardError("database shutdown ran before the non-database stage completed")
+    if _brace_depths(body)[database_await] != 0:
+        raise GuardError("database shutdown became conditional on a prior stage")
+    if any(
+        token in {"return", "break", "continue", "?", "panic"}
+        for token in body[:database_await]
+    ):
+        raise GuardError("an early exit can skip the independent database shutdown stage")
+
+    non_database_result = None
+    for index in range(timeout_at - 1, -1, -1):
+        if body[index] == "let" and index + 3 < timeout_at and body[index + 1].isidentifier():
+            if "=" in body[index + 2:timeout_at]:
+                non_database_result = body[index + 1]
+                break
+    database_result = None
+    for index in range(database_await - 1, -1, -1):
+        if body[index] == "let" and index + 3 <= database_await and body[index + 1].isidentifier():
+            if "=" in body[index + 2:database_await]:
+                database_result = body[index + 1]
+                break
+    if non_database_result is None or database_result is None:
+        raise GuardError("shutdown stage result bindings are missing")
+
+    final_if = None
+    depths = _brace_depths(body)
+    for index in range(database_await + 2, len(body)):
+        if body[index] == "if" and depths[index] == 0:
+            try:
+                candidate_open = body.index("{", index + 1)
+            except ValueError:
+                continue
+            if "&&" in body[index + 1:candidate_open]:
+                final_if = index
+                break
+    if final_if is None:
+        raise GuardError("combined shutdown failure result is missing")
+    condition_open = body.index("{", final_if + 1)
+    condition = body[final_if + 1:condition_open]
+    condition = _strip_parentheses(condition)
+    result_aliases = _value_aliases(
+        body[database_await + 2:final_if],
+        {
+            non_database_result: "non_database_result",
+            database_result: "database_result",
+        },
+    )
+    normalized_condition = [
+        result_aliases.get(token, token) if token.isidentifier() else token
+        for token in condition
+    ]
+    if normalized_condition not in [
+        ["non_database_result", "&&", "database_result"],
+        ["database_result", "&&", "non_database_result"],
+    ]:
+        raise GuardError("shutdown success must require both stage results")
+    success_close = _paired(body, condition_open, "{", "}")
+    success = body[condition_open + 1:success_close]
+    if success != ["Ok", "(", "(", ")", ")"]:
+        raise GuardError("combined successful shutdown no longer returns Ok")
+    if body[success_close + 1:success_close + 3] != ["else", "{"]:
+        raise GuardError("combined shutdown failure branch is missing")
+    failure_open = success_close + 2
+    failure_close = _paired(body, failure_open, "{", "}")
+    failure = body[failure_open + 1:failure_close]
+    if failure != [
+        "Err",
+        "(",
+        "DesktopLocalRuntimeError",
+        "::",
+        "Shutdown",
+        ")",
+    ]:
+        raise GuardError("stage failure no longer returns DesktopLocalRuntimeError::Shutdown")
+    if failure_close != len(body) - 1:
+        raise GuardError("combined shutdown result is not the helper's final return expression")
+    return shape
+
+
+def check_source(source: str) -> None:
+    tokens = _tokens(source)
+    helper = _check_helper(tokens)
+    shutdown = _impl_shutdown(tokens)
+    blocks = _assigned_async_blocks(shutdown)
+    resource_aliases = _simple_aliases(shutdown)
+    stage_aliases = _stage_aliases(shutdown)
+    helper_arguments = _call_arguments(
+        shutdown,
+        ("finish_shutdown_stages", "("),
+        "production owner finish_shutdown_stages call",
+    )
+    if len(helper_arguments) != 3:
+        raise GuardError("production owner must pass two stages and one shared deadline")
+    if len(helper_arguments[0]) != 1 or len(helper_arguments[1]) != 1:
+        raise GuardError("production owner stage futures must remain explicit local owners")
+    non_database_name = stage_aliases.get(helper_arguments[0][0])
+    database_name = stage_aliases.get(helper_arguments[1][0])
+    if non_database_name not in blocks or database_name not in blocks:
+        raise GuardError("production owner no longer passes its local stage futures")
+    deadline_is_direct = helper_arguments[2] == [
+        "crate",
+        "::",
+        "cancel",
+        "::",
+        "SHUTDOWN_DEADLINE",
+    ]
+    deadline_is_alias = (
+        len(helper_arguments[2]) == 1
+        and resource_aliases.get(helper_arguments[2][0]) == "shared_shutdown_deadline"
+    )
+    if not deadline_is_direct and not deadline_is_alias:
+        raise GuardError("production owner lost the shared shutdown deadline")
+    if helper.non_database_parameter == helper.database_parameter:
+        raise GuardError("finish_shutdown_stages stage parameters collapsed")
+
+    non_database = blocks[non_database_name]
+    database = blocks[database_name]
+    join_at = _unique(
+        non_database,
+        ("tokio", "::", "join", "!", "("),
+        "production non-database tokio::join",
+    )
+    join_open = join_at + 4
+    join_close = _paired(non_database, join_open, "(", ")")
+    join_arguments = _split_arguments(non_database[join_open + 1:join_close])
+    if len(join_arguments) != 4:
+        raise GuardError("non-database join must retain four concurrent stop branches")
+    if "await" in non_database[:join_at]:
+        raise GuardError("a non-database stop became serial before tokio::join")
+    if (
+        _find_all(non_database[:join_close], ("if", "false"))
+        or _find_all(non_database[:join_close], ("if", "true"))
+        or "||" in non_database[:join_close]
+    ):
+        raise GuardError("a concurrent stop branch is statically unreachable")
+
+    authority_calls = [
+        index
+        for index, resource in _method_calls(
+            non_database[:join_at], "shutdown_authority", resource_aliases
+        )
+        if resource == "lifecycle"
+    ]
+    if len(authority_calls) != 1:
+        raise GuardError("authority must be revoked exactly once before concurrent shutdown")
+    authority_call = authority_calls[0]
+    if _brace_depths(non_database[:join_at])[authority_call] != 0:
+        raise GuardError("authority revocation became conditional")
+    authority_close = _paired(non_database, authority_call + 1, "(", ")")
+    if non_database[authority_close + 1:authority_close + 5] != [".", "is_ok", "(", ")"]:
+        raise GuardError("authority revocation result is no longer checked")
+    authority_result = None
+    for index in range(authority_call - 1, -1, -1):
+        if non_database[index] == "let" and non_database[index + 1].isidentifier():
+            if "=" in non_database[index + 2:authority_call]:
+                authority_result = non_database[index + 1]
+                break
+    if authority_result is None:
+        raise GuardError("authority revocation result binding is missing")
+
+    expected = {
+        ("transport", "shutdown"),
+        ("agent_host", "stop"),
+        ("assembly", "shutdown"),
+        ("lifecycle", "wait_local_confirmation_stopped"),
+    }
+    observed: set[tuple[str, str]] = set()
+    resource_arms: dict[tuple[str, str], int] = {}
+    for arm_index, argument in enumerate(join_arguments):
+        for method in {"shutdown", "stop", "wait_local_confirmation_stopped"}:
+            for call_at, resource in _method_calls(argument, method, resource_aliases):
+                pair = (resource or "", method)
+                if pair in expected:
+                    if pair in observed:
+                        raise GuardError(f"duplicate concurrent stop branch: {pair[0]}.{pair[1]}")
+                    call_close = _paired(argument, call_at + 1, "(", ")")
+                    if any(
+                        token in {"return", "break", "continue"}
+                        for token in argument[:call_at]
+                    ):
+                        raise GuardError(
+                            f"concurrent stop is behind an early exit: {pair[0]}.{pair[1]}"
+                        )
+                    outer_async = argument[:2] == ["async", "{"] or argument[:3] == [
+                        "async",
+                        "move",
+                        "{",
+                    ]
+                    if argument[:call_at].count("async") > int(outer_async):
+                        raise GuardError(
+                            f"concurrent stop is hidden in an unverified nested future: {pair[0]}.{pair[1]}"
+                        )
+                    awaited = argument[call_close + 1:call_close + 3] == [".", "await"]
+                    direct_join_future = call_close == len(argument) - 1
+                    if not awaited and not direct_join_future:
+                        raise GuardError(
+                            f"concurrent stop future is not polled: {pair[0]}.{pair[1]}"
+                        )
+                    observed.add(pair)
+                    resource_arms[pair] = arm_index
+    if observed != expected:
+        missing = sorted(f"{resource}.{method}" for resource, method in expected - observed)
+        raise GuardError("concurrent shutdown branch missing: " + ", ".join(missing))
+
+    equals = None
+    for index in range(join_at - 1, -1, -1):
+        if non_database[index] == "=":
+            equals = index
+            break
+    let_at = None
+    if equals is not None:
+        for index in range(equals - 1, -1, -1):
+            if non_database[index] == "let":
+                let_at = index
+                break
+    if equals is None or let_at is None or non_database[let_at + 1] != "(":
+        raise GuardError("tokio::join result tuple binding is missing")
+    pattern_close = _paired(non_database, let_at + 1, "(", ")")
+    if pattern_close >= equals:
+        raise GuardError("tokio::join result tuple binding is malformed")
+    result_patterns = _split_arguments(non_database[let_at + 2:pattern_close])
+    if len(result_patterns) != len(join_arguments):
+        raise GuardError("tokio::join result tuple no longer matches its branches")
+    transport_arm = resource_arms[("transport", "shutdown")]
+    transport_pattern = result_patterns[transport_arm]
+    if len(transport_pattern) != 1 or not transport_pattern[0].isidentifier():
+        raise GuardError("transport shutdown result is no longer retained")
+    transport_result = transport_pattern[0]
+    after_join = non_database[join_close + 1:]
+    result_aliases = {authority_result: "authority_result"}
+    for index, token in enumerate(after_join):
+        if token != "let" or index + 3 >= len(after_join):
+            continue
+        name = after_join[index + 1]
+        if not name.isidentifier():
+            continue
+        try:
+            equals = after_join.index("=", index + 2)
+            end = after_join.index(";", equals + 1)
+        except ValueError:
+            continue
+        rhs = after_join[equals + 1:end]
+        if rhs == [transport_result, ".", "within_deadline"]:
+            result_aliases[name] = "transport_result"
+        elif len(rhs) == 1 and rhs[0] in result_aliases:
+            result_aliases[name] = result_aliases[rhs[0]]
+    final_start = max(
+        (index + 1 for index, token in enumerate(after_join) if token == ";"),
+        default=0,
+    )
+    final_expression = after_join[final_start:]
+    final_expression = _strip_parentheses(final_expression)
+    normalized_final = [
+        result_aliases.get(token, token) if token.isidentifier() else token
+        for token in final_expression
+    ]
+    direct_transport = [transport_result, ".", "within_deadline"]
+    collapsed: list[str] = []
+    index = 0
+    while index < len(normalized_final):
+        if normalized_final[index:index + 3] == direct_transport:
+            collapsed.append("transport_result")
+            index += 3
+        else:
+            collapsed.append(normalized_final[index])
+            index += 1
+    normalized_final = collapsed
+    if normalized_final not in [
+        ["authority_result", "&&", "transport_result"],
+        ["transport_result", "&&", "authority_result"],
+    ]:
+        raise GuardError("authority and transport results no longer gate non-database success")
+
+    _check_database_future(database, resource_aliases)
+
+    helper_call_at = _unique(
+        shutdown,
+        ("finish_shutdown_stages", "("),
+        "production owner finish_shutdown_stages call",
+    )
+    helper_call_open = helper_call_at + 1
+    helper_call_close = _paired(shutdown, helper_call_open, "(", ")")
+    if shutdown[helper_call_close + 1:helper_call_close + 3] != [".", "await"]:
+        raise GuardError("production owner does not await the staged shutdown helper")
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        print("usage: tauri_background_assembly_guard.py <tauri_background.rs>", file=sys.stderr)
+        return 2
+    path = Path(argv[1])
+    try:
+        source = path.read_text(encoding="utf-8")
+        check_source(source)
+    except (OSError, UnicodeError, GuardError) as error:
+        print(f"Tauri background assembly guard: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
