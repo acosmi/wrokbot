@@ -3,12 +3,12 @@
 use super::helper_journal::{self, HelperJournalError};
 use super::kernel_start_lock::KernelStartLock;
 use super::startup_journal::{self, StartupJournalError};
-use super::{PostgresSidecarError, path_matches_open_file, sync_directory};
+use super::{path_matches_open_file, sync_directory, PostgresSidecarError};
 use std::fs::{self, File, OpenOptions};
 use std::io::Read as _;
 use std::path::Path;
 use wrok_bot_macos_process::{
-    DataDirectoryOpenerObservation, ProcessIdentity, observe_data_directory_openers,
+    observe_data_directory_openers, DataDirectoryOpenerObservation, ProcessIdentity,
 };
 
 const LOCK_HEADER: &str = "openbot-postgres-start-lock-v1";
@@ -587,6 +587,172 @@ mod tests {
         );
         assert!(acquired.is_ok(), "{acquired:?}");
         assert!(!journal.exists());
+        drop(acquired.unwrap());
+        let _ = fs::remove_dir_all(&root);
+        let _ = lock_path;
+    }
+
+    #[test]
+    fn existing_version_pg_ctl_exit_confirmed_completes_helpers_and_reclaims() {
+        let root = temp_root("015-pgctl-complete");
+        let instance = "17".repeat(32);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(data_dir.join("PG_VERSION"), b"17\n").unwrap();
+        let lock_path = plant_stale_lock(&root, &instance);
+        let (device, inode) = data_dir_ids(&data_dir);
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_millis(80));
+        let child_identity = ProcessIdentity::capture(child.id()).unwrap();
+        let child_hex = encode_hex(&child_identity.evidence_bytes().unwrap());
+        let _ = child.kill();
+        let _ = child.wait();
+        thread::sleep(Duration::from_millis(40));
+        let journal = root.join(format!(".postgresql-17-{instance}.helper-v1.json"));
+        let record = serde_json::json!({
+            "schema": "openbot-postgres-helper",
+            "schemaVersion": 1,
+            "instanceId": instance,
+            "dataDirName": format!("postgresql-17-{instance}"),
+            "dataDirDevice": device,
+            "dataDirInode": inode,
+            "attemptId": "ab".repeat(16),
+            "startEvidenceSha256": "12".repeat(32),
+            "ownerObservation": owner_observation_hex(),
+            "helperKind": "version_pg_ctl",
+            "childObservation": child_hex,
+            "phase": "exit_confirmed"
+        });
+        write_private(&journal, &serde_json::to_vec(&record).unwrap());
+        let acquired = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        );
+        assert!(acquired.is_ok(), "{acquired:?}");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(value["phase"], "helpers_complete");
+        drop(acquired.unwrap());
+        let _ = fs::remove_dir_all(&root);
+        let _ = lock_path;
+    }
+
+    #[test]
+    fn version_postgres_exit_confirmed_does_not_complete_or_reclaim() {
+        let root = temp_root("015-version-incomplete");
+        let instance = "18".repeat(32);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(data_dir.join("PG_VERSION"), b"17\n").unwrap();
+        let lock_path = plant_stale_lock(&root, &instance);
+        let (device, inode) = data_dir_ids(&data_dir);
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_millis(80));
+        let child_identity = ProcessIdentity::capture(child.id()).unwrap();
+        let child_hex = encode_hex(&child_identity.evidence_bytes().unwrap());
+        let _ = child.kill();
+        let _ = child.wait();
+        thread::sleep(Duration::from_millis(40));
+        let journal = root.join(format!(".postgresql-17-{instance}.helper-v1.json"));
+        let before = serde_json::json!({
+            "schema": "openbot-postgres-helper",
+            "schemaVersion": 1,
+            "instanceId": instance,
+            "dataDirName": format!("postgresql-17-{instance}"),
+            "dataDirDevice": device,
+            "dataDirInode": inode,
+            "attemptId": "cd".repeat(16),
+            "startEvidenceSha256": "12".repeat(32),
+            "ownerObservation": owner_observation_hex(),
+            "helperKind": "version_postgres",
+            "childObservation": child_hex,
+            "phase": "exit_confirmed"
+        });
+        let before_bytes = serde_json::to_vec(&before).unwrap();
+        write_private(&journal, &before_bytes);
+        let rejected = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        );
+        assert!(rejected.is_err(), "{rejected:?}");
+        assert!(lock_path.is_file());
+        let after: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(after["phase"], "exit_confirmed");
+        assert_eq!(after["helperKind"], "version_postgres");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fresh_initdb_exit_confirmed_completes_helpers_and_reclaims() {
+        let root = temp_root("015-initdb-complete");
+        let instance = "19".repeat(32);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        // Fresh: empty data dir, no PG_VERSION
+        let lock_path = plant_stale_lock(&root, &instance);
+        let (device, inode) = data_dir_ids(&data_dir);
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_millis(80));
+        let child_identity = ProcessIdentity::capture(child.id()).unwrap();
+        let child_hex = encode_hex(&child_identity.evidence_bytes().unwrap());
+        let _ = child.kill();
+        let _ = child.wait();
+        thread::sleep(Duration::from_millis(40));
+        let journal = root.join(format!(".postgresql-17-{instance}.helper-v1.json"));
+        let record = serde_json::json!({
+            "schema": "openbot-postgres-helper",
+            "schemaVersion": 1,
+            "instanceId": instance,
+            "dataDirName": format!("postgresql-17-{instance}"),
+            "dataDirDevice": device,
+            "dataDirInode": inode,
+            "attemptId": "ef".repeat(16),
+            "startEvidenceSha256": "12".repeat(32),
+            "ownerObservation": owner_observation_hex(),
+            "helperKind": "initdb",
+            "childObservation": child_hex,
+            "phase": "exit_confirmed"
+        });
+        write_private(&journal, &serde_json::to_vec(&record).unwrap());
+        let acquired = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        );
+        assert!(acquired.is_ok(), "{acquired:?}");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(value["phase"], "helpers_complete");
         drop(acquired.unwrap());
         let _ = fs::remove_dir_all(&root);
         let _ = lock_path;
