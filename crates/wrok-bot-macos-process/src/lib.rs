@@ -196,10 +196,55 @@ impl fmt::Display for ProcessObservationError {
 
 impl std::error::Error for ProcessObservationError {}
 
+/// Return `Ok(())` only when the process described by private journal evidence is not alive as that identity.
+///
+/// This does not construct [`ProcessIdentity`], signal a process, or authorize recovery by itself.
+/// A still-matching live observation is rejected; ESRCH / a different birth at the same PID counts as absent.
+pub fn evidence_process_is_absent(evidence: &[u8; 32]) -> Result<(), ProcessObservationError> {
+    #[cfg(target_os = "macos")]
+    {
+        let pid = u32::from_be_bytes(evidence[0..4].try_into().unwrap());
+        let start_seconds = u64::from_be_bytes(evidence[4..12].try_into().unwrap());
+        let start_microseconds = u32::from_be_bytes(evidence[12..16].try_into().unwrap());
+        let boot_session: [u8; 16] = evidence[16..32].try_into().unwrap();
+        if pid == 0
+            || pid > i32::MAX as u32
+            || start_seconds == 0
+            || start_microseconds >= 1_000_000
+            || boot_session.iter().all(|byte| *byte == 0)
+        {
+            return Err(ProcessObservationError::ProcessDataInvalid);
+        }
+        let pid_i = i32::try_from(pid).map_err(|_| ProcessObservationError::InvalidPid)?;
+        match native::observe(pid_i) {
+            Ok(observation) => {
+                if observation.start_seconds == start_seconds
+                    && observation.start_microseconds == start_microseconds
+                    && observation.boot_session == boot_session
+                {
+                    // Still the same live identity.
+                    Err(ProcessObservationError::ObservationChanged)
+                } else {
+                    // PID reused or boot drifted: original identity is gone.
+                    Ok(())
+                }
+            }
+            Err(ProcessObservationError::ProcessUnavailable) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = evidence;
+        Err(ProcessObservationError::UnsupportedPlatform)
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::{
-        DataDirectoryOpenerObservation, ProcessIdentity, observe_data_directory_openers,
+        DataDirectoryOpenerObservation, ProcessIdentity, evidence_process_is_absent,
+        observe_data_directory_openers,
     };
     use std::fs::{self, File};
     use std::io::Write;
@@ -299,9 +344,38 @@ mod tests {
 
     #[test]
     fn rejects_relative_data_dir() {
-        let err = observe_data_directory_openers(Path::new("relative"), 1, 1, &[])
-            .expect_err("relative");
+        let err =
+            observe_data_directory_openers(Path::new("relative"), 1, 1, &[]).expect_err("relative");
         assert_eq!(err, super::ProcessObservationError::ProcessDataInvalid);
+    }
+
+    #[test]
+    fn evidence_absent_rejects_live_self_and_accepts_exited_child() {
+        let live = ProcessIdentity::capture(std::process::id()).expect("self");
+        let evidence = live.evidence_bytes().expect("evidence");
+        assert_eq!(
+            evidence_process_is_absent(&evidence),
+            Err(super::ProcessObservationError::ObservationChanged)
+        );
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn");
+        thread::sleep(Duration::from_millis(100));
+        let child_identity = ProcessIdentity::capture(child.id()).expect("child");
+        let child_evidence = child_identity.evidence_bytes().expect("child evidence");
+        assert_eq!(
+            evidence_process_is_absent(&child_evidence),
+            Err(super::ProcessObservationError::ObservationChanged)
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(evidence_process_is_absent(&child_evidence), Ok(()));
     }
 
     #[test]

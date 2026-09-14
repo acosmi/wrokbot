@@ -7,19 +7,17 @@
 //! No PATH-resolved development PostgreSQL is a production fallback.
 
 mod bundle_fs;
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+mod helper_journal;
 mod kernel_start_lock;
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 mod quiescent;
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
-mod helper_journal;
-#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 mod startup_journal;
 
-use kernel_start_lock::{KernelStartLock, path_matches_open_file};
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
-use helper_journal::{
-    HelperJournal, HelperJournalError, HelperJournalPreparation, HelperKind,
-};
+use helper_journal::{HelperJournal, HelperJournalError, HelperJournalPreparation, HelperKind};
+use kernel_start_lock::{KernelStartLock, path_matches_open_file};
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 use startup_journal::{StartupJournal, StartupJournalError, StartupJournalPreparation};
 
@@ -436,15 +434,18 @@ impl PostgresStartLock {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
                 if let Some(data_dir) = data_dir {
-                    match quiescent::VerifiedQuiescentInstance::try_verify(
-                        &kernel_guard,
-                        app_data_root,
-                        instance_id,
-                        data_dir,
-                    )
-                    .and_then(|verified| {
-                        verified.reclaim_start_lock_evidence(&kernel_guard, app_data_root)
-                    }) {
+                    let reclaim = || {
+                        quiescent::VerifiedQuiescentInstance::try_verify(
+                            &kernel_guard,
+                            app_data_root,
+                            instance_id,
+                            data_dir,
+                        )
+                        .and_then(|verified| {
+                            verified.reclaim_start_lock_evidence(&kernel_guard, app_data_root)
+                        })
+                    };
+                    match reclaim() {
                         Ok(()) => match options.open(&path) {
                             Ok(file) => file,
                             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -453,7 +454,28 @@ impl PostgresStartLock {
                             Err(error) => return Err(error.into()),
                         },
                         Err(_) => {
-                            return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                            // Mid-phase journals may block 012 minting; try controlled retirement once.
+                            match quiescent::recover_mid_phase_journals(
+                                &kernel_guard,
+                                app_data_root,
+                                instance_id,
+                                data_dir,
+                            )
+                            .and_then(|_| reclaim())
+                            {
+                                Ok(()) => match options.open(&path) {
+                                    Ok(file) => file,
+                                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                                        return Err(
+                                            PostgresSidecarError::StartLockRecoveryRequired,
+                                        );
+                                    }
+                                    Err(error) => return Err(error.into()),
+                                },
+                                Err(_) => {
+                                    return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                                }
+                            }
                         }
                     }
                 } else {
@@ -1125,8 +1147,8 @@ impl PostgresSidecarSupervisor {
         let startup_preparation = StartupJournalPreparation::inspect(&lock, data_dir)
             .map_err(map_startup_journal_error)?;
         #[cfg(target_os = "macos")]
-        let helper_preparation = HelperJournalPreparation::inspect(&lock, data_dir)
-            .map_err(map_helper_journal_error)?;
+        let helper_preparation =
+            HelperJournalPreparation::inspect(&lock, data_dir).map_err(map_helper_journal_error)?;
         #[cfg(target_os = "macos")]
         if startup_preparation.requires_existing_data()
             && !matches!(
@@ -1429,8 +1451,16 @@ async fn verify_program_versions_with_helper(
 ) -> Result<(), PostgresSidecarError> {
     let programs = [
         (PostgresProgram::Server, "postgres", None),
-        (PostgresProgram::Initdb, "initdb", Some(HelperKind::VersionInitdb)),
-        (PostgresProgram::Control, "pg_ctl", Some(HelperKind::VersionPgCtl)),
+        (
+            PostgresProgram::Initdb,
+            "initdb",
+            Some(HelperKind::VersionInitdb),
+        ),
+        (
+            PostgresProgram::Control,
+            "pg_ctl",
+            Some(HelperKind::VersionPgCtl),
+        ),
     ];
     for (program, label, next_kind) in programs {
         if let Some(kind) = next_kind {
@@ -1530,7 +1560,6 @@ async fn verify_program_versions(
     }
     Ok(())
 }
-
 
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 async fn run_initdb_with_helper(
