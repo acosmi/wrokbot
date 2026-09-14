@@ -1079,6 +1079,10 @@ impl PostgresSidecarSupervisor {
             return Err(PostgresSidecarError::StartupJournalRecoveryRequired);
         }
         #[cfg(target_os = "macos")]
+        startup_preparation
+            .ensure_no_foreign_openers()
+            .map_err(map_startup_journal_error)?;
+        #[cfg(target_os = "macos")]
         lock.preserve_on_drop();
         #[cfg(target_os = "macos")]
         let mut helper_journal = helper_preparation
