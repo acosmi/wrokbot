@@ -60,6 +60,10 @@ impl KernelStartLock {
         Ok(lock)
     }
 
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(super) fn is_current(&self) -> bool {
         if validate_root(&self.root).is_err() {
             return false;

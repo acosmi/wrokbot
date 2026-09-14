@@ -1133,5 +1133,40 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
 
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
+/// Read-only check used by Quiescent minting: Absent or exit_confirmed only.
+pub(super) fn allows_quiescent_cleanup(
+    app_data_root: &Path,
+    instance_id: &str,
+    data_dir: &Path,
+) -> Result<(), StartupJournalError> {
+    if !app_data_root.is_absolute() || data_dir.parent() != Some(app_data_root) {
+        return Err(StartupJournalError::Invalid);
+    }
+    let path = app_data_root.join(format!(".postgresql-17-{instance_id}.startup-v1.json"));
+    let data_dir_name = format!("postgresql-17-{instance_id}");
+    if data_dir.file_name().and_then(|n| n.to_str()) != Some(data_dir_name.as_str()) {
+        return Err(StartupJournalError::Invalid);
+    }
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(metadata) => {
+            let root_meta = fs::metadata(app_data_root).map_err(|_| StartupJournalError::Invalid)?;
+            if !valid_journal_metadata(&metadata, root_meta.uid(), None) {
+                return Err(StartupJournalError::Invalid);
+            }
+            let file = secure_open_file(&path).map_err(|_| StartupJournalError::Invalid)?;
+            let bytes = read_bounded_file(&path, &file, root_meta.uid())?;
+            let record: StartupJournalRecord =
+                serde_json::from_slice(&bytes).map_err(|_| StartupJournalError::Invalid)?;
+            let _ = validate_record(&record, instance_id, &data_dir_name)?;
+            if record.phase != StartupJournalPhase::ExitConfirmed {
+                return Err(StartupJournalError::RecoveryRequired);
+            }
+            Ok(())
+        }
+        Err(_) => Err(StartupJournalError::ReconciliationRequired),
+    }
+}
+
 #[cfg(test)]
 mod tests;
