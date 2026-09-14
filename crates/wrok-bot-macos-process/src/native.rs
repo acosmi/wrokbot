@@ -49,10 +49,10 @@ pub(super) struct Observation {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct ProcessBirth {
-    pid: i32,
-    start_seconds: u64,
-    start_microseconds: u32,
+pub(super) struct ProcessBirth {
+    pub(super) pid: i32,
+    pub(super) start_seconds: u64,
+    pub(super) start_microseconds: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -77,6 +77,14 @@ pub(super) fn observe(pid: i32) -> Result<Observation, ProcessObservationError> 
         start_microseconds: process_a.start_microseconds,
         boot_session: boot_a.0,
     })
+}
+
+pub(super) fn read_process_birth_for_openers(pid: i32) -> Result<ProcessBirth, ProcessObservationError> {
+    read_process_birth(pid)
+}
+
+pub(super) fn read_boot_session_for_openers() -> Result<[u8; 16], ProcessObservationError> {
+    Ok(read_boot_session()?.0)
 }
 
 fn read_process_birth(pid: i32) -> Result<ProcessBirth, ProcessObservationError> {

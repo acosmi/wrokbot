@@ -5,9 +5,12 @@
 #![allow(unsafe_code)]
 
 use core::fmt;
+use std::path::Path;
 
 #[cfg(target_os = "macos")]
 mod native;
+#[cfg(target_os = "macos")]
+mod openers;
 
 /// A private, non-serializable observation of one PID in one macOS boot session.
 ///
@@ -90,11 +93,74 @@ impl ProcessIdentity {
     pub fn evidence_bytes(&self) -> Result<[u8; 32], ProcessObservationError> {
         Err(ProcessObservationError::UnsupportedPlatform)
     }
+
+    /// Exact four-tuple equality for ignore lists. Does not expose fields.
+    #[cfg(target_os = "macos")]
+    pub fn same_as(&self, other: &Self) -> bool {
+        self.pid == other.pid
+            && self.start_seconds == other.start_seconds
+            && self.start_microseconds == other.start_microseconds
+            && self.boot_session == other.boot_session
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn same_as(&self, _other: &Self) -> bool {
+        let _ = self.unsupported;
+        false
+    }
 }
 
 impl fmt::Debug for ProcessIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ProcessIdentity(<observed>)")
+    }
+}
+
+/// Closed observation of processes holding open references under one data directory.
+///
+/// `Empty` is only a single successful scan result after `ignore`. It is not quiescence, lock
+/// deletion authority, or proof that an unregistered child never existed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataDirectoryOpenerObservation {
+    /// No non-ignored opener was observed in a complete double scan.
+    Empty,
+    /// At least one non-ignored opener was observed.
+    Observed,
+}
+
+/// Observe live openers of `data_dir` matching the already-held directory device/inode.
+///
+/// `ignore` removes caller-owned observers (typically the current supervisor process). This API
+/// never signals processes, deletes evidence, or grants recovery authority. A missing startup
+/// journal entry must not be treated as [`DataDirectoryOpenerObservation::Empty`].
+pub fn observe_data_directory_openers(
+    data_dir: &Path,
+    expected_device: u64,
+    expected_inode: u64,
+    ignore: &[ProcessIdentity],
+) -> Result<DataDirectoryOpenerObservation, ProcessObservationError> {
+    #[cfg(target_os = "macos")]
+    {
+        let openers = openers::observe_openers(data_dir, expected_device, expected_inode)?;
+        let foreign = openers.into_iter().any(|opener| {
+            let identity = ProcessIdentity {
+                pid: opener.pid,
+                start_seconds: opener.start_seconds,
+                start_microseconds: opener.start_microseconds,
+                boot_session: opener.boot_session,
+            };
+            !ignore.iter().any(|allowed| allowed.same_as(&identity))
+        });
+        Ok(if foreign {
+            DataDirectoryOpenerObservation::Observed
+        } else {
+            DataDirectoryOpenerObservation::Empty
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (data_dir, expected_device, expected_inode, ignore);
+        Err(ProcessObservationError::UnsupportedPlatform)
     }
 }
 
@@ -129,3 +195,121 @@ impl fmt::Display for ProcessObservationError {
 }
 
 impl std::error::Error for ProcessObservationError {}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::{
+        DataDirectoryOpenerObservation, ProcessIdentity, observe_data_directory_openers,
+    };
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::os::unix::fs::MetadataExt as _;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn temp_dir() -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "wrok-v6-pr-011-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("temp dir");
+        root
+    }
+
+    fn observe_ignoring_self(
+        dir: &Path,
+        device: u64,
+        inode: u64,
+    ) -> Result<DataDirectoryOpenerObservation, super::ProcessObservationError> {
+        let self_identity = ProcessIdentity::capture(std::process::id()).expect("self");
+        observe_data_directory_openers(dir, device, inode, &[self_identity])
+    }
+
+    #[test]
+    fn empty_after_ignoring_self_directory_open() {
+        let dir = temp_dir();
+        let _held = File::open(&dir).expect("open dir");
+        let metadata = fs::metadata(&dir).expect("meta");
+        assert_eq!(
+            observe_ignoring_self(&dir, metadata.dev(), metadata.ino()).expect("observe"),
+            DataDirectoryOpenerObservation::Empty
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detects_child_with_open_file_under_data_dir() {
+        let dir = temp_dir();
+        let child_path = dir.join("held.txt");
+        {
+            let mut file = File::create(&child_path).expect("create");
+            file.write_all(b"held").expect("write");
+        }
+        let metadata = fs::metadata(&dir).expect("meta");
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exec 3<\"$1\"; while true; do sleep 1; done")
+            .arg("opener")
+            .arg(&child_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn opener");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_observed = false;
+        while Instant::now() < deadline {
+            match observe_ignoring_self(&dir, metadata.dev(), metadata.ino()) {
+                Ok(DataDirectoryOpenerObservation::Observed) => {
+                    saw_observed = true;
+                    break;
+                }
+                Ok(_) | Err(super::ProcessObservationError::ObservationChanged) => {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => panic!("observe failed: {error:?}"),
+            }
+        }
+        assert!(saw_observed, "foreign opener was not observed");
+        let _ = child.kill();
+        let _ = child.wait();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut cleared = false;
+        while Instant::now() < deadline {
+            match observe_ignoring_self(&dir, metadata.dev(), metadata.ino()) {
+                Ok(DataDirectoryOpenerObservation::Empty) => {
+                    cleared = true;
+                    break;
+                }
+                Ok(_) | Err(super::ProcessObservationError::ObservationChanged) => {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => panic!("observe failed: {error:?}"),
+            }
+        }
+        assert!(cleared, "opener remained after child exit");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejects_relative_data_dir() {
+        let err = observe_data_directory_openers(Path::new("relative"), 1, 1, &[])
+            .expect_err("relative");
+        assert_eq!(err, super::ProcessObservationError::ProcessDataInvalid);
+    }
+
+    #[test]
+    fn empty_does_not_imply_recovery_authority_contract() {
+        // Documented non-inference: Empty is only a scan result after ignore.
+        assert_ne!(
+            DataDirectoryOpenerObservation::Empty,
+            DataDirectoryOpenerObservation::Observed
+        );
+    }
+}

@@ -12,7 +12,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use wrok_bot_macos_process::ProcessIdentity;
+use wrok_bot_macos_process::{DataDirectoryOpenerObservation, ProcessIdentity, observe_data_directory_openers};
 
 const JOURNAL_SCHEMA: &str = "openbot-postgres-startup";
 const JOURNAL_SCHEMA_VERSION: u64 = 1;
@@ -216,6 +216,28 @@ impl StartupJournalPreparation {
     #[must_use]
     pub(super) const fn requires_existing_data(&self) -> bool {
         matches!(&self.previous, PreviousJournal::Retired { .. })
+    }
+
+    /// Fail closed when a non-ignored process still holds the data directory open.
+    ///
+    /// `Empty` does not authorize recovery or evidence deletion; it only allows the existing
+    /// startup path to continue. Journal absence or an intermediate phase remains non-authoritative.
+    pub(super) fn ensure_no_foreign_openers(&self) -> Result<(), StartupJournalError> {
+        self.owner_identity
+            .revalidate()
+            .map_err(|_| StartupJournalError::Invalid)?;
+        match observe_data_directory_openers(
+            &self.data_dir_path,
+            self.data_dir_device,
+            self.data_dir_inode,
+            std::slice::from_ref(&self.owner_identity),
+        ) {
+            Ok(DataDirectoryOpenerObservation::Empty) => Ok(()),
+            Ok(DataDirectoryOpenerObservation::Observed) => {
+                Err(StartupJournalError::RecoveryRequired)
+            }
+            Err(_) => Err(StartupJournalError::Invalid),
+        }
     }
 
     /// Commit `spawn_entered` before spawning the PostgreSQL server.
