@@ -576,7 +576,7 @@ impl PostgresStartLock {
         feature = "postgres-supervisor",
         target_os = "macos"
     ))]
-    fn consume_recovery_epoch_after_existing_read(&self) -> Result<(), PostgresSecretStoreError> {
+    fn consume_recovery_epoch_if_pending(&self) -> Result<(), PostgresSecretStoreError> {
         if !self.control_invalidation_pending() {
             return Ok(());
         }
@@ -684,7 +684,7 @@ impl PostgresStartLock {
                     target_os = "macos"
                 ))]
                 if disposition.is_existing() {
-                    self.consume_recovery_epoch_after_existing_read()?;
+                    self.consume_recovery_epoch_if_pending()?;
                 }
                 return Ok(secret);
             }
@@ -700,7 +700,7 @@ impl PostgresStartLock {
                         target_os = "macos"
                     ))]
                     if disposition.is_existing() {
-                        self.consume_recovery_epoch_after_existing_read()?;
+                        self.consume_recovery_epoch_if_pending()?;
                     }
                     return Ok(secret);
                 }
@@ -711,7 +711,12 @@ impl PostgresStartLock {
         }
         #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
         if self.control_invalidation_pending() {
-            return Err(PostgresSecretStoreError::ReconciliationRequired);
+            // V6-PR-018: Fresh + empty store may write consumed then continue create.
+            if disposition.is_fresh() && stored.is_none() {
+                self.consume_recovery_epoch_if_pending()?;
+            } else {
+                return Err(PostgresSecretStoreError::ReconciliationRequired);
+            }
         }
         if self
             .secret_creation_attempted
@@ -5184,9 +5189,9 @@ mod tests {
         target_os = "macos"
     ))]
     #[test]
-    fn unreclaimed_recovery_epoch_blocks_new_secret_write() {
+    fn fresh_pending_empty_store_writes_consumed_then_creates_secret() {
         use std::os::unix::fs::PermissionsExt as _;
-        let root = root("016-secret-pending");
+        let root = root("018-fresh-consume");
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let instance = "b".repeat(64);
@@ -5214,18 +5219,71 @@ mod tests {
         assert!(lock.control_invalidation_pending());
         let store = MemorySecretStore::empty();
         let service =
-            ReviewedPostgresKeyStoreService::from_reviewed_release("com.example.016.pending")
+            ReviewedPostgresKeyStoreService::from_reviewed_release("com.example.018.fresh")
                 .unwrap();
         let fresh = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Fresh);
-        let rejected = lock.load_or_create_scram_secret(&store, &service, &fresh);
-        let writes = store.writes.load(Ordering::Relaxed);
+        let created = lock.load_or_create_scram_secret(&store, &service, &fresh);
+        assert!(created.is_ok(), "{created:?}");
+        assert!(!lock.control_invalidation_pending());
+        assert!(store.writes.load(Ordering::Relaxed) >= 1);
+        assert!(root
+            .join(format!(".postgresql-17-{instance}.consumed-recovery-epoch-v1"))
+            .is_file());
+        drop(lock);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(all(
+        feature = "postgres-key-store",
+        feature = "postgres-supervisor",
+        target_os = "macos"
+    ))]
+    #[test]
+    fn existing_pending_missing_secret_does_not_write_consumed() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = root("018-existing-missing");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let instance = "b".repeat(64);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(data_dir.join("PG_VERSION"), b"17\n").unwrap();
+        let lock_path = root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+        fs::write(
+            &lock_path,
+            format!(
+                "openbot-postgres-start-lock-v1\npid=1\ninstance={instance}\nmanifest={}\nnonce={}\n",
+                "55".repeat(32),
+                "22".repeat(16)
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let lock = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x55; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        assert!(lock.control_invalidation_pending());
+        let store = MemorySecretStore::empty();
+        let service =
+            ReviewedPostgresKeyStoreService::from_reviewed_release("com.example.018.missing")
+                .unwrap();
+        let existing = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Existing);
+        let rejected = lock.load_or_create_scram_secret(&store, &service, &existing);
+        let consumed_exists = root
+            .join(format!(".postgresql-17-{instance}.consumed-recovery-epoch-v1"))
+            .is_file();
         drop(lock);
         fs::remove_dir_all(&root).unwrap();
         assert!(
-            matches!(rejected, Err(PostgresSecretStoreError::ReconciliationRequired)),
+            matches!(rejected, Err(PostgresSecretStoreError::Missing)),
             "{rejected:?}"
         );
-        assert_eq!(writes, 0, "pending epoch must write zero secrets");
+        assert!(!consumed_exists);
     }
 
     #[cfg(all(
