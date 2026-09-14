@@ -9,6 +9,8 @@
 mod bundle_fs;
 mod kernel_start_lock;
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+mod quiescent;
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 mod helper_journal;
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 mod startup_journal;
@@ -389,6 +391,25 @@ impl PostgresStartLock {
         instance_id: &str,
         bundle_digest: PostgresBundleDigest,
     ) -> Result<Self, PostgresSidecarError> {
+        Self::acquire_inner(app_data_root, instance_id, bundle_digest, None)
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    fn acquire_with_data_dir(
+        app_data_root: &Path,
+        instance_id: &str,
+        bundle_digest: PostgresBundleDigest,
+        data_dir: &Path,
+    ) -> Result<Self, PostgresSidecarError> {
+        Self::acquire_inner(app_data_root, instance_id, bundle_digest, Some(data_dir))
+    }
+
+    fn acquire_inner(
+        app_data_root: &Path,
+        instance_id: &str,
+        bundle_digest: PostgresBundleDigest,
+        data_dir: Option<&Path>,
+    ) -> Result<Self, PostgresSidecarError> {
         let kernel_guard = KernelStartLock::acquire(app_data_root, instance_id)?;
         let path = app_data_root.join(format!(".postgresql-17-{instance_id}.start-lock-v1"));
         let mut nonce = [0_u8; LOCK_NONCE_BYTES];
@@ -413,7 +434,36 @@ impl PostgresStartLock {
         let mut file = match options.open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+                if let Some(data_dir) = data_dir {
+                    match quiescent::VerifiedQuiescentInstance::try_verify(
+                        &kernel_guard,
+                        app_data_root,
+                        instance_id,
+                        data_dir,
+                    )
+                    .and_then(|verified| {
+                        verified.reclaim_start_lock_evidence(&kernel_guard, app_data_root)
+                    }) {
+                        Ok(()) => match options.open(&path) {
+                            Ok(file) => file,
+                            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                                return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                            }
+                            Err(error) => return Err(error.into()),
+                        },
+                        Err(_) => {
+                            return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                        }
+                    }
+                } else {
+                    return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                }
+                #[cfg(not(all(feature = "postgres-supervisor", target_os = "macos")))]
+                {
+                    let _ = data_dir;
+                    return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                }
             }
             Err(error) => return Err(error.into()),
         };
@@ -1057,6 +1107,14 @@ impl PostgresSidecarSupervisor {
         service: &ReviewedPostgresKeyStoreService,
     ) -> Result<RunningPostgresSidecar, PostgresSidecarError> {
         validate_supervisor_paths(app_data_root, instance_id, data_dir)?;
+        #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+        let mut lock = PostgresStartLock::acquire_with_data_dir(
+            app_data_root,
+            instance_id,
+            PostgresBundleDigest(bundle.manifest_sha256),
+            data_dir,
+        )?;
+        #[cfg(not(all(feature = "postgres-supervisor", target_os = "macos")))]
         let mut lock = PostgresStartLock::acquire(
             app_data_root,
             instance_id,
