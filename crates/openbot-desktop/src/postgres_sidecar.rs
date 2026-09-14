@@ -13,6 +13,8 @@ mod kernel_start_lock;
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 mod quiescent;
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+mod recovery_epoch;
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 mod startup_journal;
 
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
@@ -370,6 +372,8 @@ pub struct PostgresStartLock {
     secret_creation_attempted: std::sync::atomic::AtomicBool,
     _file: File,
     kernel_guard: KernelStartLock,
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    recovery_epoch: Option<recovery_epoch::RecoveryEpoch>,
 }
 
 impl core::fmt::Debug for PostgresStartLock {
@@ -442,6 +446,12 @@ impl PostgresStartLock {
                             data_dir,
                         )
                         .and_then(|verified| {
+                            // V6-PR-014: durable epoch before deleting the dynamic start-lock.
+                            recovery_epoch::mint_or_replace_for_reclaim(
+                                &kernel_guard,
+                                app_data_root,
+                                instance_id,
+                            )?;
                             verified.reclaim_start_lock_evidence(&kernel_guard, app_data_root)
                         })
                     };
@@ -494,6 +504,9 @@ impl PostgresStartLock {
             return Err(error.into());
         }
         sync_directory(app_data_root)?;
+        #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+        let recovery_epoch =
+            recovery_epoch::load_optional(&kernel_guard, app_data_root, instance_id)?;
         let lock = Self {
             path,
             bytes,
@@ -503,14 +516,26 @@ impl PostgresStartLock {
             secret_creation_attempted: std::sync::atomic::AtomicBool::new(false),
             _file: file,
             kernel_guard,
+            #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+            recovery_epoch,
         };
         lock.ensure_current()?;
         Ok(lock)
     }
 
     fn ownership_is_current(&self) -> bool {
-        self.kernel_guard.is_current()
-            && path_matches_open_file(&self.path, &self._file, &self.bytes, true)
+        if !(self.kernel_guard.is_current()
+            && path_matches_open_file(&self.path, &self._file, &self.bytes, true))
+        {
+            return false;
+        }
+        #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+        if let Some(epoch) = &self.recovery_epoch {
+            if !epoch.is_current() {
+                return false;
+            }
+        }
+        true
     }
 
     fn ensure_current(&self) -> Result<(), PostgresSidecarError> {
