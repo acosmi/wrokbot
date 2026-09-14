@@ -9,9 +9,15 @@
 mod bundle_fs;
 mod kernel_start_lock;
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+mod helper_journal;
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 mod startup_journal;
 
 use kernel_start_lock::{KernelStartLock, path_matches_open_file};
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+use helper_journal::{
+    HelperJournal, HelperJournalError, HelperJournalPreparation, HelperKind,
+};
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 use startup_journal::{StartupJournal, StartupJournalError, StartupJournalPreparation};
 
@@ -139,6 +145,18 @@ pub enum PostgresSidecarError {
     #[cfg(feature = "postgres-supervisor")]
     #[error("postgres_sidecar_startup_journal_reconciliation_required")]
     StartupJournalReconciliationRequired,
+    /// A live or interrupted helper journal requires an explicit future recovery flow.
+    #[cfg(feature = "postgres-supervisor")]
+    #[error("postgres_sidecar_helper_journal_recovery_required")]
+    HelperJournalRecoveryRequired,
+    /// Helper journal shape, binding, or persistent identity was invalid.
+    #[cfg(feature = "postgres-supervisor")]
+    #[error("postgres_sidecar_helper_journal_invalid")]
+    HelperJournalInvalid,
+    /// A helper journal write/read-back result was not durably knowable.
+    #[cfg(feature = "postgres-supervisor")]
+    #[error("postgres_sidecar_helper_journal_reconciliation_required")]
+    HelperJournalReconciliationRequired,
     /// OS key-store secret acquisition failed before process launch.
     #[cfg(feature = "postgres-supervisor")]
     #[error(transparent)]
@@ -1048,20 +1066,63 @@ impl PostgresSidecarSupervisor {
         #[cfg(target_os = "macos")]
         let startup_preparation = StartupJournalPreparation::inspect(&lock, data_dir)
             .map_err(map_startup_journal_error)?;
+        #[cfg(target_os = "macos")]
+        let helper_preparation = HelperJournalPreparation::inspect(&lock, data_dir)
+            .map_err(map_helper_journal_error)?;
+        #[cfg(target_os = "macos")]
+        if startup_preparation.requires_existing_data()
+            && !matches!(
+                data_directory_origin(data_dir),
+                Ok(PostgresSidecarOrigin::Existing)
+            )
+        {
+            return Err(PostgresSidecarError::StartupJournalRecoveryRequired);
+        }
+        #[cfg(target_os = "macos")]
+        lock.preserve_on_drop();
+        #[cfg(target_os = "macos")]
+        let mut helper_journal = helper_preparation
+            .begin_helper(&lock, HelperKind::VersionPostgres)
+            .map_err(map_helper_journal_error)?;
+        #[cfg(target_os = "macos")]
+        verify_program_versions_with_helper(&bundle, &mut lock, &mut helper_journal).await?;
+        #[cfg(not(target_os = "macos"))]
         verify_program_versions(&bundle).await?;
         #[cfg(target_os = "macos")]
         startup_preparation
             .revalidate(&lock)
             .map_err(map_startup_journal_error)?;
+        #[cfg(target_os = "macos")]
+        helper_journal
+            .revalidate(&lock)
+            .map_err(map_helper_journal_error)?;
         let disposition = lock.inspect_data_directory(data_dir)?;
         #[cfg(target_os = "macos")]
         if startup_preparation.requires_existing_data() && !disposition.is_existing() {
             return Err(PostgresSidecarError::StartupJournalRecoveryRequired);
         }
+        #[cfg(target_os = "macos")]
+        if disposition.is_existing() {
+            helper_journal
+                .mark_complete(&lock)
+                .map_err(map_helper_journal_error)?;
+        }
         let secret = lock.load_or_create_scram_secret(store, service, &disposition)?;
         let origin = disposition.origin();
         if origin == PostgresSidecarOrigin::Fresh {
             lock.ensure_current()?;
+            #[cfg(target_os = "macos")]
+            {
+                helper_journal
+                    .begin_next_helper(&lock, HelperKind::Initdb)
+                    .map_err(map_helper_journal_error)?;
+                run_initdb_with_helper(&bundle, data_dir, &secret, &mut lock, &mut helper_journal)
+                    .await?;
+                helper_journal
+                    .mark_complete(&lock)
+                    .map_err(map_helper_journal_error)?;
+            }
+            #[cfg(not(target_os = "macos"))]
             run_initdb(&bundle, data_dir, &secret).await?;
         }
         lock.ensure_current()?;
@@ -1073,7 +1134,9 @@ impl PostgresSidecarSupervisor {
             .revalidate(&lock)
             .map_err(map_startup_journal_error)?;
         #[cfg(target_os = "macos")]
-        lock.preserve_on_drop();
+        helper_journal
+            .revalidate(&lock)
+            .map_err(map_helper_journal_error)?;
         #[cfg(target_os = "macos")]
         let mut startup_journal = startup_preparation
             .begin_spawn(&lock)
@@ -1198,6 +1261,17 @@ fn map_startup_journal_error(error: StartupJournalError) -> PostgresSidecarError
     }
 }
 
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+fn map_helper_journal_error(error: HelperJournalError) -> PostgresSidecarError {
+    match error {
+        HelperJournalError::RecoveryRequired => PostgresSidecarError::HelperJournalRecoveryRequired,
+        HelperJournalError::Invalid => PostgresSidecarError::HelperJournalInvalid,
+        HelperJournalError::ReconciliationRequired => {
+            PostgresSidecarError::HelperJournalReconciliationRequired
+        }
+    }
+}
+
 #[cfg(any(feature = "postgres-supervisor", feature = "postgres-key-store"))]
 fn validate_supervisor_paths(
     app_data_root: &Path,
@@ -1265,6 +1339,109 @@ fn data_directory_origin(data_dir: &Path) -> Result<PostgresSidecarOrigin, Postg
 }
 
 #[cfg(feature = "postgres-supervisor")]
+fn validate_version_line(label: &str, bytes: &[u8]) -> Result<(), PostgresSidecarError> {
+    let line = std::str::from_utf8(bytes)
+        .map_err(|_| PostgresSidecarError::VersionMismatch)?
+        .trim();
+    let prefix = format!("{label} (PostgreSQL) {POSTGRES_VERSION}");
+    let suffix = line
+        .strip_prefix(&prefix)
+        .ok_or(PostgresSidecarError::VersionMismatch)?;
+    if !suffix.is_empty()
+        && !(suffix.starts_with(" (")
+            && suffix.ends_with(')')
+            && suffix
+                .bytes()
+                .all(|byte| byte == b' ' || byte.is_ascii_graphic()))
+    {
+        return Err(PostgresSidecarError::VersionMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+async fn verify_program_versions_with_helper(
+    bundle: &VerifiedPostgresBundle,
+    lock: &mut PostgresStartLock,
+    helper_journal: &mut HelperJournal,
+) -> Result<(), PostgresSidecarError> {
+    let programs = [
+        (PostgresProgram::Server, "postgres", None),
+        (PostgresProgram::Initdb, "initdb", Some(HelperKind::VersionInitdb)),
+        (PostgresProgram::Control, "pg_ctl", Some(HelperKind::VersionPgCtl)),
+    ];
+    for (program, label, next_kind) in programs {
+        if let Some(kind) = next_kind {
+            helper_journal
+                .begin_next_helper(lock, kind)
+                .map_err(map_helper_journal_error)?;
+        }
+        helper_journal
+            .revalidate(lock)
+            .map_err(map_helper_journal_error)?;
+        let mut command = bundle.checked_command(program)?;
+        command
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let mut child = command
+            .spawn()
+            .map_err(|_| PostgresSidecarError::VersionMismatch)?;
+        let process_identity = match child
+            .id()
+            .ok_or(PostgresSidecarError::ProcessIdentityInvalid)
+            .and_then(|pid| {
+                ProcessIdentity::capture(pid)
+                    .map_err(|_| PostgresSidecarError::ProcessIdentityInvalid)
+            }) {
+            Ok(identity) => identity,
+            Err(error) => {
+                lock.preserve_on_drop();
+                let _ = terminate_child(&mut child).await;
+                return Err(error);
+            }
+        };
+        if process_identity.revalidate().is_err() {
+            lock.preserve_on_drop();
+            let _ = terminate_child(&mut child).await;
+            return Err(PostgresSidecarError::ProcessIdentityInvalid);
+        }
+        if let Err(error) = helper_journal.record_child(lock, &process_identity) {
+            lock.preserve_on_drop();
+            let _ = terminate_child(&mut child).await;
+            return Err(map_helper_journal_error(error));
+        }
+        let waited = tokio::time::timeout(VERSION_DEADLINE, child.wait_with_output()).await;
+        let output = match waited {
+            Ok(Ok(output)) => output,
+            _ => {
+                lock.preserve_on_drop();
+                return Err(PostgresSidecarError::VersionMismatch);
+            }
+        };
+        if !output.status.success()
+            || output.stdout.len() + output.stderr.len() > 4096
+            || !output.stderr.is_empty()
+        {
+            lock.preserve_on_drop();
+            return Err(PostgresSidecarError::VersionMismatch);
+        }
+        if let Err(error) = validate_version_line(label, &output.stdout) {
+            lock.preserve_on_drop();
+            return Err(error);
+        }
+        if let Err(error) = helper_journal.confirm_exit(lock) {
+            lock.preserve_on_drop();
+            return Err(map_helper_journal_error(error));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "postgres-supervisor")]
+#[allow(dead_code)]
 async fn verify_program_versions(
     bundle: &VerifiedPostgresBundle,
 ) -> Result<(), PostgresSidecarError> {
@@ -1287,27 +1464,108 @@ async fn verify_program_versions(
             (true, false) => output.stderr,
             _ => return Err(PostgresSidecarError::VersionMismatch),
         };
-        let line = std::str::from_utf8(&bytes)
-            .map_err(|_| PostgresSidecarError::VersionMismatch)?
-            .trim();
-        let prefix = format!("{label} (PostgreSQL) {POSTGRES_VERSION}");
-        let suffix = line
-            .strip_prefix(&prefix)
-            .ok_or(PostgresSidecarError::VersionMismatch)?;
-        if !suffix.is_empty()
-            && !(suffix.starts_with(" (")
-                && suffix.ends_with(')')
-                && suffix
-                    .bytes()
-                    .all(|byte| byte == b' ' || byte.is_ascii_graphic()))
-        {
-            return Err(PostgresSidecarError::VersionMismatch);
-        }
+        validate_version_line(label, &bytes)?;
     }
     Ok(())
 }
 
+
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+async fn run_initdb_with_helper(
+    bundle: &VerifiedPostgresBundle,
+    data_dir: &Path,
+    secret: &PostgresScramSecret,
+    lock: &mut PostgresStartLock,
+    helper_journal: &mut HelperJournal,
+) -> Result<(), PostgresSidecarError> {
+    helper_journal
+        .revalidate(lock)
+        .map_err(map_helper_journal_error)?;
+    let mut command = bundle.checked_command(PostgresProgram::Initdb)?;
+    command
+        .arg("--pgdata")
+        .arg(data_dir)
+        .arg(format!("--username={DESKTOP_LOCAL_POSTGRES_ADMIN_USER}"))
+        .args([
+            "--pwprompt",
+            "--auth-host=scram-sha-256",
+            "--auth-local=reject",
+            "--encoding=UTF8",
+            "--no-locale",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|_| PostgresSidecarError::InitdbFailed)?;
+    let process_identity = match child
+        .id()
+        .ok_or(PostgresSidecarError::ProcessIdentityInvalid)
+        .and_then(|pid| {
+            ProcessIdentity::capture(pid).map_err(|_| PostgresSidecarError::ProcessIdentityInvalid)
+        }) {
+        Ok(identity) => identity,
+        Err(error) => {
+            lock.preserve_on_drop();
+            let _ = terminate_child(&mut child).await;
+            return Err(error);
+        }
+    };
+    if process_identity.revalidate().is_err() {
+        lock.preserve_on_drop();
+        let _ = terminate_child(&mut child).await;
+        return Err(PostgresSidecarError::ProcessIdentityInvalid);
+    }
+    if let Err(error) = helper_journal.record_child(lock, &process_identity) {
+        lock.preserve_on_drop();
+        let _ = terminate_child(&mut child).await;
+        return Err(map_helper_journal_error(error));
+    }
+    let completed = tokio::time::timeout(INITDB_DEADLINE, async {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or(PostgresSidecarError::InitdbFailed)?;
+        for _ in 0..2 {
+            stdin
+                .write_all(secret.expose())
+                .await
+                .map_err(|_| PostgresSidecarError::InitdbFailed)?;
+            stdin
+                .write_all(b"\n")
+                .await
+                .map_err(|_| PostgresSidecarError::InitdbFailed)?;
+        }
+        stdin
+            .shutdown()
+            .await
+            .map_err(|_| PostgresSidecarError::InitdbFailed)?;
+        drop(stdin);
+        child
+            .wait()
+            .await
+            .map_err(|_| PostgresSidecarError::InitdbFailed)
+    })
+    .await;
+    match completed {
+        Ok(Ok(status)) if status.success() => {
+            helper_journal
+                .confirm_exit(lock)
+                .map_err(map_helper_journal_error)?;
+            Ok(())
+        }
+        _ => {
+            lock.preserve_on_drop();
+            let _ = terminate_child(&mut child).await;
+            Err(PostgresSidecarError::InitdbFailed)
+        }
+    }
+}
+
 #[cfg(feature = "postgres-supervisor")]
+#[allow(dead_code)]
 async fn run_initdb(
     bundle: &VerifiedPostgresBundle,
     data_dir: &Path,
@@ -2497,7 +2755,7 @@ mod tests {
             (expected_program_paths()[2], "pg_ctl"),
         ] {
             let script = format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"{label} (PostgreSQL) {POSTGRES_VERSION}\"; exit 0; fi\nexit 17\n"
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"{label} (PostgreSQL) {POSTGRES_VERSION}\"; /bin/sleep 0.2; exit 0; fi\nexit 17\n"
             );
             let path = root.join(relative);
             fs::write(&path, script).unwrap();
@@ -2545,13 +2803,13 @@ mod tests {
         fs::create_dir_all(root.join("bin")).unwrap();
         use std::os::unix::fs::PermissionsExt as _;
         let postgres = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"postgres (PostgreSQL) {POSTGRES_VERSION}\"; exit 0; fi\nexit 17\n"
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"postgres (PostgreSQL) {POSTGRES_VERSION}\"; /bin/sleep 0.2; exit 0; fi\nexit 17\n"
         );
         let initdb = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"initdb (PostgreSQL) {POSTGRES_VERSION}\"; exit 0; fi\ndata=\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"--pgdata\" ]; then data=$2; shift 2; else shift; fi; done\nIFS= read -r first\nIFS= read -r second\n[ -n \"$data\" ] && [ \"$first\" = \"$second\" ] || exit 18\nprintf '17\\n' > \"$data/PG_VERSION\"\nexit 0\n"
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"initdb (PostgreSQL) {POSTGRES_VERSION}\"; /bin/sleep 0.2; exit 0; fi\ndata=\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"--pgdata\" ]; then data=$2; shift 2; else shift; fi; done\nIFS= read -r first\nIFS= read -r second\n[ -n \"$data\" ] && [ \"$first\" = \"$second\" ] || exit 18\nprintf '17\\n' > \"$data/PG_VERSION\"\nexit 0\n"
         );
         let pg_ctl = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"pg_ctl (PostgreSQL) {POSTGRES_VERSION}\"; exit 0; fi\nexit 17\n"
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"pg_ctl (PostgreSQL) {POSTGRES_VERSION}\"; /bin/sleep 0.2; exit 0; fi\nexit 17\n"
         );
         for (relative, script) in [
             (expected_program_paths()[0], postgres),

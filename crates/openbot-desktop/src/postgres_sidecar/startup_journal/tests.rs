@@ -537,7 +537,7 @@ fn materialize_sleeping_supervisor_bundle(seconds: &str) -> (PathBuf, PostgresBu
     ];
     for (relative, label, body) in programs {
         let script = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"{label} (PostgreSQL) {}\"; exit 0; fi\n{body}",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"{label} (PostgreSQL) {}\"; /bin/sleep 0.2; exit 0; fi\n{body}",
             crate::postgres_sidecar::POSTGRES_VERSION
         );
         let path = bundle_root.join(relative);
