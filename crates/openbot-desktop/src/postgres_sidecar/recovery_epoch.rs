@@ -1,17 +1,19 @@
 //! Installation-local recovery epoch evidence for controlled start-lock reclaim (V6-PR-014).
 //!
-//! Minting happens only on the verified Quiescent reclaim path. This module does not invalidate
-//! auth materials, open Application, or claim backup RestoreAuthorized.
+//! Minting happens only on the verified Quiescent reclaim path. V6-PR-016 compares a consumed
+//! epoch file (never written here) so unreclaimed epochs block new secret writes. This module
+//! does not bump auth_generation, open Application, or claim backup RestoreAuthorized.
 
 use super::kernel_start_lock::KernelStartLock;
 use super::{
-    PostgresSidecarError, encode_hex, path_matches_open_file, sync_directory, valid_instance_id,
+    encode_hex, path_matches_open_file, sync_directory, valid_instance_id, PostgresSidecarError,
 };
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 const EPOCH_HEADER: &str = "openbot-postgres-recovery-epoch-v1";
+const CONSUMED_HEADER: &str = "openbot-postgres-consumed-recovery-epoch-v1";
 const EPOCH_BYTES: usize = 32;
 const EPOCH_HEX_BYTES: usize = EPOCH_BYTES * 2;
 const MAX_FILE_BYTES: usize = 512;
@@ -23,7 +25,6 @@ pub(super) struct RecoveryEpoch {
     path: PathBuf,
     bytes: Vec<u8>,
     file: File,
-    #[allow(dead_code)]
     epoch_hex: String,
 }
 
@@ -34,7 +35,6 @@ impl core::fmt::Debug for RecoveryEpoch {
 }
 
 impl RecoveryEpoch {
-    #[allow(dead_code)]
     pub(super) fn epoch_hex(&self) -> &str {
         &self.epoch_hex
     }
@@ -230,15 +230,88 @@ fn replace_exact(
     })
 }
 
+fn consumed_path(root: &Path, instance_id: &str) -> PathBuf {
+    root.join(format!(
+        ".postgresql-17-{instance_id}.consumed-recovery-epoch-v1"
+    ))
+}
+
+/// Fail closed on a malformed consumed file; absence is allowed (pending).
+pub(super) fn ensure_consumed_readable(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+) -> Result<(), PostgresSidecarError> {
+    let _ = load_consumed_hex(owner, app_data_root, instance_id)?;
+    Ok(())
+}
+
+/// True when a current recovery epoch exists and has not been consumed at the same value.
+pub(super) fn invalidation_pending(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    current: Option<&RecoveryEpoch>,
+) -> Result<bool, PostgresSidecarError> {
+    let Some(current) = current else {
+        return Ok(false);
+    };
+    match load_consumed_hex(owner, app_data_root, instance_id)? {
+        None => Ok(true),
+        Some(consumed) => Ok(consumed != current.epoch_hex()),
+    }
+}
+
+fn load_consumed_hex(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+) -> Result<Option<String>, PostgresSidecarError> {
+    if !owner.is_current() || owner.root() != app_data_root || !valid_instance_id(instance_id) {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    let path = consumed_path(app_data_root, instance_id);
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Ok(metadata) => {
+            if !valid_epoch_metadata(&metadata, None) {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            let mut file =
+                secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            let epoch_hex = parse_epoch_bytes_with_header(&bytes, instance_id, CONSUMED_HEADER)?;
+            if !path_matches_open_file(&path, &file, &bytes, true) || !owner.is_current() {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            Ok(Some(epoch_hex))
+        }
+        Err(_) => Err(PostgresSidecarError::StartLockGuardInvalid),
+    }
+}
+
 fn epoch_path(root: &Path, instance_id: &str) -> PathBuf {
     root.join(format!(".postgresql-17-{instance_id}.recovery-epoch-v1"))
 }
 
 fn parse_epoch_bytes(bytes: &[u8], instance_id: &str) -> Result<String, PostgresSidecarError> {
+    parse_epoch_bytes_with_header(bytes, instance_id, EPOCH_HEADER)
+}
+
+fn parse_epoch_bytes_with_header(
+    bytes: &[u8],
+    instance_id: &str,
+    header: &str,
+) -> Result<String, PostgresSidecarError> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
     let mut lines = text.lines();
-    if lines.next() != Some(EPOCH_HEADER) {
+    if lines.next() != Some(header) {
         return Err(PostgresSidecarError::StartLockGuardInvalid);
     }
     let mut saw_instance = false;
@@ -474,6 +547,102 @@ mod tests {
             "start-lock must remain when epoch mint/replace fails"
         );
         assert_eq!(fs::read(&epoch_path).unwrap(), b"not-an-epoch\n");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn consumed_path_for(root: &Path, instance: &str) -> PathBuf {
+        root.join(format!(
+            ".postgresql-17-{instance}.consumed-recovery-epoch-v1"
+        ))
+    }
+
+    fn write_consumed(root: &Path, instance: &str, epoch_hex: &str) {
+        let path = consumed_path_for(root, instance);
+        let body = format!(
+            "openbot-postgres-consumed-recovery-epoch-v1\ninstance={instance}\nepoch={epoch_hex}\n"
+        );
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = options.open(&path).unwrap();
+        std::io::Write::write_all(&mut file, body.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+    }
+
+    fn plant_data_dir(root: &Path, instance: &str) -> PathBuf {
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        data_dir
+    }
+
+    #[test]
+    fn reclaim_without_consumed_marks_invalidation_pending() {
+        let root = temp_root("016-pending");
+        let instance = "d".repeat(64);
+        let data_dir = plant_data_dir(&root, &instance);
+        let _ = plant_stale_lock(&root, &instance);
+        let lock = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        assert!(lock.control_invalidation_pending());
+        assert!(!consumed_path_for(&root, &instance).exists());
+        drop(lock);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn matching_consumed_clears_invalidation_pending() {
+        let root = temp_root("016-match");
+        let instance = "e".repeat(64);
+        let data_dir = plant_data_dir(&root, &instance);
+        let _ = plant_stale_lock(&root, &instance);
+        let first = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        let hex = read_epoch_hex(&epoch_path_for(&root, &instance));
+        drop(first);
+        write_consumed(&root, &instance, &hex);
+        let second = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        assert!(!second.control_invalidation_pending());
+        drop(second);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bad_consumed_blocks_reclaim_and_keeps_stale_start_lock() {
+        let root = temp_root("016-bad-consumed");
+        let instance = "f".repeat(64);
+        let data_dir = plant_data_dir(&root, &instance);
+        let lock_path = plant_stale_lock(&root, &instance);
+        let consumed = consumed_path_for(&root, &instance);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = options.open(&consumed).unwrap();
+        std::io::Write::write_all(&mut file, b"not-consumed\n").unwrap();
+        file.sync_all().unwrap();
+        let rejected = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        );
+        assert!(rejected.is_err(), "{rejected:?}");
+        assert!(lock_path.is_file(), "stale start-lock must remain");
+        assert_eq!(fs::read(&consumed).unwrap(), b"not-consumed\n");
         let _ = fs::remove_dir_all(&root);
     }
 }
