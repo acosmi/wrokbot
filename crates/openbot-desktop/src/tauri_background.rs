@@ -1336,15 +1336,18 @@ fn map_sidecar_error(error: PostgresSidecarError) -> DesktopLocalRuntimeError {
         PostgresSidecarError::StartLockRecoveryRequired => {
             DesktopLocalRuntimeError::RecoveryRequired
         }
-        PostgresSidecarError::StartupJournalRecoveryRequired => {
+        PostgresSidecarError::StartupJournalRecoveryRequired
+        | PostgresSidecarError::HelperJournalRecoveryRequired => {
             DesktopLocalRuntimeError::RecoveryRequired
         }
         PostgresSidecarError::StartLockGuardInvalid
         | PostgresSidecarError::ProcessIdentityInvalid
-        | PostgresSidecarError::StartupJournalInvalid => {
+        | PostgresSidecarError::StartupJournalInvalid
+        | PostgresSidecarError::HelperJournalInvalid => {
             DesktopLocalRuntimeError::InitializationEvidenceInvalid
         }
-        PostgresSidecarError::StartupJournalReconciliationRequired => {
+        PostgresSidecarError::StartupJournalReconciliationRequired
+        | PostgresSidecarError::HelperJournalReconciliationRequired => {
             DesktopLocalRuntimeError::InitializationReconciliationRequired
         }
         PostgresSidecarError::ShutdownFailed => DesktopLocalRuntimeError::FailureCleanup,
@@ -1712,6 +1715,18 @@ mod tests {
             ),
             (
                 PostgresSidecarError::StartupJournalReconciliationRequired,
+                "desktop_local_runtime_initialization_reconciliation_required",
+            ),
+            (
+                PostgresSidecarError::HelperJournalRecoveryRequired,
+                "desktop_local_runtime_recovery_required",
+            ),
+            (
+                PostgresSidecarError::HelperJournalInvalid,
+                "desktop_local_runtime_initialization_evidence_invalid",
+            ),
+            (
+                PostgresSidecarError::HelperJournalReconciliationRequired,
                 "desktop_local_runtime_initialization_reconciliation_required",
             ),
             (
