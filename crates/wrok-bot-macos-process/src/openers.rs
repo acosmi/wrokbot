@@ -156,7 +156,8 @@ fn list_all_pids() -> Result<Vec<i32>, ProcessObservationError> {
     if returned < 0 {
         return Err(ProcessObservationError::ProcessDataInvalid);
     }
-    let filled = usize::try_from(returned).map_err(|_| ProcessObservationError::ProcessDataInvalid)?;
+    let filled =
+        usize::try_from(returned).map_err(|_| ProcessObservationError::ProcessDataInvalid)?;
     if filled > buffer.len() {
         return Err(ProcessObservationError::ProcessDataInvalid);
     }
@@ -221,7 +222,8 @@ fn list_fds(pid: i32) -> Result<Vec<libc::proc_fdinfo>, ProcessObservationError>
         // Exact empty fd table, or a raced process. Prefer Empty over false Invalid.
         return Ok(Vec::new());
     }
-    let first_bytes = usize::try_from(first).map_err(|_| ProcessObservationError::ProcessDataInvalid)?;
+    let first_bytes =
+        usize::try_from(first).map_err(|_| ProcessObservationError::ProcessDataInvalid)?;
     if first_bytes % size_of::<libc::proc_fdinfo>() != 0 {
         return Err(ProcessObservationError::ProcessDataInvalid);
     }
@@ -327,19 +329,17 @@ fn cwd_or_root_matches(
     }
     // SAFETY: exact-size success fills one `proc_vnodepathinfo`.
     let info = unsafe { info.assume_init() };
-    Ok(
-        vnode_path_matches(
-            &info.pvi_cdir,
-            canonical_data_dir,
-            expected_device,
-            expected_inode,
-        ) || vnode_path_matches(
-            &info.pvi_rdir,
-            canonical_data_dir,
-            expected_device,
-            expected_inode,
-        ),
-    )
+    Ok(vnode_path_matches(
+        &info.pvi_cdir,
+        canonical_data_dir,
+        expected_device,
+        expected_inode,
+    ) || vnode_path_matches(
+        &info.pvi_rdir,
+        canonical_data_dir,
+        expected_device,
+        expected_inode,
+    ))
 }
 
 fn vnode_path_matches(
@@ -363,9 +363,7 @@ fn vnode_path_matches(
 
 fn vip_path_as_path(path_info: &libc::vnode_info_path) -> Option<PathBuf> {
     // libc stores MAXPATHLEN as [[c_char; 32]; 32].
-    let raw = unsafe {
-        std::slice::from_raw_parts(path_info.vip_path.as_ptr().cast::<u8>(), 1024)
-    };
+    let raw = unsafe { std::slice::from_raw_parts(path_info.vip_path.as_ptr().cast::<u8>(), 1024) };
     let end = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
     if end == 0 {
         return None;

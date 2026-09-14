@@ -550,7 +550,7 @@ fn materialize_sleeping_supervisor_bundle(seconds: &str) -> (PathBuf, PostgresBu
 
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 #[tokio::test]
-async fn cancelled_supervisor_preserves_observed_start_and_blocks_second_start() {
+async fn cancelled_supervisor_preserves_observed_start_until_mid_phase_child_is_absent() {
     use crate::postgres_sidecar::tests::{
         MemorySecretStore, signing_identity, supervisor_test_paths,
     };
@@ -621,12 +621,24 @@ async fn cancelled_supervisor_preserves_observed_start_and_blocks_second_start()
         &second_service,
     )
     .await;
-    assert!(matches!(
-        second,
-        Err(PostgresSidecarError::StartLockRecoveryRequired)
-    ));
-    assert_eq!(store.write_count(), writes_before);
-    assert!(dynamic_path.exists());
+    // V6-PR-013: abort keeps the mid-phase journal, then kill_on_drop removes the owned
+    // child. With Empty openers, controlled retirement may reclaim the start-lock so a
+    // second attempt can proceed past StartLockRecoveryRequired (this fake sleeper then
+    // hits ReadyTimeout). A still-live registered child must still fail closed.
+    match &second {
+        Err(PostgresSidecarError::StartLockRecoveryRequired) => {
+            assert_eq!(store.write_count(), writes_before);
+            assert!(dynamic_path.exists());
+            let after: serde_json::Value =
+                serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+            assert_eq!(after["phase"], "child_observed");
+        }
+        Err(PostgresSidecarError::ReadyTimeout) => {
+            // Proof the stale lock was reclaimed and startup proceeded into readiness wait.
+        }
+        Ok(_) => {}
+        Err(other) => panic!("unexpected second-start error: {other:?}"),
+    }
 }
 
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]

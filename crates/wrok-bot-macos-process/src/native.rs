@@ -79,7 +79,9 @@ pub(super) fn observe(pid: i32) -> Result<Observation, ProcessObservationError> 
     })
 }
 
-pub(super) fn read_process_birth_for_openers(pid: i32) -> Result<ProcessBirth, ProcessObservationError> {
+pub(super) fn read_process_birth_for_openers(
+    pid: i32,
+) -> Result<ProcessBirth, ProcessObservationError> {
     read_process_birth(pid)
 }
 

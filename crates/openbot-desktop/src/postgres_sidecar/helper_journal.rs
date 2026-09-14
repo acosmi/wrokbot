@@ -7,7 +7,7 @@ mod record;
 
 pub(crate) use self::record::HelperKind;
 use self::record::{HelperJournalPhase, HelperJournalRecord};
-use super::{encode_hex, PostgresStartLock};
+use super::{PostgresStartLock, encode_hex};
 use sha2::{Digest as _, Sha256};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -1107,6 +1107,182 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
 }
 
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+/// Controlled mid-phase retirement for helper journals (V6-PR-013).
+///
+/// `spawn_entered` with null child deletes back to Absent. A mid-phase with a full child advances
+/// only to `exit_confirmed` after absent evidence; this batch never auto-writes `helpers_complete`.
+pub(super) fn recover_mid_phase(
+    owner: &super::kernel_start_lock::KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    data_dir: &Path,
+) -> Result<(), HelperJournalError> {
+    if !owner.is_current() || owner.root() != app_data_root {
+        return Err(HelperJournalError::Invalid);
+    }
+    if !app_data_root.is_absolute() || data_dir.parent() != Some(app_data_root) {
+        return Err(HelperJournalError::Invalid);
+    }
+    let data_dir_name = data_dir_name(instance_id);
+    if data_dir.file_name().and_then(|n| n.to_str()) != Some(data_dir_name.as_str()) {
+        return Err(HelperJournalError::Invalid);
+    }
+    let root_meta = fs::symlink_metadata(app_data_root).map_err(|_| HelperJournalError::Invalid)?;
+    let path_meta = fs::symlink_metadata(data_dir).map_err(|_| HelperJournalError::Invalid)?;
+    if !valid_root_metadata(&root_meta) || !valid_data_dir_metadata(&path_meta, root_meta.uid()) {
+        return Err(HelperJournalError::Invalid);
+    }
+    let data_dir_file = secure_open_directory(data_dir).map_err(|_| HelperJournalError::Invalid)?;
+    let file_meta = data_dir_file
+        .metadata()
+        .map_err(|_| HelperJournalError::Invalid)?;
+    if !valid_data_dir_metadata(&file_meta, root_meta.uid()) || !same_file(&path_meta, &file_meta) {
+        return Err(HelperJournalError::Invalid);
+    }
+    let device = file_meta.dev();
+    let inode = file_meta.ino();
+    let root_uid = root_meta.uid();
+    let path = app_data_root.join(format!(".postgresql-17-{instance_id}.helper-v1.json"));
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if !owner.is_current() {
+                return Err(HelperJournalError::Invalid);
+            }
+            return Ok(());
+        }
+        Ok(metadata) => {
+            if !valid_journal_metadata(&metadata, root_uid, None) {
+                return Err(HelperJournalError::Invalid);
+            }
+            let file = secure_open_file(&path).map_err(|_| HelperJournalError::Invalid)?;
+            let bytes = read_bounded_file(&path, &file, root_uid)?;
+            let record: HelperJournalRecord =
+                serde_json::from_slice(&bytes).map_err(|_| HelperJournalError::Invalid)?;
+            let _ = validate_record(&record, instance_id, &data_dir_name)?;
+            if record.data_dir_device != device || record.data_dir_inode != inode {
+                return Err(HelperJournalError::Invalid);
+            }
+            match (record.phase, record.child_observation.as_deref()) {
+                (HelperJournalPhase::HelpersComplete, Some(_))
+                | (HelperJournalPhase::ExitConfirmed, Some(_)) => {
+                    // exit_confirmed without helpers_complete stays for a later contract.
+                    if !owner.is_current() {
+                        return Err(HelperJournalError::Invalid);
+                    }
+                    Ok(())
+                }
+                (HelperJournalPhase::SpawnEntered, None) => {
+                    delete_exact_journal(app_data_root, &path, &file, &bytes, root_uid)?;
+                    if !owner.is_current() {
+                        return Err(HelperJournalError::ReconciliationRequired);
+                    }
+                    Ok(())
+                }
+                (HelperJournalPhase::ChildObserved, Some(child_hex)) => {
+                    let evidence =
+                        decode_evidence_hex(child_hex).ok_or(HelperJournalError::Invalid)?;
+                    wrok_bot_macos_process::evidence_process_is_absent(&evidence).map_err(
+                        |error| match error {
+                            wrok_bot_macos_process::ProcessObservationError::ObservationChanged => {
+                                HelperJournalError::RecoveryRequired
+                            }
+                            _ => HelperJournalError::Invalid,
+                        },
+                    )?;
+                    let mut next = record.clone();
+                    next.phase = HelperJournalPhase::ExitConfirmed;
+                    let next_bytes = encode_record(&next)?;
+                    replace_exact_mid_phase(
+                        owner,
+                        app_data_root,
+                        instance_id,
+                        &path,
+                        &file,
+                        &bytes,
+                        &next,
+                        next_bytes,
+                        root_uid,
+                    )?;
+                    Ok(())
+                }
+                _ => Err(HelperJournalError::RecoveryRequired),
+            }
+        }
+        Err(_) => Err(HelperJournalError::ReconciliationRequired),
+    }
+}
+
+fn decode_evidence_hex(value: &str) -> Option<[u8; OBSERVATION_BYTES]> {
+    if !valid_lower_hex(value, OBSERVATION_HEX_BYTES) {
+        return None;
+    }
+    let mut bytes = [0_u8; OBSERVATION_BYTES];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        bytes[index] = (lower_hex_nibble(pair[0])? << 4) | lower_hex_nibble(pair[1])?;
+    }
+    let _ = decode_observation(&bytes)?;
+    Some(bytes)
+}
+
+fn delete_exact_journal(
+    root: &Path,
+    path: &Path,
+    file: &File,
+    expected: &[u8],
+    root_uid: u32,
+) -> Result<(), HelperJournalError> {
+    if !path_matches_open_file(path, file, expected, root_uid, Some(1)) {
+        return Err(HelperJournalError::ReconciliationRequired);
+    }
+    fs::remove_file(path).map_err(|_| HelperJournalError::ReconciliationRequired)?;
+    sync_directory(root).map_err(|_| HelperJournalError::ReconciliationRequired)?;
+    if path.exists() {
+        return Err(HelperJournalError::ReconciliationRequired);
+    }
+    Ok(())
+}
+
+fn replace_exact_mid_phase(
+    owner: &super::kernel_start_lock::KernelStartLock,
+    root: &Path,
+    instance_id: &str,
+    path: &Path,
+    old_file: &File,
+    old_bytes: &[u8],
+    record: &HelperJournalRecord,
+    bytes: Vec<u8>,
+    root_uid: u32,
+) -> Result<(), HelperJournalError> {
+    validate_record(record, instance_id, data_dir_name(instance_id).as_str())?;
+    if !owner.is_current() {
+        return Err(HelperJournalError::Invalid);
+    }
+    let (candidate_path, mut candidate) = create_candidate(root, instance_id)?;
+    if candidate
+        .write_all(&bytes)
+        .and_then(|()| candidate.sync_all())
+        .is_err()
+    {
+        cleanup_candidate(root, &candidate_path, &candidate, &bytes, 1);
+        return Err(HelperJournalError::ReconciliationRequired);
+    }
+    if !path_matches_open_file(path, old_file, old_bytes, root_uid, Some(1))
+        || !path_matches_open_file(&candidate_path, &candidate, &bytes, root_uid, Some(1))
+        || !owner.is_current()
+    {
+        cleanup_candidate(root, &candidate_path, &candidate, &bytes, 1);
+        return Err(HelperJournalError::ReconciliationRequired);
+    }
+    if fs::rename(&candidate_path, path).is_err()
+        || sync_directory(root).is_err()
+        || !path_matches_open_file(path, &candidate, &bytes, root_uid, Some(1))
+        || !owner.is_current()
+    {
+        return Err(HelperJournalError::ReconciliationRequired);
+    }
+    Ok(())
+}
 
 /// Read-only check used by Quiescent minting: Absent or helpers_complete only.
 pub(super) fn allows_quiescent_cleanup(
