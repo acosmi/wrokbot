@@ -375,7 +375,7 @@ pub struct PostgresStartLock {
     #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
     recovery_epoch: Option<recovery_epoch::RecoveryEpoch>,
     #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
-    control_invalidation_pending: bool,
+    control_invalidation_pending: std::sync::atomic::AtomicBool,
 }
 
 impl core::fmt::Debug for PostgresStartLock {
@@ -534,7 +534,9 @@ impl PostgresStartLock {
             #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
             recovery_epoch,
             #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
-            control_invalidation_pending,
+            control_invalidation_pending: std::sync::atomic::AtomicBool::new(
+                control_invalidation_pending,
+            ),
         };
         lock.ensure_current()?;
         Ok(lock)
@@ -566,6 +568,31 @@ impl PostgresStartLock {
     #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
     pub(super) fn control_invalidation_pending(&self) -> bool {
         self.control_invalidation_pending
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(all(
+        feature = "postgres-key-store",
+        feature = "postgres-supervisor",
+        target_os = "macos"
+    ))]
+    fn consume_recovery_epoch_after_existing_read(&self) -> Result<(), PostgresSecretStoreError> {
+        if !self.control_invalidation_pending() {
+            return Ok(());
+        }
+        let Some(epoch) = self.recovery_epoch.as_ref() else {
+            return Err(PostgresSecretStoreError::ReconciliationRequired);
+        };
+        recovery_epoch::write_consumed_matching(
+            &self.kernel_guard,
+            self.kernel_guard.root(),
+            self.instance_id.as_ref(),
+            epoch,
+        )
+        .map_err(|_| PostgresSecretStoreError::ReconciliationRequired)?;
+        self.control_invalidation_pending
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 
     #[cfg(feature = "postgres-supervisor")]
@@ -651,7 +678,15 @@ impl PostgresStartLock {
                 self.secret_creation_attempted
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let stored = stored.ok_or(PostgresSecretStoreError::ReconciliationRequired)?;
-                return PostgresScramSecret::from_stored(stored);
+                let secret = PostgresScramSecret::from_stored(stored)?;
+                #[cfg(all(
+                    feature = "postgres-supervisor",
+                    target_os = "macos"
+                ))]
+                if disposition.is_existing() {
+                    self.consume_recovery_epoch_after_existing_read()?;
+                }
+                return Ok(secret);
             }
             Some(ScramJournalPhase::WriteEntered) => unreachable!("handled before store read"),
             Some(ScramJournalPhase::Prepared) => {}
@@ -659,7 +694,15 @@ impl PostgresStartLock {
                 if let Some(stored) = stored {
                     self.secret_creation_attempted
                         .store(true, std::sync::atomic::Ordering::SeqCst);
-                    return PostgresScramSecret::from_stored(stored);
+                    let secret = PostgresScramSecret::from_stored(stored)?;
+                    #[cfg(all(
+                        feature = "postgres-supervisor",
+                        target_os = "macos"
+                    ))]
+                    if disposition.is_existing() {
+                        self.consume_recovery_epoch_after_existing_read()?;
+                    }
+                    return Ok(secret);
                 }
                 if disposition.is_existing() {
                     return Err(PostgresSecretStoreError::Missing);
@@ -667,7 +710,7 @@ impl PostgresStartLock {
             }
         }
         #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
-        if self.control_invalidation_pending {
+        if self.control_invalidation_pending() {
             return Err(PostgresSecretStoreError::ReconciliationRequired);
         }
         if self
@@ -5183,6 +5226,75 @@ mod tests {
             "{rejected:?}"
         );
         assert_eq!(writes, 0, "pending epoch must write zero secrets");
+    }
+
+    #[cfg(all(
+        feature = "postgres-key-store",
+        feature = "postgres-supervisor",
+        target_os = "macos"
+    ))]
+    #[test]
+    fn existing_secret_readback_writes_consumed_and_clears_pending() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = root("017-existing-consume");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let instance = "b".repeat(64);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(data_dir.join("PG_VERSION"), b"17\n").unwrap();
+        let lock_path = root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+        fs::write(
+            &lock_path,
+            format!(
+                "openbot-postgres-start-lock-v1\npid=1\ninstance={instance}\nmanifest={}\nnonce={}\n",
+                "55".repeat(32),
+                "22".repeat(16)
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let store = MemorySecretStore::empty();
+        let service =
+            ReviewedPostgresKeyStoreService::from_reviewed_release("com.example.017.consume")
+                .unwrap();
+        // Seed stored secret under the account name before reclaim acquire.
+        let account = format!("postgresql-17-{instance}");
+        let seeded = PostgresScramSecret::generate().unwrap();
+        store
+            .write(service.as_str(), &account, seeded.expose())
+            .unwrap();
+        let lock = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x55; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        assert!(lock.control_invalidation_pending());
+        let existing = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Existing);
+        let loaded = lock.load_or_create_scram_secret(&store, &service, &existing);
+        assert!(loaded.is_ok(), "{loaded:?}");
+        assert!(!lock.control_invalidation_pending());
+        let consumed = root.join(format!(
+            ".postgresql-17-{instance}.consumed-recovery-epoch-v1"
+        ));
+        assert!(consumed.is_file());
+        let epoch = root.join(format!(".postgresql-17-{instance}.recovery-epoch-v1"));
+        let epoch_hex = fs::read_to_string(&epoch)
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
+            .unwrap();
+        let consumed_hex = fs::read_to_string(&consumed)
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
+            .unwrap();
+        assert_eq!(epoch_hex, consumed_hex);
+        drop(lock);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[cfg(feature = "postgres-key-store")]

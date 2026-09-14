@@ -1,8 +1,9 @@
 //! Installation-local recovery epoch evidence for controlled start-lock reclaim (V6-PR-014).
 //!
 //! Minting happens only on the verified Quiescent reclaim path. V6-PR-016 compares a consumed
-//! epoch file (never written here) so unreclaimed epochs block new secret writes. This module
-//! does not bump auth_generation, open Application, or claim backup RestoreAuthorized.
+//! epoch file so unreclaimed epochs block new secret writes; V6-PR-017 may write that consumed
+//! witness after Existing secret readback. This module does not bump auth_generation, open
+//! Application, or claim backup RestoreAuthorized.
 
 use super::kernel_start_lock::KernelStartLock;
 use super::{
@@ -228,6 +229,133 @@ fn replace_exact(
         file: candidate,
         epoch_hex,
     })
+}
+
+/// Write consumed epoch equal to `current`, creating or replacing the witness file.
+/// Never invents a different epoch value.
+pub(super) fn write_consumed_matching(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    current: &RecoveryEpoch,
+) -> Result<(), PostgresSidecarError> {
+    if !owner.is_current()
+        || owner.root() != app_data_root
+        || !valid_instance_id(instance_id)
+        || !current.is_current()
+    {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    let epoch_hex = current.epoch_hex().to_owned();
+    let path = consumed_path(app_data_root, instance_id);
+    let bytes =
+        format!("{CONSUMED_HEADER}\ninstance={instance_id}\nepoch={epoch_hex}\n").into_bytes();
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let (candidate_path, mut candidate) = create_candidate(app_data_root, instance_id)
+                .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            if candidate
+                .write_all(&bytes)
+                .and_then(|()| candidate.sync_all())
+                .is_err()
+            {
+                let _ = fs::remove_file(&candidate_path);
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            if !path_matches_open_file(&candidate_path, &candidate, &bytes, true)
+                || !owner.is_current()
+            {
+                let _ = fs::remove_file(&candidate_path);
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            match fs::hard_link(&candidate_path, &path) {
+                Ok(()) => {
+                    if sync_directory(app_data_root).is_err()
+                        || !path_matches_open_file(&path, &candidate, &bytes, false)
+                        || fs::remove_file(&candidate_path).is_err()
+                        || sync_directory(app_data_root).is_err()
+                        || !path_matches_open_file(&path, &candidate, &bytes, true)
+                        || !owner.is_current()
+                        || !current.is_current()
+                    {
+                        return Err(PostgresSidecarError::StartLockGuardInvalid);
+                    }
+                    Ok(())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let _ = fs::remove_file(&candidate_path);
+                    // Race: fall through to replace path after re-open.
+                    write_consumed_replace(owner, app_data_root, instance_id, current, &path, bytes)
+                }
+                Err(_) => {
+                    let _ = fs::remove_file(&candidate_path);
+                    Err(PostgresSidecarError::StartLockGuardInvalid)
+                }
+            }
+        }
+        Ok(_) => write_consumed_replace(owner, app_data_root, instance_id, current, &path, bytes),
+        Err(_) => Err(PostgresSidecarError::StartLockGuardInvalid),
+    }
+}
+
+fn write_consumed_replace(
+    owner: &KernelStartLock,
+    root: &Path,
+    instance_id: &str,
+    current: &RecoveryEpoch,
+    path: &Path,
+    bytes: Vec<u8>,
+) -> Result<(), PostgresSidecarError> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+    if !valid_epoch_metadata(&metadata, None) {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    let mut old_file =
+        secure_open_read(path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+    let mut old_bytes = Vec::new();
+    old_file
+        .read_to_end(&mut old_bytes)
+        .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+    let old_hex = parse_epoch_bytes_with_header(&old_bytes, instance_id, CONSUMED_HEADER)?;
+    if !path_matches_open_file(path, &old_file, &old_bytes, true) {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    if old_hex == current.epoch_hex() {
+        // Already matching; treat as success without rewrite.
+        return Ok(());
+    }
+    let (candidate_path, mut candidate) = create_candidate(root, instance_id)
+        .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+    if candidate
+        .write_all(&bytes)
+        .and_then(|()| candidate.sync_all())
+        .is_err()
+    {
+        let _ = fs::remove_file(&candidate_path);
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    if !path_matches_open_file(&candidate_path, &candidate, &bytes, true) || !owner.is_current() {
+        let _ = fs::remove_file(&candidate_path);
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    // Atomic replace via rename over exact old path after confirming old still matches.
+    if !path_matches_open_file(path, &old_file, &old_bytes, true) {
+        let _ = fs::remove_file(&candidate_path);
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    if fs::rename(&candidate_path, path).is_err()
+        || sync_directory(root).is_err()
+        || !owner.is_current()
+        || !current.is_current()
+    {
+        let _ = fs::remove_file(&candidate_path);
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    Ok(())
 }
 
 fn consumed_path(root: &Path, instance_id: &str) -> PathBuf {
