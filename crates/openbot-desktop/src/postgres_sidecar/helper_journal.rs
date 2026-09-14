@@ -7,7 +7,7 @@ mod record;
 
 pub(crate) use self::record::HelperKind;
 use self::record::{HelperJournalPhase, HelperJournalRecord};
-use super::{PostgresStartLock, encode_hex};
+use super::{encode_hex, PostgresStartLock};
 use sha2::{Digest as _, Sha256};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -1111,7 +1111,7 @@ use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 /// Controlled mid-phase retirement for helper journals (V6-PR-013).
 ///
 /// `spawn_entered` with null child deletes back to Absent. A mid-phase with a full child advances
-/// only to `exit_confirmed` after absent evidence; this batch never auto-writes `helpers_complete`.
+/// to `exit_confirmed` after absent evidence, or to `helpers_complete` when disposition proves a terminal helper kind (V6-PR-015).
 pub(super) fn recover_mid_phase(
     owner: &super::kernel_start_lock::KernelStartLock,
     app_data_root: &Path,
@@ -1164,13 +1164,26 @@ pub(super) fn recover_mid_phase(
                 return Err(HelperJournalError::Invalid);
             }
             match (record.phase, record.child_observation.as_deref()) {
-                (HelperJournalPhase::HelpersComplete, Some(_))
-                | (HelperJournalPhase::ExitConfirmed, Some(_)) => {
-                    // exit_confirmed without helpers_complete stays for a later contract.
+                (HelperJournalPhase::HelpersComplete, Some(_)) => {
                     if !owner.is_current() {
                         return Err(HelperJournalError::Invalid);
                     }
                     Ok(())
+                }
+                (HelperJournalPhase::ExitConfirmed, Some(child_hex)) => {
+                    // V6-PR-015: complete only when disposition proves the 010 terminal kind.
+                    maybe_complete_helpers(
+                        owner,
+                        app_data_root,
+                        instance_id,
+                        data_dir,
+                        &path,
+                        &file,
+                        &bytes,
+                        &record,
+                        child_hex,
+                        root_uid,
+                    )
                 }
                 (HelperJournalPhase::SpawnEntered, None) => {
                     delete_exact_journal(app_data_root, &path, &file, &bytes, root_uid)?;
@@ -1182,16 +1195,13 @@ pub(super) fn recover_mid_phase(
                 (HelperJournalPhase::ChildObserved, Some(child_hex)) => {
                     let evidence =
                         decode_evidence_hex(child_hex).ok_or(HelperJournalError::Invalid)?;
-                    wrok_bot_macos_process::evidence_process_is_absent(&evidence).map_err(
-                        |error| match error {
-                            wrok_bot_macos_process::ProcessObservationError::ObservationChanged => {
-                                HelperJournalError::RecoveryRequired
-                            }
-                            _ => HelperJournalError::Invalid,
-                        },
-                    )?;
+                    prove_child_absent(&evidence)?;
                     let mut next = record.clone();
-                    next.phase = HelperJournalPhase::ExitConfirmed;
+                    next.phase = if helpers_complete_allowed(record.helper_kind, data_dir)? {
+                        HelperJournalPhase::HelpersComplete
+                    } else {
+                        HelperJournalPhase::ExitConfirmed
+                    };
                     let next_bytes = encode_record(&next)?;
                     replace_exact_mid_phase(
                         owner,
@@ -1211,6 +1221,103 @@ pub(super) fn recover_mid_phase(
         }
         Err(_) => Err(HelperJournalError::ReconciliationRequired),
     }
+}
+
+fn prove_child_absent(evidence: &[u8; OBSERVATION_BYTES]) -> Result<(), HelperJournalError> {
+    wrok_bot_macos_process::evidence_process_is_absent(evidence).map_err(|error| match error {
+        wrok_bot_macos_process::ProcessObservationError::ObservationChanged => {
+            HelperJournalError::RecoveryRequired
+        }
+        _ => HelperJournalError::Invalid,
+    })
+}
+
+fn helpers_complete_allowed(kind: HelperKind, data_dir: &Path) -> Result<bool, HelperJournalError> {
+    // Mirror `data_directory_origin` without the bundle reader (same PG_VERSION / empty-dir rules).
+    let origin = read_data_directory_origin(data_dir)?;
+    Ok(match (kind, origin) {
+        (HelperKind::VersionPgCtl, DataDirOrigin::Existing) => true,
+        (HelperKind::Initdb, DataDirOrigin::Fresh) => true,
+        (HelperKind::Initdb, DataDirOrigin::Existing) => return Err(HelperJournalError::Invalid),
+        (HelperKind::VersionPostgres | HelperKind::VersionInitdb | HelperKind::VersionPgCtl, _) => {
+            false
+        }
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DataDirOrigin {
+    Fresh,
+    Existing,
+}
+
+fn read_data_directory_origin(data_dir: &Path) -> Result<DataDirOrigin, HelperJournalError> {
+    let version = data_dir.join("PG_VERSION");
+    match fs::symlink_metadata(&version) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() > 16
+            {
+                return Err(HelperJournalError::Invalid);
+            }
+            let bytes = fs::read(&version).map_err(|_| HelperJournalError::Invalid)?;
+            if bytes.len() as u64 != metadata.len() {
+                return Err(HelperJournalError::Invalid);
+            }
+            let text = std::str::from_utf8(&bytes).map_err(|_| HelperJournalError::Invalid)?;
+            if text.trim() != "17" {
+                return Err(HelperJournalError::Invalid);
+            }
+            Ok(DataDirOrigin::Existing)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut entries = fs::read_dir(data_dir).map_err(|_| HelperJournalError::Invalid)?;
+            if entries.next().is_some() {
+                return Err(HelperJournalError::Invalid);
+            }
+            Ok(DataDirOrigin::Fresh)
+        }
+        Err(_) => Err(HelperJournalError::Invalid),
+    }
+}
+
+fn maybe_complete_helpers(
+    owner: &super::kernel_start_lock::KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    data_dir: &Path,
+    path: &Path,
+    file: &File,
+    bytes: &[u8],
+    record: &HelperJournalRecord,
+    child_hex: &str,
+    root_uid: u32,
+) -> Result<(), HelperJournalError> {
+    let allowed = helpers_complete_allowed(record.helper_kind, data_dir)?;
+    if !allowed {
+        if !owner.is_current() {
+            return Err(HelperJournalError::Invalid);
+        }
+        return Ok(());
+    }
+    let evidence = decode_evidence_hex(child_hex).ok_or(HelperJournalError::Invalid)?;
+    prove_child_absent(&evidence)?;
+    let mut next = record.clone();
+    next.phase = HelperJournalPhase::HelpersComplete;
+    let next_bytes = encode_record(&next)?;
+    replace_exact_mid_phase(
+        owner,
+        app_data_root,
+        instance_id,
+        path,
+        file,
+        bytes,
+        &next,
+        next_bytes,
+        root_uid,
+    )?;
+    Ok(())
 }
 
 fn decode_evidence_hex(value: &str) -> Option<[u8; OBSERVATION_BYTES]> {
