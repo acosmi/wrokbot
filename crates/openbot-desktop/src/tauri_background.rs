@@ -1131,7 +1131,12 @@ pub(crate) async fn prepare_desktop_local_runtime(
     };
     let (key_material, proof, database_origin) = vault_ready.into_parts();
     let data_plane = prepared_data_plane
-        .complete_after_vault(&package, database_origin, &proof)
+        .complete_after_vault(
+            &package,
+            database_origin,
+            &proof,
+            key_material.expose_audit_key(),
+        )
         .await
         .map_err(map_data_plane_error)?;
 

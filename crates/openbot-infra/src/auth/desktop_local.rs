@@ -19,10 +19,13 @@ use openbot_application::tenant::package::{
     TenantPackageSyncReport, synchronize_tenant_package,
 };
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
+use openbot_domain::audit::event::{AuditEvent, AuditEventType};
+use openbot_domain::audit::payload::{AuditIdentifier, AuditLabel, AuditPayload};
 use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 
 use super::{initialize_canonical_principal, load_canonical_generation};
 use crate::db::InfraError;
+use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 use crate::db::desktop_local::{
     AttestedDesktopLocalAdmin, DesktopLocalDatabase, FreshDesktopDatabaseProof,
     UnattestedDesktopLocalAdmin,
@@ -145,9 +148,18 @@ impl DesktopLocalAuthority {
         .await
     }
 
-    /// Advance `users.auth_generation`, terminate sessions, and cancel pending approvals (V6-PR-020/021/023).
+    /// Advance `users.auth_generation`, terminate sessions, and cancel pending approvals (V6-PR-020/021/023/025).
     /// Does not revoke leases/capabilities (later knives).
-    pub async fn advance_auth_generation(&self, pool: &Pool) -> Result<u64, InfraError> {
+    pub async fn advance_auth_generation(
+        &self,
+        pool: &Pool,
+        checkpoint_key: &[u8],
+    ) -> Result<u64, InfraError> {
+        if checkpoint_key.is_empty() {
+            return Err(InfraError::repository_invariant(
+                "desktop_local_audit_checkpoint_key_empty",
+            ));
+        }
         let mut client = pool
             .get()
             .await
@@ -170,15 +182,35 @@ impl DesktopLocalAuthority {
             )
             .await
             .map_err(|error| InfraError::query("终止 desktop-local sessions", error))?;
-        // V6-PR-023: cancel outstanding pending tool approvals for this actor only.
+        // V6-PR-023/025: cancel pending approvals and write cancel audit in the same transaction.
         // cancelled rows require decided_at set and decided_by NULL (native_0020 checks).
-        transaction
-            .execute(
-                "UPDATE public.tool_approvals                  SET state='cancelled', decided_at=clock_timestamp(), decided_by=NULL,                      arguments_summary=NULL, change_summary=NULL,                      updated_at=clock_timestamp()                  WHERE actor_id=$1 AND state='pending'",
+        let cancelled = transaction
+            .query(
+                "UPDATE public.tool_approvals                  SET state='cancelled', decided_at=clock_timestamp(), decided_by=NULL,                      arguments_summary=NULL, change_summary=NULL,                      updated_at=clock_timestamp()                  WHERE actor_id=$1 AND state='pending'                  RETURNING approval_id",
                 &[&self.auth.actor().as_str()],
             )
             .await
             .map_err(|error| InfraError::query("取消 desktop-local pending approvals", error))?;
+        for row in cancelled {
+            let approval_id: String = row
+                .try_get(0)
+                .map_err(|error| InfraError::query("读 cancelled approval_id", error))?;
+            let (id, created_at) = next_event_coordinates(&transaction).await?;
+            let event = AuditEvent {
+                id,
+                actor: Some(self.auth.actor().clone()),
+                event_type: AuditEventType::TOOL_APPROVAL_CANCELLED,
+                target_kind: AuditLabel::new("tool_approval"),
+                target_id: Some(
+                    AuditIdentifier::new(&approval_id).map_err(|_| {
+                        InfraError::repository_invariant("desktop_local_approval_id_invalid")
+                    })?,
+                ),
+                payload: AuditPayload::empty(),
+                created_at,
+            };
+            append_event_in_transaction(&transaction, &event, checkpoint_key).await?;
+        }
         transaction
             .commit()
             .await
