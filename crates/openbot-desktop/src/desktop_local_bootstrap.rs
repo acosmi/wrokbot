@@ -215,7 +215,7 @@ impl PreparedDesktopLocalDataPlane {
         if let Err(error) = self.ensure_owner_current() {
             return Err(self.cleanup_with(error).await);
         }
-        // V6-PR-020: matching auth-invalidation-required → bump generation only, then clear witness.
+        // V6-PR-020/024: matching required → bump once per epoch (applied witness), then clear required.
         #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
         {
             let sidecar = self
@@ -237,25 +237,53 @@ impl PreparedDesktopLocalDataPlane {
                 }
             };
             if outstanding {
-                if let Err(error) = tokio::time::timeout(
-                    STARTUP_DB_STEP_TIMEOUT,
-                    self.installation
-                        .authority()
-                        .advance_auth_generation(self.database.pool()),
-                )
-                .await
-                .map_err(|_| {
-                    openbot_infra::db::InfraError::repository_invariant(
-                        "desktop_local_auth_generation_advance_timeout",
+                // V6-PR-024: if applied already matches this epoch, skip SQL (once-per-epoch).
+                let already_applied = match sidecar.auth_invalidation_applied() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return Err(self
+                            .cleanup_with(DesktopLocalCompositionError::Bootstrap(
+                                DesktopLocalBootstrapError::Principal(
+                                    openbot_infra::db::InfraError::repository_invariant(
+                                        "desktop_local_auth_invalidation_applied_invalid",
+                                    ),
+                                ),
+                            ))
+                            .await);
+                    }
+                };
+                if !already_applied {
+                    if let Err(error) = tokio::time::timeout(
+                        STARTUP_DB_STEP_TIMEOUT,
+                        self.installation
+                            .authority()
+                            .advance_auth_generation(self.database.pool()),
                     )
-                })
-                .and_then(std::convert::identity)
-                {
-                    return Err(self
-                        .cleanup_with(DesktopLocalCompositionError::Bootstrap(
-                            DesktopLocalBootstrapError::Principal(error),
-                        ))
-                        .await);
+                    .await
+                    .map_err(|_| {
+                        openbot_infra::db::InfraError::repository_invariant(
+                            "desktop_local_auth_generation_advance_timeout",
+                        )
+                    })
+                    .and_then(std::convert::identity)
+                    {
+                        return Err(self
+                            .cleanup_with(DesktopLocalCompositionError::Bootstrap(
+                                DesktopLocalBootstrapError::Principal(error),
+                            ))
+                            .await);
+                    }
+                    if sidecar.mark_auth_invalidation_applied().is_err() {
+                        return Err(self
+                            .cleanup_with(DesktopLocalCompositionError::Bootstrap(
+                                DesktopLocalBootstrapError::Principal(
+                                    openbot_infra::db::InfraError::repository_invariant(
+                                        "desktop_local_auth_invalidation_applied_failed",
+                                    ),
+                                ),
+                            ))
+                            .await);
+                    }
                 }
                 if sidecar.clear_auth_invalidation_after_advance().is_err() {
                     return Err(self

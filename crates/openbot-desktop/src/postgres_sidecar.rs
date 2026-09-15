@@ -601,6 +601,45 @@ impl PostgresStartLock {
         )
     }
 
+    /// Whether auth-invalidation-applied matches the current recovery epoch (V6-PR-024).
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    pub(crate) fn auth_invalidation_applied(&self) -> Result<bool, PostgresSidecarError> {
+        self.ensure_current()?;
+        let Some(epoch) = self.recovery_epoch.as_ref() else {
+            return Ok(false);
+        };
+        recovery_epoch::auth_invalidation_applied(
+            &self.kernel_guard,
+            self.kernel_guard.root(),
+            self.instance_id.as_ref(),
+            epoch,
+        )
+    }
+
+    /// Record that generation advance for the current epoch was committed (V6-PR-024).
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    pub(crate) fn mark_auth_invalidation_applied(&self) -> Result<(), PostgresSidecarError> {
+        self.ensure_current()?;
+        let Some(epoch) = self.recovery_epoch.as_ref() else {
+            return Err(PostgresSidecarError::StartLockGuardInvalid);
+        };
+        recovery_epoch::write_auth_invalidation_applied(
+            &self.kernel_guard,
+            self.kernel_guard.root(),
+            self.instance_id.as_ref(),
+            epoch,
+        )?;
+        if !recovery_epoch::auth_invalidation_applied(
+            &self.kernel_guard,
+            self.kernel_guard.root(),
+            self.instance_id.as_ref(),
+            epoch,
+        )? {
+            return Err(PostgresSidecarError::StartLockGuardInvalid);
+        }
+        Ok(())
+    }
+
     #[cfg(all(
         feature = "postgres-key-store",
         feature = "postgres-supervisor",
@@ -1158,6 +1197,24 @@ impl RunningPostgresSidecar {
             .as_ref()
             .ok_or(PostgresSidecarError::StartLockGuardInvalid)?
             .clear_auth_invalidation_after_advance()
+    }
+
+    /// Whether generation advance for this epoch was already recorded (V6-PR-024).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn auth_invalidation_applied(&self) -> Result<bool, PostgresSidecarError> {
+        self.lock
+            .as_ref()
+            .ok_or(PostgresSidecarError::StartLockGuardInvalid)?
+            .auth_invalidation_applied()
+    }
+
+    /// Plant applied witness after a successful generation advance (V6-PR-024).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn mark_auth_invalidation_applied(&self) -> Result<(), PostgresSidecarError> {
+        self.lock
+            .as_ref()
+            .ok_or(PostgresSidecarError::StartLockGuardInvalid)?
+            .mark_auth_invalidation_applied()
     }
 
     /// Fresh/existing result proved before process start.
