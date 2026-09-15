@@ -3765,11 +3765,34 @@ mod tests {
         assert!(row.get::<_, bool>(2));
         assert!(row.get::<_, bool>(3));
         assert_eq!(data_plane.auth_context().auth_generation().get(), 0);
-        // V6-PR-026: live sidecar matrix for advance_auth_generation (020/021/023/025).
+        // V6-PR-026/027: live sidecar matrix for advance_auth_generation.
+        let tenant = data_plane.auth_context().tenant().as_str().to_owned();
+        let deployment = data_plane.auth_context().deployment().as_str().to_owned();
         client
             .execute(
                 "INSERT INTO public.sessions(id,user_id,token,expires_at,created_at,updated_at,auth_generation)                  VALUES('desktop-adv-session',$1,'desktop-adv-token',clock_timestamp()+interval '1 day',                         clock_timestamp(),clock_timestamp(),0)",
                 &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.threads(                   thread_id,tenant_id,deployment_id,created_by,anchor_kind,anchor_id,status                 ) VALUES(                   'desktop-adv-thread',$1,$2,$3,'channel','desktop-home','active'                 )",
+                &[&tenant, &deployment, &DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.thread_memberships(thread_id,user_id)                  VALUES('desktop-adv-thread',$1)",
+                &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.thread_leases(                   thread_id,owner_id,fencing_token,acquired_at,expires_at,updated_at                 ) VALUES(                   'desktop-adv-thread','runtime',1,                   clock_timestamp(),clock_timestamp()+interval '10 minutes',clock_timestamp()                 )",
+                &[],
             )
             .await
             .unwrap();
@@ -3806,6 +3829,15 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(pending, 0);
+        let lease_live: i64 = client
+            .query_one(
+                "SELECT count(*)::bigint FROM public.thread_leases                  WHERE thread_id='desktop-adv-thread' AND expires_at>clock_timestamp()",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(lease_live, 0);
         // No pending approvals → no cancel audit rows required; generation path must still commit.
         client
             .execute(
