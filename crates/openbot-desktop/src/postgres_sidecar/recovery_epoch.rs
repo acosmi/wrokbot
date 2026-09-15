@@ -1,9 +1,10 @@
 //! Installation-local recovery epoch evidence for controlled start-lock reclaim (V6-PR-014).
 //!
 //! Minting happens only on the verified Quiescent reclaim path. V6-PR-016 compares a consumed
-//! epoch file so unreclaimed epochs block new secret writes; V6-PR-017 may write that consumed
-//! witness after Existing secret readback. This module does not bump auth_generation, open
-//! Application, or claim backup RestoreAuthorized.
+//! epoch file so unreclaimed epochs block new secret writes; V6-PR-017/018 may write that consumed
+//! witness on secret reconcile. V6-PR-019 plants `.auth-invalidation-required-v1` on the same
+//! consume path as a durable obligation for a later auth_generation bump. This module does not
+//! itself bump auth_generation, open Application, or claim backup RestoreAuthorized.
 
 use super::kernel_start_lock::KernelStartLock;
 use super::{
@@ -15,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 const EPOCH_HEADER: &str = "openbot-postgres-recovery-epoch-v1";
 const CONSUMED_HEADER: &str = "openbot-postgres-consumed-recovery-epoch-v1";
+const AUTH_INVALIDATION_HEADER: &str = "openbot-postgres-auth-invalidation-required-v1";
 const EPOCH_BYTES: usize = 32;
 const EPOCH_HEX_BYTES: usize = EPOCH_BYTES * 2;
 const MAX_FILE_BYTES: usize = 512;
@@ -239,6 +241,67 @@ pub(super) fn write_consumed_matching(
     instance_id: &str,
     current: &RecoveryEpoch,
 ) -> Result<(), PostgresSidecarError> {
+    write_labeled_epoch_witness(
+        owner,
+        app_data_root,
+        instance_id,
+        current,
+        CONSUMED_HEADER,
+        &consumed_path(app_data_root, instance_id),
+    )
+}
+
+/// Plant auth-invalidation-required equal to `current` (V6-PR-019). Idempotent when matching.
+pub(super) fn write_auth_invalidation_required(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    current: &RecoveryEpoch,
+) -> Result<(), PostgresSidecarError> {
+    write_labeled_epoch_witness(
+        owner,
+        app_data_root,
+        instance_id,
+        current,
+        AUTH_INVALIDATION_HEADER,
+        &auth_invalidation_path(app_data_root, instance_id),
+    )
+}
+
+/// True when auth-invalidation-required exists and matches `current` epoch.
+pub(super) fn auth_invalidation_required(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    current: &RecoveryEpoch,
+) -> Result<bool, PostgresSidecarError> {
+    if !owner.is_current()
+        || owner.root() != app_data_root
+        || !valid_instance_id(instance_id)
+        || !current.is_current()
+    {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    match load_labeled_epoch_hex(
+        owner,
+        app_data_root,
+        instance_id,
+        AUTH_INVALIDATION_HEADER,
+        &auth_invalidation_path(app_data_root, instance_id),
+    )? {
+        None => Ok(false),
+        Some(hex) => Ok(hex == current.epoch_hex()),
+    }
+}
+
+fn write_labeled_epoch_witness(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    current: &RecoveryEpoch,
+    header: &str,
+    path: &Path,
+) -> Result<(), PostgresSidecarError> {
     if !owner.is_current()
         || owner.root() != app_data_root
         || !valid_instance_id(instance_id)
@@ -247,13 +310,11 @@ pub(super) fn write_consumed_matching(
         return Err(PostgresSidecarError::StartLockGuardInvalid);
     }
     let epoch_hex = current.epoch_hex().to_owned();
-    let path = consumed_path(app_data_root, instance_id);
-    let bytes =
-        format!("{CONSUMED_HEADER}\ninstance={instance_id}\nepoch={epoch_hex}\n").into_bytes();
+    let bytes = format!("{header}\ninstance={instance_id}\nepoch={epoch_hex}\n").into_bytes();
     if bytes.len() > MAX_FILE_BYTES {
         return Err(PostgresSidecarError::StartLockGuardInvalid);
     }
-    match fs::symlink_metadata(&path) {
+    match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let (candidate_path, mut candidate) = create_candidate(app_data_root, instance_id)
                 .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
@@ -271,13 +332,13 @@ pub(super) fn write_consumed_matching(
                 let _ = fs::remove_file(&candidate_path);
                 return Err(PostgresSidecarError::StartLockGuardInvalid);
             }
-            match fs::hard_link(&candidate_path, &path) {
+            match fs::hard_link(&candidate_path, path) {
                 Ok(()) => {
                     if sync_directory(app_data_root).is_err()
-                        || !path_matches_open_file(&path, &candidate, &bytes, false)
+                        || !path_matches_open_file(path, &candidate, &bytes, false)
                         || fs::remove_file(&candidate_path).is_err()
                         || sync_directory(app_data_root).is_err()
-                        || !path_matches_open_file(&path, &candidate, &bytes, true)
+                        || !path_matches_open_file(path, &candidate, &bytes, true)
                         || !owner.is_current()
                         || !current.is_current()
                     {
@@ -287,8 +348,15 @@ pub(super) fn write_consumed_matching(
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     let _ = fs::remove_file(&candidate_path);
-                    // Race: fall through to replace path after re-open.
-                    write_consumed_replace(owner, app_data_root, instance_id, current, &path, bytes)
+                    write_labeled_epoch_replace(
+                        owner,
+                        app_data_root,
+                        instance_id,
+                        current,
+                        header,
+                        path,
+                        bytes,
+                    )
                 }
                 Err(_) => {
                     let _ = fs::remove_file(&candidate_path);
@@ -296,16 +364,25 @@ pub(super) fn write_consumed_matching(
                 }
             }
         }
-        Ok(_) => write_consumed_replace(owner, app_data_root, instance_id, current, &path, bytes),
+        Ok(_) => write_labeled_epoch_replace(
+            owner,
+            app_data_root,
+            instance_id,
+            current,
+            header,
+            path,
+            bytes,
+        ),
         Err(_) => Err(PostgresSidecarError::StartLockGuardInvalid),
     }
 }
 
-fn write_consumed_replace(
+fn write_labeled_epoch_replace(
     owner: &KernelStartLock,
     root: &Path,
     instance_id: &str,
     current: &RecoveryEpoch,
+    header: &str,
     path: &Path,
     bytes: Vec<u8>,
 ) -> Result<(), PostgresSidecarError> {
@@ -320,12 +397,11 @@ fn write_consumed_replace(
     old_file
         .read_to_end(&mut old_bytes)
         .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-    let old_hex = parse_epoch_bytes_with_header(&old_bytes, instance_id, CONSUMED_HEADER)?;
+    let old_hex = parse_epoch_bytes_with_header(&old_bytes, instance_id, header)?;
     if !path_matches_open_file(path, &old_file, &old_bytes, true) {
         return Err(PostgresSidecarError::StartLockGuardInvalid);
     }
     if old_hex == current.epoch_hex() {
-        // Already matching; treat as success without rewrite.
         return Ok(());
     }
     let (candidate_path, mut candidate) = create_candidate(root, instance_id)
@@ -342,7 +418,6 @@ fn write_consumed_replace(
         let _ = fs::remove_file(&candidate_path);
         return Err(PostgresSidecarError::StartLockGuardInvalid);
     }
-    // Atomic replace via rename over exact old path after confirming old still matches.
     if !path_matches_open_file(path, &old_file, &old_bytes, true) {
         let _ = fs::remove_file(&candidate_path);
         return Err(PostgresSidecarError::StartLockGuardInvalid);
@@ -357,6 +432,47 @@ fn write_consumed_replace(
     }
     Ok(())
 }
+
+fn auth_invalidation_path(root: &Path, instance_id: &str) -> PathBuf {
+    root.join(format!(
+        ".postgresql-17-{instance_id}.auth-invalidation-required-v1"
+    ))
+}
+
+fn load_labeled_epoch_hex(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    header: &str,
+    path: &Path,
+) -> Result<Option<String>, PostgresSidecarError> {
+    if !owner.is_current() || owner.root() != app_data_root || !valid_instance_id(instance_id) {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Ok(metadata) => {
+            if !valid_epoch_metadata(&metadata, None) {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            let mut file =
+                secure_open_read(path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            let epoch_hex = parse_epoch_bytes_with_header(&bytes, instance_id, header)?;
+            if !path_matches_open_file(path, &file, &bytes, true) || !owner.is_current() {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            Ok(Some(epoch_hex))
+        }
+        Err(_) => Err(PostgresSidecarError::StartLockGuardInvalid),
+    }
+}
+
 
 fn consumed_path(root: &Path, instance_id: &str) -> PathBuf {
     root.join(format!(
@@ -395,32 +511,13 @@ fn load_consumed_hex(
     app_data_root: &Path,
     instance_id: &str,
 ) -> Result<Option<String>, PostgresSidecarError> {
-    if !owner.is_current() || owner.root() != app_data_root || !valid_instance_id(instance_id) {
-        return Err(PostgresSidecarError::StartLockGuardInvalid);
-    }
-    let path = consumed_path(app_data_root, instance_id);
-    match fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Ok(metadata) => {
-            if !valid_epoch_metadata(&metadata, None) {
-                return Err(PostgresSidecarError::StartLockGuardInvalid);
-            }
-            let mut file =
-                secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)
-                .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
-                return Err(PostgresSidecarError::StartLockGuardInvalid);
-            }
-            let epoch_hex = parse_epoch_bytes_with_header(&bytes, instance_id, CONSUMED_HEADER)?;
-            if !path_matches_open_file(&path, &file, &bytes, true) || !owner.is_current() {
-                return Err(PostgresSidecarError::StartLockGuardInvalid);
-            }
-            Ok(Some(epoch_hex))
-        }
-        Err(_) => Err(PostgresSidecarError::StartLockGuardInvalid),
-    }
+    load_labeled_epoch_hex(
+        owner,
+        app_data_root,
+        instance_id,
+        CONSUMED_HEADER,
+        &consumed_path(app_data_root, instance_id),
+    )
 }
 
 fn epoch_path(root: &Path, instance_id: &str) -> PathBuf {
@@ -696,6 +793,13 @@ mod tests {
         file.sync_all().unwrap();
     }
 
+
+    fn auth_invalidation_path_for(root: &Path, instance: &str) -> PathBuf {
+        root.join(format!(
+            ".postgresql-17-{instance}.auth-invalidation-required-v1"
+        ))
+    }
+
     fn plant_data_dir(root: &Path, instance: &str) -> PathBuf {
         let data_dir = root.join(format!("postgresql-17-{instance}"));
         fs::create_dir_all(&data_dir).unwrap();
@@ -718,6 +822,7 @@ mod tests {
         .unwrap();
         assert!(lock.control_invalidation_pending());
         assert!(!consumed_path_for(&root, &instance).exists());
+        assert!(!auth_invalidation_path_for(&root, &instance).exists());
         drop(lock);
         let _ = fs::remove_dir_all(&root);
     }
@@ -746,6 +851,7 @@ mod tests {
         )
         .unwrap();
         assert!(!second.control_invalidation_pending());
+        assert!(!auth_invalidation_path_for(&root, &instance).exists());
         drop(second);
         let _ = fs::remove_dir_all(&root);
     }

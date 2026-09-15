@@ -583,6 +583,24 @@ impl PostgresStartLock {
         let Some(epoch) = self.recovery_epoch.as_ref() else {
             return Err(PostgresSecretStoreError::ReconciliationRequired);
         };
+        // V6-PR-019: plant auth-invalidation obligation before claiming consumed.
+        recovery_epoch::write_auth_invalidation_required(
+            &self.kernel_guard,
+            self.kernel_guard.root(),
+            self.instance_id.as_ref(),
+            epoch,
+        )
+        .map_err(|_| PostgresSecretStoreError::ReconciliationRequired)?;
+        if !recovery_epoch::auth_invalidation_required(
+            &self.kernel_guard,
+            self.kernel_guard.root(),
+            self.instance_id.as_ref(),
+            epoch,
+        )
+        .map_err(|_| PostgresSecretStoreError::ReconciliationRequired)?
+        {
+            return Err(PostgresSecretStoreError::ReconciliationRequired);
+        }
         recovery_epoch::write_consumed_matching(
             &self.kernel_guard,
             self.kernel_guard.root(),
@@ -5229,6 +5247,23 @@ mod tests {
         assert!(root
             .join(format!(".postgresql-17-{instance}.consumed-recovery-epoch-v1"))
             .is_file());
+        let auth_req = root.join(format!(
+            ".postgresql-17-{instance}.auth-invalidation-required-v1"
+        ));
+        assert!(auth_req.is_file());
+        let epoch_hex = fs::read_to_string(root.join(format!(
+            ".postgresql-17-{instance}.recovery-epoch-v1"
+        )))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
+        .unwrap();
+        let auth_hex = fs::read_to_string(&auth_req)
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
+            .unwrap();
+        assert_eq!(epoch_hex, auth_hex);
         drop(lock);
         fs::remove_dir_all(&root).unwrap();
     }
@@ -5277,6 +5312,9 @@ mod tests {
         let consumed_exists = root
             .join(format!(".postgresql-17-{instance}.consumed-recovery-epoch-v1"))
             .is_file();
+        let auth_exists = root
+            .join(format!(".postgresql-17-{instance}.auth-invalidation-required-v1"))
+            .is_file();
         drop(lock);
         fs::remove_dir_all(&root).unwrap();
         assert!(
@@ -5284,6 +5322,7 @@ mod tests {
             "{rejected:?}"
         );
         assert!(!consumed_exists);
+        assert!(!auth_exists);
     }
 
     #[cfg(all(
@@ -5351,6 +5390,23 @@ mod tests {
             .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
             .unwrap();
         assert_eq!(epoch_hex, consumed_hex);
+        let auth_req = root.join(format!(
+            ".postgresql-17-{instance}.auth-invalidation-required-v1"
+        ));
+        assert!(auth_req.is_file());
+        let auth_hex = fs::read_to_string(&auth_req)
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
+            .unwrap();
+        assert_eq!(epoch_hex, auth_hex);
+        assert!(auth_req
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+            == 0o600);
         drop(lock);
         fs::remove_dir_all(&root).unwrap();
     }
