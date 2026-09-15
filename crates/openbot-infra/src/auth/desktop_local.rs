@@ -145,8 +145,8 @@ impl DesktopLocalAuthority {
         .await
     }
 
-    /// Advance `users.auth_generation` once and terminate desktop-local sessions (V6-PR-020/021).
-    /// Does not revoke leases/capabilities or touch approval rows (later knives).
+    /// Advance `users.auth_generation`, terminate sessions, and cancel pending approvals (V6-PR-020/021/023).
+    /// Does not revoke leases/capabilities (later knives).
     pub async fn advance_auth_generation(&self, pool: &Pool) -> Result<u64, InfraError> {
         let mut client = pool
             .get()
@@ -170,6 +170,15 @@ impl DesktopLocalAuthority {
             )
             .await
             .map_err(|error| InfraError::query("终止 desktop-local sessions", error))?;
+        // V6-PR-023: cancel outstanding pending tool approvals for this actor only.
+        // cancelled rows require decided_at set and decided_by NULL (native_0020 checks).
+        transaction
+            .execute(
+                "UPDATE public.tool_approvals                  SET state='cancelled', decided_at=clock_timestamp(), decided_by=NULL,                      arguments_summary=NULL, change_summary=NULL,                      updated_at=clock_timestamp()                  WHERE actor_id=$1 AND state='pending'",
+                &[&self.auth.actor().as_str()],
+            )
+            .await
+            .map_err(|error| InfraError::query("取消 desktop-local pending approvals", error))?;
         transaction
             .commit()
             .await
