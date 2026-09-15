@@ -571,6 +571,36 @@ impl PostgresStartLock {
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Whether a matching auth-invalidation-required witness is outstanding (V6-PR-019/020).
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    pub(crate) fn auth_invalidation_outstanding(&self) -> Result<bool, PostgresSidecarError> {
+        self.ensure_current()?;
+        let Some(epoch) = self.recovery_epoch.as_ref() else {
+            return Ok(false);
+        };
+        recovery_epoch::auth_invalidation_required(
+            &self.kernel_guard,
+            self.kernel_guard.root(),
+            self.instance_id.as_ref(),
+            epoch,
+        )
+    }
+
+    /// Clear matching auth-invalidation-required after auth_generation was advanced (V6-PR-020).
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    pub(crate) fn clear_auth_invalidation_after_advance(&self) -> Result<(), PostgresSidecarError> {
+        self.ensure_current()?;
+        let Some(epoch) = self.recovery_epoch.as_ref() else {
+            return Err(PostgresSidecarError::StartLockGuardInvalid);
+        };
+        recovery_epoch::clear_auth_invalidation_required(
+            &self.kernel_guard,
+            self.kernel_guard.root(),
+            self.instance_id.as_ref(),
+            epoch,
+        )
+    }
+
     #[cfg(all(
         feature = "postgres-key-store",
         feature = "postgres-supervisor",
@@ -1110,6 +1140,24 @@ impl RunningPostgresSidecar {
             )
             .map_err(map_startup_journal_error)?;
         Ok(())
+    }
+
+    /// Whether auth-invalidation-required still needs a generation bump (V6-PR-020).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn auth_invalidation_outstanding(&self) -> Result<bool, PostgresSidecarError> {
+        self.lock
+            .as_ref()
+            .ok_or(PostgresSidecarError::StartLockGuardInvalid)?
+            .auth_invalidation_outstanding()
+    }
+
+    /// Clear the matching auth-invalidation-required witness after generation advance.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn clear_auth_invalidation_after_advance(&self) -> Result<(), PostgresSidecarError> {
+        self.lock
+            .as_ref()
+            .ok_or(PostgresSidecarError::StartLockGuardInvalid)?
+            .clear_auth_invalidation_after_advance()
     }
 
     /// Fresh/existing result proved before process start.

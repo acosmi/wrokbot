@@ -145,6 +145,30 @@ impl DesktopLocalAuthority {
         .await
     }
 
+    /// Advance `users.auth_generation` once for the desktop-local principal (V6-PR-020).
+    /// Does not delete sessions or other control rows.
+    pub async fn advance_auth_generation(&self, pool: &Pool) -> Result<u64, InfraError> {
+        let mut client = pool
+            .get()
+            .await
+            .map_err(|error| InfraError::connect("取 desktop-local generation 连接", error))?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| InfraError::query("开始 desktop-local generation 事务", error))?;
+        let next = crate::repo::people_admin::advance_generation(
+            &transaction,
+            self.auth.actor(),
+            None,
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| InfraError::query("提交 desktop-local generation", error))?;
+        Ok(next)
+    }
+
     /// Resolve runtime authority from the attested installation's business database after repair.
     /// The Desktop actor and instance scope are fixed by this authority, never an external context.
     pub async fn load_runtime_auth_context(&self, pool: &Pool) -> Result<AuthContext, InfraError> {
