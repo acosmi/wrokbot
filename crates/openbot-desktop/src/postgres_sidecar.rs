@@ -3765,6 +3765,48 @@ mod tests {
         assert!(row.get::<_, bool>(2));
         assert!(row.get::<_, bool>(3));
         assert_eq!(data_plane.auth_context().auth_generation().get(), 0);
+        // V6-PR-026: live sidecar matrix for advance_auth_generation (020/021/023/025).
+        client
+            .execute(
+                "INSERT INTO public.sessions(id,user_id,token,expires_at,created_at,updated_at,auth_generation)                  VALUES('desktop-adv-session',$1,'desktop-adv-token',clock_timestamp()+interval '1 day',                         clock_timestamp(),clock_timestamp(),0)",
+                &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
+        let next = data_plane
+            .authority()
+            .advance_auth_generation(data_plane.pool(), first_material.expose_audit_key())
+            .await
+            .unwrap();
+        assert_eq!(next, 1);
+        let auth_gen: i64 = client
+            .query_one(
+                "SELECT coalesce(auth_generation,0) FROM public.users WHERE id=$1",
+                &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(auth_gen, 1);
+        let sessions: i64 = client
+            .query_one(
+                "SELECT count(*)::bigint FROM public.sessions WHERE user_id=$1",
+                &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(sessions, 0);
+        let pending: i64 = client
+            .query_one(
+                "SELECT count(*)::bigint FROM public.tool_approvals WHERE actor_id=$1 AND state='pending'",
+                &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(pending, 0);
+        // No pending approvals → no cancel audit rows required; generation path must still commit.
         client
             .execute(
                 "UPDATE public.users SET auth_generation=7 WHERE id=$1",
