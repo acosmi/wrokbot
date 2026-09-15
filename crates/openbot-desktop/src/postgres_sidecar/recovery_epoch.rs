@@ -3,8 +3,9 @@
 //! Minting happens only on the verified Quiescent reclaim path. V6-PR-016 compares a consumed
 //! epoch file so unreclaimed epochs block new secret writes; V6-PR-017/018 may write that consumed
 //! witness on secret reconcile. V6-PR-019 plants `.auth-invalidation-required-v1` on the same
-//! consume path as a durable obligation for a later auth_generation bump. This module does not
-//! itself bump auth_generation, open Application, or claim backup RestoreAuthorized.
+//! consume path as a durable obligation. V6-PR-020 may clear that file after a successful
+//! desktop-local auth_generation bump. This module does not itself bump auth_generation, open
+//! Application, or claim backup RestoreAuthorized.
 
 use super::kernel_start_lock::KernelStartLock;
 use super::{
@@ -291,6 +292,55 @@ pub(super) fn auth_invalidation_required(
     )? {
         None => Ok(false),
         Some(hex) => Ok(hex == current.epoch_hex()),
+    }
+}
+
+/// Remove a matching auth-invalidation-required witness after generation was advanced (V6-PR-020).
+/// Absence is success. Mismatch or corrupt file fails closed.
+pub(super) fn clear_auth_invalidation_required(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    current: &RecoveryEpoch,
+) -> Result<(), PostgresSidecarError> {
+    if !owner.is_current()
+        || owner.root() != app_data_root
+        || !valid_instance_id(instance_id)
+        || !current.is_current()
+    {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    let path = auth_invalidation_path(app_data_root, instance_id);
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(metadata) => {
+            if !valid_epoch_metadata(&metadata, None) {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            let mut file =
+                secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            let hex = parse_epoch_bytes_with_header(&bytes, instance_id, AUTH_INVALIDATION_HEADER)?;
+            if hex != current.epoch_hex()
+                || !path_matches_open_file(&path, &file, &bytes, true)
+                || !owner.is_current()
+            {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            drop(file);
+            fs::remove_file(&path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            sync_directory(app_data_root).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            if !owner.is_current() || !current.is_current() {
+                return Err(PostgresSidecarError::StartLockGuardInvalid);
+            }
+            Ok(())
+        }
+        Err(_) => Err(PostgresSidecarError::StartLockGuardInvalid),
     }
 }
 
@@ -853,6 +903,38 @@ mod tests {
         assert!(!second.control_invalidation_pending());
         assert!(!auth_invalidation_path_for(&root, &instance).exists());
         drop(second);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clear_auth_invalidation_required_removes_matching_file() {
+        let root = temp_root("020-clear-auth");
+        let instance = "a".repeat(64);
+        let data_dir = plant_data_dir(&root, &instance);
+        let _ = plant_stale_lock(&root, &instance);
+        let lock = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        let hex = read_epoch_hex(&epoch_path_for(&root, &instance));
+        let auth_path = auth_invalidation_path_for(&root, &instance);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = options.open(&auth_path).unwrap();
+        let body = format!(
+            "openbot-postgres-auth-invalidation-required-v1\ninstance={instance}\nepoch={hex}\n"
+        );
+        std::io::Write::write_all(&mut file, body.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+        assert!(lock.auth_invalidation_outstanding().unwrap());
+        lock.clear_auth_invalidation_after_advance().unwrap();
+        assert!(!auth_path.exists());
+        assert!(!lock.auth_invalidation_outstanding().unwrap());
+        lock.clear_auth_invalidation_after_advance().unwrap();
+        drop(lock);
         let _ = fs::remove_dir_all(&root);
     }
 

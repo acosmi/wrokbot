@@ -215,6 +215,64 @@ impl PreparedDesktopLocalDataPlane {
         if let Err(error) = self.ensure_owner_current() {
             return Err(self.cleanup_with(error).await);
         }
+        // V6-PR-020: matching auth-invalidation-required → bump generation only, then clear witness.
+        #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+        {
+            let sidecar = self
+                .sidecar
+                .as_ref()
+                .ok_or(DesktopLocalCompositionError::SidecarShutdown)?;
+            let outstanding = match sidecar.auth_invalidation_outstanding() {
+                Ok(value) => value,
+                Err(_) => {
+                    return Err(self
+                        .cleanup_with(DesktopLocalCompositionError::Bootstrap(
+                            DesktopLocalBootstrapError::Principal(
+                                openbot_infra::db::InfraError::repository_invariant(
+                                    "desktop_local_auth_invalidation_witness_invalid",
+                                ),
+                            ),
+                        ))
+                        .await);
+                }
+            };
+            if outstanding {
+                if let Err(error) = tokio::time::timeout(
+                    STARTUP_DB_STEP_TIMEOUT,
+                    self.installation
+                        .authority()
+                        .advance_auth_generation(self.database.pool()),
+                )
+                .await
+                .map_err(|_| {
+                    openbot_infra::db::InfraError::repository_invariant(
+                        "desktop_local_auth_generation_advance_timeout",
+                    )
+                })
+                .and_then(std::convert::identity)
+                {
+                    return Err(self
+                        .cleanup_with(DesktopLocalCompositionError::Bootstrap(
+                            DesktopLocalBootstrapError::Principal(error),
+                        ))
+                        .await);
+                }
+                if sidecar.clear_auth_invalidation_after_advance().is_err() {
+                    return Err(self
+                        .cleanup_with(DesktopLocalCompositionError::Bootstrap(
+                            DesktopLocalBootstrapError::Principal(
+                                openbot_infra::db::InfraError::repository_invariant(
+                                    "desktop_local_auth_invalidation_clear_failed",
+                                ),
+                            ),
+                        ))
+                        .await);
+                }
+                if let Err(error) = self.ensure_owner_current() {
+                    return Err(self.cleanup_with(error).await);
+                }
+            }
+        }
         let runtime_auth = match tokio::time::timeout(
             STARTUP_DB_STEP_TIMEOUT,
             self.installation
