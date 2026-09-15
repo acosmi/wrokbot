@@ -3718,7 +3718,7 @@ mod tests {
             .unwrap();
         let (first_material, proof, database_origin) = ready.into_parts();
         let data_plane = prepared
-            .complete_after_vault(&correct_package, database_origin, &proof)
+            .complete_after_vault(&correct_package, database_origin, &proof, first_material.expose_audit_key())
             .await
             .unwrap();
         assert_eq!(
@@ -3817,7 +3817,7 @@ mod tests {
             .unwrap();
         let (restarted_material, proof, database_origin) = ready.into_parts();
         let restarted = prepared
-            .complete_after_vault(&correct_package, database_origin, &proof)
+            .complete_after_vault(&correct_package, database_origin, &proof, restarted_material.expose_audit_key())
             .await
             .unwrap();
         assert_eq!(
@@ -3903,9 +3903,9 @@ mod tests {
                         )
                         .await
                         .unwrap();
-                    let (_, proof, database_origin) = ready.into_parts();
+                    let (material, proof, database_origin) = ready.into_parts();
                     prepared
-                        .complete_after_vault(&correct_package, database_origin, &proof)
+                        .complete_after_vault(&correct_package, database_origin, &proof, material.expose_audit_key())
                         .await
                 },
                 Err(DesktopLocalCompositionError::Bootstrap(
@@ -4263,9 +4263,8 @@ mod tests {
             .await
             .unwrap();
         let (material, proof, origin) = ready.into_parts();
-        drop(material);
         let running = prepared
-            .complete_after_vault(&fixture.package, origin, &proof)
+            .complete_after_vault(&fixture.package, origin, &proof, material.expose_audit_key())
             .await
             .unwrap();
         running.shutdown().await.unwrap();
@@ -4346,7 +4345,7 @@ mod tests {
             .unwrap();
         let (material, proof, database_origin) = ready.into_parts();
         let owner = prepared
-            .complete_after_vault(&package, database_origin, &proof)
+            .complete_after_vault(&package, database_origin, &proof, material.expose_audit_key())
             .await
             .unwrap();
         let id = Uuid::from_u128(0x1234);
@@ -4442,7 +4441,7 @@ mod tests {
             .unwrap();
         let (restored, proof, database_origin) = ready.into_parts();
         let owner = prepared
-            .complete_after_vault(&package, database_origin, &proof)
+            .complete_after_vault(&package, database_origin, &proof, restored.expose_audit_key())
             .await
             .unwrap();
         assert_eq!(
