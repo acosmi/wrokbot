@@ -145,8 +145,8 @@ impl DesktopLocalAuthority {
         .await
     }
 
-    /// Advance `users.auth_generation` once for the desktop-local principal (V6-PR-020).
-    /// Does not delete sessions or other control rows.
+    /// Advance `users.auth_generation` once and terminate desktop-local sessions (V6-PR-020/021).
+    /// Does not revoke leases/capabilities or touch approval rows (later knives).
     pub async fn advance_auth_generation(&self, pool: &Pool) -> Result<u64, InfraError> {
         let mut client = pool
             .get()
@@ -162,6 +162,14 @@ impl DesktopLocalAuthority {
             None,
         )
         .await?;
+        // V6-PR-021: same-transaction session termination for this principal only.
+        transaction
+            .execute(
+                "DELETE FROM public.sessions WHERE user_id=$1",
+                &[&self.auth.actor().as_str()],
+            )
+            .await
+            .map_err(|error| InfraError::query("终止 desktop-local sessions", error))?;
         transaction
             .commit()
             .await
