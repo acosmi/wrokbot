@@ -1386,6 +1386,16 @@ impl PostgresSidecarSupervisor {
         helper_journal
             .revalidate(&lock)
             .map_err(map_helper_journal_error)?;
+        // V6-PR-022: Existing clusters may keep a stale postmaster.pid after crash. With Empty
+        // openers re-checked here, remove only that pid file so PG can run its own recovery.
+        // Never delete PG_VERSION / pg_wal / base.
+        #[cfg(target_os = "macos")]
+        if origin == PostgresSidecarOrigin::Existing {
+            startup_preparation
+                .ensure_no_foreign_openers()
+                .map_err(map_startup_journal_error)?;
+            remove_stale_postmaster_pid(data_dir)?;
+        }
         #[cfg(target_os = "macos")]
         let mut startup_journal = startup_preparation
             .begin_spawn(&lock)
@@ -1922,6 +1932,35 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), PostgresSidecarEr
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
+}
+
+
+/// Remove a leftover `postmaster.pid` so PostgreSQL can start its own crash recovery.
+/// Callers must already prove no foreign data-dir openers. Never touches data/WAL/version files.
+#[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+fn remove_stale_postmaster_pid(data_dir: &Path) -> Result<(), PostgresSidecarError> {
+    let path = data_dir.join("postmaster.pid");
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+                return Err(PostgresSidecarError::DataDirectoryInvalid);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                if metadata.nlink() != 1 || metadata.mode() & 0o777 != 0o600 {
+                    return Err(PostgresSidecarError::DataDirectoryInvalid);
+                }
+            }
+            fs::remove_file(&path).map_err(|_| PostgresSidecarError::DataDirectoryInvalid)?;
+            if !data_dir.join("PG_VERSION").is_file() {
+                return Err(PostgresSidecarError::DataDirectoryInvalid);
+            }
+            Ok(())
+        }
+        Err(_) => Err(PostgresSidecarError::DataDirectoryInvalid),
+    }
 }
 
 #[cfg(feature = "postgres-supervisor")]
@@ -5314,6 +5353,27 @@ mod tests {
         assert_eq!(epoch_hex, auth_hex);
         drop(lock);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    #[test]
+    fn remove_stale_postmaster_pid_keeps_pg_version() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = root("022-stale-pid");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let data = root.join("data");
+        fs::create_dir(&data).unwrap();
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(data.join("PG_VERSION"), b"17\n").unwrap();
+        let pid = data.join("postmaster.pid");
+        fs::write(&pid, b"1\n/data\n1234567890\n5432\n/tmp\n*\n5432\n\n").unwrap();
+        fs::set_permissions(&pid, fs::Permissions::from_mode(0o600)).unwrap();
+        remove_stale_postmaster_pid(&data).unwrap();
+        assert!(!pid.exists());
+        assert_eq!(fs::read(data.join("PG_VERSION")).unwrap(), b"17\n");
+        remove_stale_postmaster_pid(&data).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(all(
