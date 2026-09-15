@@ -4,8 +4,9 @@
 //! epoch file so unreclaimed epochs block new secret writes; V6-PR-017/018 may write that consumed
 //! witness on secret reconcile. V6-PR-019 plants `.auth-invalidation-required-v1` on the same
 //! consume path as a durable obligation. V6-PR-020 may clear that file after a successful
-//! desktop-local auth_generation bump. This module does not itself bump auth_generation, open
-//! Application, or claim backup RestoreAuthorized.
+//! desktop-local auth_generation bump. V6-PR-024 plants `.auth-invalidation-applied-v1` after
+//! that bump so a failed clear cannot cause a second bump for the same epoch. This module does
+//! not itself bump auth_generation, open Application, or claim backup RestoreAuthorized.
 
 use super::kernel_start_lock::KernelStartLock;
 use super::{
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 const EPOCH_HEADER: &str = "openbot-postgres-recovery-epoch-v1";
 const CONSUMED_HEADER: &str = "openbot-postgres-consumed-recovery-epoch-v1";
 const AUTH_INVALIDATION_HEADER: &str = "openbot-postgres-auth-invalidation-required-v1";
+const AUTH_INVALIDATION_APPLIED_HEADER: &str = "openbot-postgres-auth-invalidation-applied-v1";
 const EPOCH_BYTES: usize = 32;
 const EPOCH_HEX_BYTES: usize = EPOCH_BYTES * 2;
 const MAX_FILE_BYTES: usize = 512;
@@ -344,6 +346,50 @@ pub(super) fn clear_auth_invalidation_required(
     }
 }
 
+
+/// Plant auth-invalidation-applied equal to `current` (V6-PR-024). Idempotent when matching.
+pub(super) fn write_auth_invalidation_applied(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    current: &RecoveryEpoch,
+) -> Result<(), PostgresSidecarError> {
+    write_labeled_epoch_witness(
+        owner,
+        app_data_root,
+        instance_id,
+        current,
+        AUTH_INVALIDATION_APPLIED_HEADER,
+        &auth_invalidation_applied_path(app_data_root, instance_id),
+    )
+}
+
+/// True when auth-invalidation-applied exists and matches `current` epoch.
+pub(super) fn auth_invalidation_applied(
+    owner: &KernelStartLock,
+    app_data_root: &Path,
+    instance_id: &str,
+    current: &RecoveryEpoch,
+) -> Result<bool, PostgresSidecarError> {
+    if !owner.is_current()
+        || owner.root() != app_data_root
+        || !valid_instance_id(instance_id)
+        || !current.is_current()
+    {
+        return Err(PostgresSidecarError::StartLockGuardInvalid);
+    }
+    match load_labeled_epoch_hex(
+        owner,
+        app_data_root,
+        instance_id,
+        AUTH_INVALIDATION_APPLIED_HEADER,
+        &auth_invalidation_applied_path(app_data_root, instance_id),
+    )? {
+        None => Ok(false),
+        Some(hex) => Ok(hex == current.epoch_hex()),
+    }
+}
+
 fn write_labeled_epoch_witness(
     owner: &KernelStartLock,
     app_data_root: &Path,
@@ -486,6 +532,12 @@ fn write_labeled_epoch_replace(
 fn auth_invalidation_path(root: &Path, instance_id: &str) -> PathBuf {
     root.join(format!(
         ".postgresql-17-{instance_id}.auth-invalidation-required-v1"
+    ))
+}
+
+fn auth_invalidation_applied_path(root: &Path, instance_id: &str) -> PathBuf {
+    root.join(format!(
+        ".postgresql-17-{instance_id}.auth-invalidation-applied-v1"
     ))
 }
 
@@ -850,6 +902,12 @@ mod tests {
         ))
     }
 
+    fn auth_invalidation_applied_path_for(root: &Path, instance: &str) -> PathBuf {
+        root.join(format!(
+            ".postgresql-17-{instance}.auth-invalidation-applied-v1"
+        ))
+    }
+
     fn plant_data_dir(root: &Path, instance: &str) -> PathBuf {
         let data_dir = root.join(format!("postgresql-17-{instance}"));
         fs::create_dir_all(&data_dir).unwrap();
@@ -934,6 +992,88 @@ mod tests {
         assert!(!auth_path.exists());
         assert!(!lock.auth_invalidation_outstanding().unwrap());
         lock.clear_auth_invalidation_after_advance().unwrap();
+        drop(lock);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_auth_invalidation_applied_is_idempotent_when_matching() {
+        let root = temp_root("024-applied-idem");
+        let instance = "b".repeat(64);
+        let data_dir = plant_data_dir(&root, &instance);
+        let _ = plant_stale_lock(&root, &instance);
+        let lock = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        assert!(!lock.auth_invalidation_applied().unwrap());
+        lock.mark_auth_invalidation_applied().unwrap();
+        assert!(lock.auth_invalidation_applied().unwrap());
+        let path = auth_invalidation_applied_path_for(&root, &instance);
+        let before = fs::read(&path).unwrap();
+        lock.mark_auth_invalidation_applied().unwrap();
+        assert_eq!(before, fs::read(&path).unwrap());
+        drop(lock);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn applied_match_allows_clear_required_without_replant() {
+        let root = temp_root("024-clear-only");
+        let instance = "c".repeat(64);
+        let data_dir = plant_data_dir(&root, &instance);
+        let _ = plant_stale_lock(&root, &instance);
+        let lock = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        let hex = read_epoch_hex(&epoch_path_for(&root, &instance));
+        let auth_path = auth_invalidation_path_for(&root, &instance);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = options.open(&auth_path).unwrap();
+        let body = format!(
+            "openbot-postgres-auth-invalidation-required-v1\ninstance={instance}\nepoch={hex}\n"
+        );
+        std::io::Write::write_all(&mut file, body.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+        assert!(lock.auth_invalidation_outstanding().unwrap());
+        lock.mark_auth_invalidation_applied().unwrap();
+        assert!(lock.auth_invalidation_applied().unwrap());
+        lock.clear_auth_invalidation_after_advance().unwrap();
+        assert!(!auth_path.exists());
+        assert!(!lock.auth_invalidation_outstanding().unwrap());
+        assert!(lock.auth_invalidation_applied().unwrap());
+        drop(lock);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn corrupt_applied_fails_closed() {
+        let root = temp_root("024-bad-applied");
+        let instance = "1".repeat(64);
+        let data_dir = plant_data_dir(&root, &instance);
+        let _ = plant_stale_lock(&root, &instance);
+        let lock = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        )
+        .unwrap();
+        let path = auth_invalidation_applied_path_for(&root, &instance);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = options.open(&path).unwrap();
+        std::io::Write::write_all(&mut file, b"not-an-applied-witness\n").unwrap();
+        file.sync_all().unwrap();
+        assert!(lock.auth_invalidation_applied().is_err());
         drop(lock);
         let _ = fs::remove_dir_all(&root);
     }
