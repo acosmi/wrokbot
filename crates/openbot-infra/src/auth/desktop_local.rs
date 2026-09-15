@@ -148,8 +148,8 @@ impl DesktopLocalAuthority {
         .await
     }
 
-    /// Advance `users.auth_generation`, terminate sessions, and cancel pending approvals (V6-PR-020/021/023/025).
-    /// Does not revoke leases/capabilities (later knives).
+    /// Advance `users.auth_generation`, terminate sessions, cancel pending approvals, and expire member thread leases (V6-PR-020/021/023/025/027).
+    /// Does not clear durable capability/ticket rows (later knife).
     pub async fn advance_auth_generation(
         &self,
         pool: &Pool,
@@ -182,6 +182,14 @@ impl DesktopLocalAuthority {
             )
             .await
             .map_err(|error| InfraError::query("终止 desktop-local sessions", error))?;
+        // V6-PR-027: expire unexpired thread_leases on threads this actor is a member of.
+        transaction
+            .execute(
+                "UPDATE public.thread_leases AS l                  SET expires_at=greatest(clock_timestamp(), l.acquired_at + interval '1 microsecond'),                      updated_at=clock_timestamp()                  WHERE l.expires_at > clock_timestamp()                    AND EXISTS (                      SELECT 1 FROM public.thread_memberships AS tm                      WHERE tm.thread_id=l.thread_id AND tm.user_id=$1                    )",
+                &[&self.auth.actor().as_str()],
+            )
+            .await
+            .map_err(|error| InfraError::query("使 desktop-local 成员 thread_leases 过期", error))?;
         // V6-PR-023/025: cancel pending approvals and write cancel audit in the same transaction.
         // cancelled rows require decided_at set and decided_by NULL (native_0020 checks).
         let cancelled = transaction
