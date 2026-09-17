@@ -19,6 +19,7 @@ const ENVELOPE_MAX_BYTES: usize = 8192;
 const METADATA_MAX_BYTES: usize = 4096;
 
 /// Closed identity used only to form recovery-wrap AAD.
+#[derive(Clone)]
 pub struct BackupRecoveryBinding {
     bundle_id: String,
     dataset: String,
@@ -49,7 +50,7 @@ impl BackupRecoveryBinding {
         Ok(binding)
     }
 
-    fn aad(&self) -> Vec<u8> {
+    pub(super) fn aad(&self) -> Vec<u8> {
         let mut aad = AAD_PREFIX.to_vec();
         for field in [
             self.bundle_id.as_bytes(),
@@ -170,7 +171,7 @@ fn valid_identity(value: &str) -> bool {
     (1..=256).contains(&value.len()) && !value.chars().any(|ch| ch == '\0' || ch.is_control())
 }
 
-fn encode_hex(bytes: &[u8]) -> String {
+pub(super) fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut value = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -180,7 +181,7 @@ fn encode_hex(bytes: &[u8]) -> String {
     value
 }
 
-fn decode_hex(value: &str) -> Result<Vec<u8>, VaultError> {
+pub(super) fn decode_hex(value: &str) -> Result<Vec<u8>, VaultError> {
     if !value.len().is_multiple_of(2)
         || !value
             .bytes()
