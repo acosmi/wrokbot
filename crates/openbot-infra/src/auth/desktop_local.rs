@@ -148,8 +148,8 @@ impl DesktopLocalAuthority {
         .await
     }
 
-    /// Advance `users.auth_generation`, terminate sessions, cancel pending approvals, expire member thread leases, and abort minted executing capabilities (V6-PR-020/021/023/025/027/028).
-    /// Does not clear tickets/run assertions (later knife).
+    /// Advance `users.auth_generation`, terminate sessions, cancel pending approvals, expire member thread leases, abort minted executing capabilities, and cancel pending component human decisions (V6-PR-020/021/023/025/027/028/029).
+    /// Does not clear tickets/run assertions/remote interrupts (later knife).
     pub async fn advance_auth_generation(
         &self,
         pool: &Pool,
@@ -198,6 +198,32 @@ impl DesktopLocalAuthority {
             )
             .await
             .map_err(|error| InfraError::query("中止 desktop-local 已铸造 capability", error))?;
+        // V6-PR-029: cancel pending component human decisions and write cancel audit.
+        let cancelled_decisions = transaction
+            .query(
+                "UPDATE public.component_human_decisions                  SET state='cancelled', resolved_at=clock_timestamp(), resolved_by=NULL,                      updated_at=clock_timestamp()                  WHERE actor_id=$1 AND state='pending'                  RETURNING decision_id, component_name",
+                &[&self.auth.actor().as_str()],
+            )
+            .await
+            .map_err(|error| InfraError::query("取消 desktop-local pending human decisions", error))?;
+        for row in cancelled_decisions {
+            let component_name: String = row
+                .try_get(1)
+                .map_err(|error| InfraError::query("读 cancelled component_name", error))?;
+            let (id, created_at) = next_event_coordinates(&transaction).await?;
+            let event = AuditEvent {
+                id,
+                actor: Some(self.auth.actor().clone()),
+                event_type: AuditEventType::COMPONENT_HUMAN_CANCELLED,
+                target_kind: AuditLabel::new("component"),
+                target_id: Some(AuditIdentifier::new(&component_name).map_err(|_| {
+                    InfraError::repository_invariant("desktop_local_component_name_invalid")
+                })?),
+                payload: AuditPayload::empty(),
+                created_at,
+            };
+            append_event_in_transaction(&transaction, &event, checkpoint_key).await?;
+        }
         // V6-PR-023/025: cancel pending approvals and write cancel audit in the same transaction.
         // cancelled rows require decided_at set and decided_by NULL (native_0020 checks).
         let cancelled = transaction
