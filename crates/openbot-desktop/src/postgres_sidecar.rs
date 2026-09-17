@@ -5895,6 +5895,52 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    #[test]
+    fn truncated_start_lock_is_not_reclaimed() {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let root = root("034-truncated-lock");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let instance = "c".repeat(64);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let lock_path = root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+        let mut truncated = format!(
+            "openbot-postgres-start-lock-v1\npid=1\ninstance={}",
+            &instance[..16]
+        )
+        .into_bytes();
+        truncated.push(0xE4);
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&lock_path)
+            .unwrap();
+        file.write_all(&truncated).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        let acquired = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x55; 32]),
+            &data_dir,
+        );
+        assert!(
+            matches!(
+                acquired,
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ),
+            "truncated start-lock must not be reclaimed, got {acquired:?}"
+        );
+        assert_eq!(fs::read(&lock_path).unwrap(), truncated);
+        assert!(data_dir.is_dir());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     #[cfg(all(
         feature = "postgres-key-store",
         feature = "postgres-supervisor",
