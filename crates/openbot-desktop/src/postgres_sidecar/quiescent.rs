@@ -242,6 +242,7 @@ fn secure_open_read(path: &Path) -> std::io::Result<File> {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    use crate::postgres_sidecar::kernel_start_lock::KernelStartLock;
     use crate::postgres_sidecar::{PostgresBundleDigest, PostgresSidecarError, PostgresStartLock};
     use std::fs::{self, File, OpenOptions};
     use std::io::Write as _;
@@ -499,6 +500,69 @@ mod tests {
         drop(acquired.unwrap());
         let _ = fs::remove_dir_all(&root);
         let _ = lock_path;
+    }
+
+    #[test]
+    fn crash_after_mid_phase_durable_write_restarts_from_files() {
+        let root = temp_root("036-crash-during-recovery");
+        let instance = "f".repeat(64);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let lock_path = plant_stale_lock(&root, &instance);
+        let (device, inode) = data_dir_ids(&data_dir);
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_millis(80));
+        let child_identity = ProcessIdentity::capture(child.id()).unwrap();
+        let child_hex = encode_hex(&child_identity.evidence_bytes().unwrap());
+        let _ = child.kill();
+        let _ = child.wait();
+        thread::sleep(Duration::from_millis(40));
+        let journal = root.join(format!(".postgresql-17-{instance}.startup-v1.json"));
+        let record = serde_json::json!({
+            "schema": "openbot-postgres-startup",
+            "schemaVersion": 1,
+            "instanceId": instance,
+            "dataDirName": format!("postgresql-17-{instance}"),
+            "dataDirDevice": device,
+            "dataDirInode": inode,
+            "attemptId": "56".repeat(16),
+            "startEvidenceSha256": "12".repeat(32),
+            "ownerObservation": owner_observation_hex(),
+            "childObservation": child_hex,
+            "phase": "child_observed"
+        });
+        write_private(&journal, &serde_json::to_vec(&record).unwrap());
+        let kernel = KernelStartLock::acquire(&root, &instance).unwrap();
+        super::recover_mid_phase_journals(&kernel, &root, &instance, &data_dir).unwrap();
+        let after_crash_point: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(after_crash_point["phase"], "exit_confirmed");
+        assert!(
+            lock_path.is_file(),
+            "start-lock must remain when recovery crashes before reclaim"
+        );
+        drop(kernel);
+        let acquired = PostgresStartLock::acquire_with_data_dir(
+            &root,
+            &instance,
+            PostgresBundleDigest([0x11; 32]),
+            &data_dir,
+        );
+        assert!(acquired.is_ok(), "{acquired:?}");
+        let after_restart: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(after_restart["phase"], "exit_confirmed");
+        assert_eq!(after_restart["childObservation"], child_hex);
+        drop(acquired.unwrap());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
