@@ -4812,6 +4812,78 @@ mod tests {
         )
         .await;
         probe_running_sidecar(&recovered).await;
+        #[cfg(target_os = "macos")]
+        {
+            // V6-PR-033: parent SIGKILL analog — Drop does not kill, flock is released, child lives.
+            let leaked = leak_like_parent_sigkill(recovered);
+            assert!(
+                stale_lock.is_file(),
+                "dynamic start-lock must remain after parent death"
+            );
+            assert_eq!(fs::read(data_dir.join("PG_VERSION")).unwrap(), pg_version);
+            assert!(data_dir.join("pg_wal").is_dir());
+            leaked
+                .identity
+                .revalidate()
+                .expect("orphaned postgres must still be the same process");
+            assert_crash_recovery_marker_at(leaked.port, &leaked.password).await;
+            let bundle_busy = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
+            assert!(
+                matches!(
+                    PostgresSidecarSupervisor::start(
+                        bundle_busy,
+                        &app_root,
+                        &instance,
+                        &data_dir,
+                        &store,
+                        &service,
+                    )
+                    .await,
+                    Err(PostgresSidecarError::StartLockRecoveryRequired)
+                ),
+                "start against a live orphaned postgres must be StartLockRecoveryRequired"
+            );
+            leaked
+                .identity
+                .revalidate()
+                .expect("supervisor must not kill the orphaned postgres");
+            assert_crash_recovery_marker_at(leaked.port, &leaked.password).await;
+            assert!(stale_lock.is_file());
+            assert_eq!(fs::read(data_dir.join("PG_VERSION")).unwrap(), pg_version);
+            assert!(data_dir.join("pg_wal").is_dir());
+            let bundle_stop = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
+            let stop_status = run_pg_ctl_stop(&bundle_stop, &data_dir).await.unwrap();
+            assert!(
+                stop_status.success(),
+                "test-owned pg_ctl must stop the leaked child"
+            );
+            let closed_after_orphan = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if tokio::net::TcpStream::connect(("127.0.0.1", leaked.port))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                assert!(tokio::time::Instant::now() < closed_after_orphan);
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            let bundle_after = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
+            let after_orphan = PostgresSidecarSupervisor::start(
+                bundle_after,
+                &app_root,
+                &instance,
+                &data_dir,
+                &store,
+                &service,
+            )
+            .await
+            .unwrap();
+            assert_eq!(after_orphan.origin(), PostgresSidecarOrigin::Existing);
+            assert_crash_recovery_marker(&after_orphan).await;
+            after_orphan.shutdown().await.unwrap();
+        }
+        #[cfg(not(target_os = "macos"))]
         recovered.shutdown().await.unwrap();
         assert!(
             !fs::read_dir(&app_root)
@@ -4821,6 +4893,59 @@ mod tests {
         );
         fs::remove_dir_all(app_root).unwrap();
         fs::remove_dir_all(bundle_root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    struct LeakedPostgres {
+        identity: ProcessIdentity,
+        port: u16,
+        password: Vec<u8>,
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    fn leak_like_parent_sigkill(mut running: RunningPostgresSidecar) -> LeakedPostgres {
+        running.preserve_lock();
+        let pid = running
+            .child
+            .as_ref()
+            .and_then(tokio::process::Child::id)
+            .expect("running postgres pid");
+        let identity =
+            ProcessIdentity::capture(pid).expect("capture identity of postgres before parent death");
+        let leaked = LeakedPostgres {
+            identity,
+            port: running.port,
+            password: running.secret.expose().to_vec(),
+        };
+        if let Some(child) = running.child.take() {
+            std::mem::forget(child);
+        }
+        drop(running);
+        leaked
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    async fn assert_crash_recovery_marker_at(port: u16, password: &[u8]) {
+        let mut config = tokio_postgres::Config::new();
+        config
+            .host("127.0.0.1")
+            .port(port)
+            .user(DESKTOP_LOCAL_POSTGRES_ADMIN_USER)
+            .password(password)
+            .dbname("postgres");
+        let (client, driver) = config.connect(NoTls).await.unwrap();
+        let driver = tokio::spawn(driver);
+        let note: String = client
+            .query_one(
+                "SELECT note FROM openbot_crash_recovery_marker_v1 WHERE id = 1",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(note, "v6-pr-031");
+        drop(client);
+        driver.abort();
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
