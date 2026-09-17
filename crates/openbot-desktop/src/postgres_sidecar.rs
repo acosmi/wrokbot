@@ -3765,7 +3765,7 @@ mod tests {
         assert!(row.get::<_, bool>(2));
         assert!(row.get::<_, bool>(3));
         assert_eq!(data_plane.auth_context().auth_generation().get(), 0);
-        // V6-PR-026/027/028: live sidecar matrix for advance_auth_generation.
+        // V6-PR-026/027/028/029: live sidecar matrix for advance_auth_generation.
         let tenant = data_plane.auth_context().tenant().as_str().to_owned();
         let deployment = data_plane.auth_context().deployment().as_str().to_owned();
         client
@@ -3845,6 +3845,20 @@ mod tests {
             )
             .await
             .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.components(                   name,title,kind,draft_description,published_description,published,                   published_at,updated_by,created_at,updated_at                 ) VALUES(                   'askApproval','Ask Approval','decision','d','d',true,                   clock_timestamp(),'the build',clock_timestamp(),clock_timestamp()                 )                  ON CONFLICT (name) DO NOTHING",
+                &[],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.component_human_decisions(                   decision_id,deployment_id,tenant_id,thread_id,run_id,actor_id,bot_id,                   auth_generation,provider_call_id,component_name,arguments,arguments_hash,state,                   requested_at,expires_at,created_at,updated_at                 ) VALUES(                   'desktop-adv-hitl',$1,$2,'desktop-adv-thread','desktop-adv-run',$3,'desktop-assistant',                   0,'desktop-adv-provider-call','askApproval','{\"title\":\"x\"}'::jsonb,repeat('a',64),'pending',                   clock_timestamp(),clock_timestamp()+interval '30 minutes',clock_timestamp(),clock_timestamp()                 )",
+                &[&deployment, &tenant, &DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
         let next = data_plane
             .authority()
             .advance_auth_generation(data_plane.pool(), first_material.expose_audit_key())
@@ -3917,6 +3931,24 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(other, "executing");
+        let hitl: String = client
+            .query_one(
+                "SELECT state FROM public.component_human_decisions WHERE decision_id='desktop-adv-hitl'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(hitl, "cancelled");
+        let human_cancel_audits: i64 = client
+            .query_one(
+                "SELECT count(*)::bigint FROM public.audit_events WHERE event_type='component.human_cancelled'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(human_cancel_audits, 1);
         // No pending approvals → no cancel audit rows required; generation path must still commit.
         client
             .execute(
