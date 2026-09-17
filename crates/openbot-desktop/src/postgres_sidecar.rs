@@ -3765,7 +3765,7 @@ mod tests {
         assert!(row.get::<_, bool>(2));
         assert!(row.get::<_, bool>(3));
         assert_eq!(data_plane.auth_context().auth_generation().get(), 0);
-        // V6-PR-026/027/028/029: live sidecar matrix for advance_auth_generation.
+        // V6-PR-026/027/028/029/030: live sidecar matrix for advance_auth_generation.
         let tenant = data_plane.auth_context().tenant().as_str().to_owned();
         let deployment = data_plane.auth_context().deployment().as_str().to_owned();
         client
@@ -3855,6 +3855,13 @@ mod tests {
         client
             .execute(
                 "INSERT INTO public.component_human_decisions(                   decision_id,deployment_id,tenant_id,thread_id,run_id,actor_id,bot_id,                   auth_generation,provider_call_id,component_name,arguments,arguments_hash,state,                   requested_at,expires_at,created_at,updated_at                 ) VALUES(                   'desktop-adv-hitl',$1,$2,'desktop-adv-thread','desktop-adv-run',$3,'desktop-assistant',                   0,'desktop-adv-provider-call','askApproval','{\"title\":\"x\"}'::jsonb,repeat('a',64),'pending',                   clock_timestamp(),clock_timestamp()+interval '30 minutes',clock_timestamp(),clock_timestamp()                 )",
+                &[&deployment, &tenant, &DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.remote_agent_interrupts(                   request_id,deployment_id,tenant_id,thread_id,run_id,actor_id,bot_id,                   auth_generation,protocol_run_id,interrupt_id,position,descriptor,state,                   requested_at,expires_at,created_at,updated_at                 ) VALUES(                   '00000000-0000-7000-8000-000000000001',$1,$2,'desktop-adv-thread','desktop-adv-run',$3,'desktop-assistant',                   0,'desktop-adv-protocol','int-1',0,'{\"id\":\"int-1\",\"reason\":\"r\"}'::jsonb,'pending',                   clock_timestamp(),clock_timestamp()+interval '30 minutes',clock_timestamp(),clock_timestamp()                 )",
                 &[&deployment, &tenant, &DESKTOP_LOCAL_ACTOR_ID],
             )
             .await
@@ -3949,6 +3956,24 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(human_cancel_audits, 1);
+        let interrupt: String = client
+            .query_one(
+                "SELECT state FROM public.remote_agent_interrupts WHERE request_id='00000000-0000-7000-8000-000000000001'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(interrupt, "expired");
+        let interrupt_expire_audits: i64 = client
+            .query_one(
+                "SELECT count(*)::bigint FROM public.audit_events WHERE event_type='agent.remote_interrupt_expired'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(interrupt_expire_audits, 1);
         // No pending approvals → no cancel audit rows required; generation path must still commit.
         client
             .execute(
