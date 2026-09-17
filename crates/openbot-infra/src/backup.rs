@@ -19,6 +19,7 @@
 //! - 完成回执只证明确认时点的输出；后续 owner 接收前必须重新核验。
 //! - 可用容量来自调用方观察，不是 OS 配额预留。
 
+pub mod archive_bundle;
 pub mod checked_fs;
 pub mod staging;
 
@@ -81,4 +82,8 @@ pub use staging::{
     MaterialSource, OwnedDir, OwnedFile, ScriptedSource, SinkWriteError, StagingBounds,
     StagingCompleted, StagingFailure, StagingInput, StagingOutcome, StagingRequest, StdFs,
     run_staging,
+};
+pub use archive_bundle::{
+    ArchiveBundleBounds, ArchiveBundleContents, ArchiveBundleFault, read_archive_bundle,
+    write_archive_bundle,
 };
