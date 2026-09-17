@@ -379,6 +379,30 @@ mod tests {
     }
 
     #[test]
+    fn reused_pid_with_different_birth_is_absent_not_the_original_child() {
+        let live = ProcessIdentity::capture(std::process::id()).expect("self");
+        let original = live.evidence_bytes().expect("evidence");
+        assert_eq!(
+            evidence_process_is_absent(&original),
+            Err(super::ProcessObservationError::ObservationChanged)
+        );
+        let mut reused = original;
+        let mut start_seconds = u64::from_be_bytes(reused[4..12].try_into().unwrap());
+        start_seconds = start_seconds.wrapping_add(1);
+        if start_seconds == 0 {
+            start_seconds = 1;
+        }
+        reused[4..12].copy_from_slice(&start_seconds.to_be_bytes());
+        assert_eq!(evidence_process_is_absent(&reused), Ok(()));
+        assert_eq!(
+            evidence_process_is_absent(&original),
+            Err(super::ProcessObservationError::ObservationChanged),
+            "detecting PID reuse must not treat the still-matching identity as absent"
+        );
+        assert_eq!(std::process::id(), u32::from_be_bytes(original[0..4].try_into().unwrap()));
+    }
+
+    #[test]
     fn empty_does_not_imply_recovery_authority_contract() {
         // Documented non-inference: Empty is only a scan result after ignore.
         assert_ne!(
