@@ -4746,6 +4746,10 @@ mod tests {
         .await
         .unwrap();
         let unclean_port = unclean.connection().port();
+        // V6-PR-031: a committed row must survive PG's own crash recovery after unclean Drop.
+        commit_crash_recovery_marker(&unclean).await;
+        let pg_version = fs::read(data_dir.join("PG_VERSION")).unwrap();
+        assert!(data_dir.join("pg_wal").is_dir());
         drop(unclean);
         let closed_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -4761,14 +4765,23 @@ mod tests {
         let stale_lock = app_root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
         assert!(stale_lock.is_file());
         let bundle = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
-        assert!(matches!(
-            PostgresSidecarSupervisor::start(
-                bundle, &app_root, &instance, &data_dir, &store, &service,
-            )
-            .await,
-            Err(PostgresSidecarError::StartLockRecoveryRequired)
-        ));
-        fs::remove_file(stale_lock).unwrap();
+        let recovered = PostgresSidecarSupervisor::start(
+            bundle, &app_root, &instance, &data_dir, &store, &service,
+        )
+        .await
+        .unwrap();
+        assert_eq!(recovered.origin(), PostgresSidecarOrigin::Existing);
+        assert_eq!(fs::read(data_dir.join("PG_VERSION")).unwrap(), pg_version);
+        assert!(data_dir.join("pg_wal").is_dir());
+        probe_running_sidecar(&recovered).await;
+        assert_crash_recovery_marker(&recovered).await;
+        recovered.shutdown().await.unwrap();
+        assert!(
+            !fs::read_dir(&app_root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().contains("start-lock"))
+        );
         fs::remove_dir_all(app_root).unwrap();
         fs::remove_dir_all(bundle_root).unwrap();
     }
@@ -4800,6 +4813,60 @@ mod tests {
         assert_eq!(row.get::<_, String>(2), "127.0.0.1");
         assert_eq!(row.get::<_, String>(3), "scram-sha-256");
         assert!(row.get::<_, bool>(4));
+        drop(client);
+        driver.abort();
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
+    async fn connect_supervisor_postgres(
+        running: &RunningPostgresSidecar,
+    ) -> (
+        tokio_postgres::Client,
+        tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+    ) {
+        let connection = running.connection();
+        let mut config = tokio_postgres::Config::new();
+        config
+            .host(connection.host())
+            .port(connection.port())
+            .user(connection.user())
+            .password(connection.expose_password())
+            .dbname("postgres");
+        let (client, driver) = config.connect(NoTls).await.unwrap();
+        (client, tokio::spawn(driver))
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
+    async fn commit_crash_recovery_marker(running: &RunningPostgresSidecar) {
+        let (client, driver) = connect_supervisor_postgres(running).await;
+        client
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS openbot_crash_recovery_marker_v1 (
+                    id integer PRIMARY KEY,
+                    note text NOT NULL
+                 );
+                 INSERT INTO openbot_crash_recovery_marker_v1(id, note)
+                 VALUES (1, 'v6-pr-031')
+                 ON CONFLICT (id) DO UPDATE SET note = EXCLUDED.note;",
+            )
+            .await
+            .unwrap();
+        drop(client);
+        driver.abort();
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
+    async fn assert_crash_recovery_marker(running: &RunningPostgresSidecar) {
+        let (client, driver) = connect_supervisor_postgres(running).await;
+        let note: String = client
+            .query_one(
+                "SELECT note FROM openbot_crash_recovery_marker_v1 WHERE id = 1",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(note, "v6-pr-031");
         drop(client);
         driver.abort();
     }
