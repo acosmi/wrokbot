@@ -3765,7 +3765,7 @@ mod tests {
         assert!(row.get::<_, bool>(2));
         assert!(row.get::<_, bool>(3));
         assert_eq!(data_plane.auth_context().auth_generation().get(), 0);
-        // V6-PR-026/027: live sidecar matrix for advance_auth_generation.
+        // V6-PR-026/027/028: live sidecar matrix for advance_auth_generation.
         let tenant = data_plane.auth_context().tenant().as_str().to_owned();
         let deployment = data_plane.auth_context().deployment().as_str().to_owned();
         client
@@ -3792,6 +3792,55 @@ mod tests {
         client
             .execute(
                 "INSERT INTO public.thread_leases(                   thread_id,owner_id,fencing_token,acquired_at,expires_at,updated_at                 ) VALUES(                   'desktop-adv-thread','runtime',1,                   clock_timestamp(),clock_timestamp()+interval '10 minutes',clock_timestamp()                 )",
+                &[],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.runs(                   run_id,thread_id,bot_id,actor_id,foreground,status,fencing_token,started_at                 ) VALUES(                   'desktop-adv-run','desktop-adv-thread','desktop-assistant',$1,true,'running',1,                   clock_timestamp()                 )",
+                &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.tool_calls(                   tool_call_id,run_id,call_seq,decision_id,actor_id,bot_id,tool_name,                   schema_hash,catalog_generation,args_hash,target_kind,target_id,effect,                   effect_downgraded,idempotency,approval_class,policy_version                 ) VALUES(                   'desktop-adv-call','desktop-adv-run',0,'desktop-adv-decision',$1,'desktop-assistant','remember',                   repeat('a',64),0,repeat('b',64),'memory','desktop-adv-thread','write',                   false,'idempotent','not_required','pv-1'                 )",
+                &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.tool_attempts(                   tool_call_id,attempt_seq,attempt_id,capability_id,status,started_at                 ) VALUES(                   'desktop-adv-call',0,'desktop-adv-attempt','desktop-adv-capability','executing',                   clock_timestamp()                 )",
+                &[],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.tool_calls(                   tool_call_id,run_id,call_seq,decision_id,actor_id,bot_id,tool_name,                   schema_hash,catalog_generation,args_hash,target_kind,target_id,effect,                   effect_downgraded,idempotency,approval_class,policy_version                 ) VALUES(                   'desktop-adv-call-done','desktop-adv-run',1,'desktop-adv-decision-done',$1,'desktop-assistant','remember',                   repeat('a',64),0,repeat('b',64),'memory','desktop-adv-thread','write',                   false,'idempotent','not_required','pv-1'                 )",
+                &[&DESKTOP_LOCAL_ACTOR_ID],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.tool_attempts(                   tool_call_id,attempt_seq,attempt_id,capability_id,status,commit_state,started_at,finished_at                 ) VALUES(                   'desktop-adv-call-done',0,'desktop-adv-attempt-done','desktop-adv-capability-done','completed','committed',                   clock_timestamp(),clock_timestamp()                 )",
+                &[],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.tool_calls(                   tool_call_id,run_id,call_seq,decision_id,actor_id,bot_id,tool_name,                   schema_hash,catalog_generation,args_hash,target_kind,target_id,effect,                   effect_downgraded,idempotency,approval_class,policy_version                 ) VALUES(                   'desktop-adv-call-other','desktop-adv-run',2,'desktop-adv-decision-other','other-actor','desktop-assistant','remember',                   repeat('a',64),0,repeat('b',64),'memory','desktop-adv-thread','write',                   false,'idempotent','not_required','pv-1'                 )",
+                &[],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO public.tool_attempts(                   tool_call_id,attempt_seq,attempt_id,capability_id,status,started_at                 ) VALUES(                   'desktop-adv-call-other',0,'desktop-adv-attempt-other','desktop-adv-capability-other','executing',                   clock_timestamp()                 )",
                 &[],
             )
             .await
@@ -3838,6 +3887,36 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(lease_live, 0);
+        let minted = client
+            .query_one(
+                "SELECT status, capability_id FROM public.tool_attempts WHERE attempt_id='desktop-adv-attempt'",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(minted.get::<_, String>(0), "aborted");
+        assert_eq!(
+            minted.get::<_, Option<String>>(1).as_deref(),
+            Some("desktop-adv-capability")
+        );
+        let completed: String = client
+            .query_one(
+                "SELECT status FROM public.tool_attempts WHERE attempt_id='desktop-adv-attempt-done'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(completed, "completed");
+        let other: String = client
+            .query_one(
+                "SELECT status FROM public.tool_attempts WHERE attempt_id='desktop-adv-attempt-other'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(other, "executing");
         // No pending approvals → no cancel audit rows required; generation path must still commit.
         client
             .execute(
