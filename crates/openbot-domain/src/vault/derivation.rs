@@ -16,6 +16,8 @@ pub enum ApplicationKeyPurpose {
     McpOauthState,
     /// Desktop dataset/key identity canary encryption.
     DesktopVaultCanary,
+    /// Backup recovery-metadata wrapping under an owner-supplied 256-bit recovery key.
+    BackupRecoveryWrap,
 }
 
 impl ApplicationKeyPurpose {
@@ -24,6 +26,7 @@ impl ApplicationKeyPurpose {
             Self::AuditCheckpoint => b"openbot:audit-checkpoint:v1",
             Self::McpOauthState => b"openbot:mcp-oauth-state:v1",
             Self::DesktopVaultCanary => b"openbot:desktop-vault-canary:v1",
+            Self::BackupRecoveryWrap => b"openbot:backup-recovery-wrap:v1",
         }
     }
 }
@@ -39,7 +42,9 @@ pub fn derive_application_key(
     purpose: ApplicationKeyPurpose,
 ) -> Result<SecretBytes, VaultError> {
     if master.is_empty()
-        || (purpose == ApplicationKeyPurpose::DesktopVaultCanary && master.len() != 32)
+        || ((purpose == ApplicationKeyPurpose::DesktopVaultCanary
+            || purpose == ApplicationKeyPurpose::BackupRecoveryWrap)
+            && master.len() != 32)
     {
         return Err(VaultError::KeyLength);
     }
@@ -84,6 +89,21 @@ mod tests {
             derive_application_key(
                 &SecretBytes::new(Vec::new()),
                 ApplicationKeyPurpose::AuditCheckpoint,
+            ),
+            Err(VaultError::KeyLength)
+        ));
+
+        let key32 = SecretBytes::new(vec![0x5a; 32]);
+        let wrap =
+            derive_application_key(&key32, ApplicationKeyPurpose::BackupRecoveryWrap).unwrap();
+        let canary =
+            derive_application_key(&key32, ApplicationKeyPurpose::DesktopVaultCanary).unwrap();
+        assert_ne!(wrap.expose(), canary.expose());
+        assert_eq!(wrap.len(), 32);
+        assert!(matches!(
+            derive_application_key(
+                &SecretBytes::new(b"master-key".to_vec()),
+                ApplicationKeyPurpose::BackupRecoveryWrap,
             ),
             Err(VaultError::KeyLength)
         ));

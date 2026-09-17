@@ -18,10 +18,14 @@
 //! - 签发 recovery epoch、写库、生成密钥、恢复 dispatch、重放工具。
 //! - 把同机目录复制称为完整恢复。
 //! - 关闭 V5-BACKUP-01 的真实加密恢复、V5-UPGRADE-01 或 A6 真机演练。
+//!
+//! V6-PR-037 另增 [`recovery_wrap`]：复用 Vault AES-256-GCM 包装有界恢复元数据。
+//! 它仍不是 archive / RestoreAuthorized / A6。
 
 pub mod inventory;
 pub mod plan;
 pub mod post_restore;
+pub mod recovery_wrap;
 
 #[cfg(test)]
 mod tests;
@@ -44,4 +48,8 @@ pub use post_restore::{
     ObjectDisposition, ObjectDispositionKind, PostRestoreBounds, PostRestoreFault, PostRestorePlan,
     PostRestoreRequest, ReceiptClass, ReceiptRetention, RecoveryEpochDerivation,
     RecoveryEpochObligation, plan_post_restore,
+};
+pub use recovery_wrap::{
+    BackupRecoveryBinding, BackupRecoveryEnvelope, open_backup_recovery_wrap,
+    seal_backup_recovery_wrap,
 };
