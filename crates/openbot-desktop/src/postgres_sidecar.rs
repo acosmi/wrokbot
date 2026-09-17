@@ -4720,6 +4720,19 @@ mod tests {
             }
         }
         probe_running_sidecar(&running).await;
+        // V6-PR-032: a live owner must keep the second start busy without killing the first PG.
+        assert_second_start_held(
+            &bundle_root,
+            digest,
+            &signing,
+            &app_root,
+            &instance,
+            &data_dir,
+            &store,
+            &service,
+        )
+        .await;
+        probe_running_sidecar(&running).await;
         running.shutdown().await.unwrap();
         assert!(
             !fs::read_dir(&app_root)
@@ -4764,17 +4777,41 @@ mod tests {
         }
         let stale_lock = app_root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
         assert!(stale_lock.is_file());
-        let bundle = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
-        let recovered = PostgresSidecarSupervisor::start(
-            bundle, &app_root, &instance, &data_dir, &store, &service,
-        )
-        .await
-        .unwrap();
+        let bundle_a = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
+        let bundle_b = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
+        // V6-PR-032: two recoverers after unclean Drop; exactly one Existing writer.
+        let (left, right) = tokio::join!(
+            PostgresSidecarSupervisor::start(
+                bundle_a, &app_root, &instance, &data_dir, &store, &service,
+            ),
+            PostgresSidecarSupervisor::start(
+                bundle_b, &app_root, &instance, &data_dir, &store, &service,
+            ),
+        );
+        let recovered = match (left, right) {
+            (Ok(winner), Err(PostgresSidecarError::StartLockHeld))
+            | (Err(PostgresSidecarError::StartLockHeld), Ok(winner)) => winner,
+            other => panic!(
+                "expected one Existing recoverer and one StartLockHeld, got {other:?}"
+            ),
+        };
         assert_eq!(recovered.origin(), PostgresSidecarOrigin::Existing);
         assert_eq!(fs::read(data_dir.join("PG_VERSION")).unwrap(), pg_version);
         assert!(data_dir.join("pg_wal").is_dir());
         probe_running_sidecar(&recovered).await;
         assert_crash_recovery_marker(&recovered).await;
+        assert_second_start_held(
+            &bundle_root,
+            digest,
+            &signing,
+            &app_root,
+            &instance,
+            &data_dir,
+            &store,
+            &service,
+        )
+        .await;
+        probe_running_sidecar(&recovered).await;
         recovered.shutdown().await.unwrap();
         assert!(
             !fs::read_dir(&app_root)
@@ -4784,6 +4821,30 @@ mod tests {
         );
         fs::remove_dir_all(app_root).unwrap();
         fs::remove_dir_all(bundle_root).unwrap();
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
+    async fn assert_second_start_held(
+        bundle_root: &Path,
+        digest: PostgresBundleDigest,
+        signing: &ReviewedPostgresSigningIdentity,
+        app_root: &Path,
+        instance: &str,
+        data_dir: &Path,
+        store: &MemorySecretStore,
+        service: &ReviewedPostgresKeyStoreService,
+    ) {
+        let bundle = VerifiedPostgresBundle::open(bundle_root, digest, signing).unwrap();
+        assert!(
+            matches!(
+                PostgresSidecarSupervisor::start(
+                    bundle, app_root, instance, data_dir, store, service,
+                )
+                .await,
+                Err(PostgresSidecarError::StartLockHeld)
+            ),
+            "second start against a live owner must be StartLockHeld"
+        );
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
