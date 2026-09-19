@@ -31,20 +31,35 @@ pub fn App() -> impl IntoView {
     provide_meta_context();
     provide_context(crate::features::admin::plugins::PluginActions::new());
     provide_context(crate::features::memory::remember::RememberActions::new());
-    provide_context(crate::features::settings::models::ModelActions::new());
     view! {
         <I18nContextProvider set_lang_attr_on_html=true enable_cookie=false>
             <Title text="Wrok Bot" />
             <Router>
                 <RootLayout>
                     <AuthenticatedBoundary>
-                        <AppLayout>
-                            <AppRoutes />
-                        </AppLayout>
+                        <AuthenticatedWorkspace />
                     </AuthenticatedBoundary>
                 </RootLayout>
             </Router>
         </I18nContextProvider>
+    }
+}
+
+/// Authenticated-mount-owned projections cannot survive a session boundary or accept its late reads.
+#[component]
+fn AuthenticatedWorkspace() -> impl IntoView {
+    let model_actions = crate::features::settings::models::ModelActions::new();
+    provide_context(model_actions);
+    provide_context(
+        crate::features::channels::composer::models::ModelDirectory::new(model_actions),
+    );
+    provide_context(
+        crate::features::channels::composer::model_intents::RunSubmissionActions::new(),
+    );
+    view! {
+        <AppLayout>
+            <AppRoutes />
+        </AppLayout>
     }
 }
 

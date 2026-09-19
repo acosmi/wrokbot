@@ -72,6 +72,12 @@
     "crates/openbot-ui/assets/notices/markdown/guille_sublime-kotlin_LICENSE.md",
     "crates/openbot-ui/design/markdown/PROVENANCE.md",
     "crates/openbot-ui/locales/GLOSSARY.md",
+    "crates/wrokbot-ui/assets/fonts/LICENSE.txt",
+    "crates/wrokbot-ui/assets/notices/markdown/README.txt",
+    "crates/wrokbot-ui/assets/notices/markdown/SublimeText_PowerShell_LICENSE.txt",
+    "crates/wrokbot-ui/assets/notices/markdown/guille_sublime-kotlin_LICENSE.md",
+    "crates/wrokbot-ui/design/markdown/PROVENANCE.md",
+    "crates/wrokbot-ui/locales/GLOSSARY.md",
     "crates/openbot-windows-sandbox/SECURITY.md",
     "fixtures/README.md",
     "fixtures/agui/schema-0.0.57/README.md",
@@ -95,6 +101,7 @@
   ],
   "file_size_limits": {
     "crates/openbot-ui/assets/brand/wrok-bot-logo-1024.gif": 31457280,
+    "crates/wrokbot-ui/assets/brand/wrok-bot-logo-1024.gif": 31457280,
     ".github/assets/wrok-bot-logo-1024.gif": 31457280
   }
 }

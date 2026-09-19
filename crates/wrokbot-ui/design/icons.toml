@@ -5,7 +5,7 @@
 # design-lint 三向逐条 join；任一不一致直接判红，不允许在冲突时静默选择其中一份。
 #
 # 消费者（GUI 方案 §4.6.1、§13）：
-#   crates/openbot-ui/build.rs 读本文件 + design/icons/<name>.svg，生成 src/icons.rs 的
+#   crates/wrokbot-ui/build.rs 读本文件 + design/icons/<name>.svg，生成 src/icons.rs 的
 #   `Icon` 枚举与 `view!` 片段。
 #
 # 闸门（xtask design-lint，两向零漂移）：

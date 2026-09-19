@@ -10,7 +10,7 @@ use flate2::{Compression, GzBuilder};
 use regex::Regex;
 use walkdir::WalkDir;
 
-const UI_DIR: &str = "crates/openbot-ui";
+const UI_DIR: &str = "crates/wrokbot-ui";
 const WASM_GZIP_LIMIT: usize = 3_670_016;
 /// Icon fixture §10.5 / v3 R123 (2026-08-28): 96 KiB was exhausted at Batch 50 (97,848 B, 456 B
 /// left) with 24 route journeys still open, so the limit is 128 KiB with a 120 KiB warning line. The

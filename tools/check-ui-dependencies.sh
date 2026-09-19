@@ -51,7 +51,7 @@ grep -qxF 'image = { workspace = true, optional = true }' crates/openbot-testkit
   || fail 'golden image edge is not optional and testkit-owned'
 [[ "$(grep -cF '"dep:image"' crates/openbot-testkit/Cargo.toml)" == 1 ]] \
   || fail 'golden image must be enabled exactly once by the xtask feature'
-for product_manifest in crates/openbot-{contracts,domain,application,infra,agent,computer,server,ui,desktop}/Cargo.toml; do
+for product_manifest in crates/openbot-{contracts,domain,application,infra,agent,computer,server,desktop}/Cargo.toml crates/wrokbot-ui/Cargo.toml; do
   ! grep -qE '^image[[:space:]]*=' "$product_manifest" \
     || fail "golden image escaped into product manifest $product_manifest"
 done
@@ -74,7 +74,7 @@ grep -qF '85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104' Carg
   || fail 'image Cargo.lock checksum changed'
 grep -qF 'Cargo.lock checksum = 85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104' provenance/sources.spdx.json \
   || fail 'image SPDX lock identity is stale'
-grep -qxF 'futures-util.workspace = true' crates/openbot-ui/Cargo.toml \
+grep -qxF 'futures-util.workspace = true' crates/wrokbot-ui/Cargo.toml \
   || fail 'UI WebSocket StreamExt dependency boundary drifted'
 gloo_net_root="$(crate_root gloo-net-0.6.0)"
 [[ ! -e "$gloo_net_root/build.rs" ]] || fail 'gloo-net gained a build script'

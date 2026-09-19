@@ -5,6 +5,8 @@ use super::ApiError;
 use openbot_contracts::model_connections::*;
 
 const ROOT: &str = "/api/me/model-connections";
+const MAX_DIRECTORY_ROWS: usize = 1_000;
+const MAX_DIRECTORY_PAGES: usize = 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WriteError {
@@ -82,6 +84,53 @@ pub(crate) async fn list(cursor: Option<&str>) -> Result<ModelConnectionPage, Ap
     let page: ModelConnectionPage = read(&route).await?;
     validate_page(&page, cursor)?;
     Ok(page)
+}
+
+#[derive(Default)]
+struct DirectoryAccumulator {
+    rows: Vec<ModelConnection>,
+    row_ids: std::collections::BTreeSet<String>,
+    cursors: std::collections::BTreeSet<String>,
+    pages: usize,
+}
+
+impl DirectoryAccumulator {
+    fn push(
+        &mut self,
+        page: ModelConnectionPage,
+        cursor: Option<&str>,
+    ) -> Result<Option<String>, ApiError> {
+        self.pages = self.pages.saturating_add(1);
+        if self.pages > MAX_DIRECTORY_PAGES {
+            return Err(ApiError::InvalidResponse);
+        }
+        validate_page(&page, cursor)?;
+        for row in page.connections {
+            if self.rows.len() >= MAX_DIRECTORY_ROWS || !self.row_ids.insert(row.id.clone()) {
+                return Err(ApiError::InvalidResponse);
+            }
+            self.rows.push(row);
+        }
+        if let Some(next) = &page.next_cursor
+            && !self.cursors.insert(next.clone())
+        {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(page.next_cursor)
+    }
+}
+
+/// Read the complete bounded v1 inventory without accepting cursor loops or duplicate rows.
+pub(crate) async fn list_all() -> Result<Vec<ModelConnection>, ApiError> {
+    let mut directory = DirectoryAccumulator::default();
+    let mut cursor = None::<String>;
+    loop {
+        let page = list(cursor.as_deref()).await?;
+        let Some(next) = directory.push(page, cursor.as_deref())? else {
+            return Ok(directory.rows);
+        };
+        cursor = Some(next);
+    }
 }
 
 pub(crate) async fn get(id: &str) -> Result<ModelConnection, ApiError> {
@@ -230,6 +279,23 @@ async fn decode<T: serde::de::DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(index: usize) -> ModelConnection {
+        ModelConnection {
+            id: format!("01991389-7380-7000-8000-{index:012x}"),
+            source: ModelConnectionSource::Custom,
+            name: format!("Test {index}"),
+            protocol: CustomModelProtocol::OpenaiResponses,
+            endpoint: "https://example.test/v1/responses".into(),
+            model: format!("model-{index}"),
+            enabled: true,
+            revision: 1,
+            has_credential: true,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
     #[test]
     fn sensitive_endpoint_framing_rejects_hidden_credentials_and_unicode_overflow() {
         for endpoint in [
@@ -265,19 +331,7 @@ mod tests {
     }
     #[test]
     fn page_rejects_duplicate_identity_and_cursor_loops() {
-        let row = ModelConnection {
-            id: "01991389-7380-7000-8000-000000000001".into(),
-            source: ModelConnectionSource::Custom,
-            name: "Test".into(),
-            protocol: CustomModelProtocol::OpenaiResponses,
-            endpoint: "https://example.test/v1/responses".into(),
-            model: "model".into(),
-            enabled: true,
-            revision: 1,
-            has_credential: true,
-            created_at: time::OffsetDateTime::UNIX_EPOCH,
-            updated_at: time::OffsetDateTime::UNIX_EPOCH,
-        };
+        let row = row(1);
         let mut page = ModelConnectionPage {
             connections: vec![row.clone()],
             next_cursor: Some(row.id.clone()),
@@ -286,5 +340,135 @@ mod tests {
         assert!(validate_page(&page, Some(&row.id)).is_err());
         page.connections.push(row);
         assert!(validate_page(&page, None).is_err());
+    }
+
+    #[test]
+    fn page_size_boundary_is_exact() {
+        let mut page = ModelConnectionPage {
+            connections: (0..MODEL_CONNECTION_PAGE_SIZE).map(row).collect(),
+            next_cursor: None,
+        };
+        assert!(validate_page(&page, None).is_ok());
+        page.connections.push(row(MODEL_CONNECTION_PAGE_SIZE));
+        assert_eq!(validate_page(&page, None), Err(ApiError::InvalidResponse));
+    }
+
+    #[test]
+    fn complete_directory_rejects_cross_page_duplicates_and_cursor_cycles() {
+        let mut duplicate = DirectoryAccumulator::default();
+        assert_eq!(
+            duplicate
+                .push(
+                    ModelConnectionPage {
+                        connections: vec![row(1)],
+                        next_cursor: Some(row(1).id),
+                    },
+                    None,
+                )
+                .unwrap(),
+            Some(row(1).id)
+        );
+        assert_eq!(
+            duplicate.push(
+                ModelConnectionPage {
+                    connections: vec![row(1)],
+                    next_cursor: None,
+                },
+                Some(&row(1).id),
+            ),
+            Err(ApiError::InvalidResponse)
+        );
+
+        let mut cycle = DirectoryAccumulator::default();
+        let first = row(10).id;
+        let second = row(11).id;
+        cycle
+            .push(
+                ModelConnectionPage {
+                    connections: vec![],
+                    next_cursor: Some(first.clone()),
+                },
+                None,
+            )
+            .unwrap();
+        cycle
+            .push(
+                ModelConnectionPage {
+                    connections: vec![],
+                    next_cursor: Some(second.clone()),
+                },
+                Some(&first),
+            )
+            .unwrap();
+        assert_eq!(
+            cycle.push(
+                ModelConnectionPage {
+                    connections: vec![],
+                    next_cursor: Some(first),
+                },
+                Some(&second),
+            ),
+            Err(ApiError::InvalidResponse)
+        );
+    }
+
+    #[test]
+    fn complete_directory_rejects_rows_beyond_the_global_bound() {
+        let mut directory = DirectoryAccumulator::default();
+        for page in 0..10 {
+            let start = page * MODEL_CONNECTION_PAGE_SIZE;
+            let next = row(start + MODEL_CONNECTION_PAGE_SIZE - 1).id;
+            directory
+                .push(
+                    ModelConnectionPage {
+                        connections: (start..start + MODEL_CONNECTION_PAGE_SIZE)
+                            .map(row)
+                            .collect(),
+                        next_cursor: Some(next.clone()),
+                    },
+                    (page > 0).then(|| row(start - 1).id).as_deref(),
+                )
+                .unwrap();
+        }
+        assert_eq!(directory.rows.len(), MAX_DIRECTORY_ROWS);
+        assert_eq!(
+            directory.push(
+                ModelConnectionPage {
+                    connections: vec![row(MAX_DIRECTORY_ROWS)],
+                    next_cursor: None,
+                },
+                Some(&row(MAX_DIRECTORY_ROWS - 1).id),
+            ),
+            Err(ApiError::InvalidResponse)
+        );
+    }
+
+    #[test]
+    fn complete_directory_rejects_a_twelfth_page() {
+        let mut directory = DirectoryAccumulator::default();
+        for page in 0..MAX_DIRECTORY_PAGES {
+            let current = (page > 0).then(|| row(page - 1).id);
+            let next = row(page).id;
+            assert_eq!(
+                directory.push(
+                    ModelConnectionPage {
+                        connections: vec![],
+                        next_cursor: Some(next.clone()),
+                    },
+                    current.as_deref(),
+                ),
+                Ok(Some(next))
+            );
+        }
+        assert_eq!(
+            directory.push(
+                ModelConnectionPage {
+                    connections: vec![],
+                    next_cursor: None,
+                },
+                Some(&row(MAX_DIRECTORY_PAGES - 1).id),
+            ),
+            Err(ApiError::InvalidResponse)
+        );
     }
 }
