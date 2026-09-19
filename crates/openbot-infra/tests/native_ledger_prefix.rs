@@ -53,6 +53,7 @@ async fn known_prefix_accepts_0031_and_rejects_every_ledger_drift_without_writin
         prefix_refusal_is_read_only(&client, native::NATIVE_0032_VERSION).await;
         prefix_refusal_is_read_only(&client, 12).await;
         prefix_refusal_is_read_only(&client, 33).await;
+        prefix_refusal_is_read_only(&client, 34).await;
 
         let original = client
             .query_one(
@@ -119,7 +120,7 @@ async fn known_prefix_accepts_0031_and_rejects_every_ledger_drift_without_writin
         client
             .execute(
                 "INSERT INTO openbot_internal.schema_migrations(version,name,checksum) \
-                 VALUES(33,'future-0033',repeat('3',64))",
+                 VALUES(34,'future-0034',repeat('3',64))",
                 &[],
             )
             .await
@@ -127,7 +128,7 @@ async fn known_prefix_accepts_0031_and_rejects_every_ledger_drift_without_writin
         prefix_refusal_is_read_only(&client, native::NATIVE_0031_VERSION).await;
         client
             .execute(
-                "DELETE FROM openbot_internal.schema_migrations WHERE version=33",
+                "DELETE FROM openbot_internal.schema_migrations WHERE version=34",
                 &[],
             )
             .await

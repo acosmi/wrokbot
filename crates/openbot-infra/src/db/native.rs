@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0032_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0033_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -209,6 +209,13 @@ pub const NATIVE_0032_VERSION: i32 = 32;
 pub const NATIVE_0032_NAME: &str = "native_0032_desktop_vault_canary";
 /// 0032 expand-only SQL source.
 pub const NATIVE_0032_SQL: &str = include_str!("../../sql/native_0032.sql");
+
+/// SDK Gateway PG/Vault credential authority version.
+pub const NATIVE_0033_VERSION: i32 = 33;
+/// 0033 stable migration name.
+pub const NATIVE_0033_NAME: &str = "native_0033_sdk_gateway_authority";
+/// 0033 expand-only SQL source.
+pub const NATIVE_0033_SQL: &str = include_str!("../../sql/native_0033.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -324,6 +331,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0032_VERSION,
         name: NATIVE_0032_NAME,
         sql: NATIVE_0032_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0033_VERSION,
+        name: NATIVE_0033_NAME,
+        sql: NATIVE_0033_SQL,
     },
 ];
 
@@ -497,6 +509,12 @@ pub fn native_0031_checksum() -> String {
 #[must_use]
 pub fn native_0032_checksum() -> String {
     Sha256Digest::of(NATIVE_0032_SQL.as_bytes()).to_hex()
+}
+
+/// SHA-256 of the exact native 0033 SQL bytes.
+#[must_use]
+pub fn native_0033_checksum() -> String {
+    Sha256Digest::of(NATIVE_0033_SQL.as_bytes()).to_hex()
 }
 
 /// 在一个已到 0012 的数据库上施加当前二进制认识的全部 Rust-owned migrations。
@@ -865,6 +883,7 @@ mod tests {
             .chain(statement_lines(NATIVE_0030_SQL))
             .chain(statement_lines(NATIVE_0031_SQL))
             .chain(statement_lines(NATIVE_0032_SQL))
+            .chain(statement_lines(NATIVE_0033_SQL))
         {
             let uppercase = line.to_ascii_uppercase();
             assert!(
@@ -924,6 +943,9 @@ mod tests {
         assert!(NATIVE_0028_SQL.contains("remote_agent_interrupts_state_shape"));
         assert!(NATIVE_0029_SQL.contains("ADD COLUMN egress_allow_cidrs text[]"));
         assert!(NATIVE_0029_SQL.contains("provenance = 'custom'"));
+        assert_eq!(NATIVE_0033_SQL.matches("CREATE TABLE public.").count(), 3);
+        assert!(NATIVE_0033_SQL.contains("sdk_gateway_connections_state_shape"));
+        assert!(NATIVE_0033_SQL.contains("sdk_gateway_operations_state_shape"));
     }
 
     #[test]
@@ -987,6 +1009,7 @@ mod tests {
                 .chain(statement_lines(NATIVE_0030_SQL))
                 .chain(statement_lines(NATIVE_0031_SQL))
                 .chain(statement_lines(NATIVE_0032_SQL))
+                .chain(statement_lines(NATIVE_0033_SQL))
                 .any(|line| line.contains("IF NOT EXISTS"))
         );
         assert!(LEDGER_BOOTSTRAP_SQL.contains("IF NOT EXISTS"));
@@ -1061,7 +1084,10 @@ mod tests {
         let desktop_vault_canary = native_0032_checksum();
         assert_eq!(desktop_vault_canary.len(), 64);
         assert_ne!(run_model_selections, desktop_vault_canary);
-        assert_eq!(MIGRATIONS.len(), 20);
-        assert_eq!(MIGRATIONS[19].version, NATIVE_LATEST_VERSION);
+        let sdk_gateway_authority = native_0033_checksum();
+        assert_eq!(sdk_gateway_authority.len(), 64);
+        assert_ne!(desktop_vault_canary, sdk_gateway_authority);
+        assert_eq!(MIGRATIONS.len(), 21);
+        assert_eq!(MIGRATIONS[20].version, NATIVE_LATEST_VERSION);
     }
 }

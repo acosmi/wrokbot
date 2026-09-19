@@ -22,7 +22,7 @@ use openbot_infra::auth::single_user::desktop_local::{
 };
 use openbot_infra::db::desktop_local::{DesktopLocalDatabase, connect_for_attestation};
 use openbot_infra::db::initialization::DatabaseOrigin;
-use openbot_infra::db::{desktop_vault_canary, initialization, native};
+use openbot_infra::db::{baseline, desktop_vault_canary, initialization, native};
 
 static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const TEST_USER: &str = "desktop_admin";
@@ -337,6 +337,203 @@ fn append_postgres_config(data_dir: &Path, socket_dir: &Path, port: u16) -> Resu
         .map_err(|_| "sync postgresql.conf failed".to_owned())
 }
 
+async fn install_historical_0032(database: &DesktopLocalDatabase) {
+    let mut client = database.pool().get().await.unwrap();
+    baseline::apply(&client).await.unwrap();
+    native::apply_through(&mut client, native::NATIVE_0032_VERSION)
+        .await
+        .unwrap();
+}
+
+async fn native_0033_restart_facts(
+    database: &DesktopLocalDatabase,
+) -> (String, Vec<(String, u32)>) {
+    let client = database.pool().get().await.unwrap();
+    let applied_at: String = client
+        .query_one(
+            "SELECT applied_at::text FROM openbot_internal.schema_migrations WHERE version=33",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let relations = client
+        .query(
+            "SELECT c.relname,c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace \
+             WHERE n.nspname='public' AND c.relname IN \
+             ('sdk_gateway_connections','sdk_gateway_operations','sdk_gateway_secrets') \
+             ORDER BY c.relname",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    (applied_at, relations)
+}
+
+#[tokio::test]
+#[ignore = "需要本机 PostgreSQL 17 binaries；设置 OPENBOT_TEST_POSTGRES_BIN_DIR 后运行"]
+async fn existing_0032_canary_upgrades_once_and_0033_restart_runs_no_ddl() {
+    let DesktopFixture {
+        database,
+        installation,
+        port,
+        mut running,
+    } = start_desktop_fixture(None).await;
+    install_historical_0032(&database).await;
+    let package = loaded_package(installation.authority().auth_context().tenant().as_str());
+    let proof = verified_canary(&database, &installation).await;
+    assert_eq!(
+        desktop_vault_canary::verify_pre_upgrade_layout(database.pool())
+            .await
+            .unwrap()
+            .native_version(),
+        native::NATIVE_0032_VERSION
+    );
+    let before = bootstrap_write_counts(&database).await;
+    assert_eq!(before.ledger, 20);
+    assert_eq!(
+        (
+            before.users,
+            before.agents,
+            before.channels,
+            before.memberships
+        ),
+        (0, 0, 0, 0)
+    );
+
+    let first = installation
+        .complete_postgres_after_vault(&database, &package, DatabaseOrigin::RustManaged, &proof)
+        .await
+        .unwrap();
+    assert_eq!(first.package.memberships_granted, 1);
+    desktop_vault_canary::verify_current_layout(database.pool())
+        .await
+        .unwrap();
+    let after = bootstrap_write_counts(&database).await;
+    assert_eq!(after.ledger, 21);
+    let first_facts = native_0033_restart_facts(&database).await;
+    assert_eq!(first_facts.1.len(), 3);
+
+    let second_admin =
+        connect_for_attestation(port, SecretBytes::new(TEST_PASSWORD.as_bytes().to_vec()))
+            .await
+            .unwrap();
+    let second_admin = installation
+        .attest_postgres_admin(second_admin)
+        .await
+        .unwrap();
+    let second_database_owner = second_admin.connect_application(false).await.unwrap();
+    let master = SecretBytes::new(vec![0x5a; 32]);
+    let second_proof = desktop_vault_canary::verify_persisted(
+        &second_database_owner,
+        &master,
+        proof.dataset_id(),
+        proof.deployment_id(),
+        proof.tenant_id(),
+        proof.key_id(),
+    )
+    .await
+    .unwrap();
+    let second = installation
+        .complete_postgres_after_vault(
+            &second_database_owner,
+            &package,
+            DatabaseOrigin::RustManaged,
+            &second_proof,
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.package.memberships_granted, 0);
+    assert_eq!(
+        native_0033_restart_facts(&second_database_owner).await,
+        first_facts
+    );
+    assert_eq!(bootstrap_write_counts(&second_database_owner).await, after);
+
+    second_database_owner.close();
+    database.close();
+    running.stop().unwrap();
+}
+
+#[tokio::test]
+#[ignore = "需要本机 PostgreSQL 17 binaries；设置 OPENBOT_TEST_POSTGRES_BIN_DIR 后运行"]
+async fn existing_0032_bad_master_or_changed_canary_performs_zero_0033_ddl() {
+    let DesktopFixture {
+        database,
+        installation,
+        port: _,
+        mut running,
+    } = start_desktop_fixture(None).await;
+    install_historical_0032(&database).await;
+    let package = loaded_package(installation.authority().auth_context().tenant().as_str());
+    let proof = verified_canary(&database, &installation).await;
+    let before = bootstrap_write_counts(&database).await;
+    assert_eq!(before.ledger, 20);
+    let wrong_master = SecretBytes::new(vec![0xa5; 32]);
+    assert!(
+        desktop_vault_canary::verify_persisted(
+            &database,
+            &wrong_master,
+            proof.dataset_id(),
+            proof.deployment_id(),
+            proof.tenant_id(),
+            proof.key_id(),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(bootstrap_write_counts(&database).await, before);
+
+    let client = database.pool().get().await.unwrap();
+    client
+        .execute(
+            "UPDATE openbot_internal.desktop_vault_canaries \
+             SET encrypted_canary=encrypted_canary || '0' \
+             WHERE deployment_id=$1 AND tenant_id=$2",
+            &[&proof.deployment_id(), &proof.tenant_id()],
+        )
+        .await
+        .unwrap();
+    drop(client);
+    completion_refusal_is_read_only(
+        &installation,
+        &database,
+        &package,
+        DatabaseOrigin::RustManaged,
+        &proof,
+    )
+    .await;
+    assert_eq!(bootstrap_write_counts(&database).await, before);
+    let client = database.pool().get().await.unwrap();
+    let new_relations: i64 = client
+        .query_one(
+            "SELECT count(*)::bigint FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace \
+             WHERE n.nspname='public' AND c.relname IN \
+             ('sdk_gateway_connections','sdk_gateway_operations','sdk_gateway_secrets')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(new_relations, 0);
+    let migration_0033: i64 = client
+        .query_one(
+            "SELECT count(*)::bigint FROM openbot_internal.schema_migrations WHERE version=33",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(migration_0033, 0);
+    drop(client);
+
+    database.close();
+    running.stop().unwrap();
+}
+
 #[tokio::test]
 #[ignore = "需要本机 PostgreSQL 17 binaries；设置 OPENBOT_TEST_POSTGRES_BIN_DIR 后运行"]
 async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership() {
@@ -358,9 +555,12 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
     let layout = desktop_vault_canary::verify_pre_upgrade_layout(pool)
         .await
         .unwrap();
-    assert_eq!(layout.native_version(), 32);
+    assert_eq!(layout.native_version(), native::NATIVE_LATEST_VERSION);
     let before_failures = bootstrap_write_counts(&database).await;
-    assert_eq!(before_failures.ledger, 20);
+    assert_eq!(
+        before_failures.ledger,
+        i64::try_from(native::NATIVE_MIGRATION_COUNT).unwrap()
+    );
     assert_eq!(before_failures.users, 0);
     assert_eq!(before_failures.agents, 0);
     assert_eq!(before_failures.channels, 0);

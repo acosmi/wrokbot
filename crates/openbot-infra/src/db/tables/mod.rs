@@ -46,7 +46,7 @@
 //! 0013、0016、0020、0021、0022、0023、0026、0028 与 0030 的 native 表分别登记在 [`NATIVE_0013_TABLES`] /
 //! [`NATIVE_0016_TABLES`] / [`NATIVE_0020_TABLES`] / [`NATIVE_0021_TABLES`] /
 //! [`NATIVE_0022_TABLES`] / [`NATIVE_0023_TABLES`] / [`NATIVE_0026_TABLES`] /
-//! [`NATIVE_0028_TABLES`] 与 [`NATIVE_0030_TABLES`]，
+//! [`NATIVE_0028_TABLES`]、[`NATIVE_0030_TABLES`]、[`NATIVE_0031_TABLES`] 与 [`NATIVE_0033_TABLES`]，
 //! 始终不混进只代表固定上游 0012 的 [`ALL_TABLES`]。
 
 use std::fmt;
@@ -102,6 +102,7 @@ pub const SECRET_COLUMNS: &[(&str, &str)] = &[
     ("remote_agent_interrupts", "response_payload"),
     ("run_events", "payload"),
     ("runs", "fencing_token"),
+    ("sdk_gateway_secrets", "encrypted_value"),
     ("sessions", "token"),
     ("sso_providers", "oidc_config"),
     ("sso_providers", "saml_config"),
@@ -273,6 +274,31 @@ pub const SECRET_SCAN_EXEMPTIONS: &[(&str, &str, &str)] = &[
         "bigint：provider 报告 token 的累计总数，不含内容或可认证 token 字节",
     ),
     (
+        "sdk_gateway_connections",
+        "credential_generation",
+        "bigint：SDK Gateway 凭据的单调代次，不含凭据字节",
+    ),
+    (
+        "sdk_gateway_connections",
+        "current_secret_id",
+        "uuid：指向sdk_gateway_secrets的复合外键，不含密文或令牌",
+    ),
+    (
+        "sdk_gateway_operations",
+        "candidate_secret_id",
+        "uuid：指向候选sdk_gateway_secrets代次，不含密文或令牌",
+    ),
+    (
+        "sdk_gateway_operations",
+        "token_admitted_at",
+        "timestamptz：一次受控token请求获准的数据库时刻，不含令牌",
+    ),
+    (
+        "sdk_gateway_secrets",
+        "credential_generation",
+        "bigint：密文记录绑定的凭据代次，不含凭据字节",
+    ),
+    (
         "tool_calls",
         "schema_hash",
         "SHA-256 catalog schema 摘要是公开版本标识，不由运行期 secret 输入派生",
@@ -281,7 +307,7 @@ pub const SECRET_SCAN_EXEMPTIONS: &[(&str, &str, &str)] = &[
 
 /// 这一列是否登记在 [`SECRET_COLUMNS`] 里。
 ///
-/// 由 `define_table!` 展开出来的 `Debug` 调用。线性扫 32 项 —— `Debug` 不在热路径上，
+/// 由 `define_table!` 展开出来的 `Debug` 调用。线性扫当前闭集 —— `Debug` 不在热路径上，
 /// 换成完美哈希只会多一处可以和台账漂开的东西。
 pub fn is_secret_column(table: &str, column: &str) -> bool {
     SECRET_COLUMNS
@@ -652,6 +678,9 @@ pub const NATIVE_0028_TABLES: &[TableSpec] = &[TableSpec {
 pub mod model_connection_secrets;
 pub mod model_connections;
 pub mod run_model_selections;
+pub mod sdk_gateway_connections;
+pub mod sdk_gateway_operations;
+pub mod sdk_gateway_secrets;
 
 /// Native 0031 private historical custom-model run selection.
 pub const NATIVE_0031_TABLES: &[TableSpec] = &[TableSpec {
@@ -674,24 +703,47 @@ pub const NATIVE_0030_TABLES: &[TableSpec] = &[
     },
 ];
 
+/// Native 0033 SDK Gateway connection, ciphertext generation and rotation authority tables.
+pub const NATIVE_0033_TABLES: &[TableSpec] = &[
+    TableSpec {
+        name: sdk_gateway_connections::TABLE_NAME,
+        columns: sdk_gateway_connections::COLUMNS,
+        column_specs: sdk_gateway_connections::COLUMN_SPECS,
+    },
+    TableSpec {
+        name: sdk_gateway_operations::TABLE_NAME,
+        columns: sdk_gateway_operations::COLUMNS,
+        column_specs: sdk_gateway_operations::COLUMN_SPECS,
+    },
+    TableSpec {
+        name: sdk_gateway_secrets::TABLE_NAME,
+        columns: sdk_gateway_secrets::COLUMNS,
+        column_specs: sdk_gateway_secrets::COLUMN_SPECS,
+    },
+];
+
+/// Complete current public-table registry: fixed upstream 0012 plus every Rust-owned native table.
+/// Historical callers that specifically compare the upstream boundary must continue using
+/// [`ALL_TABLES`] instead.
+pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
+    ALL_TABLES
+        .iter()
+        .chain(NATIVE_0013_TABLES.iter())
+        .chain(NATIVE_0016_TABLES.iter())
+        .chain(NATIVE_0020_TABLES.iter())
+        .chain(NATIVE_0021_TABLES.iter())
+        .chain(NATIVE_0022_TABLES.iter())
+        .chain(NATIVE_0023_TABLES.iter())
+        .chain(NATIVE_0026_TABLES.iter())
+        .chain(NATIVE_0028_TABLES.iter())
+        .chain(NATIVE_0030_TABLES.iter())
+        .chain(NATIVE_0031_TABLES.iter())
+        .chain(NATIVE_0033_TABLES.iter())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
-        ALL_TABLES
-            .iter()
-            .chain(NATIVE_0013_TABLES.iter())
-            .chain(NATIVE_0016_TABLES.iter())
-            .chain(NATIVE_0020_TABLES.iter())
-            .chain(NATIVE_0021_TABLES.iter())
-            .chain(NATIVE_0022_TABLES.iter())
-            .chain(NATIVE_0023_TABLES.iter())
-            .chain(NATIVE_0026_TABLES.iter())
-            .chain(NATIVE_0028_TABLES.iter())
-            .chain(NATIVE_0030_TABLES.iter())
-            .chain(NATIVE_0031_TABLES.iter())
-    }
 
     /// 每张表的列数。数值取自参照库（`fixtures/db/schema-0012.json`），合计必须是 204。
     ///
@@ -1050,8 +1102,8 @@ mod tests {
             })
             .count();
         assert_eq!(hits, registered_root_hits + exemption_root_hits);
-        assert_eq!(SECRET_COLUMNS.len(), 35);
-        assert_eq!(SECRET_SCAN_EXEMPTIONS.len(), 22);
+        assert_eq!(SECRET_COLUMNS.len(), 36);
+        assert_eq!(SECRET_SCAN_EXEMPTIONS.len(), 27);
     }
 
     /// 两张名单都必须指向真实存在的 `(表, 列)`，且互不重叠。

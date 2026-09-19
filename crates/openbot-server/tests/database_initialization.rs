@@ -5,7 +5,7 @@ mod harness {
 }
 
 use harness::{admin_config, with_temp_database};
-use openbot_infra::db::tables::{ALL_TABLES, NATIVE_0013_TABLES, NATIVE_0016_TABLES};
+use openbot_infra::db::tables::current_table_specs;
 use openbot_infra::db::{baseline, native, pool};
 use openbot_server::database::{DatabaseInitializationError, DatabaseOrigin, initialize};
 
@@ -30,10 +30,7 @@ async fn fresh_bootstrap_survives_a_second_start_without_a_drizzle_ledger() {
             .map_err(|error| error.to_string())?;
         let outcome = async {
             let expected_native = i64::try_from(native::NATIVE_MIGRATION_COUNT).unwrap();
-            let expected_public_tables = i64::try_from(
-                ALL_TABLES.len() + NATIVE_0013_TABLES.len() + NATIVE_0016_TABLES.len(),
-            )
-            .unwrap();
+            let expected_public_tables = i64::try_from(current_table_specs().count()).unwrap();
             if initialize(&pool).await.map_err(|error| error.to_string())? != DatabaseOrigin::Fresh
             {
                 return Err("空库首次启动没有识别为 Fresh".to_owned());
