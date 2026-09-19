@@ -18,11 +18,11 @@ use openbot_domain::vault::{
 };
 use openbot_infra::auth::single_user::desktop_local::{
     CurrentOsUserAppDataRoot, DESKTOP_LOCAL_ACTOR_ID, DesktopLocalAuthorityStore,
-    DesktopLocalBootstrapError,
+    DesktopLocalBootstrapError, DesktopLocalInstallation,
 };
 use openbot_infra::db::desktop_local::{DesktopLocalDatabase, connect_for_attestation};
 use openbot_infra::db::initialization::DatabaseOrigin;
-use openbot_infra::db::{desktop_vault_canary, initialization};
+use openbot_infra::db::{desktop_vault_canary, initialization, native};
 
 static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const TEST_USER: &str = "desktop_admin";
@@ -73,6 +73,23 @@ struct RunningPostgres {
     stopped: bool,
 }
 
+struct DesktopFixture {
+    database: DesktopLocalDatabase,
+    installation: DesktopLocalInstallation,
+    port: u16,
+    running: RunningPostgres,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BootstrapWriteCounts {
+    ledger: i64,
+    ledger_fingerprint: String,
+    users: i64,
+    agents: i64,
+    channels: i64,
+    memberships: i64,
+}
+
 impl RunningPostgres {
     fn stop(&mut self) -> Result<(), String> {
         if !self.stopped {
@@ -98,86 +115,52 @@ impl Drop for RunningPostgres {
     }
 }
 
-fn loaded_package(tenant_id: &str) -> LoadedTenantPackage {
-    let files = TenantPackageFiles {
-        brand: format!("tenant: {{ id: {tenant_id}, product_name: Desktop Local }}"),
-        agents: "agents: [{ id: desktop-assistant, name: Assistant, title: Local Assistant, role_description: Help locally., type: built-in, system_prompt: Answer carefully. }]".to_owned(),
-        channels: "channels: [{ id: desktop-home, name: Home, description: Local home., permitted_agents: [desktop-assistant], allowed_groups: [all] }]".to_owned(),
-        model: "model: { provider: openai, credential_secret_ref: openai-key, default_model: gpt-4.1 }".to_owned(),
-        knowledge: "sources: []".to_owned(),
-    };
-    LoadedTenantPackage::new(
-        validate_tenant_package(files).unwrap(),
-        "/desktop-local/package".to_owned(),
-        "d".repeat(64),
-    )
-    .unwrap()
-}
-
-async fn verified_canary(
-    database: &DesktopLocalDatabase,
-    installation: &openbot_infra::auth::single_user::desktop_local::DesktopLocalInstallation,
-) -> desktop_vault_canary::VerifiedDesktopVaultCanary {
-    let dataset = format!("{:032x}", TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1);
-    let key_id = format!("{:032x}", TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1);
-    let deployment = installation
-        .authority()
-        .auth_context()
-        .deployment()
-        .as_str();
-    let tenant = installation.authority().auth_context().tenant().as_str();
-    let master = SecretBytes::new(vec![0x5a; 32]);
-    let binding =
-        DesktopVaultCanaryBinding::new(&dataset, deployment, tenant, &key_id, KeyVersion::new(1))
-            .unwrap();
-    let envelope =
-        seal_desktop_vault_canary(&master, &binding, Nonce::from_array([0x33; NONCE_BYTES]))
-            .unwrap();
-    let row = desktop_vault_canary::DesktopVaultCanaryRow::new(
-        &dataset,
-        deployment,
-        tenant,
-        &key_id,
-        envelope.to_column_value(),
-    )
-    .unwrap();
-    if desktop_vault_canary::read(database.pool(), deployment, tenant)
+async fn bootstrap_write_counts(database: &DesktopLocalDatabase) -> BootstrapWriteCounts {
+    let client = database.pool().get().await.unwrap();
+    let row = client
+        .query_one(
+            "SELECT \
+               (SELECT count(*)::bigint FROM openbot_internal.schema_migrations), \
+               (SELECT coalesce(string_agg(version::text || ':' || name || ':' || checksum || ':' || applied_at::text,'|' ORDER BY version),'') FROM openbot_internal.schema_migrations), \
+               (SELECT count(*)::bigint FROM public.users), \
+               (SELECT count(*)::bigint FROM public.agent_profiles), \
+               (SELECT count(*)::bigint FROM public.channels), \
+               (SELECT count(*)::bigint FROM public.channel_memberships)",
+            &[],
+        )
         .await
-        .unwrap()
-        .is_none()
-    {
-        desktop_vault_canary::insert_once(database.pool(), &row)
-            .await
-            .unwrap();
+        .unwrap();
+    BootstrapWriteCounts {
+        ledger: row.get(0),
+        ledger_fingerprint: row.get(1),
+        users: row.get(2),
+        agents: row.get(3),
+        channels: row.get(4),
+        memberships: row.get(5),
     }
-    desktop_vault_canary::verify_persisted(database, &master, &dataset, deployment, tenant, &key_id)
-        .await
-        .unwrap()
 }
 
-fn append_postgres_config(data_dir: &Path, socket_dir: &Path, port: u16) -> Result<(), String> {
-    let socket = socket_dir
-        .to_str()
-        .filter(|value| !value.contains('\''))
-        .ok_or_else(|| "socket path is not a safe UTF-8 setting".to_owned())?;
-    let mut config = OpenOptions::new()
-        .append(true)
-        .open(data_dir.join("postgresql.conf"))
-        .map_err(|_| "open postgresql.conf failed".to_owned())?;
-    writeln!(
-        config,
-        "\nlisten_addresses = '127.0.0.1'\nport = {port}\npassword_encryption = 'scram-sha-256'\ndynamic_shared_memory_type = 'posix'\nunix_socket_directories = '{socket}'\nunix_socket_permissions = 0700"
-    )
-    .map_err(|_| "write postgresql.conf failed".to_owned())?;
-    config
-        .sync_all()
-        .map_err(|_| "sync postgresql.conf failed".to_owned())
+fn copy_installation_identity(source_root: &Path, target_root: &Path) {
+    fs::create_dir(target_root).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(target_root, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let target = target_root.join("desktop-instance-v1");
+    fs::copy(source_root.join("desktop-instance-v1"), &target).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(target, fs::Permissions::from_mode(0o600)).unwrap();
+    }
 }
 
-#[tokio::test]
-#[ignore = "需要本机 PostgreSQL 17 binaries；设置 OPENBOT_TEST_POSTGRES_BIN_DIR 后运行"]
-async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership() {
+async fn start_desktop_fixture(identity_source: Option<&Path>) -> DesktopFixture {
     let app_root = test_root();
+    if let Some(source_root) = identity_source {
+        copy_installation_identity(source_root, &app_root);
+    }
     let store = DesktopLocalAuthorityStore::new(
         CurrentOsUserAppDataRoot::from_current_os_user_app_data(&app_root).unwrap(),
     );
@@ -241,19 +224,129 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
     ) {
         panic!("{error}");
     }
-    let mut running = RunningPostgres {
+    let running = RunningPostgres {
         pg_ctl,
-        data_dir: data_dir.clone(),
-        app_root: app_root.clone(),
-        socket_dir: socket_dir.clone(),
+        data_dir,
+        app_root,
+        socket_dir,
         stopped: false,
     };
-
     let admin = connect_for_attestation(port, SecretBytes::new(TEST_PASSWORD.as_bytes().to_vec()))
         .await
         .unwrap();
     let admin = installation.attest_postgres_admin(admin).await.unwrap();
     let database = admin.connect_application(true).await.unwrap();
+    DesktopFixture {
+        database,
+        installation,
+        port,
+        running,
+    }
+}
+
+fn loaded_package(tenant_id: &str) -> LoadedTenantPackage {
+    let files = TenantPackageFiles {
+        brand: format!("tenant: {{ id: {tenant_id}, product_name: Desktop Local }}"),
+        agents: "agents: [{ id: desktop-assistant, name: Assistant, title: Local Assistant, role_description: Help locally., type: built-in, system_prompt: Answer carefully. }]".to_owned(),
+        channels: "channels: [{ id: desktop-home, name: Home, description: Local home., permitted_agents: [desktop-assistant], allowed_groups: [all] }]".to_owned(),
+        model: "model: { provider: openai, credential_secret_ref: openai-key, default_model: gpt-4.1 }".to_owned(),
+        knowledge: "sources: []".to_owned(),
+    };
+    LoadedTenantPackage::new(
+        validate_tenant_package(files).unwrap(),
+        "/desktop-local/package".to_owned(),
+        "d".repeat(64),
+    )
+    .unwrap()
+}
+
+async fn verified_canary(
+    database: &DesktopLocalDatabase,
+    installation: &openbot_infra::auth::single_user::desktop_local::DesktopLocalInstallation,
+) -> desktop_vault_canary::VerifiedDesktopVaultCanary {
+    let dataset = format!("{:032x}", TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1);
+    let key_id = format!("{:032x}", TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1);
+    let deployment = installation
+        .authority()
+        .auth_context()
+        .deployment()
+        .as_str();
+    let tenant = installation.authority().auth_context().tenant().as_str();
+    let master = SecretBytes::new(vec![0x5a; 32]);
+    let binding =
+        DesktopVaultCanaryBinding::new(&dataset, deployment, tenant, &key_id, KeyVersion::new(1))
+            .unwrap();
+    let envelope =
+        seal_desktop_vault_canary(&master, &binding, Nonce::from_array([0x33; NONCE_BYTES]))
+            .unwrap();
+    let row = desktop_vault_canary::DesktopVaultCanaryRow::new(
+        &dataset,
+        deployment,
+        tenant,
+        &key_id,
+        envelope.to_column_value(),
+    )
+    .unwrap();
+    if desktop_vault_canary::read(database.pool(), deployment, tenant)
+        .await
+        .unwrap()
+        .is_none()
+    {
+        desktop_vault_canary::insert_once(database.pool(), &row)
+            .await
+            .unwrap();
+    }
+    desktop_vault_canary::verify_persisted(database, &master, &dataset, deployment, tenant, &key_id)
+        .await
+        .unwrap()
+}
+
+async fn completion_refusal_is_read_only(
+    installation: &DesktopLocalInstallation,
+    database: &DesktopLocalDatabase,
+    package: &LoadedTenantPackage,
+    database_origin: DatabaseOrigin,
+    proof: &desktop_vault_canary::VerifiedDesktopVaultCanary,
+) {
+    let before = bootstrap_write_counts(database).await;
+    assert!(
+        installation
+            .complete_postgres_after_vault(database, package, database_origin, proof)
+            .await
+            .is_err()
+    );
+    assert_eq!(bootstrap_write_counts(database).await, before);
+}
+
+fn append_postgres_config(data_dir: &Path, socket_dir: &Path, port: u16) -> Result<(), String> {
+    let socket = socket_dir
+        .to_str()
+        .filter(|value| !value.contains('\''))
+        .ok_or_else(|| "socket path is not a safe UTF-8 setting".to_owned())?;
+    let mut config = OpenOptions::new()
+        .append(true)
+        .open(data_dir.join("postgresql.conf"))
+        .map_err(|_| "open postgresql.conf failed".to_owned())?;
+    writeln!(
+        config,
+        "\nlisten_addresses = '127.0.0.1'\nport = {port}\npassword_encryption = 'scram-sha-256'\ndynamic_shared_memory_type = 'posix'\nunix_socket_directories = '{socket}'\nunix_socket_permissions = 0700"
+    )
+    .map_err(|_| "write postgresql.conf failed".to_owned())?;
+    config
+        .sync_all()
+        .map_err(|_| "sync postgresql.conf failed".to_owned())
+}
+
+#[tokio::test]
+#[ignore = "需要本机 PostgreSQL 17 binaries；设置 OPENBOT_TEST_POSTGRES_BIN_DIR 后运行"]
+async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership() {
+    let DesktopFixture {
+        database,
+        installation,
+        port,
+        mut running,
+    } = start_desktop_fixture(None).await;
+    let app_root = running.app_root.clone();
     let pool = database.pool();
     let package = loaded_package(installation.authority().auth_context().tenant().as_str());
     let fresh = database.fresh_initialization_proof().unwrap();
@@ -262,6 +355,179 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
         .await
         .unwrap();
     let proof = verified_canary(&database, &installation).await;
+    let layout = desktop_vault_canary::verify_pre_upgrade_layout(pool)
+        .await
+        .unwrap();
+    assert_eq!(layout.native_version(), 32);
+    let before_failures = bootstrap_write_counts(&database).await;
+    assert_eq!(before_failures.ledger, 20);
+    assert_eq!(before_failures.users, 0);
+    assert_eq!(before_failures.agents, 0);
+    assert_eq!(before_failures.channels, 0);
+    assert_eq!(before_failures.memberships, 0);
+
+    let wrong_master = SecretBytes::new(vec![0xa5; 32]);
+    assert!(
+        desktop_vault_canary::verify_persisted(
+            &database,
+            &wrong_master,
+            proof.dataset_id(),
+            proof.deployment_id(),
+            proof.tenant_id(),
+            proof.key_id(),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(bootstrap_write_counts(&database).await, before_failures);
+
+    let persisted = desktop_vault_canary::read(pool, proof.deployment_id(), proof.tenant_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let encrypted_canary = persisted.encrypted_canary().to_owned();
+    let client = pool.get().await.unwrap();
+    client
+        .execute(
+            "UPDATE openbot_internal.desktop_vault_canaries \
+             SET encrypted_canary=encrypted_canary || '0' \
+             WHERE deployment_id=$1 AND tenant_id=$2",
+            &[&proof.deployment_id(), &proof.tenant_id()],
+        )
+        .await
+        .unwrap();
+    drop(client);
+    completion_refusal_is_read_only(&installation, &database, &package, first_origin, &proof).await;
+    assert_eq!(
+        desktop_vault_canary::read(pool, proof.deployment_id(), proof.tenant_id())
+            .await
+            .unwrap()
+            .unwrap()
+            .encrypted_canary(),
+        format!("{encrypted_canary}0")
+    );
+    let client = pool.get().await.unwrap();
+    client
+        .execute(
+            "UPDATE openbot_internal.desktop_vault_canaries SET encrypted_canary=$1 \
+             WHERE deployment_id=$2 AND tenant_id=$3",
+            &[
+                &encrypted_canary,
+                &proof.deployment_id(),
+                &proof.tenant_id(),
+            ],
+        )
+        .await
+        .unwrap();
+    drop(client);
+
+    let client = pool.get().await.unwrap();
+    client
+        .execute(
+            "DELETE FROM openbot_internal.desktop_vault_canaries \
+             WHERE deployment_id=$1 AND tenant_id=$2",
+            &[&proof.deployment_id(), &proof.tenant_id()],
+        )
+        .await
+        .unwrap();
+    drop(client);
+    completion_refusal_is_read_only(&installation, &database, &package, first_origin, &proof).await;
+    assert!(
+        desktop_vault_canary::read(pool, proof.deployment_id(), proof.tenant_id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let restored = desktop_vault_canary::DesktopVaultCanaryRow::new(
+        persisted.dataset_id(),
+        persisted.deployment_id(),
+        persisted.tenant_id(),
+        persisted.key_id(),
+        encrypted_canary,
+    )
+    .unwrap();
+    desktop_vault_canary::insert_once(pool, &restored)
+        .await
+        .unwrap();
+
+    let client = pool.get().await.unwrap();
+    client
+        .batch_execute("CREATE TABLE public.r357_unexpected(id integer)")
+        .await
+        .unwrap();
+    drop(client);
+    completion_refusal_is_read_only(&installation, &database, &package, first_origin, &proof).await;
+    let client = pool.get().await.unwrap();
+    assert!(
+        client
+            .query_one(
+                "SELECT to_regclass('public.r357_unexpected') IS NOT NULL",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, bool>(0)
+    );
+    client
+        .batch_execute("DROP TABLE public.r357_unexpected")
+        .await
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE FUNCTION openbot_internal.r357_canary_hook() RETURNS trigger \
+             LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; \
+             CREATE TRIGGER r357_canary_hook BEFORE UPDATE ON \
+             openbot_internal.desktop_vault_canaries FOR EACH ROW \
+             EXECUTE FUNCTION openbot_internal.r357_canary_hook()",
+        )
+        .await
+        .unwrap();
+    drop(client);
+    completion_refusal_is_read_only(&installation, &database, &package, first_origin, &proof).await;
+    let client = pool.get().await.unwrap();
+    assert_eq!(
+        client
+            .query_one(
+                "SELECT count(*)::bigint FROM pg_trigger \
+                 WHERE tgname='r357_canary_hook' AND NOT tgisinternal",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        1
+    );
+    client
+        .batch_execute(
+            "DROP TRIGGER r357_canary_hook ON openbot_internal.desktop_vault_canaries; \
+             DROP FUNCTION openbot_internal.r357_canary_hook()",
+        )
+        .await
+        .unwrap();
+    drop(client);
+
+    let client = pool.get().await.unwrap();
+    client
+        .execute(
+            "UPDATE openbot_internal.schema_migrations SET checksum=repeat('0',64) \
+             WHERE version=32",
+            &[],
+        )
+        .await
+        .unwrap();
+    drop(client);
+    completion_refusal_is_read_only(&installation, &database, &package, first_origin, &proof).await;
+    let client = pool.get().await.unwrap();
+    let checksum = native::native_0032_checksum();
+    client
+        .execute(
+            "UPDATE openbot_internal.schema_migrations SET checksum=$1 WHERE version=32",
+            &[&checksum],
+        )
+        .await
+        .unwrap();
+    drop(client);
+
     let second_admin =
         connect_for_attestation(port, SecretBytes::new(TEST_PASSWORD.as_bytes().to_vec()))
             .await
@@ -277,12 +543,14 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
             .await,
         Err(DesktopLocalBootstrapError::VaultCanaryMismatch)
     ));
-    assert!(matches!(
-        installation
-            .complete_postgres_after_vault(&second_database_owner, &package, first_origin, &proof,)
-            .await,
-        Err(DesktopLocalBootstrapError::VaultCanaryMismatch)
-    ));
+    completion_refusal_is_read_only(
+        &installation,
+        &second_database_owner,
+        &package,
+        first_origin,
+        &proof,
+    )
+    .await;
     second_database_owner.close();
     let first = installation
         .complete_postgres_after_vault(&database, &package, first_origin, &proof)
@@ -327,6 +595,43 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
         .unwrap();
     assert_eq!(second.database_origin, DatabaseOrigin::RustManaged);
     assert_eq!(second.package.memberships_granted, 0);
+
+    let DesktopFixture {
+        database: other_database,
+        installation: other_database_installation,
+        port: _,
+        running: mut other_running,
+    } = start_desktop_fixture(Some(&app_root)).await;
+    assert_eq!(
+        other_database_installation.authority().instance_id(),
+        installation.authority().instance_id()
+    );
+    let other_database_package = loaded_package(
+        other_database_installation
+            .authority()
+            .auth_context()
+            .tenant()
+            .as_str(),
+    );
+    let other_database_fresh = other_database.fresh_initialization_proof().unwrap();
+    let other_database_origin = other_database_installation
+        .initialize_postgres_schema(
+            &other_database,
+            &other_database_package,
+            &other_database_fresh,
+        )
+        .await
+        .unwrap();
+    completion_refusal_is_read_only(
+        &other_database_installation,
+        &other_database,
+        &other_database_package,
+        other_database_origin,
+        &proof,
+    )
+    .await;
+    other_database.close();
+    other_running.stop().unwrap();
 
     let other_root = test_root();
     let other = DesktopLocalAuthorityStore::new(

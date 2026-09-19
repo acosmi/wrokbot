@@ -545,6 +545,132 @@ pub async fn ledger_exists(client: &Client) -> Result<bool, InfraError> {
         .map_err(|source| RowDecodeError::column("(to_regclass)", "exists", source).into())
 }
 
+/// Read-only proof that the database contains one exact, contiguous prefix of the migrations known
+/// to this binary. Missing known tail migrations are allowed; unknown rows and holes are not.
+/// This proof describes storage facts only and does not authorize applying a migration.
+pub struct ValidatedNativeLedger {
+    latest_version: i32,
+}
+
+impl ValidatedNativeLedger {
+    /// Highest exact migration version present in the validated ledger prefix.
+    #[must_use]
+    pub const fn latest_version(&self) -> i32 {
+        self.latest_version
+    }
+}
+
+impl core::fmt::Debug for ValidatedNativeLedger {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ValidatedNativeLedger")
+            .field("latest_version", &self.latest_version)
+            .finish()
+    }
+}
+
+/// Validate an exact known ledger prefix at or beyond `required_through`, without DDL or locks.
+/// The bounded extra row makes an appended unknown version observable instead of truncating it.
+pub async fn validate_known_prefix(
+    client: &Client,
+    required_through: i32,
+) -> Result<ValidatedNativeLedger, InfraError> {
+    if !MIGRATIONS
+        .iter()
+        .any(|migration| migration.version == required_through)
+    {
+        return Err(InfraError::repository_invariant(
+            "native_migration_floor_unknown",
+        ));
+    }
+    if !ledger_exists(client).await? {
+        return Err(InfraError::repository_invariant(
+            "native_migration_ledger_missing",
+        ));
+    }
+
+    let limit = MIGRATIONS
+        .len()
+        .checked_add(1)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| {
+            InfraError::repository_invariant("native_migration_validation_limit_invalid")
+        })?;
+    let rows = client
+        .query(
+            "SELECT version,name,checksum FROM openbot_internal.schema_migrations ORDER BY version,name,checksum LIMIT $1",
+            &[&limit],
+        )
+        .await
+        .map_err(|source| InfraError::query("只读核验 native migration 前缀", source))?;
+    if rows.is_empty() {
+        return Err(InfraError::repository_invariant(
+            "native_migration_ledger_incomplete",
+        ));
+    }
+
+    let mut latest_version = None;
+    for (index, row) in rows.iter().enumerate() {
+        let actual_version: i32 = row
+            .try_get("version")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "version", source))?;
+        let actual_name: String = row
+            .try_get("name")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "name", source))?;
+        let actual_checksum: String = row
+            .try_get("checksum")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "checksum", source))?;
+        let Some(expected) = MIGRATIONS.get(index) else {
+            return Err(InfraError::repository_invariant(
+                "native_migration_ledger_unknown_row",
+            ));
+        };
+        let expected_contiguous_version = NATIVE_0013_VERSION
+            .checked_add(i32::try_from(index).map_err(|_| {
+                InfraError::repository_invariant("native_migration_registry_invalid")
+            })?)
+            .ok_or_else(|| InfraError::repository_invariant("native_migration_registry_invalid"))?;
+        if expected.version != expected_contiguous_version {
+            return Err(InfraError::repository_invariant(
+                "native_migration_registry_invalid",
+            ));
+        }
+        if actual_version > expected.version {
+            return Err(NativeMigrationViolation::MissingBeforeFuture {
+                missing_version: expected.version,
+                future_version: actual_version,
+            }
+            .into());
+        }
+        if actual_version != expected.version {
+            return Err(InfraError::repository_invariant(
+                "native_migration_ledger_unknown_row",
+            ));
+        }
+        let expected_checksum = Sha256Digest::of(expected.sql.as_bytes()).to_hex();
+        if actual_name != expected.name || actual_checksum != expected_checksum {
+            return Err(NativeMigrationViolation::LedgerDrift {
+                version: expected.version,
+                expected_name: expected.name,
+                expected_checksum,
+                actual_name,
+                actual_checksum,
+            }
+            .into());
+        }
+        latest_version = Some(actual_version);
+    }
+
+    let latest_version = latest_version
+        .ok_or_else(|| InfraError::repository_invariant("native_migration_ledger_incomplete"))?;
+    if latest_version < required_through || latest_version > NATIVE_LATEST_VERSION {
+        return Err(InfraError::repository_invariant(
+            "native_migration_ledger_incomplete",
+        ));
+    }
+    Ok(ValidatedNativeLedger { latest_version })
+}
+
 /// Read-only verification that every currently known native migration is present with exact
 /// name/checksum and that no future version is recorded.
 pub async fn validate_current(client: &Client) -> Result<(), InfraError> {

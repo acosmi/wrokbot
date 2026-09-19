@@ -235,7 +235,7 @@ impl PreparedDesktopLocalDataPlane {
                     return Err(DesktopVaultKeyError::ReconciliationRequired);
                 }
                 MasterJournalPhase::CanaryWriteEntered | MasterJournalPhase::CanaryConfirmed => {
-                    desktop_vault_canary::verify_current_layout(self.pool())
+                    desktop_vault_canary::verify_pre_upgrade_layout(self.pool())
                         .await
                         .map_err(|_| DesktopVaultKeyError::ReconciliationRequired)?;
                 }

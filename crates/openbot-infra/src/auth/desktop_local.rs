@@ -30,10 +30,11 @@ use crate::db::desktop_local::{
     AttestedDesktopLocalAdmin, DesktopLocalDatabase, FreshDesktopDatabaseProof,
     UnattestedDesktopLocalAdmin,
 };
-use crate::db::desktop_vault_canary::VerifiedDesktopVaultCanary;
+use crate::db::desktop_vault_canary::{self, VerifiedDesktopVaultCanary};
 use crate::db::initialization::{
     DatabaseInitializationError, DatabaseOrigin, initialize as initialize_database,
 };
+use crate::db::native;
 use crate::tenant::PostgresTenantPackageSynchronizer;
 
 const FILE_NAME: &str = "desktop-instance-v1";
@@ -418,6 +419,39 @@ impl DesktopLocalInstallation {
         }
         let pool = database.pool();
         verify_postgres_sidecar(pool, &self.sidecar_data_dir).await?;
+        let layout = desktop_vault_canary::verify_pre_upgrade_layout(pool)
+            .await
+            .map_err(|_| DesktopLocalBootstrapError::VaultCanaryMismatch)?;
+        if layout.native_version() < native::NATIVE_LATEST_VERSION {
+            if !proof
+                .matches_database(database)
+                .await
+                .map_err(|_| DesktopLocalBootstrapError::VaultCanaryMismatch)?
+            {
+                return Err(DesktopLocalBootstrapError::VaultCanaryMismatch);
+            }
+            let mut client = pool
+                .get()
+                .await
+                .map_err(|source| {
+                    DesktopLocalBootstrapError::Database(
+                        InfraError::connect("取 Desktop canary 后迁移连接", source).into(),
+                    )
+                })?;
+            native::apply(&mut client)
+                .await
+                .map_err(|error| DesktopLocalBootstrapError::Database(error.into()))?;
+        }
+        desktop_vault_canary::verify_current_layout(pool)
+            .await
+            .map_err(|_| DesktopLocalBootstrapError::VaultCanaryMismatch)?;
+        if !proof
+            .matches_database(database)
+            .await
+            .map_err(|_| DesktopLocalBootstrapError::VaultCanaryMismatch)?
+        {
+            return Err(DesktopLocalBootstrapError::VaultCanaryMismatch);
+        }
         self.authority
             .provision_postgres(pool)
             .await

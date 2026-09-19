@@ -6,7 +6,7 @@
 
 ## 任务与 PR
 
-001–041 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
+001–042 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
 
 | 任务 | 交付范围 | 状态 | PR | 合并提交 |
 |---|---|---|---|---|
@@ -51,7 +51,20 @@
 | V6-PR-039 | 归档容器有界读写 | 已合入 | [#46](https://github.com/acosmi/wrokbot/pull/46) | [2e52377e25](https://github.com/acosmi/wrokbot/commit/2e52377e256893c0ffec9c3d9f2e841d212152c0) |
 | V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 已合入 | [#47](https://github.com/acosmi/wrokbot/pull/47) | [31e5c364f2](https://github.com/acosmi/wrokbot/commit/31e5c364f2c56976304b63f522f8ab92574730f6) |
 | V6-PR-041 | 归档写出分配前预算与配置硬上限 | 已合入 | [#48](https://github.com/acosmi/wrokbot/pull/48) | [eb75f8b47a](https://github.com/acosmi/wrokbot/commit/eb75f8b47a33474c61bb1510440c924ae0d00d8c) |
-| V6-PR-042 | 最大合法恢复信封自读回 | 主控验收通过 | [#49](https://github.com/acosmi/wrokbot/pull/49) | 合并状态及提交见 PR |
+| V6-PR-042 | 最大合法恢复信封自读回 | 已合入 | [#49](https://github.com/acosmi/wrokbot/pull/49) | [45d69618f3](https://github.com/acosmi/wrokbot/commit/45d69618f39e5ddd049d60b60eb0fae62146896a) |
+| V6-PR-043 | 已知数据库版本门与原 canary 重核 | 主控验收通过 | [#50](https://github.com/acosmi/wrokbot/pull/50) | 合并状态及提交见 PR |
+
+## macOS 首发进度
+
+当前尚无 A0–A7 中任何一项取得完整同候选通过证据；局部 PR 数量不代表首发完成比例。持续实施到首发验收完成。
+
+| 部分 | 当前事实 |
+|---|---|
+| 启动与数据保护 | 多个真实 PG 子场景已验；完整签名 App 旅程仍待验 |
+| 三模型 | custom 后端已有链路；SDK5 已核正式来源、生产接线待做；账户桥更新已核源、Rust适配待做 |
+| Browser / 原生 | 有协调核心；实际执行、画面与GUI完整装配仍有缺口 |
+| 备份恢复 | 加密/归档基础已验；PG恢复、切换及完整演练未完成 |
+| 签名与交付 | 本机存在有效Developer ID身份；实际候选签名、公证及发行图验收待完成 |
 
 ## 本批验证
 
@@ -67,6 +80,8 @@
 041 主控已亲读实现与独立预期字节测试，归档链 29 项通过（7 项写出边界、13 项解包、9 项容器回归），Desktop Local infra 的 offline/locked 构建通过。写出字段顺序与原格式一致，超预算时输出 writer 的 write/flush 调用数均为零；实际 I/O 失败仍可保留已写前缀。
 
 042 主控已验证 domain 恢复 13 项、归档链 30 项以及 Desktop Local infra 构建通过。独立探针用相同 4096 字节输入确认信封为 8334 字节，解析结果由失败变为成功；最大合法数据经归档写读和认证解包恢复原字节。
+
+043 主控亲读六个源码/测试文件，使用独立 PostgreSQL 17.11 验证：已知账本前缀拒绝矩阵、0032形态回归、Desktop bootstrap错误master/canary改删/跨库proof矩阵、实际sidecar→Vault→Application组合，四个定向测试均通过；Desktop Launcher all-target offline/locked check通过。当前32无重复迁移；真实32→下一新schema的升级矩阵随首次新migration另验。
 
 ## 仍未完成
 
