@@ -36,11 +36,9 @@ version = "0.0.0"
 # repository contract §3 固定基线：Rust `1.98.0`，edition 2024。与 rust-toolchain.toml 同值。
 edition = "2024"
 rust-version = "1.98.0"
-# v3 §23.2〈新项目发行许可〉：本次实施默认是内部、闭源、all-rights-reserved 的第一方新代码。
-# 因此这里**不能**写 MIT —— 上游 OpenBot 的 MIT（v3 §23.1 条 1）只约束被复用的上游源码，
-# 不上溯覆盖本仓第一方代码。SPDX 的 `LicenseRef-` 前缀是表达"非 SPDX 登记许可"的合法写法。
-# 若未来开源，必须另立书面发布决议并重做 whole-tree license audit（v3 §23.2），不在本次重写中自动发生。
-license = "LicenseRef-OpenBot-Proprietary"
+# 第一方代码个人免费使用，企业使用需取得授权；完整条款见仓根 LICENSE。
+# 第三方组件继续适用各自许可证，见 NOTICE 与 provenance/sources.spdx.json。
+license = "LicenseRef-WrokBot-Personal-Free-Enterprise-Authorization"
 publish = false
 
 # v3 §16.3〈Supply chain〉：核心 crate `unsafe_code = "deny"`。

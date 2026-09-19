@@ -14,9 +14,9 @@
   },
   "hasExtractedLicensingInfos": [
     {
-      "licenseId": "LicenseRef-OpenBot-RS-Proprietary",
-      "name": "OpenBot-rs Proprietary (All Rights Reserved)",
-      "extractedText": "Copyright (c) 2026 acosmi. All rights reserved.\n\n本项目第一方新代码为专有、闭源、保留一切权利（v3 §23.2）。仓库在 GitHub 上 public 只是可见性设置，不构成任何开源许可、不授予任何使用、复制、修改或再分发许可。第三方组件按各自条款分区随包，见仓根 NOTICE。许可证全文见仓根 LICENSE。"
+      "licenseId": "LicenseRef-WrokBot-Personal-Free-Enterprise-Authorization",
+      "name": "Wrok Bot Personal Free / Enterprise Authorization",
+      "extractedText": "Copyright (c) 2026 acosmi. All rights reserved.\n版权所有 (c) 2026 acosmi，保留一切权利。\n\n================================================================================\n1. 本仓第一方新代码：个人免费使用，企业使用需取得授权\n================================================================================\n\n本许可适用于本仓库中由本项目编写并有权授权的第一方代码、文档、配置、资产与\n构建脚本，以及相应构建产物。第三方组件按第 3 节处理。\n\n个人免费使用：自然人为本人使用本作品，可免费获取、安装、运行，并为该用途\n复制、编译和修改本作品，无需另行申请授权；相关副本须保留版权与许可声明。\n\n企业使用需取得授权：企业及代表企业的人员，在企业业务、内部办公、部署或对外\n服务中使用本作品，须事先取得权利人的书面授权，并遵守该授权约定的范围和条件。\n企业员工以个人身份下载或安装，不使企业用途适用个人免费许可。\n\n除上述个人免费许可或另行书面授权外，本文件不授予发布、分发、再许可或出售\n本作品及其修改版本的权利。未明确授予的权利由权利人保留；本文件不授予专利\n或商标许可。\n\n================================================================================\n2. 公开源码与许可范围\n================================================================================\n\n本仓库公开源码，实行「个人免费使用，企业使用需取得授权」的许可方式。\n第一方代码的使用范围以本文件及另行取得的书面授权为准；仓库公开本身不扩大\n这些授权，也不将第一方代码改为 MIT、Apache-2.0 或 GPL 等开源许可。\n第三方代码的开源许可不受本节影响。\n\n================================================================================\n3. 第三方组件：按各自条款随包，不受本文件约束\n================================================================================\n\n本作品在构建与分发时会包含或链接第三方组件。这些组件**各自**按其原始许可条款\n授权与分发，本文件第 1 节的个人免费及企业授权条款不适用于它们，也不能覆盖或收紧它们的\n原始条款。\n\n第三方组件的清单、版本、许可证与必须随包的声明，见仓根 **NOTICE** 文件；\n机器可读的完整来源登记（含固定 commit、SHA-256、purl、取证记录）见\n`provenance/sources.spdx.json`（SPDX 2.3）。\n\n其中至少以下几类是硬性随包义务，缺一即为发布级违规：\n\n- 复用的 MIT 许可第三方代码：发行包保留对应版权声明与许可证全文，具体来源\n  及文本见 NOTICE。\n- Apache-2.0 来源（如 OpenAI Codex、xAI Grok Build、binaryen、rmcp）：复制或改造\n  的文件必须保留 SPDX 标识、版权声明、来源 commit、显著修改声明；来源仓存在\n  NOTICE 文件时，该 NOTICE 必须随衍生作品重现（Apache-2.0 §4(d)，v3 §23.1 条 2/3）。\n- 字体与图标资产（Inter：SIL OFL-1.1；Lucide：ISC，其中源自 Feather 的图标另受\n  MIT 约束）：随包必须带各自许可证全文。\n- Electron / Chromium / Node.js / FFmpeg 等随发行包交付的第三方 notices 必须原样\n  交付。\n\n================================================================================\n4. 服务条款不因本文件而改变\n================================================================================\n\n本文件只处理**本作品的许可**。使用 CopilotKit Intelligence、OpenAI API、xAI API、\nGoogle Drive 及各 IdP 等服务，另受其各自的服务条款、数据处理条款与费用边界约束；\n本文件不能替代任何服务合同。\n\n复用 Codex / Grok Build 的开源代码，不授予任何模型使用权、消费者订阅权或 OAuth\n使用权；模型只使用官方 developer / API 凭据。\n\n================================================================================\n5. 商标\n================================================================================\n\nMIT / Apache-2.0 等开源许可不授予商标权。本文件同样不授予任何商标许可。\n\n对外产品名称、bundle ID、域名、deep-link scheme 与图标不得包含或仿冒 OpenBot、\nCopilotKit、Codex、OpenAI、Grok、xAI。`openbot-rs` 只是内部迁移代号；对外发行前\n必须使用完成商标清查的新品牌。法律声明与准确的兼容性说明可以引用来源名称，\n但必须同时写明「无从属、认证或背书关系」。\n\n================================================================================\n6. 免责声明\n================================================================================\n\n本作品按「现状」提供，不附带任何明示或默示的担保，包括但不限于对适销性、\n特定用途适用性与非侵权的担保。\n\n================================================================================\n联系与授权申请\n================================================================================\n\n企业使用及任何超出本文件个人免费许可范围的使用，须事先取得权利人书面许可。\n"
     },
     {
       "licenseId": "LicenseRef-CrabCode-Proprietary",
@@ -31,8 +31,8 @@
       "versionInfo": "0.0.0-phase0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
-      "licenseConcluded": "LicenseRef-OpenBot-RS-Proprietary",
-      "licenseDeclared": "LicenseRef-OpenBot-RS-Proprietary",
+      "licenseConcluded": "LicenseRef-WrokBot-Personal-Free-Enterprise-Authorization",
+      "licenseDeclared": "LicenseRef-WrokBot-Personal-Free-Enterprise-Authorization",
       "copyrightText": "NOASSERTION",
       "homepage": "https://github.com/acosmi/wrokbot",
       "primaryPackagePurpose": "APPLICATION"
