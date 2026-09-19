@@ -6,7 +6,7 @@
 
 ## 任务与 PR
 
-001–040 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
+001–041 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
 
 | 任务 | 交付范围 | 状态 | PR | 合并提交 |
 |---|---|---|---|---|
@@ -50,8 +50,8 @@
 | V6-PR-038 | 分块序号和清单AAD绑定 | 已合入 | [#45](https://github.com/acosmi/wrokbot/pull/45) | [139b7592eb](https://github.com/acosmi/wrokbot/commit/139b7592eb2f61cbc827578d5fb0b741b3b734d9) |
 | V6-PR-039 | 归档容器有界读写 | 已合入 | [#46](https://github.com/acosmi/wrokbot/pull/46) | [2e52377e25](https://github.com/acosmi/wrokbot/commit/2e52377e256893c0ffec9c3d9f2e841d212152c0) |
 | V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 已合入 | [#47](https://github.com/acosmi/wrokbot/pull/47) | [31e5c364f2](https://github.com/acosmi/wrokbot/commit/31e5c364f2c56976304b63f522f8ab92574730f6) |
-| V6-PR-041 | 归档写出分配前预算与配置硬上限 | 主控验收通过 | [#48](https://github.com/acosmi/wrokbot/pull/48) | 合并状态及提交见 PR |
-| V6-PR-042 | 最大合法恢复信封自读回 | 主控验收通过，暂存本地 | 等待 041 合入后创建 | — |
+| V6-PR-041 | 归档写出分配前预算与配置硬上限 | 已合入 | [#48](https://github.com/acosmi/wrokbot/pull/48) | [eb75f8b47a](https://github.com/acosmi/wrokbot/commit/eb75f8b47a33474c61bb1510440c924ae0d00d8c) |
+| V6-PR-042 | 最大合法恢复信封自读回 | 主控验收通过 | 正在创建独立 PR | 合并状态及提交以 PR 为准 |
 
 ## 本批验证
 
