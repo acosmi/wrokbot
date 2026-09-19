@@ -1,4 +1,4 @@
-//! Actual SDK4 -> production gateway transport -> owned TLS. No real tokens, PG authority or login.
+//! Actual SDK5 -> production gateway transport -> owned TLS. No real tokens, PG authority or login.
 use acosmi::{
     AuthorityResult, AuthorityState, ChatRequest, Client, Config, StrictTokenAuthority,
     TokenAuthorityError, TokenSet, TokenStore,
@@ -32,6 +32,8 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 include!("gateway_sdk_transport/tls.rs");
 include!("gateway_sdk_transport/authority.rs");
+#[path = "gateway_sdk_transport/sdk5_tests.rs"]
+mod sdk5_tests;
 
 // In-memory test fixture only. The production module intentionally has no authority implementation.
 #[derive(Default)]
