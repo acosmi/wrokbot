@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
+use openbot_domain::audit::hash::Sha256Digest;
 use openbot_domain::vault::{
     DesktopVaultCanaryBinding, DesktopVaultCanaryEnvelope, KeyVersion, SecretBytes,
     open_desktop_vault_canary,
@@ -54,6 +55,21 @@ pub struct VerifiedDesktopVaultCanary {
     tenant_id: String,
     key_id: String,
     key_version: i32,
+    encrypted_canary_digest: Sha256Digest,
+}
+
+/// Exact native/public layout observed before an existing Desktop dataset may verify its canary.
+/// This read-only fact is not a migration, key-store, or business authority.
+pub struct ValidatedDesktopVaultLayout {
+    native_version: i32,
+}
+
+impl ValidatedDesktopVaultLayout {
+    /// Highest native version whose ledger and registered public schema were verified exactly.
+    #[must_use]
+    pub const fn native_version(&self) -> i32 {
+        self.native_version
+    }
 }
 
 impl VerifiedDesktopVaultCanary {
@@ -81,13 +97,34 @@ impl VerifiedDesktopVaultCanary {
             return Ok(false);
         }
         let (system_identifier, database_oid) = database_identity(database.pool()).await?;
-        Ok(self.system_identifier == system_identifier && self.database_oid == database_oid)
+        if self.system_identifier != system_identifier || self.database_oid != database_oid {
+            return Ok(false);
+        }
+        let Some(row) = read(database.pool(), &self.deployment_id, &self.tenant_id).await? else {
+            return Ok(false);
+        };
+        Ok(row.dataset_id == self.dataset_id
+            && row.deployment_id == self.deployment_id
+            && row.tenant_id == self.tenant_id
+            && row.key_id == self.key_id
+            && row.key_version == self.key_version
+            && row.canary_schema == 1
+            && Sha256Digest::of(row.encrypted_canary.as_bytes()) == self.encrypted_canary_digest)
     }
 }
 
 impl core::fmt::Debug for VerifiedDesktopVaultCanary {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("VerifiedDesktopVaultCanary(<verified>)")
+    }
+}
+
+impl core::fmt::Debug for ValidatedDesktopVaultLayout {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ValidatedDesktopVaultLayout")
+            .field("native_version", &self.native_version)
+            .finish()
     }
 }
 
@@ -177,6 +214,7 @@ fn verify(
         tenant_id: row.tenant_id.clone(),
         key_id: row.key_id.clone(),
         key_version: row.key_version,
+        encrypted_canary_digest: Sha256Digest::of(row.encrypted_canary.as_bytes()),
     })
 }
 
@@ -245,13 +283,16 @@ pub async fn table_exists(pool: &Pool) -> Result<bool, DesktopVaultCanaryError> 
     .await
 }
 
-pub async fn verify_current_layout(pool: &Pool) -> Result<(), DesktopVaultCanaryError> {
+/// Verify an exact, registered Desktop Vault layout at native 0032 or a later known prefix.
+/// Missing known tail migrations are permitted here so an existing canary can be checked first.
+pub async fn verify_pre_upgrade_layout(
+    pool: &Pool,
+) -> Result<ValidatedDesktopVaultLayout, DesktopVaultCanaryError> {
     bounded(async {
         let client = client(pool).await?;
-        native::validate_current(&client).await?;
+        let ledger = native::validate_known_prefix(&client, native::NATIVE_0032_VERSION).await?;
         verify_internal_shape(&client).await?;
-        let expected: SchemaFacts = serde_json::from_str(PUBLIC_0031)
-            .map_err(|_| InfraError::repository_invariant("schema_0031_fixture_invalid"))?;
+        let expected = registered_public_schema(ledger.latest_version())?;
         if schema_facts::fetch(&client).await? != expected {
             return Err(InfraError::repository_invariant(
                 "desktop_vault_public_schema_invalid",
@@ -271,9 +312,36 @@ pub async fn verify_current_layout(pool: &Pool) -> Result<(), DesktopVaultCanary
                 "desktop_vault_public_relation_unknown",
             ));
         }
-        Ok(())
+        Ok(ValidatedDesktopVaultLayout {
+            native_version: ledger.latest_version(),
+        })
     })
     .await
+}
+
+/// Require the exact latest layout known to this binary. Ordinary current-schema callers retain
+/// the prior strict behavior; only the explicit pre-upgrade entry point accepts a known prefix.
+pub async fn verify_current_layout(pool: &Pool) -> Result<(), DesktopVaultCanaryError> {
+    let layout = verify_pre_upgrade_layout(pool).await?;
+    if layout.native_version() != native::NATIVE_LATEST_VERSION {
+        return Err(
+            InfraError::repository_invariant("desktop_vault_native_schema_not_current").into(),
+        );
+    }
+    Ok(())
+}
+
+fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraError> {
+    let bytes = match native_version {
+        native::NATIVE_0032_VERSION => PUBLIC_0031,
+        _ => {
+            return Err(InfraError::repository_invariant(
+                "desktop_vault_native_schema_unregistered",
+            ));
+        }
+    };
+    serde_json::from_str(bytes)
+        .map_err(|_| InfraError::repository_invariant("schema_0031_fixture_invalid"))
 }
 
 async fn verify_internal_shape(client: &tokio_postgres::Client) -> Result<(), InfraError> {
@@ -445,11 +513,10 @@ async fn verify_internal_shape(client: &tokio_postgres::Client) -> Result<(), In
 }
 
 pub async fn verify_empty_initializing(pool: &Pool) -> Result<(), DesktopVaultCanaryError> {
-    verify_current_layout(pool).await?;
+    let layout = verify_pre_upgrade_layout(pool).await?;
     bounded(async {
         let client = client(pool).await?;
-        let expected: SchemaFacts = serde_json::from_str(PUBLIC_0031)
-            .map_err(|_| InfraError::repository_invariant("schema_0031_fixture_invalid"))?;
+        let expected = registered_public_schema(layout.native_version())?;
         for table in expected.tables {
             if !table
                 .name
