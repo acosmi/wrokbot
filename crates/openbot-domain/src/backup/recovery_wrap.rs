@@ -15,8 +15,12 @@ const AAD_PREFIX: &[u8] = b"openbot.backup.aad.recovery-wrap.v1\x00";
 const RECOVERY_SCHEMA: &str = "openbot.backup.recovery.v1";
 const ENVELOPE_SCHEMA: &str = "openbot-backup-recovery-wrap";
 const ENVELOPE_SCHEMA_VERSION: u64 = 1;
-const ENVELOPE_MAX_BYTES: usize = 8192;
 const METADATA_MAX_BYTES: usize = 4096;
+/// Canonical JSON bytes with empty nonce and ciphertext, including field names and punctuation.
+const ENVELOPE_FIXED_WIRE_BYTES: usize = 86;
+const ENVELOPE_MAX_BYTES: usize = ENVELOPE_FIXED_WIRE_BYTES
+    + NONCE_BYTES * 2
+    + (METADATA_MAX_BYTES + TAG_BYTES) * 2;
 
 /// Closed identity used only to form recovery-wrap AAD.
 #[derive(Clone)]
@@ -207,6 +211,9 @@ fn nibble(byte: u8) -> Result<u8, VaultError> {
         _ => Err(VaultError::EnvelopeInvalid),
     }
 }
+
+#[cfg(test)]
+mod capacity_tests;
 
 #[cfg(test)]
 mod tests {

@@ -6,7 +6,7 @@
 
 ## 任务与 PR
 
-001–040 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
+001–041 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
 
 | 任务 | 交付范围 | 状态 | PR | 合并提交 |
 |---|---|---|---|---|
@@ -50,7 +50,8 @@
 | V6-PR-038 | 分块序号和清单AAD绑定 | 已合入 | [#45](https://github.com/acosmi/wrokbot/pull/45) | [139b7592eb](https://github.com/acosmi/wrokbot/commit/139b7592eb2f61cbc827578d5fb0b741b3b734d9) |
 | V6-PR-039 | 归档容器有界读写 | 已合入 | [#46](https://github.com/acosmi/wrokbot/pull/46) | [2e52377e25](https://github.com/acosmi/wrokbot/commit/2e52377e256893c0ffec9c3d9f2e841d212152c0) |
 | V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 已合入 | [#47](https://github.com/acosmi/wrokbot/pull/47) | [31e5c364f2](https://github.com/acosmi/wrokbot/commit/31e5c364f2c56976304b63f522f8ab92574730f6) |
-| V6-PR-041 | 归档写出分配前预算与配置硬上限 | 主控验收通过 | [#48](https://github.com/acosmi/wrokbot/pull/48) | 合并状态及提交见 PR |
+| V6-PR-041 | 归档写出分配前预算与配置硬上限 | 已合入 | [#48](https://github.com/acosmi/wrokbot/pull/48) | [eb75f8b47a](https://github.com/acosmi/wrokbot/commit/eb75f8b47a33474c61bb1510440c924ae0d00d8c) |
+| V6-PR-042 | 最大合法恢复信封自读回 | 主控验收通过 | [#49](https://github.com/acosmi/wrokbot/pull/49) | 合并状态及提交见 PR |
 
 ## 本批验证
 
@@ -65,9 +66,11 @@
 
 041 主控已亲读实现与独立预期字节测试，归档链 29 项通过（7 项写出边界、13 项解包、9 项容器回归），Desktop Local infra 的 offline/locked 构建通过。写出字段顺序与原格式一致，超预算时输出 writer 的 write/flush 调用数均为零；实际 I/O 失败仍可保留已写前缀。
 
+042 主控已验证 domain 恢复 13 项、归档链 30 项以及 Desktop Local infra 构建通过。独立探针用相同 4096 字节输入确认信封为 8334 字节，解析结果由失败变为成功；最大合法数据经归档写读和认证解包恢复原字节。
+
 ## 仍未完成
 
-- 恢复包装与归档极值容量兼容仍待定版，不能将理论明文上限当作容器可承载保证。
+- 归档容器容量仍是单独预算，不能将 4 MiB 理论明文上限当作外层 8 MiB 容器的可承载保证。
 - PostgreSQL/WAL 恢复、隔离暂存的产品装配、同机与新安装恢复演练、签名升级及 A6。
 - 旧 0031 数据的合法恢复输入；不能推测旧密文或凭据。
 - 稳定签名、真实 OS 权限与旧 Keychain 访问验证。
