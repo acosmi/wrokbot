@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "openbot-rs-phase0-evidence-freeze",
-  "documentNamespace": "https://github.com/acosmi/wrokbot/spdxrepository contract",
+  "documentNamespace": "https://github.com/acosmi/wrokbot/spdx/sources-2026-09-19-sdk5",
   "creationInfo": {
     "created": "2026-08-22T12:43:56Z",
     "creators": [
@@ -1139,9 +1139,117 @@
       "copyrightText": "Copyright 2023 Anthropic, PBC.",
       "homepage": "https://github.com/anthropics/anthropic-sdk-php",
       "primaryPackagePurpose": "SOURCE"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-acosmi-sdk-5-0-0",
+      "name": "acosmi-sdk",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "https://crates.io/api/v1/crates/acosmi-sdk/5.0.0/download",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "4fbba2969b9ecf59906ae061e773ebe3d147d7a438b958693f5c76f29d708c50"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2026 Acosmi",
+      "homepage": "https://github.com/acosmi/sdk-rust",
+      "sourceInfo": "crates.io archive is 360505 bytes; LICENSE SHA-256 is 16e94051dea41052858aa87cb815bb98d9a153d23eb869b2d01de54274c63c7f; .cargo_vcs_info.json binds commit 0a2152f69019c92fae47d0bb905e3f83893574bc.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/acosmi-sdk@5.0.0"
+        },
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/acosmi/sdk-rust@0a2152f69019c92fae47d0bb905e3f83893574bc"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-async-stream-0-3-6",
+      "name": "async-stream",
+      "versionInfo": "0.3.6",
+      "downloadLocation": "https://crates.io/api/v1/crates/async-stream/0.3.6/download",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2019 Carl Lerche; Copyright (c) 2018 David Tolnay",
+      "homepage": "https://github.com/tokio-rs/async-stream",
+      "sourceInfo": "crates.io archive is 13823 bytes; LICENSE SHA-256 is 157d381f6304eba77459fc10dfb5b1b22fc0d04e384a32865f32d8e67a34c0eb; .cargo_vcs_info.json binds commit b0b2f22df8e87b7fed7b2fa234509797adbff7db and records dirty=true, so this registry artifact is not described as a clean Git snapshot.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/async-stream@0.3.6"
+        },
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/tokio-rs/async-stream@b0b2f22df8e87b7fed7b2fa234509797adbff7db"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-async-stream-impl-0-3-6",
+      "name": "async-stream-impl",
+      "versionInfo": "0.3.6",
+      "downloadLocation": "https://crates.io/api/v1/crates/async-stream-impl/0.3.6/download",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2019 Carl Lerche; Copyright (c) 2018 David Tolnay",
+      "homepage": "https://github.com/tokio-rs/async-stream",
+      "sourceInfo": "crates.io archive is 4312 bytes; LICENSE SHA-256 is 157d381f6304eba77459fc10dfb5b1b22fc0d04e384a32865f32d8e67a34c0eb; .cargo_vcs_info.json binds commit b0b2f22df8e87b7fed7b2fa234509797adbff7db at path async-stream-impl.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/async-stream-impl@0.3.6"
+        },
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/tokio-rs/async-stream@b0b2f22df8e87b7fed7b2fa234509797adbff7db"
+        }
+      ],
+      "primaryPackagePurpose": "LIBRARY"
     }
   ],
   "relationships": [
+    {
+      "spdxElementId": "SPDXRef-Package-openbot-rs",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-acosmi-sdk-5-0-0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-acosmi-sdk-5-0-0",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-async-stream-0-3-6"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-async-stream-0-3-6",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-async-stream-impl-0-3-6"
+    },
     {
       "spdxElementId": "SPDXRef-Package-openbot-rs",
       "relationshipType": "GENERATED_FROM",

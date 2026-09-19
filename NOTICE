@@ -8,7 +8,7 @@ NOTICE —— 第三方组件声明
 - 本文件只声明**第三方**组件；它们各自按原始条款授权，LICENSE 的「保留一切权利」
   不适用于、也不能收紧它们。
 - 机器可读的完整来源登记（固定 commit、SHA-256、purl、逐条取证记录）在
-  `provenance/sources.spdx.json`（SPDX 2.3，57 个 package）。**那份是真源**，
+  `provenance/sources.spdx.json`（SPDX 2.3，62 个 package）。**那份是真源**，
   本文件是它面向发行包的人类可读投影；两者不一致时以 SPDX 文件与实际取证为准，
   并同 PR 修订本文件。
 
@@ -809,6 +809,106 @@ xmlsec/xmlsec-openssl 原件中与本闭包相关的一节：
     Except as contained in this notice, the name of Aleksey Sanin shall not
     be used in advertising or otherwise to promote the sale, use or other deal-
     ings in this Software without prior written authorization from him.
+
+================================================================================
+6C. 模型网关 SDK 闭包 —— acosmi-sdk、async-stream、async-stream-impl
+================================================================================
+
+当前模型网关 Rust 闭包包含以下三个 MIT crate：
+
+  acosmi-sdk 5.0.0       : crates.io 归档 360,505 B，SHA-256
+                           4fbba2969b9ecf59906ae061e773ebe3d147d7a438b958693f5c76f29d708c50
+                           VCS commit 0a2152f69019c92fae47d0bb905e3f83893574bc
+                           LICENSE SHA-256
+                           16e94051dea41052858aa87cb815bb98d9a153d23eb869b2d01de54274c63c7f
+  async-stream 0.3.6     : crates.io 归档 13,823 B，SHA-256
+                           0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476
+                           VCS commit b0b2f22df8e87b7fed7b2fa234509797adbff7db；
+                           registry VCS metadata 明确记录 dirty=true，故不描述为 clean Git 快照
+  async-stream-impl 0.3.6: crates.io 归档 4,312 B，SHA-256
+                           c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d
+                           VCS commit b0b2f22df8e87b7fed7b2fa234509797adbff7db
+
+async-stream 两包使用同一份 LICENSE，SHA-256
+157d381f6304eba77459fc10dfb5b1b22fc0d04e384a32865f32d8e67a34c0eb。
+
+acosmi-sdk 5.0.0 LICENSE 全文：
+
+    MIT License
+
+    Copyright (c) 2026 Acosmi
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+async-stream 0.3.6 与 async-stream-impl 0.3.6 共用的 LICENSE 全文：
+
+    Copyright (c) 2019 Carl Lerche
+
+    Permission is hereby granted, free of charge, to any
+    person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal in the
+    Software without restriction, including without
+    limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of
+    the Software, and to permit persons to whom the Software
+    is furnished to do so, subject to the following
+    conditions:
+
+    The above copyright notice and this permission notice
+    shall be included in all copies or substantial portions
+    of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+    ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+    TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+    PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+    SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+    OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+    IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+    Copyright (c) 2018 David Tolnay
+
+    Permission is hereby granted, free of charge, to any
+    person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal in the
+    Software without restriction, including without
+    limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of
+    the Software, and to permit persons to whom the Software
+    is furnished to do so, subject to the following
+    conditions:
+
+    The above copyright notice and this permission notice
+    shall be included in all copies or substantial portions
+    of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+    ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+    TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+    PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+    SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+    OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+    IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
 
 ================================================================================
 7. 待补全清单（发布前检查表）

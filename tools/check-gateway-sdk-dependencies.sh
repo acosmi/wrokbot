@@ -12,7 +12,7 @@ def require(condition, message):
     if not condition: raise SystemExit('Gateway SDK dependency guard: FAIL: '+message)
 workspace=tomllib.loads((root/'Cargo.toml').read_text())['workspace']['dependencies']
 sdk=workspace['acosmi-sdk']
-require(sdk == {'version':'=4.0.0','default-features':False,'features':['custom-transport','sanitize']},'SDK declaration changed')
+require(sdk == {'version':'=5.0.0','default-features':False,'features':['custom-transport','sanitize']},'SDK declaration changed')
 require(workspace['tokio-util']=={'version':'=0.7.19','default-features':False},'cancellation type direct edge changed')
 infra=tomllib.loads((root/'crates/openbot-infra/Cargo.toml').read_text())
 for dep in ['acosmi-sdk','tokio-util']:
@@ -20,7 +20,7 @@ for dep in ['acosmi-sdk','tokio-util']:
     require('dep:'+dep in infra['features']['server-runtime'],'runtime feature omitted: '+dep)
 packages={p['id']:p for p in d['packages']};nodes={n['id']:n for n in d['resolve']['nodes']}
 expected={
-'acosmi-sdk':('4.0.0',327337,'05639a0b4c77b7063f9c67b7d47f14e4f4a61fa46d39d0188763b65343a9ae66','16e94051dea41052858aa87cb815bb98d9a153d23eb869b2d01de54274c63c7f','db5774b06ddb2acaccf121122644505f7810186a',False),
+'acosmi-sdk':('5.0.0',360505,'4fbba2969b9ecf59906ae061e773ebe3d147d7a438b958693f5c76f29d708c50','16e94051dea41052858aa87cb815bb98d9a153d23eb869b2d01de54274c63c7f','0a2152f69019c92fae47d0bb905e3f83893574bc',False),
 'async-stream':('0.3.6',13823,'0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476','157d381f6304eba77459fc10dfb5b1b22fc0d04e384a32865f32d8e67a34c0eb','b0b2f22df8e87b7fed7b2fa234509797adbff7db',False),
 'async-stream-impl':('0.3.6',4312,'c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d','157d381f6304eba77459fc10dfb5b1b22fc0d04e384a32865f32d8e67a34c0eb','b0b2f22df8e87b7fed7b2fa234509797adbff7db',True),
 }
@@ -75,5 +75,5 @@ for path in (root/'crates').glob('*/src/**/*.rs'):
     text=path.read_text()
     if 'acosmi::' in text:require(path in allowed,'SDK type escaped adapter: '+str(path.relative_to(root)))
     require('async_stream::__private' not in text,'first-party bypass of reviewed macro pair')
-print('Gateway SDK dependency guard: PASS (exact 4.0.0, three fixed registry sources, macro bytes, sole Infra edge, no SDK HTTP/TLS/WS, no UI edge; no Vet/advisory/global-gate claim)')
+print('Gateway SDK dependency guard: PASS (exact 5.0.0, three fixed registry sources, macro bytes, sole Infra edge, no SDK HTTP/TLS/WS, no UI edge; no Vet/advisory/global-gate claim)')
 PY

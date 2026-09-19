@@ -65,7 +65,7 @@ libc = "=0.2.189"
 core-foundation-sys = "=0.8.7"
 wrok-bot-macos-process = { path = "crates/wrok-bot-macos-process" }
 # R230: one Infra-owned SDK transport; existing SafeDialer remains the only network stack.
-acosmi-sdk = { version = "=4.0.0", default-features = false, features = ["custom-transport", "sanitize"] }
+acosmi-sdk = { version = "=5.0.0", default-features = false, features = ["custom-transport", "sanitize"] }
 # SDK HttpTransport names this existing dependency's token in its public trait signature.
 # This direct edge belongs only to Infra's SDK adapter; Desktop keeps its existing local token.
 tokio-util = { version = "=0.7.19", default-features = false }

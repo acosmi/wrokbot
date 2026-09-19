@@ -4,9 +4,9 @@ version = 4
 
 [[package]]
 name = "acosmi-sdk"
-version = "4.0.0"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05639a0b4c77b7063f9c67b7d47f14e4f4a61fa46d39d0188763b65343a9ae66"
+checksum = "4fbba2969b9ecf59906ae061e773ebe3d147d7a438b958693f5c76f29d708c50"
 dependencies = [
  "async-stream",
  "async-trait",
