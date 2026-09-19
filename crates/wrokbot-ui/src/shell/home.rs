@@ -9,10 +9,12 @@ use openbot_contracts::text::trim_ecmascript;
 use crate::api::channel_new_href;
 #[cfg(target_arch = "wasm32")]
 use crate::api::{channel_route_href, list_agents, mint_run_id, route_channel_message};
+use crate::features::channels::composer::model_intents::{RunSubmissionActions, SubmissionSource};
+use crate::features::channels::composer::models::{ModelComposer, ModelPicker};
 use crate::features::channels::composer::skills::{SkillComposer, SkillPicker};
-use crate::features::channels::new::StartAttempt;
+use crate::features::channels::new::{StartAttempt, SubmissionNotice, model_notice};
 #[cfg(target_arch = "wasm32")]
-use crate::features::channels::new::{StartFailureKind, execute_start_attempt};
+use crate::features::channels::new::{StartFailureKind, definite_notice, execute_start_attempt};
 use crate::features::layout::{PageShell, PageWidth};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
@@ -44,17 +46,103 @@ pub fn HomePage() -> impl IntoView {
     let draft = RwSignal::new(String::new());
     let agent_picker_open = RwSignal::new(false);
     let selected_mention = RwSignal::new(None::<MentionSelection>);
+    let frozen_model_agent = RwSignal::new(None::<BotId>);
     let skill_composer = SkillComposer::new(
         draft,
         Signal::derive(move || selected_mention.get().map(|s| s.agent_id)),
         "home-message",
     );
+    let model_composer = ModelComposer::new(
+        Signal::derive(move || {
+            let agent_id = frozen_model_agent
+                .get()
+                .or_else(|| selected_mention.get().map(|selection| selection.agent_id));
+            let Some(agent_id) = agent_id else {
+                return false;
+            };
+            supports_explicit_model(&agents.get(), &agent_id)
+        }),
+        Signal::derive(move || {
+            frozen_model_agent
+                .get()
+                .or_else(|| selected_mention.get().map(|selection| selection.agent_id))
+        }),
+    );
     let submitting = RwSignal::new(false);
-    let start_error = RwSignal::new(false);
+    let notice = RwSignal::new(None::<SubmissionNotice>);
     let uncertain_create = RwSignal::new(false);
+    let begin_unknown = RwSignal::new(false);
+    let submission_blocked = RwSignal::new(false);
     let resumable = RwSignal::new(None::<StartAttempt>);
+    let submissions = expect_context::<RunSubmissionActions>();
 
     install_home_agent_loader(load_generation, agents, loading, load_error);
+
+    Effect::new(move |_| {
+        if let Some(intent) = submissions.create_unknown(SubmissionSource::Home) {
+            uncertain_create.set(true);
+            frozen_model_agent.set(Some(intent.agent_id.clone()));
+            draft.set(intent.message);
+            skill_composer.selected.set(intent.selected_skill_slugs);
+            model_composer.restore_selection(intent.model_selection, Some(intent.agent_id.clone()));
+            if let Some(agent) = agents
+                .get()
+                .into_iter()
+                .find(|agent| agent.id == intent.agent_id)
+            {
+                selected_mention.set(Some(MentionSelection {
+                    agent_id: agent.id,
+                    display_text: agent.name,
+                }));
+            }
+        }
+        if resumable.get_untracked().is_none()
+            && let Some(recovery) = submissions.run_unknown_for_source(SubmissionSource::Home)
+            && let Some(channel) = recovery.channel
+        {
+            let intent = recovery.intent;
+            frozen_model_agent.set(Some(intent.agent_id.clone()));
+            draft.set(intent.message.clone());
+            skill_composer
+                .selected
+                .set(intent.selected_skill_slugs.clone());
+            model_composer.restore_selection(
+                intent.model_selection.clone(),
+                Some(intent.agent_id.clone()),
+            );
+            if let Some(agent) = agents
+                .get()
+                .into_iter()
+                .find(|agent| agent.id == intent.agent_id)
+            {
+                selected_mention.set(Some(MentionSelection {
+                    agent_id: agent.id,
+                    display_text: agent.name,
+                }));
+            }
+            resumable.set(Some(StartAttempt {
+                source: SubmissionSource::Home,
+                agent_id: intent.agent_id,
+                message: intent.message,
+                run_id: intent.run_id,
+                channel: Some(channel),
+                selected_skill_slugs: intent.selected_skill_slugs,
+                model_selection: intent.model_selection,
+            }));
+            begin_unknown.set(true);
+            notice.set(None);
+        }
+    });
+    Effect::new(move |_| {
+        if submitting.get() {
+            return;
+        }
+        let owns_barrier = submissions.create_unknown(SubmissionSource::Home).is_some()
+            || submissions
+                .run_unknown_for_source(SubmissionSource::Home)
+                .is_some();
+        submission_blocked.set(!owns_barrier && submissions.has_barrier());
+    });
 
     let fallback = Memo::new(move |_| fallback_agent(&agents.get()));
     let active =
@@ -87,13 +175,20 @@ pub fn HomePage() -> impl IntoView {
         }
     });
 
-    let inputs_locked = Signal::derive(move || submitting.get() || resumable.get().is_some());
+    let inputs_locked = Signal::derive(move || {
+        submitting.get()
+            || resumable.get().is_some()
+            || uncertain_create.get()
+            || submission_blocked.get()
+    });
     let send_disabled = Signal::derive(move || {
         submitting.get()
             || uncertain_create.get()
-            || fallback.get().is_none()
-            || trim_ecmascript(&draft.get()).is_empty()
-            || (resumable.get().is_none() && skill_composer.invalid.get())
+            || submission_blocked.get()
+            || (resumable.get().is_none()
+                && (fallback.get().is_none()
+                    || trim_ecmascript(&draft.get()).is_empty()
+                    || skill_composer.invalid.get()))
     });
     let mention_open = Signal::derive(move || active.get().is_some() && !inputs_locked.get());
 
@@ -105,25 +200,61 @@ pub fn HomePage() -> impl IntoView {
         if send_disabled.get_untracked() {
             return;
         }
-        let Some(default_agent) = fallback.get_untracked() else {
-            return;
-        };
-        let message = draft.get_untracked();
-        if message.is_empty() {
-            return;
-        }
         let prior_attempt = resumable.get_untracked();
-        let explicit = selected_agent_id(&message, selected_mention.get_untracked().as_ref());
-        let roster = agents.get_untracked();
+        if prior_attempt.is_none() {
+            frozen_model_agent.set(None);
+        }
+        let fresh = if prior_attempt.is_none() {
+            let Some(default_agent) = fallback.get_untracked() else {
+                return;
+            };
+            let message = draft.get_untracked();
+            if message.is_empty() {
+                return;
+            }
+            if let Some(model_notice) = model_notice(model_composer.selection_status()) {
+                notice.set(Some(model_notice));
+                return;
+            }
+            let model_selection = match model_composer.freeze() {
+                Ok(selection) => selection,
+                Err(_) => {
+                    notice.set(Some(SubmissionNotice::ModelSelectionUnavailable));
+                    return;
+                }
+            };
+            let explicit = selected_agent_id(&message, selected_mention.get_untracked().as_ref());
+            Some((
+                default_agent,
+                message,
+                skill_composer.selected.get_untracked(),
+                model_selection,
+                explicit,
+                agents.get_untracked(),
+            ))
+        } else {
+            None
+        };
         submitting.set(true);
-        start_error.set(false);
+        notice.set(None);
+        begin_unknown.set(false);
+        submission_blocked.set(false);
         #[cfg(target_arch = "wasm32")]
         {
             let navigate_after_send = send_navigate.clone();
             leptos::task::spawn_local_scoped_with_cancellation(async move {
+                let retry_unknown = prior_attempt.is_some();
                 let attempt = match prior_attempt {
                     Some(attempt) => attempt,
                     None => {
+                        let (
+                            default_agent,
+                            message,
+                            selected_skill_slugs,
+                            model_selection,
+                            explicit,
+                            roster,
+                        ) = fresh.expect("fresh attempt");
                         let agent_id = resolve_home_recipient(
                             &message,
                             explicit.as_ref(),
@@ -131,34 +262,59 @@ pub fn HomePage() -> impl IntoView {
                             &roster,
                         )
                         .await;
+                        if model_selection.is_some() && !supports_explicit_model(&roster, &agent_id)
+                        {
+                            notice.set(Some(SubmissionNotice::ModelAgentConflict));
+                            submitting.set(false);
+                            return;
+                        }
                         let attempt = StartAttempt {
+                            source: SubmissionSource::Home,
                             agent_id,
                             message,
                             run_id: mint_run_id(),
                             channel: None,
-                            selected_skill_slugs: skill_composer.selected.get_untracked(),
+                            selected_skill_slugs,
+                            model_selection,
                         };
                         // Route selection and run identity are now fixed. Retries never reroute.
                         resumable.set(Some(attempt.clone()));
                         attempt
                     }
                 };
-                match execute_start_attempt(attempt).await {
+                match execute_start_attempt(attempt, retry_unknown).await {
                     Ok(started) => {
                         let href = channel_route_href(started.channel.id.as_str());
                         resumable.set(Some(started.attempt));
                         submitting.set(false);
                         match href {
                             Ok(href) => navigate_after_send(&href, Default::default()),
-                            Err(_) => start_error.set(true),
+                            Err(_) => notice.set(Some(SubmissionNotice::NavigationFailed)),
                         }
                     }
                     Err(failure) => {
-                        if failure.kind == StartFailureKind::CreateUncertain {
-                            uncertain_create.set(true);
+                        match failure.kind {
+                            StartFailureKind::CreateUncertain => {
+                                uncertain_create.set(true);
+                                resumable.set(Some(failure.attempt));
+                                notice.set(None);
+                            }
+                            StartFailureKind::BeginUnknown => {
+                                resumable.set(Some(failure.attempt));
+                                begin_unknown.set(true);
+                                notice.set(None);
+                            }
+                            StartFailureKind::CreateDefinite | StartFailureKind::BeginDefinite => {
+                                resumable.set(None);
+                                frozen_model_agent.set(None);
+                                let rejected = definite_notice(failure.error);
+                                if rejected == SubmissionNotice::Conflict {
+                                    model_composer.directory_reload();
+                                }
+                                notice.set(Some(rejected));
+                            }
+                            StartFailureKind::Blocked => submission_blocked.set(true),
                         }
-                        resumable.set(Some(failure.attempt));
-                        start_error.set(true);
                         submitting.set(false);
                     }
                 }
@@ -166,9 +322,9 @@ pub fn HomePage() -> impl IntoView {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = (prior_attempt, explicit, roster, default_agent, message);
+            let _ = (prior_attempt, fresh);
             submitting.set(false);
-            start_error.set(true);
+            notice.set(Some(SubmissionNotice::Rejected));
         }
     });
     let submit_or_choose = UnsyncCallback::new(move |_| {
@@ -273,6 +429,7 @@ pub fn HomePage() -> impl IntoView {
                             </Show>
                         </div>
                     </Show>
+                    <ModelPicker state=model_composer disabled=inputs_locked/>
                     <SkillPicker state=skill_composer disabled=inputs_locked/>
                     <div class="ob-home-composer-actions">
                         <details class="ob-composer-options" on:keydown=crate::primitives::dismiss_disclosure on:click=crate::primitives::dismiss_disclosure_link>
@@ -286,11 +443,18 @@ pub fn HomePage() -> impl IntoView {
                         </details>
                         <div class="ob-composer-spacer"></div>
                         <button class="ob-composer-mode" type="button"
+                            disabled=inputs_locked
                             aria-label=move || t_string!(i18n, home.choose_agent).to_owned()
                             aria-expanded=move || agent_picker_open.get().to_string()
                             aria-controls="home-agent-picker"
                             on:click=move |_| agent_picker_open.update(|open| *open = !*open)>
-                            <span>{move || selected_mention.get().map_or_else(|| t_string!(i18n, home.auto).to_owned(), |selected| selected.display_text)}</span>
+                            <span>{move || {
+                                let frozen = resumable.get().map(|attempt| attempt.agent_id).or_else(|| submissions.create_unknown(SubmissionSource::Home).map(|intent| intent.agent_id));
+                                frozen.map_or_else(
+                                    || selected_mention.get().map_or_else(|| t_string!(i18n, home.auto).to_owned(), |selected| selected.display_text),
+                                    |id| agents.get().into_iter().find(|agent| agent.id == id).map_or_else(|| id.as_str().to_owned(), |agent| agent.name),
+                                )
+                            }}</span>
                             <IconView icon=Icon::Brain size=IconSize::Inline />
                             <IconView icon=Icon::ChevronDown size=IconSize::Inline />
                         </button>
@@ -303,7 +467,7 @@ pub fn HomePage() -> impl IntoView {
                             on_activate=move |_| send.run(())
                         >
                             <IconView icon=Icon::ArrowUp size=IconSize::Navigation />
-                            <span class="ob-visually-hidden">{move || if resumable.get().is_some() {
+                            <span class="ob-visually-hidden">{move || if begin_unknown.get() {
                                 t_string!(i18n, common.retry).to_owned()
                             } else {
                                 t_string!(i18n, channels.composer_send).to_owned()
@@ -317,11 +481,24 @@ pub fn HomePage() -> impl IntoView {
                         <a href="/agents">{move || t!(i18n, home.no_agents)}</a>
                     </p>
                 </Show>
-                <Show when=move || start_error.get()>
-                    <p class="ob-alert" role="alert">{move || t!(i18n, channels.start_error)}</p>
-                </Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::Conflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::Rejected)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::NavigationFailed)><p class="ob-alert" role="alert">{move || t!(i18n, channels.navigation_failed)}</p></Show>
                 <Show when=move || uncertain_create.get()>
-                    <p class="ob-alert" role="alert">{move || t!(i18n, channels.create_uncertain)}</p>
+                    <div class="ob-alert" role="alert">
+                        <p>{move || t!(i18n, channels.create_uncertain)}</p>
+                        <a href="/">{move || t!(i18n, home.title)}</a>
+                    </div>
+                </Show>
+                <Show when=move || begin_unknown.get()>
+                    <p class="ob-alert" role="alert">{move || t!(i18n, channels.begin_unknown)}</p>
+                </Show>
+                <Show when=move || submission_blocked.get()>
+                    <a class="ob-alert" role="alert" href=move || submissions.barrier().and_then(|barrier| barrier.href()).unwrap_or_else(|| "/".to_owned())>
+                        {move || t!(i18n, channels.submission_blocked)}
+                    </a>
                 </Show>
                 <section id="home-agent-picker" class="ob-home-explore" hidden=move || !agent_picker_open.get() aria-labelledby="home-explore-title">
                     <h2 id="home-explore-title">{move || t!(i18n, home.choose_agent)}</h2>
@@ -400,6 +577,13 @@ async fn resolve_home_recipient(
         }
         _ => fallback.id.clone(),
     }
+}
+
+fn supports_explicit_model(agents: &[AgentProfile], agent_id: &BotId) -> bool {
+    agents
+        .iter()
+        .find(|agent| &agent.id == agent_id)
+        .is_some_and(|agent| agent.endpoint.is_none())
 }
 
 fn valid_home_agent(agent: &AgentProfile) -> bool {
@@ -532,6 +716,17 @@ mod tests {
             can_manage: mine,
             mine,
         }
+    }
+
+    #[test]
+    fn explicit_models_require_a_known_builtin_agent() {
+        let builtin = agent("builtin", "Built in", true, AgentVisibility::Public);
+        let mut remote = agent("remote", "Remote", false, AgentVisibility::Public);
+        remote.endpoint = Some("https://example.test/agui".into());
+        let roster = [builtin.clone(), remote.clone()];
+        assert!(supports_explicit_model(&roster, &builtin.id));
+        assert!(!supports_explicit_model(&roster, &remote.id));
+        assert!(!supports_explicit_model(&roster, &BotId::new("missing")));
     }
 
     #[test]

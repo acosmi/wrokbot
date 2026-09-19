@@ -1123,7 +1123,32 @@ pub async fn begin_thread_run_with_skills(
     message: &str,
     selected_skill_slugs: &[String],
 ) -> Result<ThreadRunStarted, ApiError> {
+    begin_thread_run_with_skills_and_model(
+        thread_id,
+        agent_id,
+        run_id,
+        anchor,
+        message,
+        selected_skill_slugs,
+        None,
+    )
+    .await
+}
+
+/// Begin a run with ordered skills and one explicitly frozen v1 model connection revision.
+pub async fn begin_thread_run_with_skills_and_model(
+    thread_id: &ThreadId,
+    agent_id: &BotId,
+    run_id: &RunId,
+    anchor: ThreadRunAnchor,
+    message: &str,
+    selected_skill_slugs: &[String],
+    model_selection: Option<&openbot_contracts::model_connections::RunModelSelection>,
+) -> Result<ThreadRunStarted, ApiError> {
     if !openbot_contracts::command::valid_selected_skill_slugs(selected_skill_slugs) {
+        return Err(ApiError::InvalidResponse);
+    }
+    if model_selection.is_some_and(|selection| !selection.is_valid()) {
         return Err(ApiError::InvalidResponse);
     }
     validate_agent_id(agent_id.as_str())?;
@@ -1141,7 +1166,7 @@ pub async fn begin_thread_run_with_skills(
             .credentials(RequestCredentials::SameOrigin)
             .redirect(RequestRedirect::Error)
             .json(&BeginThreadRunBody {
-                model_selection: None,
+                model_selection: model_selection.cloned(),
                 run_id: run_id.clone(),
                 bot_id: agent_id.clone(),
                 anchor,
@@ -1175,6 +1200,7 @@ pub async fn begin_thread_run_with_skills(
             anchor,
             message,
             selected_skill_slugs,
+            model_selection,
         );
         Err(ApiError::Unavailable)
     }

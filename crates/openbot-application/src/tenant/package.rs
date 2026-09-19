@@ -1,7 +1,7 @@
 //! Tenant Package 五份 YAML 的纯解析、受众校验与同步 port（v3 §3.2 / §6.5）。
 //!
 //! 文件读取、checksum 与 PostgreSQL 事务属于 infra；本模块只接收已经读入的文本和显式环境
-//! 投影。GUI 第一真源规定 design token 只能来自 `openbot-ui/design/tokens.toml`，因此 runtime
+//! 投影。GUI 第一真源规定 design token 只能来自 `wrokbot-ui/design/tokens.toml`，因此 runtime
 //! tenant CSS 不在输入类型里；历史 `skin.stylesheet` 只产生兼容状态，不读取、更不执行。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1111,7 +1111,7 @@ mod tests {
             package.theme_status,
             TenantThemeStatus::CompatibilityInputIgnored
         );
-        let tokens = include_str!("../../../openbot-ui/design/tokens.toml");
+        let tokens = include_str!("../../../wrokbot-ui/design/tokens.toml");
         assert!(tokens.contains("light_selector = \":root\""));
         assert!(tokens.contains("dark_selector = \".dark\""));
         assert!(tokens.contains("system_dark_selector = \":root:not(.light)\""));

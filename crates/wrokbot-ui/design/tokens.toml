@@ -5,7 +5,7 @@
 # 并在同一个 PR 里把文档改回来（GUI 方案 §4.1「单一来源」）。
 #
 # 消费者（GUI 方案 §4.1、§13）：
-#   crates/openbot-ui/build.rs 从本文件生成
+#   crates/wrokbot-ui/build.rs 从本文件生成
 #     ① design/tokens.css —— 三块同源，不手写：
 #          :root { … }                                        亮色（[color.light]）
 #          .dark { … }                                        强制暗（[color.dark]）
@@ -49,7 +49,7 @@ rust_emit_sections = ["color", "typography", "spacing", "radius", "border", "foc
 # radius.{sm,md,lg,xl} / motion.ease_{enter,exit} / breakpoint.{md,lg}。必须有一条测试解析
 # app.css 与本文件、断言这几组值逐字相等；否则改了本文件而 app.css 没跟，界面按 app.css 走、
 # 测试按本文件走，两边各自「正确」，全绿且不一致。
-# 解除条件 = crates/openbot-ui 里存在该测试并被 `cargo test -p openbot-ui` 跑到。
+# 解除条件 = crates/wrokbot-ui 里存在该测试并被 `cargo test -p openbot-ui` 跑到。
 css_theme_drift_gate = "done"
 
 # ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ line_height = 28
 size = 24
 line_height = 32
 
-# 随包字体资产（GUI 方案 §4.3；文件在 crates/openbot-ui/assets/fonts/）。
+# 随包字体资产（GUI 方案 §4.3；文件在 crates/wrokbot-ui/assets/fonts/）。
 # 字节数与 sha256 由 xtask 校验；zip 来源 rsms/inter release v4.1。
 [[typography.font_face]]
 family = "Inter Variable"

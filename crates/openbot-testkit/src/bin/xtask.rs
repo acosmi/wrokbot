@@ -2239,8 +2239,14 @@ mod tests {
         // 例外或把安全边界误列成产品迁移 owner 都会判红。
         let manifest = include_str!("../../../../Cargo.toml");
         for owner in OWNERS {
+            // The UI directory was renamed; the Cargo package and parity owner stay stable.
+            let directory = if owner == "openbot-ui" {
+                "wrokbot-ui"
+            } else {
+                owner
+            };
             assert!(
-                manifest.contains(&format!("\"crates/{owner}\"")),
+                manifest.contains(&format!("\"crates/{directory}\"")),
                 "OWNERS 里的 {owner} 不在 workspace members 里"
             );
         }
@@ -2253,7 +2259,10 @@ mod tests {
         }
         let member_count = manifest
             .lines()
-            .filter(|l| l.trim_start().starts_with("\"crates/openbot-"))
+            .filter(|l| {
+                let line = l.trim_start();
+                line.starts_with("\"crates/openbot-") || line.starts_with("\"crates/wrokbot-ui\"")
+            })
             .count();
         assert_eq!(
             member_count,
