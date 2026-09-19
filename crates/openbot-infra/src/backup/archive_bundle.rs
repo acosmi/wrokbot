@@ -38,7 +38,12 @@ impl ArchiveBundleBounds {
     /// 更紧的测试边界。
     #[must_use]
     pub fn try_new(max_total_bytes: usize, max_chunks: usize) -> Option<Self> {
-        if max_total_bytes == 0 || max_chunks == 0 {
+        let standard = Self::standard();
+        if max_total_bytes == 0
+            || max_total_bytes > standard.max_total_bytes
+            || max_chunks == 0
+            || max_chunks > standard.max_chunks
+        {
             return None;
         }
         Some(Self {
@@ -87,7 +92,7 @@ const ARCHIVE_SCHEMA: &str = "openbot-backup-archive";
 const ARCHIVE_SCHEMA_VERSION: u64 = 1;
 
 /// Strict canonical JSON wire format.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct WireArchiveBundle {
     schema: String,
@@ -95,6 +100,53 @@ struct WireArchiveBundle {
     inventory_digest: String,
     wrap_envelope: String,
     chunk_envelopes: Vec<String>,
+}
+
+/// Borrowed write view with the exact field order of [`WireArchiveBundle`].
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BorrowedWireArchiveBundle<'a> {
+    schema: &'a str,
+    schema_version: u64,
+    inventory_digest: &'a str,
+    wrap_envelope: &'a str,
+    chunk_envelopes: &'a [String],
+}
+
+/// Fixed-space sink used to count the exact serialized byte length before output I/O.
+struct BoundedCountingWriter {
+    limit: usize,
+    written: usize,
+    exceeded: bool,
+}
+
+impl BoundedCountingWriter {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            written: 0,
+            exceeded: false,
+        }
+    }
+}
+
+impl Write for BoundedCountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let Some(next) = self.written.checked_add(buffer.len()) else {
+            self.exceeded = true;
+            return Err(std::io::Error::other("archive bundle byte count overflow"));
+        };
+        if next > self.limit {
+            self.exceeded = true;
+            return Err(std::io::Error::other("archive bundle byte limit exceeded"));
+        }
+        self.written = next;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// 读入结果：持有 digest + wrap column value + chunk column values。
@@ -145,22 +197,26 @@ pub fn write_archive_bundle(
     if chunk_envelopes.len() > bounds.max_chunks {
         return Err(ArchiveBundleFault::ChunkCountExceeded);
     }
-    let wire = WireArchiveBundle {
-        schema: ARCHIVE_SCHEMA.to_owned(),
+    let inventory_digest = hex_encode(inventory_digest.as_bytes());
+    let wire = BorrowedWireArchiveBundle {
+        schema: ARCHIVE_SCHEMA,
         schema_version: ARCHIVE_SCHEMA_VERSION,
-        inventory_digest: hex_encode(inventory_digest.as_bytes()),
-        wrap_envelope: wrap_envelope.to_owned(),
-        chunk_envelopes: chunk_envelopes.to_vec(),
+        inventory_digest: &inventory_digest,
+        wrap_envelope,
+        chunk_envelopes,
     };
-    let serialized =
-        serde_json::to_vec(&wire).map_err(|_| ArchiveBundleFault::WriteFailed)?;
-    if serialized.len() > bounds.max_total_bytes {
-        return Err(ArchiveBundleFault::TotalBytesExceeded);
+
+    let mut counter = BoundedCountingWriter::new(bounds.max_total_bytes);
+    if serde_json::to_writer(&mut counter, &wire).is_err() {
+        return if counter.exceeded {
+            Err(ArchiveBundleFault::TotalBytesExceeded)
+        } else {
+            Err(ArchiveBundleFault::WriteFailed)
+        };
     }
-    output
-        .write_all(&serialized)
-        .map_err(|_| ArchiveBundleFault::WriteFailed)?;
-    Ok(u64::try_from(serialized.len()).unwrap_or(u64::MAX))
+
+    serde_json::to_writer(output, &wire).map_err(|_| ArchiveBundleFault::WriteFailed)?;
+    u64::try_from(counter.written).map_err(|_| ArchiveBundleFault::WriteFailed)
 }
 
 /// 从 archive bundle 读入并校验 schema/version/inventory digest。
@@ -324,6 +380,9 @@ fn nibble(byte: u8) -> Result<u8, ()> {
         _ => Err(()),
     }
 }
+
+#[cfg(test)]
+mod bounds_tests;
 
 #[cfg(test)]
 mod unpack_tests;

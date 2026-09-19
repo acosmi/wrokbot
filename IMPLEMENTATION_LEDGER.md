@@ -6,7 +6,7 @@
 
 ## 任务与 PR
 
-001–039 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
+001–040 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
 
 | 任务 | 交付范围 | 状态 | PR | 合并提交 |
 |---|---|---|---|---|
@@ -49,7 +49,8 @@
 | V6-PR-037 | 恢复元数据AEAD包装 | 已合入 | [#44](https://github.com/acosmi/wrokbot/pull/44) | [2185a7d142](https://github.com/acosmi/wrokbot/commit/2185a7d1424b650d039f2589598783b1b0829d1c) |
 | V6-PR-038 | 分块序号和清单AAD绑定 | 已合入 | [#45](https://github.com/acosmi/wrokbot/pull/45) | [139b7592eb](https://github.com/acosmi/wrokbot/commit/139b7592eb2f61cbc827578d5fb0b741b3b734d9) |
 | V6-PR-039 | 归档容器有界读写 | 已合入 | [#46](https://github.com/acosmi/wrokbot/pull/46) | [2e52377e25](https://github.com/acosmi/wrokbot/commit/2e52377e256893c0ffec9c3d9f2e841d212152c0) |
-| V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 主控验收通过 | [#47](https://github.com/acosmi/wrokbot/pull/47) | 合并状态及提交见 PR |
+| V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 已合入 | [#47](https://github.com/acosmi/wrokbot/pull/47) | [31e5c364f2](https://github.com/acosmi/wrokbot/commit/31e5c364f2c56976304b63f522f8ab92574730f6) |
+| V6-PR-041 | 归档写出分配前预算与配置硬上限 | 主控验收通过 | 待创建独立 PR | — |
 
 ## 本批验证
 
@@ -62,9 +63,10 @@
 
 认证后的总长度不符、有效前缀后的外包末块、损坏和乱序均无成功结果。未执行 PostgreSQL 恢复或实际 OS 验收。
 
+041 主控已亲读实现与独立预期字节测试，归档链 29 项通过（7 项写出边界、13 项解包、9 项容器回归），Desktop Local infra 的 offline/locked 构建通过。写出字段顺序与原格式一致，超预算时输出 writer 的 write/flush 调用数均为零；实际 I/O 失败仍可保留已写前缀。
+
 ## 仍未完成
 
-- 下一项 041：归档写出在分配前核预算，配置只能收紧既有上限；已发现缺口，尚未修复。
 - 恢复包装与归档极值容量兼容仍待定版，不能将理论明文上限当作容器可承载保证。
 - PostgreSQL/WAL 恢复、隔离暂存的产品装配、同机与新安装恢复演练、签名升级及 A6。
 - 旧 0031 数据的合法恢复输入；不能推测旧密文或凭据。
