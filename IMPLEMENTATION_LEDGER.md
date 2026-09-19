@@ -54,8 +54,8 @@
 | V6-PR-042 | 最大合法恢复信封自读回 | 已合入 | [#49](https://github.com/acosmi/wrokbot/pull/49) | [45d69618f3](https://github.com/acosmi/wrokbot/commit/45d69618f39e5ddd049d60b60eb0fae62146896a) |
 | V6-PR-043 | 已知数据库版本门与原 canary 重核 | 已合入 | [#50](https://github.com/acosmi/wrokbot/pull/50) | [78354b95df](https://github.com/acosmi/wrokbot/commit/78354b95df78adb897abf72c9528a8d9f92113e2) |
 | V6-PR-044 | SDK 5.0 正式制品、许可与宿主传输接纳 | 已合入 | [#51](https://github.com/acosmi/wrokbot/pull/51) | [0af43c89d1](https://github.com/acosmi/wrokbot/commit/0af43c89d1c0fb39cb07be35a8bbc660b97311b9) |
-| V6-PR-045 | 固定网关账户身份读取与有界宿主传输 | 主控验收通过，待独立 PR | 待创建 | 尚未合入 |
-| V6-PR-046 | 自定义模型选择的四入口与队列消费 | 实施中，尚未验收 | 待创建 | 尚未合入 |
+| V6-PR-045 | 固定网关账户身份读取与有界宿主传输 | 主控验收通过 | [#52](https://github.com/acosmi/wrokbot/pull/52) | 合并状态及提交见 PR |
+| V6-PR-046 | 自定义模型选择的四入口与队列消费 | 未验候选保留，待本仓库前端任务接手 | 待创建 | 尚未合入 |
 
 ## macOS 首发进度
 
