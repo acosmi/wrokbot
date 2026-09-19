@@ -99,6 +99,8 @@ pub mod component_catalogue;
 pub mod credential_admin;
 pub mod db;
 #[cfg(feature = "server-runtime")]
+pub mod gateway_account;
+#[cfg(feature = "server-runtime")]
 pub mod gateway_transport;
 #[cfg(feature = "server-runtime")]
 pub mod google_drive;

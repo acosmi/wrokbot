@@ -32,6 +32,8 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 include!("gateway_sdk_transport/tls.rs");
 include!("gateway_sdk_transport/authority.rs");
+#[path = "gateway_sdk_transport/account_tests.rs"]
+mod account_tests;
 #[path = "gateway_sdk_transport/sdk5_tests.rs"]
 mod sdk5_tests;
 

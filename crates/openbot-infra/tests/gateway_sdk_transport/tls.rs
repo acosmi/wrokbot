@@ -3,6 +3,7 @@
 struct ResponsePlan {
     status: u16,
     body: String,
+    content_type: &'static str,
     location: Option<String>,
     extra_headers: String,
     header_gate: Option<Arc<Semaphore>>,
@@ -13,6 +14,7 @@ impl ResponsePlan {
         Self {
             status: 200,
             body,
+            content_type: "text/event-stream",
             location: None,
             extra_headers: String::new(),
             header_gate: None,
@@ -118,8 +120,8 @@ impl TlsFixture {
                                 .map(|url| format!("Location: {url}\r\n")).unwrap_or_default();
                             let retry = if plan.status == 429 { "Retry-After: 1\r\n" } else { "" };
                             let headers = format!(
-                                "HTTP/1.1 {} OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n{extra}{retry}{}\r\n",
-                                plan.status, plan.body.len(), plan.extra_headers
+                                "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}{retry}{}\r\n",
+                                plan.status, plan.content_type, plan.body.len(), plan.extra_headers
                             );
                             if stream.write_all(headers.as_bytes()).await.is_err() { return; }
                             if let Some(gate) = &plan.body_gate {
