@@ -55,6 +55,7 @@ pub struct VerifiedGatewayEndpoints {
     model: Option<Url>,
     discovery: Option<Url>,
     oauth: Option<GatewayOAuthEndpoints>,
+    account_profile: Option<Url>,
 }
 impl VerifiedGatewayEndpoints {
     /// Normalize the same API base as SDK4 and pin one optional model/wire and OAuth set.
@@ -143,7 +144,28 @@ impl VerifiedGatewayEndpoints {
             model,
             discovery,
             oauth,
+            account_profile: None,
         })
+    }
+    /// Opt in to the fixed same-origin account profile endpoint for Desktop OAuth only.
+    /// The endpoint is host-derived and cannot be supplied by SDK metadata or a caller.
+    pub fn with_account_profile(mut self) -> Result<Self, GatewayConfigError> {
+        let set = self.oauth.as_ref().ok_or(GatewayConfigError)?;
+        if set.profile != GatewayOAuthProfile::Desktop {
+            return Err(GatewayConfigError);
+        }
+        let discovery = self.discovery.as_ref().ok_or(GatewayConfigError)?;
+        let account_profile = parse_url(&format!(
+            "{}/api/oauth/profile",
+            discovery.origin().ascii_serialization()
+        ))?;
+        if account_profile.origin() != set.registration.origin()
+            || self.classify(&account_profile).is_some()
+        {
+            return Err(GatewayConfigError);
+        }
+        self.account_profile = Some(account_profile);
+        Ok(self)
     }
     pub(super) fn classify(&self, url: &Url) -> Option<GatewayRequestKind> {
         if url.as_str().len() > 2048 {
@@ -151,6 +173,9 @@ impl VerifiedGatewayEndpoints {
         }
         if url == &self.catalogue || url == &self.picker {
             return Some(GatewayRequestKind::Catalogue);
+        }
+        if self.account_profile.as_ref() == Some(url) {
+            return Some(GatewayRequestKind::AccountProfile);
         }
         if self.model.as_ref() == Some(url) {
             return Some(GatewayRequestKind::Model);

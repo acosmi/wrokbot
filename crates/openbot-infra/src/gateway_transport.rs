@@ -26,6 +26,8 @@ pub struct GatewayConfigError;
 pub enum GatewayRequestKind {
     /// Protected model catalogue.
     Catalogue,
+    /// Current authenticated gateway account profile.
+    AccountProfile,
     /// One host-selected model wire endpoint.
     Model,
     /// Fixed OAuth discovery URL.

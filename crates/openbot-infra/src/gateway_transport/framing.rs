@@ -29,6 +29,7 @@ pub(super) fn frame(
     let stream = request.context.response_mode == HttpResponseMode::Streaming;
     let expected_purpose = match kind {
         GatewayRequestKind::Catalogue => HttpPurpose::Api,
+        GatewayRequestKind::AccountProfile => HttpPurpose::Api,
         GatewayRequestKind::Model => HttpPurpose::Model,
         GatewayRequestKind::OAuthDiscovery => HttpPurpose::OAuthDiscovery,
         GatewayRequestKind::OAuthRegistration => HttpPurpose::OAuthRegistration,
@@ -50,7 +51,9 @@ pub(super) fn frame(
     }
     let bearer = matches!(
         kind,
-        GatewayRequestKind::Catalogue | GatewayRequestKind::Model
+        GatewayRequestKind::Catalogue
+            | GatewayRequestKind::AccountProfile
+            | GatewayRequestKind::Model
     );
     let authorization = match request.headers.get(AUTHORIZATION) {
         Some(value) if bearer => {
@@ -75,13 +78,14 @@ pub(super) fn frame(
         .map_err(|_| TransportError::InvalidRequest)?
     {
         Some("text/event-stream") if stream => GatewayAccept::EventStream,
-        None | Some("application/json") if !stream => GatewayAccept::Json,
+        Some("application/json") if !stream => GatewayAccept::Json,
+        None if !stream && kind != GatewayRequestKind::AccountProfile => GatewayAccept::Json,
         _ => return Err(TransportError::InvalidRequest),
     };
     let method = match kind {
-        GatewayRequestKind::Catalogue | GatewayRequestKind::OAuthDiscovery => {
-            GatewayHttpMethod::GetJson
-        }
+        GatewayRequestKind::Catalogue
+        | GatewayRequestKind::AccountProfile
+        | GatewayRequestKind::OAuthDiscovery => GatewayHttpMethod::GetJson,
         GatewayRequestKind::Model | GatewayRequestKind::OAuthRegistration => {
             GatewayHttpMethod::PostJson
         }
@@ -107,6 +111,7 @@ pub(super) fn frame(
     }
     let (body_limit, response_limit, timeout) = match kind {
         GatewayRequestKind::Catalogue => (0, 4 * 1024 * 1024, Duration::from_secs(30)),
+        GatewayRequestKind::AccountProfile => (0, 64 * 1024, Duration::from_secs(10)),
         GatewayRequestKind::Model => (8 * 1024 * 1024, 64 * 1024 * 1024, Duration::from_secs(30)),
         _ => (64 * 1024, 64 * 1024, Duration::from_secs(10)),
     };
