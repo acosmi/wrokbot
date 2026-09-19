@@ -385,6 +385,9 @@ fn nibble(byte: u8) -> Result<u8, ()> {
 mod bounds_tests;
 
 #[cfg(test)]
+mod recovery_limits_tests;
+
+#[cfg(test)]
 mod unpack_tests;
 
 #[cfg(test)]
