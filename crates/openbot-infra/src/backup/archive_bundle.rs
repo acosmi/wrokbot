@@ -1,14 +1,22 @@
 //! 有界 archive bundle 写出与读入（§14.4 / R344 / V6-PR-039）。
 //!
 //! Archive bundle 是 037 recovery-wrap + 038 recovery-chunks 的序列化容器。
-//! 本模块只做有界 JSON 序列化/反序列化，不打开 AEAD（调用方用 037/038 API 打开），
+//! 本模块的写出/读入只做有界 JSON 序列化/反序列化，不打开 AEAD（调用方用 037/038 API 打开），
 //! 不做 PG/WAL 恢复、原子切换、staging coordinator 集成、RestoreAuthorized、A6 或 0031。
+//!
+//! V6-PR-040 另增 [`unpack_archive_bundle`]：按序解析并打开 wrap 与 chunk envelope，
+//! 任何一步失败都返回分类故障，不泄露任何明文。
 
 use std::io::{Read, Write};
 
 use serde::{Deserialize, Serialize};
 
 use openbot_domain::audit::hash::Sha256Digest;
+use openbot_domain::backup::{
+    BackupRecoveryBinding, BackupRecoveryChunkEnvelope, BackupRecoveryChunkStream,
+    BackupRecoveryEnvelope, open_backup_recovery_wrap,
+};
+use openbot_domain::vault::SecretBytes;
 
 /// Archive bundle 有界配置。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +69,18 @@ pub enum ArchiveBundleFault {
     WrapMissing,
     /// Chunk envelopes 为空。
     ChunksEmpty,
+    /// Wrap envelope 解析失败。
+    WrapParseFailed,
+    /// Wrap envelope AEAD 打开失败。
+    WrapOpenFailed,
+    /// Chunk envelope 解析失败。
+    ChunkParseFailed,
+    /// Chunk envelope 序号不符或 AEAD 打开失败（含跨 bundle 绑定）。
+    ChunkOpenFailed,
+    /// Chunk 数量与预期不符。
+    ChunkCountMismatch,
+    /// Chunk 流装配失败（总长/完整性校验不通过）。
+    ChunkAssemblyFailed,
 }
 
 const ARCHIVE_SCHEMA: &str = "openbot-backup-archive";
@@ -195,6 +215,78 @@ pub fn read_archive_bundle(
     })
 }
 
+/// 解包结果：wrap 明文与按序装配的 chunk 明文。
+///
+/// 两个字段均为 [`SecretBytes`]；仅在全部解析与 AEAD 校验成功后构造。
+pub struct UnpackedArchiveBundle {
+    wrap_plaintext: SecretBytes,
+    chunks_plaintext: SecretBytes,
+}
+
+impl UnpackedArchiveBundle {
+    /// Wrap 明文（恢复元数据）。
+    #[must_use]
+    pub fn wrap_plaintext(&self) -> &SecretBytes {
+        &self.wrap_plaintext
+    }
+
+    /// 按序装配的 chunk 明文。
+    #[must_use]
+    pub fn chunks_plaintext(&self) -> &SecretBytes {
+        &self.chunks_plaintext
+    }
+}
+
+impl core::fmt::Debug for UnpackedArchiveBundle {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("UnpackedArchiveBundle(<redacted-plaintext>)")
+    }
+}
+
+/// 解析并打开 archive bundle：按序校验 wrap 与全部 chunk envelope 后返回明文。
+///
+/// 步骤：校验 chunk 数量 → 用 `BackupRecoveryChunkStream::begin` 校验硬预算 →
+/// 解析并认证 wrap → 按序逐块解析与 AEAD 打开 → 完整性收尾。
+/// 任一步失败均返回分类故障，且不返回任何明文。
+pub fn unpack_archive_bundle(
+    contents: &ArchiveBundleContents,
+    recovery_key: &SecretBytes,
+    binding: &BackupRecoveryBinding,
+    chunk_count: u32,
+    total_bytes: u64,
+) -> Result<UnpackedArchiveBundle, ArchiveBundleFault> {
+    if usize::try_from(chunk_count).ok() != Some(contents.chunk_envelopes().len()) {
+        return Err(ArchiveBundleFault::ChunkCountMismatch);
+    }
+    let mut stream = BackupRecoveryChunkStream::begin(
+        binding.clone(),
+        chunk_count,
+        total_bytes,
+        contents.inventory_digest(),
+    )
+    .map_err(|_| ArchiveBundleFault::ChunkAssemblyFailed)?;
+
+    let wrap_envelope = BackupRecoveryEnvelope::parse(contents.wrap_envelope())
+        .map_err(|_| ArchiveBundleFault::WrapParseFailed)?;
+    let wrap_plaintext = open_backup_recovery_wrap(recovery_key, binding, &wrap_envelope)
+        .map_err(|_| ArchiveBundleFault::WrapOpenFailed)?;
+
+    for chunk in contents.chunk_envelopes() {
+        let envelope = BackupRecoveryChunkEnvelope::parse(chunk)
+            .map_err(|_| ArchiveBundleFault::ChunkParseFailed)?;
+        stream
+            .accept(recovery_key, &envelope)
+            .map_err(|_| ArchiveBundleFault::ChunkOpenFailed)?;
+    }
+    let chunks_plaintext = stream
+        .finish()
+        .map_err(|_| ArchiveBundleFault::ChunkAssemblyFailed)?;
+    Ok(UnpackedArchiveBundle {
+        wrap_plaintext,
+        chunks_plaintext,
+    })
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut value = String::with_capacity(bytes.len() * 2);
@@ -232,6 +324,9 @@ fn nibble(byte: u8) -> Result<u8, ()> {
         _ => Err(()),
     }
 }
+
+#[cfg(test)]
+mod unpack_tests;
 
 #[cfg(test)]
 mod tests {

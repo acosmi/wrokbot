@@ -16,8 +16,19 @@ class PublicationGuardTests(unittest.TestCase):
         for path in ['docs/notes.md', 'grok-bot/src/index.ts', 'crates/x/implementation.md', 'crates/x/.env', '.local-private/backup.tar.gz', 'artifacts/logo.zip', 'crates/x/node_modules/a.js']:
             with self.subTest(path=path):
                 self.assertIsNotNone(guard.forbidden(path))
-        for path in ['README.md', 'Cargo.lock', 'crates/openbot-ui/assets/brand/wrok-bot-motion.gif']:
+        for path in ['README.md', 'IMPLEMENTATION_LEDGER.md', 'Cargo.lock', 'crates/openbot-ui/assets/brand/wrok-bot-motion.gif']:
             self.assertIsNone(guard.forbidden(path))
+
+    def test_implementation_ledger_allowlist_is_exact(self):
+        for path in [
+            'IMPLEMENTATION-LEDGER.md',
+            'IMPLEMENTATION_LEDGER-copy.md',
+            'OTHER_LEDGER.md',
+            'docs/IMPLEMENTATION_LEDGER.md',
+            'docs/history-ledger.md',
+        ]:
+            with self.subTest(path=path):
+                self.assertIsNotNone(guard.forbidden(path))
 
     def test_content_rules_preserve_public_status_but_block_internal_plans(self):
         self.assertIsNotNone(guard.content_reason('README.md', '实施方案：内部任务分配'.encode()))
@@ -32,6 +43,23 @@ class PublicationGuardTests(unittest.TestCase):
             (root / 'README.md').write_text('Wrok Bot')
             with self.assertRaisesRegex(RuntimeError, 'internal implementation'):
                 guard.inspect(root=root)
+
+    def test_staged_implementation_ledger_still_enforces_private_content_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init(root)
+            ledger = root / 'IMPLEMENTATION_LEDGER.md'
+            ledger.write_text('实施方案：内部任务分配')
+            self.run_git(root, 'add', 'IMPLEMENTATION_LEDGER.md')
+            with self.assertRaisesRegex(RuntimeError, 'internal implementation'):
+                guard.inspect(root=root)
+
+            ledger.write_text('# Implementation Ledger\n\nCurrent status: complete.\n')
+            self.run_git(root, 'add', 'IMPLEMENTATION_LEDGER.md')
+            files = guard.inspect(root=root)
+            self.assertEqual(files, [
+                ('IMPLEMENTATION_LEDGER.md', b'# Implementation Ledger\n\nCurrent status: complete.\n'),
+            ])
 
     def test_deleted_private_file_still_blocks_history(self):
         with tempfile.TemporaryDirectory() as tmp:
