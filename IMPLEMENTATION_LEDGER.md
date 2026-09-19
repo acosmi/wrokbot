@@ -49,7 +49,7 @@
 | V6-PR-037 | 恢复元数据AEAD包装 | 已合入 | [#44](https://github.com/acosmi/wrokbot/pull/44) | [2185a7d142](https://github.com/acosmi/wrokbot/commit/2185a7d1424b650d039f2589598783b1b0829d1c) |
 | V6-PR-038 | 分块序号和清单AAD绑定 | 已合入 | [#45](https://github.com/acosmi/wrokbot/pull/45) | [139b7592eb](https://github.com/acosmi/wrokbot/commit/139b7592eb2f61cbc827578d5fb0b741b3b734d9) |
 | V6-PR-039 | 归档容器有界读写 | 已合入 | [#46](https://github.com/acosmi/wrokbot/pull/46) | [2e52377e25](https://github.com/acosmi/wrokbot/commit/2e52377e256893c0ffec9c3d9f2e841d212152c0) |
-| V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 主控验收通过 | 待创建独立 PR | — |
+| V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 主控验收通过 | [#47](https://github.com/acosmi/wrokbot/pull/47) | 合并状态及提交见 PR |
 
 ## 本批验证
 
