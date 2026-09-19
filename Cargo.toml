@@ -23,7 +23,7 @@ members = [
     "crates/openbot-agent",
     "crates/openbot-computer",
     "crates/openbot-server",
-    "crates/openbot-ui",
+    "crates/wrokbot-ui",
     "crates/openbot-desktop",
     "crates/openbot-testkit",
     "crates/openbot-windows-sandbox",
@@ -79,7 +79,7 @@ openbot-infra = { path = "crates/openbot-infra", default-features = false }
 openbot-agent = { path = "crates/openbot-agent" }
 openbot-computer = { path = "crates/openbot-computer" }
 openbot-server = { path = "crates/openbot-server" }
-openbot-ui = { path = "crates/openbot-ui" }
+openbot-ui = { path = "crates/wrokbot-ui" }
 openbot-desktop = { path = "crates/openbot-desktop" }
 openbot-testkit = { path = "crates/openbot-testkit" }
 openbot-windows-sandbox = { path = "crates/openbot-windows-sandbox" }

@@ -143,6 +143,13 @@
     "thread_error": "Could not prepare a conversation thread."
   },
   "channels": {
+    "model_agent_conflict": "The model selection does not match the current assistant. Select a supported built-in assistant and choose the model again, or clear the selection.",
+    "model_selection_unavailable": "The selected model is not currently available. Wait for the model list to load or refresh it, then explicitly choose a current model or clear the selection.",
+    "submit_conflict": "The model selection or conversation changed before this request was accepted. Review the current state, reselect the model if needed, and send a new request.",
+    "submit_rejected": "The request was rejected. Check your permission and the current conversation state before sending again.",
+    "navigation_failed": "The run was accepted, but the conversation could not be opened. Open it from the channel list.",
+    "begin_unknown": "The run submission is unconfirmed. Retry sends the original message again with the same assistant, skills, model version, and run ID.",
+    "submission_blocked": "Another unconfirmed submission is blocking new sends. Return to that submission to review its status.",
     "title": "Channels",
     "channel": "Channel",
     "thread": "Thread",
@@ -173,7 +180,7 @@
     "run_failed": "The run ended before a complete reply was available.",
     "run_cancelled": "The run was stopped.",
     "run_reconciliation": "This run needs reconciliation before another message can start.",
-    "send_error": "The message was not confirmed. Retry uses the same run identity.",
+    "send_error": "The message could not be sent. Check the current conversation and model selection before trying again.",
     "time_minutes_ago": "{{ count }}m ago",
     "time_hours_ago": "{{ count }}h ago",
     "time_days_ago": "{{ count }}d ago",
@@ -187,7 +194,7 @@
     "composer_placeholder": "Message your coworker",
     "composer_send": "Send",
     "composer_queue": "Queue message",
-    "start_error": "The first message was not committed. Try again if the recipient and message are locked below.",
+    "start_error": "The conversation could not be started. Check the assistant and model selection before trying again.",
     "create_uncertain": "The channel creation response was lost, so this page will not submit again and risk creating a duplicate. Check your channel list.",
     "composer_stop": "Stop",
     "cancelling": "Stopping…",
@@ -1054,6 +1061,9 @@
     "cap_boundary": "The per-run cost cap below controls your budget. It is not usage, account balance, or a plan allowance."
   },
   "models": {
+    "selection_unavailable_label": "Model selection unavailable",
+    "selection_agent_conflict": "The model selection does not match the current assistant. Select a supported built-in assistant and choose the model again, or clear the selection.",
+    "selection_unavailable_locked": "This model selection is not currently available.",
     "title": "Model services",
     "description": "Manage the model sources used by Wrok Bot. Model-service accounts are separate from your product sign-in.",
     "gateway": "SDK gateway",
@@ -1067,7 +1077,7 @@
     "bridge_description": "Connect existing model-service accounts and manage their sign-in, access and provider-reported usage separately.",
     "bridge_pending": "Account connections are part of the first release; the connection flow is not ready yet.",
     "bridge_connect": "Connect model account",
-    "saved_boundary": "Saving updates configuration only. Connection testing and conversation model selection are still being integrated.",
+    "saved_boundary": "Saving updates configuration only. Availability is checked again when a conversation starts.",
     "load_failed": "Model connections could not be loaded. Refresh to try again.",
     "refresh": "Refresh data",
     "empty": "No custom models on this page.",
@@ -1092,6 +1102,11 @@
     "conflict": "This connection changed or is no longer available. Close the dialog, refresh, then open the current record.",
     "authentication": "Current authorization is insufficient or requires a fresh sign-in. Confirm your account before continuing.",
     "unknown": "The result is unconfirmed; further writes are paused. Refresh to review records without repeating the request. A similar name cannot confirm whether creation succeeded.",
+    "use_agent_default": "Use the assistant model",
+    "managed_by_agent": "Model managed by this assistant",
+    "choose_for_next": "Choose a model for the next message",
+    "none_available": "No enabled custom model with a stored key is available.",
+    "selection_unavailable": "The selected model changed or is unavailable. Clear it or choose the current version.",
     "enable_connection": "Enable this connection"
   }
 }

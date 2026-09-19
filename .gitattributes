@@ -13,4 +13,4 @@
 *.sse text eol=lf whitespace=-blank-at-eof
 
 # Preserve upstream license text, including its trailing blank line.
-crates/openbot-ui/assets/notices/markdown/Microsoft_TypeScript-Sublime-Plugin_LICENSE whitespace=-blank-at-eof
+crates/wrokbot-ui/assets/notices/markdown/Microsoft_TypeScript-Sublime-Plugin_LICENSE whitespace=-blank-at-eof

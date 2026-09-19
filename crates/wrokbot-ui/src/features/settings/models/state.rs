@@ -19,7 +19,7 @@ impl Status {
 #[derive(Clone, Copy)]
 pub(crate) struct ModelActions {
     pub(super) status: RwSignal<Status>,
-    pub(super) revision: RwSignal<u64>,
+    pub(crate) revision: RwSignal<u64>,
 }
 impl ModelActions {
     pub(crate) fn new() -> Self {

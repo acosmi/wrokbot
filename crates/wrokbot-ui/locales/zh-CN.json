@@ -143,6 +143,13 @@
     "thread_error": "无法准备对话线程。"
   },
   "channels": {
+    "model_agent_conflict": "模型选择与当前助手不匹配。请确认支持模型选择的内置助手并重新选择模型，或清除模型选择。",
+    "model_selection_unavailable": "所选模型当前不可用。请等待模型列表加载或刷新列表，再显式选择当前模型，或清除选择。",
+    "submit_conflict": "此次请求接受前，模型选择或会话状态已发生变化。请核对当前状态，必要时重新选择模型，再发起新的请求。",
+    "submit_rejected": "请求已被拒绝。请检查你的权限和当前会话状态后再发送。",
+    "navigation_failed": "运行已被接受，但无法打开会话。请从频道列表打开该会话。",
+    "begin_unknown": "尚未确认此次运行提交的结果。点击“重试”将使用原助手、技能、模型版本和运行标识，精确重发原消息。",
+    "submission_blocked": "另一条尚未确认的提交正在阻止新发送。请返回该提交查看状态。",
     "title": "频道",
     "channel": "频道",
     "thread": "会话",
@@ -173,7 +180,7 @@
     "run_failed": "本次运行在完整回复产生前结束。",
     "run_cancelled": "本次运行已停止。",
     "run_reconciliation": "本次运行需要完成和解，之后才能发送下一条消息。",
-    "send_error": "消息尚未确认；重试将复用同一个运行标识。",
+    "send_error": "未能发送消息。请检查当前会话和模型选择后再试。",
     "time_minutes_ago": "{{ count }}分钟前",
     "time_hours_ago": "{{ count }}小时前",
     "time_days_ago": "{{ count }}天前",
@@ -187,7 +194,7 @@
     "composer_placeholder": "给同事发消息",
     "composer_send": "发送",
     "composer_queue": "消息排队",
-    "start_error": "首条消息尚未确认提交；如果下方收件人和消息已锁定，请重试同一次提交。",
+    "start_error": "未能开始会话。请检查助手和模型选择后再试。",
     "create_uncertain": "频道创建响应已丢失；本页不会再次提交以免重复创建，请检查频道列表。",
     "composer_stop": "停止",
     "cancelling": "正在停止…",
@@ -1054,6 +1061,9 @@
     "cap_boundary": "下方的单次任务成本上限是预算控制，不代表已用量、账户余额或套餐额度。"
   },
   "models": {
+    "selection_unavailable_label": "模型选择不可用",
+    "selection_agent_conflict": "模型选择与当前助手不匹配。请确认支持模型选择的内置助手并重新选择模型，或清除模型选择。",
+    "selection_unavailable_locked": "此模型选择当前不可用。",
     "title": "模型服务",
     "description": "管理 Wrok Bot 使用的模型来源。模型服务账号与产品登录账号分别管理。",
     "gateway": "SDK 网关",
@@ -1067,7 +1077,7 @@
     "bridge_description": "连接已有的模型服务账号，分别管理其登录、授权状态和提供方用量。",
     "bridge_pending": "账户桥接将在首版提供，当前连接流程尚未就绪。",
     "bridge_connect": "连接模型账号",
-    "saved_boundary": "保存仅更新配置，连接测试和对话模型选择仍在接入中。",
+    "saved_boundary": "保存仅更新配置；开始对话时仍会重新检查可用性。",
     "load_failed": "暂时无法读取模型连接。请刷新重试。",
     "refresh": "刷新数据",
     "empty": "当前页暂无自定义模型。",
@@ -1092,6 +1102,11 @@
     "conflict": "此连接已发生变化或不可用。请关闭窗口、刷新数据，再打开最新记录。",
     "authentication": "当前授权不足或需要重新登录。请重新确认账号后再操作。",
     "unknown": "尚无法确认此次操作结果，后续写入已暂停。请刷新核对记录，不要重复提交；相似名称不能确认新增是否成功。",
+    "use_agent_default": "使用助手配置的模型",
+    "managed_by_agent": "模型由该助手管理",
+    "choose_for_next": "选择下一条消息使用的模型",
+    "none_available": "没有已启用且保存了密钥的自定义模型。",
+    "selection_unavailable": "所选模型已变化或不可用，请清除选择或选择当前版本。",
     "enable_connection": "启用此连接"
   }
 }

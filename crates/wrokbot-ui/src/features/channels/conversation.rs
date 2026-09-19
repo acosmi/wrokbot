@@ -35,14 +35,22 @@ use crate::api::desktop_transport::{
 use crate::api::mint_run_id;
 #[cfg(target_arch = "wasm32")]
 use crate::api::{
-    answer_component_human_decision, answer_remote_interrupt, begin_thread_run_with_skills,
-    cancel_thread_run, list_pending_component_human_decisions, list_pending_remote_interrupts,
+    answer_component_human_decision, answer_remote_interrupt,
+    begin_thread_run_with_skills_and_model, cancel_thread_run,
+    list_pending_component_human_decisions, list_pending_remote_interrupts, load_agent,
     load_thread_conversation, mint_thread_id, thread_event_stream_path,
 };
 use crate::features::agents::{AgentPresence, AgentPresenceState};
+#[cfg(target_arch = "wasm32")]
+use crate::features::channels::composer::model_intents::SubmissionSource;
+use crate::features::channels::composer::model_intents::{
+    RunIntent, RunRecovery, RunSubmissionActions,
+};
+use crate::features::channels::composer::models::{ModelComposer, ModelPicker};
 use crate::features::channels::composer::queue::{QueueAction, QueuedMessage, reduce_queue};
 use crate::features::channels::composer::skills::{SkillComposer, SkillPicker};
 use crate::features::channels::markdown::{MarkdownBody, StreamingMarkdownBody};
+use crate::features::channels::new::{SubmissionNotice, model_notice};
 use crate::features::computer::workspace::{ComputerWorkspace, WorkspaceActivity};
 use crate::features::gallery::{ConversationComponent, GalleryFrame, HumanDecisionCard};
 use crate::features::memory::remember::{RememberDialog, RememberReview, RememberTarget};
@@ -177,15 +185,27 @@ const fn send_control_disabled(
         || (!has_resumable && (!has_selected_agent || draft_empty))
 }
 
-/// A parked queue drains on exactly one busy -> idle edge, never into an inactive channel and
-/// never twice for the same edge. `previous` is the last observed in-flight fact of this mount.
+/// Remember an authoritative foreground-run terminal edge until all local send gates are safe.
+const fn queue_drain_pending(previous_active: bool, active: bool, pending: bool) -> bool {
+    pending || (previous_active && !active)
+}
+
 const fn should_drain_queue(
-    previous: bool,
+    pending: bool,
     in_flight: bool,
+    loading: bool,
     channel_active: bool,
     queue_empty: bool,
+    submission_barrier: bool,
+    has_resumable: bool,
 ) -> bool {
-    previous && !in_flight && channel_active && !queue_empty
+    pending
+        && !in_flight
+        && !loading
+        && channel_active
+        && !queue_empty
+        && !submission_barrier
+        && !has_resumable
 }
 
 impl ConversationState {
@@ -473,15 +493,7 @@ fn durable_tool_call(call: &serde_json::Value) -> Option<(String, String, serde_
     Some((call_id, name, arguments))
 }
 
-#[derive(Clone)]
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-struct PendingTurn {
-    thread_id: ThreadId,
-    run_id: RunId,
-    agent_id: BotId,
-    message: String,
-    selected_skill_slugs: Vec<String>,
-}
+type PendingTurn = RunIntent;
 
 /// Data-backed channel transcript using the shared native thread conversation surface.
 #[component]
@@ -503,6 +515,7 @@ pub fn ChannelConversation(
             channel_active=channel.active
             anchor=ThreadRunAnchor::Channel { channel_id: channel.id }
             fresh_thread=false
+            agent_profile=None
         />
     }
 }
@@ -517,15 +530,19 @@ pub fn DirectBotConversation(
     /// The Server minted this identity, but no first run has persisted it yet.
     fresh: bool,
 ) -> impl IntoView {
+    let agent_id = agent.id.clone();
+    let agent_name = agent.name.clone();
+    let agent_seed = agent.avatar_seed.clone();
     view! {
         <ConversationSurface
             thread=Some(thread)
-            agent_id=Some(agent.id)
-            agent_name=agent.name
-            agent_seed=agent.avatar_seed
+            agent_id=Some(agent_id)
+            agent_name
+            agent_seed
             channel_active=true
             anchor=ThreadRunAnchor::DirectBot
             fresh_thread=fresh
+            agent_profile=Some(agent)
         />
     }
 }
@@ -539,12 +556,30 @@ fn ConversationSurface(
     channel_active: bool,
     anchor: ThreadRunAnchor,
     fresh_thread: bool,
+    agent_profile: Option<AgentProfile>,
 ) -> impl IntoView {
     let i18n = use_i18n();
     let run_anchor = StoredValue::new(anchor);
     #[cfg(not(target_arch = "wasm32"))]
     let _ = run_anchor;
     let agent_id = StoredValue::new(agent_id);
+    let model_support = RwSignal::new(agent_profile.as_ref().map(|agent| agent.endpoint.is_none()));
+    #[cfg(target_arch = "wasm32")]
+    let model_agent_epoch = RwSignal::new(0_u64);
+    #[cfg(target_arch = "wasm32")]
+    if model_support.get_untracked().is_none()
+        && let Some(requested_agent) = agent_id.get_value()
+    {
+        let epoch = model_agent_epoch.get_untracked().saturating_add(1);
+        model_agent_epoch.set(epoch);
+        leptos::task::spawn_local_scoped_with_cancellation(async move {
+            let result = load_agent(requested_agent.as_str()).await;
+            if model_agent_epoch.try_get_untracked() != Some(epoch) {
+                return;
+            }
+            model_support.set(result.ok().map(|agent| agent.endpoint.is_none()));
+        });
+    }
     let streaming_agent_seed = StoredValue::new(agent_seed.clone());
     let streaming_agent_name = StoredValue::new(agent_name.clone());
     let thread_id = RwSignal::new(thread);
@@ -635,38 +670,83 @@ fn ConversationSurface(
         Signal::derive(move || agent_id.get_value()),
         "channel-message",
     );
+    let model_composer = ModelComposer::new(
+        Signal::derive(move || model_support.get() == Some(true)),
+        Signal::derive(move || agent_id.get_value()),
+    );
     let queued = RwSignal::new(Vec::<QueuedMessage>::new());
     let queue_skills_invalid = Signal::derive(move || {
-        let mut slugs = Vec::new();
-        for slug in queued
-            .get()
-            .iter()
-            .flat_map(|q| &q.command_ids)
-            .chain(skill_composer.selected.get().iter())
-        {
-            if !slugs.contains(slug) {
-                slugs.push(slug.clone());
-            }
-        }
-        !openbot_contracts::command::valid_selected_skill_slugs(&slugs)
+        queued.get().iter().any(|item| {
+            !openbot_contracts::command::valid_selected_skill_slugs(
+                &item.intent.selected_skill_slugs,
+            )
+        })
     });
     let submitting = RwSignal::new(false);
     let cancelling_request = RwSignal::new(false);
-    let send_error = RwSignal::new(false);
+    let send_notice = RwSignal::new(None::<SubmissionNotice>);
+    let begin_unknown = RwSignal::new(false);
+    let submission_blocked = RwSignal::new(false);
     let cancel_error = RwSignal::new(false);
     let resumable = RwSignal::new(None::<PendingTurn>);
+    let resumable_recovery = RwSignal::new(None::<RunRecovery>);
+    let submissions = expect_context::<RunSubmissionActions>();
+    Effect::new(move |_| {
+        if submitting.get() {
+            return;
+        }
+        if resumable.get_untracked().is_some() {
+            submission_blocked.set(false);
+            return;
+        }
+        let recovery = submissions.run_unknown_for_scope(
+            thread_id.get().as_ref(),
+            &run_anchor.get_value(),
+            agent_id.get_value().as_ref(),
+        );
+        let Some(recovery) = recovery else {
+            submission_blocked.set(submissions.has_barrier());
+            return;
+        };
+        submission_blocked.set(false);
+        let intent = recovery.intent.clone();
+        draft.set(intent.message.clone());
+        skill_composer
+            .selected
+            .set(intent.selected_skill_slugs.clone());
+        model_composer.restore_selection(
+            intent.model_selection.clone(),
+            Some(intent.agent_id.clone()),
+        );
+        resumable_recovery.set(Some(recovery));
+        resumable.set(Some(intent));
+        begin_unknown.set(true);
+        send_notice.set(None);
+    });
     Effect::new(move |_| {
         let Some(attempt) = resumable.get() else {
             return;
         };
         if state.get().active_run_id.as_ref() == Some(&attempt.run_id) {
+            if let Some(thread) = attempt.thread_id.as_ref() {
+                submissions.acknowledge_observed(
+                    thread,
+                    &attempt.anchor,
+                    &attempt.agent_id,
+                    &attempt.run_id,
+                );
+            }
             resumable.set(None);
+            resumable_recovery.set(None);
             skill_composer.clear();
-            send_error.set(false);
+            begin_unknown.set(false);
+            send_notice.set(None);
         }
     });
     let busy = Signal::derive(move || state.get().active_run_id.is_some() || submitting.get());
-    let input_locked = Signal::derive(move || submitting.get() || resumable.get().is_some());
+    let input_locked = Signal::derive(move || {
+        submitting.get() || resumable.get().is_some() || submission_blocked.get()
+    });
     let textarea_disabled = Signal::derive(move || input_locked.get() || !channel_active);
     let send_disabled = Signal::derive(move || {
         send_control_disabled(
@@ -677,8 +757,9 @@ fn ConversationSurface(
             loading.get(),
             trim_ecmascript(&draft.get()).is_empty(),
             resumable.get().is_some(),
-        ) || (resumable.get().is_none()
-            && (skill_composer.invalid.get() || queue_skills_invalid.get()))
+        ) || submission_blocked.get()
+            || (resumable.get().is_none()
+                && (skill_composer.invalid.get() || queue_skills_invalid.get()))
     });
     let stop_control = Signal::derive(move || {
         let snapshot = state.get();
@@ -693,105 +774,147 @@ fn ConversationSurface(
     let can_stop = Signal::derive(move || stop_control.get().enabled());
     let show_stop = Signal::derive(move || stop_control.get().visible());
     let stop_disabled = Signal::derive(move || !can_stop.get());
-    let send_now = UnsyncCallback::new(
-        move |(requested_agent, message, selected_skill_slugs): (BotId, String, Vec<String>)| {
-            if submitting.get_untracked()
-                || state.get_untracked().active_run_id.is_some()
-                || !channel_active
-            {
-                return;
-            }
-            if resumable.get_untracked().is_none() && trim_ecmascript(&message).is_empty() {
-                return;
-            }
-            submitting.set(true);
-            send_error.set(false);
-            #[cfg(target_arch = "wasm32")]
-            leptos::task::spawn_local_scoped_with_cancellation(async move {
-                let was_retry = resumable.get_untracked().is_some();
-                let attempt = match resumable.get_untracked() {
-                    Some(attempt) => attempt,
-                    None => {
-                        let resolved_thread = match thread_id.get_untracked() {
-                            Some(thread) => thread,
-                            None => match mint_thread_id().await {
-                                Ok(thread) => thread,
-                                Err(_) => {
-                                    send_error.set(true);
-                                    submitting.set(false);
-                                    return;
-                                }
-                            },
-                        };
-                        let attempt = PendingTurn {
-                            thread_id: resolved_thread,
-                            run_id: mint_run_id(),
-                            agent_id: requested_agent,
-                            message,
-                            selected_skill_slugs,
-                        };
-                        resumable.set(Some(attempt.clone()));
-                        attempt
-                    }
-                };
-                match begin_thread_run_with_skills(
-                    &attempt.thread_id,
-                    &attempt.agent_id,
-                    &attempt.run_id,
-                    run_anchor.get_value(),
-                    &attempt.message,
-                    &attempt.selected_skill_slugs,
-                )
-                .await
-                {
-                    Ok(_) => {
-                        allow_missing_snapshot.set(false);
-                        thread_id.set(Some(attempt.thread_id));
-                        state.update(|state| {
-                            state.active_run_id = Some(attempt.run_id);
-                            state.active_run_state = Some(ThreadForegroundRunState::Running);
-                            state.active_run_cancellable = true;
-                            state.streaming_text.clear();
-                            state.terminal_notice = None;
-                        });
-                        if draft.get_untracked() == attempt.message
-                            && skill_composer.selected.get_untracked()
-                                == attempt.selected_skill_slugs
-                        {
-                            skill_composer.clear();
-                        }
-                        resumable.set(None);
-                        reload_generation.update(|value| *value = value.saturating_add(1));
-                    }
-                    Err(error) => {
-                        if !was_retry
-                            && matches!(
-                                error,
-                                crate::api::ApiError::NotFound
-                                    | crate::api::ApiError::Forbidden
-                                    | crate::api::ApiError::Unauthorized
-                            )
-                        {
-                            resumable.set(None);
-                            skill_composer.reload();
-                        }
-                        send_error.set(true);
-                        reload_generation.update(|value| *value = value.saturating_add(1));
-                    }
+    let send_now = UnsyncCallback::new(move |requested: RunIntent| {
+        if submitting.get_untracked()
+            || state.get_untracked().active_run_id.is_some()
+            || !channel_active
+        {
+            return;
+        }
+        if resumable.get_untracked().is_none() && trim_ecmascript(&requested.message).is_empty() {
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let retry_unknown = resumable.get_untracked().is_some();
+        submitting.set(true);
+        send_notice.set(None);
+        begin_unknown.set(false);
+        submission_blocked.set(false);
+        #[cfg(target_arch = "wasm32")]
+        leptos::task::spawn_local_scoped_with_cancellation(async move {
+            let attempt = match resumable.get_untracked() {
+                Some(attempt) => attempt,
+                None => {
+                    let resolved_thread = match requested.thread_id.clone() {
+                        Some(thread) => thread,
+                        None => match mint_thread_id().await {
+                            Ok(thread) => thread,
+                            Err(_) => {
+                                send_notice.set(Some(SubmissionNotice::Rejected));
+                                submitting.set(false);
+                                return;
+                            }
+                        },
+                    };
+                    let mut attempt = requested;
+                    attempt.thread_id = Some(resolved_thread);
+                    resumable.set(Some(attempt.clone()));
+                    attempt
                 }
+            };
+            let Some(resolved_thread) = attempt.thread_id.as_ref() else {
+                send_notice.set(Some(SubmissionNotice::Rejected));
                 submitting.set(false);
-            });
-            #[cfg(not(target_arch = "wasm32"))]
+                return;
+            };
+            let recovery = resumable_recovery
+                .get_untracked()
+                .unwrap_or_else(|| RunRecovery {
+                    source: SubmissionSource::Conversation,
+                    intent: attempt.clone(),
+                    channel: None,
+                });
+            let Some(ticket) = submissions.start_run(&recovery, retry_unknown) else {
+                if !retry_unknown {
+                    resumable.set(None);
+                }
+                submission_blocked.set(true);
+                submitting.set(false);
+                return;
+            };
+            match begin_thread_run_with_skills_and_model(
+                resolved_thread,
+                &attempt.agent_id,
+                &attempt.run_id,
+                attempt.anchor.clone(),
+                &attempt.message,
+                &attempt.selected_skill_slugs,
+                attempt.model_selection.as_ref(),
+            )
+            .await
             {
-                let _ = (requested_agent, message, selected_skill_slugs);
-                submitting.set(false);
-                send_error.set(true);
+                Ok(_) => {
+                    ticket.accepted();
+                    allow_missing_snapshot.set(false);
+                    thread_id.set(attempt.thread_id.clone());
+                    state.update(|state| {
+                        state.active_run_id = Some(attempt.run_id.clone());
+                        state.active_run_state = Some(ThreadForegroundRunState::Running);
+                        state.active_run_cancellable = true;
+                        state.streaming_text.clear();
+                        state.terminal_notice = None;
+                    });
+                    if draft.get_untracked() == attempt.message
+                        && skill_composer.selected.get_untracked() == attempt.selected_skill_slugs
+                        && model_composer.selected.get_untracked() == attempt.model_selection
+                    {
+                        skill_composer.clear();
+                        model_composer.clear();
+                    }
+                    resumable.set(None);
+                    resumable_recovery.set(None);
+                    begin_unknown.set(false);
+                    send_notice.set(None);
+                    reload_generation.update(|value| *value = value.saturating_add(1));
+                }
+                Err(error) => {
+                    ticket.failed(error);
+                    let definite = matches!(
+                        error,
+                        crate::api::ApiError::NotFound
+                            | crate::api::ApiError::Forbidden
+                            | crate::api::ApiError::Unauthorized
+                            | crate::api::ApiError::Conflict
+                    );
+                    if definite {
+                        resumable.set(None);
+                        resumable_recovery.set(None);
+                        begin_unknown.set(false);
+                        send_notice.set(Some(if error == crate::api::ApiError::Conflict {
+                            SubmissionNotice::Conflict
+                        } else {
+                            SubmissionNotice::Rejected
+                        }));
+                        skill_composer.reload();
+                        model_composer.directory_reload();
+                    } else if submissions.has_barrier() {
+                        resumable_recovery.set(Some(recovery));
+                        begin_unknown.set(true);
+                        send_notice.set(None);
+                    } else {
+                        // Snapshot/SSE may have confirmed this exact run before the HTTP future
+                        // reported a lost response. Do not carry stale retry metadata forward.
+                        resumable.set(None);
+                        resumable_recovery.set(None);
+                        begin_unknown.set(false);
+                        send_notice.set(None);
+                    }
+                    reload_generation.update(|value| *value = value.saturating_add(1));
+                }
             }
-        },
-    );
+            submitting.set(false);
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = requested;
+            submitting.set(false);
+            send_notice.set(Some(SubmissionNotice::Rejected));
+        }
+    });
     let component_ask_disabled = Signal::derive(move || {
         submitting.get()
             || resumable.get().is_some()
+            || submissions.has_barrier()
             || state.get().active_run_id.is_some()
             || !channel_active
             || snapshot_error.get()
@@ -801,7 +924,15 @@ fn ConversationSurface(
         if component_ask_disabled.get_untracked() || trim_ecmascript(&message).is_empty() {
             return;
         }
-        send_now.run((agent_id, message, Vec::new()));
+        send_now.run(RunIntent {
+            thread_id: thread_id.get_untracked(),
+            run_id: mint_run_id(),
+            agent_id,
+            anchor: run_anchor.get_value(),
+            message,
+            selected_skill_slugs: Vec::new(),
+            model_selection: None,
+        });
     });
     let answer_human_decision = UnsyncCallback::new(
         move |(decision_id, answer): (String, ComponentHumanDecisionAnswer)| {
@@ -886,37 +1017,54 @@ fn ConversationSurface(
             return;
         }
         if let Some(attempt) = resumable.get_untracked() {
-            send_now.run((
-                attempt.agent_id,
-                attempt.message,
-                attempt.selected_skill_slugs,
-            ));
+            send_now.run(attempt);
             return;
         }
         let composer_draft = skill_composer.compose();
         if composer_draft.is_empty {
             return;
         }
-        let queue_id = mint_run_id().as_str().to_owned();
+        let Some(requested_agent) = agent_id.get_value() else {
+            return;
+        };
+        if let Some(model_notice) = model_notice(model_composer.selection_status()) {
+            send_notice.set(Some(model_notice));
+            return;
+        }
+        let model_selection = match model_composer.freeze() {
+            Ok(selection) => selection,
+            Err(_) => {
+                send_notice.set(Some(SubmissionNotice::ModelSelectionUnavailable));
+                return;
+            }
+        };
+        let intent = RunIntent {
+            thread_id: thread_id.get_untracked(),
+            run_id: mint_run_id(),
+            agent_id: requested_agent,
+            anchor: run_anchor.get_value(),
+            message: composer_draft.text,
+            selected_skill_slugs: composer_draft.command_ids,
+            model_selection,
+        };
         let current = queued.get_untracked();
         let transition = reduce_queue(
             &current,
             QueueAction::Submit {
-                id: &queue_id,
-                draft: &composer_draft,
+                intent: &intent,
                 busy: busy.get_untracked(),
             },
         );
+        let submitted_queued = transition.submitted_queued;
         let next_queue = transition.queue.into_owned();
         let run = transition.run.map(|run| run.into_owned());
         queued.set(next_queue);
-        if busy.get_untracked() {
+        if submitted_queued {
             skill_composer.clear();
+            model_composer.clear();
         }
-        if let Some(run) = run
-            && let Some(agent_id) = agent_id.get_value()
-        {
-            send_now.run((agent_id, run.text, run.command_ids));
+        if let Some(run) = run {
+            send_now.run(run);
         }
     });
     let stop = UnsyncCallback::new(move |_| {
@@ -970,16 +1118,22 @@ fn ConversationSurface(
     // 结果是排队消息永远发不出去，且 `submitting` 卡在 true 让整个 Composer 死锁。改成在组件 owner
     // 里执行：它活过每一次 Effect 运行，与用户点击 Send 走的是同一个 owner。
     let composer_owner = Owner::current();
-    let was_in_flight = RwSignal::new(false);
+    let was_active = RwSignal::new(false);
+    let queue_drain_waiting = RwSignal::new(false);
     Effect::new(move |_| {
-        let in_flight = busy.get();
-        let previous = was_in_flight.get_untracked();
-        was_in_flight.set(in_flight);
+        let active = state.get().active_run_id.is_some();
+        let previous = was_active.get_untracked();
+        was_active.set(active);
+        let pending = queue_drain_pending(previous, active, queue_drain_waiting.get_untracked());
+        queue_drain_waiting.set(pending);
         if !should_drain_queue(
-            previous,
-            in_flight,
+            pending,
+            active || submitting.get(),
+            loading.get() || snapshot_error.get(),
             channel_active,
-            queued.get_untracked().is_empty(),
+            queued.get().is_empty(),
+            submissions.has_barrier(),
+            resumable.get().is_some(),
         ) {
             return;
         }
@@ -988,13 +1142,11 @@ fn ConversationSurface(
         let next_queue = transition.queue.into_owned();
         let run = transition.run.map(|run| run.into_owned());
         queued.set(next_queue);
+        queue_drain_waiting.set(false);
         if let Some(run) = run {
-            let Some(agent_id) = agent_id.get_value() else {
-                return;
-            };
             match composer_owner.as_ref() {
-                Some(owner) => owner.with(|| send_now.run((agent_id, run.text, run.command_ids))),
-                None => send_now.run((agent_id, run.text, run.command_ids)),
+                Some(owner) => owner.with(|| send_now.run(run)),
+                None => send_now.run(run),
             }
         }
     });
@@ -1179,7 +1331,7 @@ fn ConversationSurface(
                             key=|message| message.id.clone()
                             children=move |message| {
                                 let queue_id = message.id.clone();
-                                let text = message.text.clone();
+                                let text = message.intent.message.clone();
                                 let visible_text = text.clone();
                                 let remove_label = t_string!(
                                     i18n,
@@ -1198,7 +1350,7 @@ fn ConversationSurface(
                                             >
                                                 <MessageContent>
                                                     <Bubble kind=BubbleKind::User>
-                                                        <div class="ob-skill-chips">{message.command_ids.into_iter().map(|slug| view! { <code>{format!("/{slug}")}</code> }).collect_view()}</div>
+                                                        <div class="ob-skill-chips">{message.intent.selected_skill_slugs.into_iter().map(|slug| view! { <code>{format!("/{slug}")}</code> }).collect_view()}</div>
                                                         <p class="ob-transcript-text">{visible_text}</p>
                                                     </Bubble>
                                                     <MessageFooter>
@@ -1240,6 +1392,7 @@ fn ConversationSurface(
             <RememberDialog review=remember_review/>
             <div class="ob-channel-composer">
                 <div class="ob-skill-editor">
+                <ModelPicker state=model_composer disabled=textarea_disabled/>
                 <SkillPicker state=skill_composer disabled=textarea_disabled/>
                 <Textarea
                     value=draft
@@ -1269,7 +1422,7 @@ fn ConversationSurface(
                             on_activate=submit
                         >
                             <IconView icon=Icon::Send size=IconSize::Inline />
-                            <span>{move || if resumable.get().is_some() {
+                            <span>{move || if begin_unknown.get() {
                                 t_string!(i18n, common.retry).to_owned()
                             } else if busy.get() {
                                 t_string!(i18n, channels.composer_queue).to_owned()
@@ -1300,8 +1453,17 @@ fn ConversationSurface(
                     </Button>
                 </Show>
             </div>
-            <Show when=move || send_error.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, channels.send_error)}</p>
+            <Show when=move || send_notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
+            <Show when=move || send_notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
+            <Show when=move || send_notice.get()==Some(SubmissionNotice::Conflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
+            <Show when=move || send_notice.get()==Some(SubmissionNotice::Rejected)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
+            <Show when=move || begin_unknown.get()>
+                <p class="ob-alert" role="alert">{move || t!(i18n, channels.begin_unknown)}</p>
+            </Show>
+            <Show when=move || submission_blocked.get()>
+                <a class="ob-alert" role="alert" href=move || submissions.barrier().and_then(|barrier| barrier.href()).unwrap_or_else(|| "/".to_owned())>
+                    {move || t!(i18n, channels.submission_blocked)}
+                </a>
             </Show>
             <Show when=move || cancel_error.get()>
                 <p class="ob-alert" role="alert">{move || t!(i18n, channels.cancel_error)}</p>
@@ -2225,11 +2387,13 @@ mod tests {
             false, true, true, false, false, true, false,
         ));
         let pending = PendingTurn {
-            thread_id: ThreadId::new("thread-1"),
+            thread_id: Some(ThreadId::new("thread-1")),
             run_id: RunId::new("run-1"),
             agent_id: BotId::new("bot-from-component"),
+            anchor: ThreadRunAnchor::DirectBot,
             message: "Exact follow-up".to_owned(),
             selected_skill_slugs: vec!["review".to_owned()],
+            model_selection: None,
         };
         assert_eq!(pending.agent_id.as_str(), "bot-from-component");
         assert_eq!(pending.message, "Exact follow-up");
@@ -2555,15 +2719,41 @@ mod tests {
     }
 
     #[test]
-    fn parked_queue_drains_on_exactly_one_busy_to_idle_edge() {
-        // 唯一排空点 = busy -> idle 边沿。
-        assert!(should_drain_queue(true, false, true, false));
-        // 从未 busy、仍 busy、频道不可用、队列为空：四条都不排空。
-        assert!(!should_drain_queue(false, false, true, false));
-        assert!(!should_drain_queue(true, true, true, false));
-        assert!(!should_drain_queue(true, false, false, false));
-        assert!(!should_drain_queue(true, false, true, true));
-        // 同一边沿只触发一次：上一拍记下 in_flight=false 后 previous 变 false。
-        assert!(!should_drain_queue(false, false, true, false));
+    fn parked_queue_drains_only_after_an_authoritative_run_terminal_edge() {
+        assert!(queue_drain_pending(true, false, false));
+        assert!(!queue_drain_pending(false, false, false));
+        // A definite Begin failure changes only local submitting state, so it cannot arm a drain.
+        assert!(!should_drain_queue(
+            queue_drain_pending(false, false, false),
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+        ));
+        // A real terminal edge is retained while another local gate is busy, then drains once safe.
+        assert!(!should_drain_queue(
+            true, true, false, true, false, false, false,
+        ));
+        assert!(should_drain_queue(
+            true, false, false, true, false, false, false,
+        ));
+        assert!(!should_drain_queue(
+            true, false, false, true, false, true, false,
+        ));
+        assert!(!should_drain_queue(
+            true, false, false, true, false, false, true,
+        ));
+        // A newer foreground run cannot consume the latched item. Its own terminal edge drains it.
+        let pending = queue_drain_pending(true, false, false);
+        assert!(!should_drain_queue(
+            pending, true, false, true, false, false, false,
+        ));
+        let pending = queue_drain_pending(false, true, pending);
+        let pending = queue_drain_pending(true, false, pending);
+        assert!(should_drain_queue(
+            pending, false, false, true, false, false, false,
+        ));
     }
 }
