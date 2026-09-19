@@ -8,6 +8,7 @@
     ".gitleaks.toml",
     "Cargo.lock",
     "Cargo.toml",
+    "IMPLEMENTATION_LEDGER.md",
     "LICENSE",
     "NOTICE",
     "README.md",
@@ -61,6 +62,7 @@
     ".xlsx"
   ],
   "documents": [
+    "IMPLEMENTATION_LEDGER.md",
     "README.md",
     "README.zh-CN.md",
     "apps/wrok-bot-mobile/README.md",

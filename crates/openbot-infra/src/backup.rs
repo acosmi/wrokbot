@@ -84,6 +84,6 @@ pub use staging::{
     run_staging,
 };
 pub use archive_bundle::{
-    ArchiveBundleBounds, ArchiveBundleContents, ArchiveBundleFault, read_archive_bundle,
-    write_archive_bundle,
+    ArchiveBundleBounds, ArchiveBundleContents, ArchiveBundleFault, UnpackedArchiveBundle,
+    read_archive_bundle, unpack_archive_bundle, write_archive_bundle,
 };

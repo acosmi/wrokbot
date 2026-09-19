@@ -1,0 +1,76 @@
+# Wrok Bot 后端实施台账
+
+更新时间：2026-09-19。实施人：grokbot。GitHub任务实施人：wrok code。
+
+本台账记录实施与验证事实，不定义产品能力或架构。每个任务对应一个独立 PR，按编号顺序集成。PR 链接中的合并状态与提交是远端集成事实；局部测试通过不表示产品阶段或发布验收完成。
+
+## 任务与 PR
+
+001–039 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
+
+| 任务 | 交付范围 | 状态 | PR | 合并提交 |
+|---|---|---|---|---|
+| V6-PR-001 | 启动owner与初始化拒绝边界 | 已合入 | [#8](https://github.com/acosmi/wrokbot/pull/8) | [61e783b9a4](https://github.com/acosmi/wrokbot/commit/61e783b9a400a0a2c947e6767ea6700c8fc43a21) |
+| V6-PR-002 | SCRAM持久意图 | 已合入 | [#9](https://github.com/acosmi/wrokbot/pull/9) | [3eacd5600e](https://github.com/acosmi/wrokbot/commit/3eacd5600e018ed49168194a1fd49e4acba64df9) |
+| V6-PR-003 | 验收记录集合与候选检查 | 已合入 | [#10](https://github.com/acosmi/wrokbot/pull/10) | [cfb044ef25](https://github.com/acosmi/wrokbot/commit/cfb044ef259b9f09ec8a7fb084206a19b72daa1b) |
+| V6-PR-004 | 主密钥日志与PG canary | 已合入 | [#11](https://github.com/acosmi/wrokbot/pull/11) | [8cfe1bc0fc](https://github.com/acosmi/wrokbot/commit/8cfe1bc0fc14a816b89ebb6b6c855a5960ab6692) |
+| V6-PR-005 | 启动诊断错误投影 | 已合入 | [#12](https://github.com/acosmi/wrokbot/pull/12) | [ffc7e08a00](https://github.com/acosmi/wrokbot/commit/ffc7e08a00ece74e8505e85d5c222dc72ded9627) |
+| V6-PR-006 | 工具装配守卫 | 已合入 | [#13](https://github.com/acosmi/wrokbot/pull/13) | [3fdcef6de0](https://github.com/acosmi/wrokbot/commit/3fdcef6de02091d87ecd3b489e7a53220923ed7e) |
+| V6-PR-007 | 数据面错误传递 | 已合入 | [#14](https://github.com/acosmi/wrokbot/pull/14) | [a537b4da32](https://github.com/acosmi/wrokbot/commit/a537b4da32bfbc53de49f8a035ae2c59a01cc4e5) |
+| V6-PR-008 | macOS进程身份观察 | 已合入 | [#15](https://github.com/acosmi/wrokbot/pull/15) | [78786d8c30](https://github.com/acosmi/wrokbot/commit/78786d8c308888bfed3d81fa0e5d5bd1eede413e) |
+| V6-PR-009 | PG启动journal | 已合入 | [#16](https://github.com/acosmi/wrokbot/pull/16) | [963e44010f](https://github.com/acosmi/wrokbot/commit/963e44010f0a0076d0f2ba9670c00bdd8f877777) |
+| V6-PR-010 | 辅助进程journal | 已合入 | [#17](https://github.com/acosmi/wrokbot/pull/17) | [5964c9b64b](https://github.com/acosmi/wrokbot/commit/5964c9b64be098a089e637916c55c90fac339342) |
+| V6-PR-011 | 数据目录打开者观察 | 已合入 | [#18](https://github.com/acosmi/wrokbot/pull/18) | [e2c1a04f6c](https://github.com/acosmi/wrokbot/commit/e2c1a04f6cb6458a8cbd306226924031df7cb7fa) |
+| V6-PR-012 | 静止实例与启动锁回收 | 已合入 | [#19](https://github.com/acosmi/wrokbot/pull/19) | [f21d00d103](https://github.com/acosmi/wrokbot/commit/f21d00d1033d847911559d9d280efbd6a8766705) |
+| V6-PR-013 | 中间态journal恢复 | 已合入 | [#20](https://github.com/acosmi/wrokbot/pull/20) | [f3355c8981](https://github.com/acosmi/wrokbot/commit/f3355c89819bbab80000ebf13558bab3d0cdb81c) |
+| V6-PR-014 | 恢复epoch | 已合入 | [#21](https://github.com/acosmi/wrokbot/pull/21) | [72910c3900](https://github.com/acosmi/wrokbot/commit/72910c3900c8ec0c4f1fce5416e8c0a369fb271e) |
+| V6-PR-015 | 辅助journal终态收口 | 已合入 | [#22](https://github.com/acosmi/wrokbot/pull/22) | [2a82d580da](https://github.com/acosmi/wrokbot/commit/2a82d580da5d53590ae74ed1d785811e72929b5d) |
+| V6-PR-016 | 未消费epoch秘密写入门 | 已合入 | [#23](https://github.com/acosmi/wrokbot/pull/23) | [8d91bdbba2](https://github.com/acosmi/wrokbot/commit/8d91bdbba2480fc5c2bf96e0b2237a2fdf9e42ed) |
+| V6-PR-017 | Existing消费恢复epoch | 已合入 | [#24](https://github.com/acosmi/wrokbot/pull/24) | [378cd756bd](https://github.com/acosmi/wrokbot/commit/378cd756bd1d928ae306f9cb795c657f8b67cfa6) |
+| V6-PR-018 | Fresh消费恢复epoch | 已合入 | [#25](https://github.com/acosmi/wrokbot/pull/25) | [207e14105e](https://github.com/acosmi/wrokbot/commit/207e14105e3fe20625a6a8b10b2f250696ba6aef) |
+| V6-PR-019 | 授权失效required记录 | 已合入 | [#26](https://github.com/acosmi/wrokbot/pull/26) | [378f301b36](https://github.com/acosmi/wrokbot/commit/378f301b367a82bdaa7132a9652ba44a19725a69) |
+| V6-PR-020 | 推进授权代次 | 已合入 | [#27](https://github.com/acosmi/wrokbot/pull/27) | [74fc479529](https://github.com/acosmi/wrokbot/commit/74fc4795292bc807f05443b4f2cd791ac1a5d1cf) |
+| V6-PR-021 | 终止旧本机会话 | 已合入 | [#28](https://github.com/acosmi/wrokbot/pull/28) | [c89e9b7091](https://github.com/acosmi/wrokbot/commit/c89e9b7091cdf83daf86b208b440035cf6dfb9dc) |
+| V6-PR-022 | 陈旧postmaster记录验证 | 已合入 | [#29](https://github.com/acosmi/wrokbot/pull/29) | [676b7ca21b](https://github.com/acosmi/wrokbot/commit/676b7ca21b52a16109ca9b525c2c0b2dbfb17c92) |
+| V6-PR-023 | 取消待定工具审批 | 已合入 | [#30](https://github.com/acosmi/wrokbot/pull/30) | [0dc9b1a308](https://github.com/acosmi/wrokbot/commit/0dc9b1a308abc2f541beafce6b97b667e964d212) |
+| V6-PR-024 | 授权失效幂等见证 | 已合入 | [#31](https://github.com/acosmi/wrokbot/pull/31) | [03d8bf5f13](https://github.com/acosmi/wrokbot/commit/03d8bf5f13f2278e0d732dc7aecbb62f1b3e04de) |
+| V6-PR-025 | 审批取消同事务审计 | 已合入 | [#32](https://github.com/acosmi/wrokbot/pull/32) | [af74f2eced](https://github.com/acosmi/wrokbot/commit/af74f2eced7fb05c4b8e347d54a8767dba5f49a6) |
+| V6-PR-026 | 真实PG授权推进矩阵 | 已合入 | [#33](https://github.com/acosmi/wrokbot/pull/33) | [9ef02bb057](https://github.com/acosmi/wrokbot/commit/9ef02bb057ba95fb27f94fa6d3372efda804cfb8) |
+| V6-PR-027 | 过期成员线程租约 | 已合入 | [#34](https://github.com/acosmi/wrokbot/pull/34) | [c678c3486a](https://github.com/acosmi/wrokbot/commit/c678c3486a75290e818571feea5dbaa69190a7b1) |
+| V6-PR-028 | 中止已铸造执行能力 | 已合入 | [#35](https://github.com/acosmi/wrokbot/pull/35) | [02da9c61c2](https://github.com/acosmi/wrokbot/commit/02da9c61c22ea9e23a88494b9754bc500afb6700) |
+| V6-PR-029 | 取消待定人工决策 | 已合入 | [#36](https://github.com/acosmi/wrokbot/pull/36) | [757f6be9ad](https://github.com/acosmi/wrokbot/commit/757f6be9adf4daf55bf619b489cf4bcabb187e71) |
+| V6-PR-030 | 过期远程人工中断 | 已合入 | [#37](https://github.com/acosmi/wrokbot/pull/37) | [08e230ebe2](https://github.com/acosmi/wrokbot/commit/08e230ebe20b00f4e28aa11006018427d9864688) |
+| V6-PR-031 | 异常退出后Existing恢复 | 已合入 | [#38](https://github.com/acosmi/wrokbot/pull/38) | [0e5655f440](https://github.com/acosmi/wrokbot/commit/0e5655f4400825ad1e3229549bba24113b2d2e85) |
+| V6-PR-032 | 两个恢复者唯一writer | 已合入 | [#39](https://github.com/acosmi/wrokbot/pull/39) | [835201a8cc](https://github.com/acosmi/wrokbot/commit/835201a8cc9b29ef3d2996b53b753112bad1073e) |
+| V6-PR-033 | 父进程退出但子进程存活时拒绝 | 已合入 | [#40](https://github.com/acosmi/wrokbot/pull/40) | [ab6e7457fd](https://github.com/acosmi/wrokbot/commit/ab6e7457fd5bbf5e4905c27e2aaed58c4109ce0b) |
+| V6-PR-034 | 截断启动锁拒绝 | 已合入 | [#41](https://github.com/acosmi/wrokbot/pull/41) | [1a6204268b](https://github.com/acosmi/wrokbot/commit/1a6204268bb3d9515744153e2f2c642aca75134e) |
+| V6-PR-035 | PID复用身份不等价 | 已合入 | [#42](https://github.com/acosmi/wrokbot/pull/42) | [d3c8bb13b7](https://github.com/acosmi/wrokbot/commit/d3c8bb13b74a3bfd644ff810ef4ee0377e2fb584) |
+| V6-PR-036 | 恢复中再次退出后持久重验 | 已合入 | [#43](https://github.com/acosmi/wrokbot/pull/43) | [116c90bd74](https://github.com/acosmi/wrokbot/commit/116c90bd74e06757d342ea2b87230f56a6577be0) |
+| V6-PR-037 | 恢复元数据AEAD包装 | 已合入 | [#44](https://github.com/acosmi/wrokbot/pull/44) | [2185a7d142](https://github.com/acosmi/wrokbot/commit/2185a7d1424b650d039f2589598783b1b0829d1c) |
+| V6-PR-038 | 分块序号和清单AAD绑定 | 已合入 | [#45](https://github.com/acosmi/wrokbot/pull/45) | [139b7592eb](https://github.com/acosmi/wrokbot/commit/139b7592eb2f61cbc827578d5fb0b741b3b734d9) |
+| V6-PR-039 | 归档容器有界读写 | 已合入 | [#46](https://github.com/acosmi/wrokbot/pull/46) | [2e52377e25](https://github.com/acosmi/wrokbot/commit/2e52377e256893c0ffec9c3d9f2e841d212152c0) |
+| V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 主控验收通过 | [#47](https://github.com/acosmi/wrokbot/pull/47) | 合并状态及提交见 PR |
+
+## 本批验证
+
+040 主控已亲读实现与测试，并在同一候选运行：
+
+- `cargo test -p openbot-infra --offline --locked --lib -- backup::archive_bundle`：22 通过，包括 13 项解包测试和 9 项容器回归。
+- `cargo test -p openbot-domain --offline --locked --lib -- backup::recovery_`：9 通过。
+- `python3 -m unittest tools.test_repository_guard`：8 通过。
+- `cargo check -p openbot-infra --offline --locked --no-default-features --features desktop-local-vault --lib`：通过。
+
+认证后的总长度不符、有效前缀后的外包末块、损坏和乱序均无成功结果。未执行 PostgreSQL 恢复或实际 OS 验收。
+
+## 仍未完成
+
+- 下一项 041：归档写出在分配前核预算，配置只能收紧既有上限；已发现缺口，尚未修复。
+- 恢复包装与归档极值容量兼容仍待定版，不能将理论明文上限当作容器可承载保证。
+- PostgreSQL/WAL 恢复、隔离暂存的产品装配、同机与新安装恢复演练、签名升级及 A6。
+- 旧 0031 数据的合法恢复输入；不能推测旧密文或凭据。
+- 稳定签名、真实 OS 权限与旧 Keychain 访问验证。
+- SDK 的 PG/Vault 当前授权、三种模型完整旅程；账户桥固定来源待同步，真实厂商旅程需相应合法账户。
+- Browser 与原生电脑的完整产品链、A0–A7 同一候选验收和 24 小时 soak。
+- M1 事件与同节点协作、M2 节点与文件能力，以及完整平台、安全和发布验收。
+
+040 只验证有界归档的认证消费，不授予恢复切换权限，不关闭以上工作。
