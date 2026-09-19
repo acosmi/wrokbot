@@ -53,7 +53,7 @@
 | V6-PR-041 | 归档写出分配前预算与配置硬上限 | 已合入 | [#48](https://github.com/acosmi/wrokbot/pull/48) | [eb75f8b47a](https://github.com/acosmi/wrokbot/commit/eb75f8b47a33474c61bb1510440c924ae0d00d8c) |
 | V6-PR-042 | 最大合法恢复信封自读回 | 已合入 | [#49](https://github.com/acosmi/wrokbot/pull/49) | [45d69618f3](https://github.com/acosmi/wrokbot/commit/45d69618f39e5ddd049d60b60eb0fae62146896a) |
 | V6-PR-043 | 已知数据库版本门与原 canary 重核 | 已合入 | [#50](https://github.com/acosmi/wrokbot/pull/50) | [78354b95df](https://github.com/acosmi/wrokbot/commit/78354b95df78adb897abf72c9528a8d9f92113e2) |
-| V6-PR-044 | SDK 5.0 正式制品、许可与宿主传输接纳 | 主控验收通过 | 待创建独立 PR | — |
+| V6-PR-044 | SDK 5.0 正式制品、许可与宿主传输接纳 | 主控验收通过 | [#51](https://github.com/acosmi/wrokbot/pull/51) | 合并状态及提交见 PR |
 
 ## macOS 首发进度
 
