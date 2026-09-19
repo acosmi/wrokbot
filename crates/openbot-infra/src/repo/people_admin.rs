@@ -396,6 +396,33 @@ pub(crate) async fn advance_generation(
             "auth_generation_snapshot_mismatch",
         ));
     }
+    transaction
+        .execute(
+            "UPDATE public.sdk_gateway_operations \
+             SET state='auth_required',updated_at=clock_timestamp(),completed_at=coalesce(completed_at,clock_timestamp()) \
+             WHERE owner_user_id=$1 AND state IN ('pending','staged')",
+            &[&subject.as_str()],
+        )
+        .await
+        .map_err(|error| InfraError::query("失效 subject SDK gateway pending operation", error))?;
+    transaction
+        .execute(
+            "UPDATE public.sdk_gateway_secrets \
+             SET retired_at=coalesce(retired_at,clock_timestamp()) \
+             WHERE owner_user_id=$1",
+            &[&subject.as_str()],
+        )
+        .await
+        .map_err(|error| InfraError::query("退休 subject SDK gateway credential", error))?;
+    transaction
+        .execute(
+            "UPDATE public.sdk_gateway_connections \
+             SET credential_generation=credential_generation+1,state='auth_required',current_secret_id=NULL,pending_operation_id=NULL,updated_at=clock_timestamp() \
+             WHERE owner_user_id=$1",
+            &[&subject.as_str()],
+        )
+        .await
+        .map_err(|error| InfraError::query("失效 subject SDK gateway authority", error))?;
     Ok(value)
 }
 

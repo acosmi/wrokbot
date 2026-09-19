@@ -51,7 +51,12 @@ async fn post_0031_preserves_all_old_facts_and_fresh_matches_upgrade() {
     harness::with_temp_database(&admin, "model31fresh", |config| async move {
         let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
         let mut c = pool.get().await.map_err(|e| e.to_string())?;
-        fresh::apply(&mut c).await.map_err(|e| e.to_string())?;
+        // Historical 0031 truth must not float with NATIVE_LATEST_VERSION. Fresh-latest parity is
+        // covered by native_0033; this database is intentionally pinned to the old 0031 boundary.
+        baseline::apply(&c).await.map_err(|e| e.to_string())?;
+        native::apply_through(&mut c, native::NATIVE_0031_VERSION)
+            .await
+            .map_err(|e| e.to_string())?;
         let expected: SchemaFacts =
             serde_json::from_str(&std::fs::read_to_string(fixture()).unwrap()).unwrap();
         assert_eq!(schema_facts::fetch(&c).await.unwrap(), expected);

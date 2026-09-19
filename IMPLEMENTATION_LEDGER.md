@@ -6,7 +6,7 @@
 
 ## 任务与 PR
 
-001–044 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
+001–045 的合并状态与提交已从 GitHub 重新核对；这些任务的历史运行结论本轮未全部重测。
 
 | 任务 | 交付范围 | 状态 | PR | 合并提交 |
 |---|---|---|---|---|
@@ -54,8 +54,10 @@
 | V6-PR-042 | 最大合法恢复信封自读回 | 已合入 | [#49](https://github.com/acosmi/wrokbot/pull/49) | [45d69618f3](https://github.com/acosmi/wrokbot/commit/45d69618f39e5ddd049d60b60eb0fae62146896a) |
 | V6-PR-043 | 已知数据库版本门与原 canary 重核 | 已合入 | [#50](https://github.com/acosmi/wrokbot/pull/50) | [78354b95df](https://github.com/acosmi/wrokbot/commit/78354b95df78adb897abf72c9528a8d9f92113e2) |
 | V6-PR-044 | SDK 5.0 正式制品、许可与宿主传输接纳 | 已合入 | [#51](https://github.com/acosmi/wrokbot/pull/51) | [0af43c89d1](https://github.com/acosmi/wrokbot/commit/0af43c89d1c0fb39cb07be35a8bbc660b97311b9) |
-| V6-PR-045 | 固定网关账户身份读取与有界宿主传输 | 主控验收通过 | [#52](https://github.com/acosmi/wrokbot/pull/52) | 合并状态及提交见 PR |
-| V6-PR-046 | 自定义模型选择的四入口与队列消费 | 未验候选保留，待本仓库前端任务接手 | 待创建 | 尚未合入 |
+| V6-PR-045 | 固定网关账户身份读取与有界宿主传输 | 已合入 | [#52](https://github.com/acosmi/wrokbot/pull/52) | [38c7259a18](https://github.com/acosmi/wrokbot/commit/38c7259a187e719831b007202c5c4a3f5061f702) |
+| V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 主控发现队列草稿边界，修复及浏览器验收中 | 待创建 | 尚未合入 |
+| V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 主控本机验收通过，按顺序等待 046 | 待创建 | 尚未合入 |
+| V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 规划中，待前置任务合入及精确合同 | 待创建 | 尚未实施 |
 
 ## macOS 首发进度
 
@@ -89,6 +91,8 @@
 044 主控核定 exact SDK5 制品/源码/LICENSE，Cargo.lock仅SDK版本/checksum变化；三个依赖许可原文及SPDX关系核同，原59条来源保留、总62条。18项真实TLS测试、六目标依赖图、四组Server/SSO/Desktop feature并集、Launcher all-target check均通过，SDK自带HTTP/TLS/WS和UI依赖边均未启用。初始测试模块路径和HTTP EOF预期错误已修正留证；SDK `[DONE]`后的body Drop保留Cancelled事实，不伪报HTTP EOF或用户取消。
 
 045 主控亲读九个源码/测试/守卫文件；真实 TLS 测试 24 项通过（原 18 项与新 6 项），依赖边界检查及 Desktop Launcher all-target offline/locked check 通过。验证显式开放的账户端点、固定身份协议、无效请求在发送前拒绝、身份一致性、脱敏、取消、零重定向及 64 KiB 路由预算。结果仅为协议读取能力，未证明真实账户登录、凭据持久化或完整三模型旅程。
+
+047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。真实 App 登录、v2 模型运行和厂商旅程仍待。
 
 ## 仍未完成
 
