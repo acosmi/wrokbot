@@ -50,7 +50,7 @@
 | V6-PR-038 | 分块序号和清单AAD绑定 | 已合入 | [#45](https://github.com/acosmi/wrokbot/pull/45) | [139b7592eb](https://github.com/acosmi/wrokbot/commit/139b7592eb2f61cbc827578d5fb0b741b3b734d9) |
 | V6-PR-039 | 归档容器有界读写 | 已合入 | [#46](https://github.com/acosmi/wrokbot/pull/46) | [2e52377e25](https://github.com/acosmi/wrokbot/commit/2e52377e256893c0ffec9c3d9f2e841d212152c0) |
 | V6-PR-040 | 完整认证归档解包；公开执行台账精确白名单 | 已合入 | [#47](https://github.com/acosmi/wrokbot/pull/47) | [31e5c364f2](https://github.com/acosmi/wrokbot/commit/31e5c364f2c56976304b63f522f8ab92574730f6) |
-| V6-PR-041 | 归档写出分配前预算与配置硬上限 | 主控验收通过 | 待创建独立 PR | — |
+| V6-PR-041 | 归档写出分配前预算与配置硬上限 | 主控验收通过 | [#48](https://github.com/acosmi/wrokbot/pull/48) | 合并状态及提交见 PR |
 
 ## 本批验证
 
