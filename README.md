@@ -62,4 +62,6 @@ The guard checks staged content before commits and the complete history being pu
 
 ## License and acknowledgements
 
-See `LICENSE` for first-party terms and `NOTICE` for third-party acknowledgements. Fonts, icons, and other assets retain their respective licenses.
+First-party code is free for personal use. Enterprise use requires authorization; see [LICENSE](LICENSE) for the terms.
+
+Product and technical planning draws on grok bot and open bot, together with the open-source project crabcode-tui. See [NOTICE](NOTICE) for third-party acknowledgements. Third-party code, fonts, icons, and other assets retain their respective licenses.

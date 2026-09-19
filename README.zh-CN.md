@@ -62,4 +62,6 @@ python3 tools/repository_guard.py install
 
 ## 许可与声明
 
-第一方代码条款见 `LICENSE`，第三方声明见 `NOTICE`。字体、图标等资源保留各自许可证。
+本项目第一方代码个人免费使用，企业使用需取得授权，具体条款见 [LICENSE](LICENSE)。
+
+项目参考 grok bot 与 open bot，并结合开源项目 crabcode-tui 进行产品与技术规划。第三方声明见 [NOTICE](NOTICE)，相关代码、字体、图标等资源保留各自许可证。
