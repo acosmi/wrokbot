@@ -58,7 +58,7 @@
 | V6-PR-044 | SDK 5.0 正式制品、许可与宿主传输接纳 | 已合入 | [#51](https://github.com/acosmi/wrokbot/pull/51) | [0af43c89d1](https://github.com/acosmi/wrokbot/commit/0af43c89d1c0fb39cb07be35a8bbc660b97311b9) |
 | V6-PR-045 | 固定网关账户身份读取与有界宿主传输 | 已合入 | [#52](https://github.com/acosmi/wrokbot/pull/52) | [38c7259a18](https://github.com/acosmi/wrokbot/commit/38c7259a187e719831b007202c5c4a3f5061f702) |
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
-| V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 主控独立验收通过，准备独立 PR | 待创建 | 尚未合入 |
+| V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 仅规划，本批未启动实施 | 待创建 | 尚未实施 |
 
 ## macOS 首发进度
@@ -68,7 +68,7 @@
 | 部分 | 当前事实 |
 |---|---|
 | 启动与数据保护 | 多个真实 PG 子场景已验；完整签名 App 旅程仍待验 |
-| 三模型 | custom 后端与四入口UI已局部验收；SDK5及账户身份已合，PG/Vault候选本机通过待按序集成；登录及模型运行组合仍待，账户桥Rust适配待做 |
+| 三模型 | custom 后端与四入口UI已局部验收；SDK5及账户身份已合，PG/Vault已完成本机及组合验收，集成记录见047；登录及模型运行组合仍待，账户桥Rust适配待做 |
 | Browser / 原生 | 有协调核心；实际执行、画面与GUI完整装配仍有缺口 |
 | 备份恢复 | 加密/归档基础已验；PG恢复、切换及完整演练未完成 |
 | 签名与交付 | 本机存在有效Developer ID身份；实际候选签名、公证及发行图验收待完成 |
