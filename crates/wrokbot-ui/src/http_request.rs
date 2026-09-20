@@ -20,7 +20,9 @@ pub(crate) struct Request;
 
 #[cfg(target_arch = "wasm32")]
 impl Request {
-    fn new(path: &str, method: gloo_net::http::Method) -> gloo_net::http::RequestBuilder {
+    // Named `builder`, not `new`: this returns a `gloo_net::http::RequestBuilder`, never `Self`
+    // (`Request` is a zero-sized method namespace, not a value type).
+    fn builder(path: &str, method: gloo_net::http::Method) -> gloo_net::http::RequestBuilder {
         let (base, pairs) = parts(path);
         gloo_net::http::RequestBuilder::new(base)
             .method(method)
@@ -31,19 +33,19 @@ impl Request {
             )
     }
     pub(crate) fn get(path: &str) -> gloo_net::http::RequestBuilder {
-        Self::new(path, gloo_net::http::Method::GET)
+        Self::builder(path, gloo_net::http::Method::GET)
     }
     pub(crate) fn post(path: &str) -> gloo_net::http::RequestBuilder {
-        Self::new(path, gloo_net::http::Method::POST)
+        Self::builder(path, gloo_net::http::Method::POST)
     }
     pub(crate) fn put(path: &str) -> gloo_net::http::RequestBuilder {
-        Self::new(path, gloo_net::http::Method::PUT)
+        Self::builder(path, gloo_net::http::Method::PUT)
     }
     pub(crate) fn patch(path: &str) -> gloo_net::http::RequestBuilder {
-        Self::new(path, gloo_net::http::Method::PATCH)
+        Self::builder(path, gloo_net::http::Method::PATCH)
     }
     pub(crate) fn delete(path: &str) -> gloo_net::http::RequestBuilder {
-        Self::new(path, gloo_net::http::Method::DELETE)
+        Self::builder(path, gloo_net::http::Method::DELETE)
     }
 }
 
