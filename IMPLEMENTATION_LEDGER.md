@@ -60,6 +60,7 @@
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 仅规划，本批未启动实施 | 待创建 | 尚未实施 |
+| V6-PR-053 | 修复 transport_parity 穷举 match 缺 5 个 ModelConnection 变体（E0004，阻塞全工作区编译，fixes #63） | Copilot完成，待主控验收 | [#68](https://github.com/acosmi/wrokbot/pull/68) | 以 PR 合并记录为准 |
 
 ## macOS 首发进度
 
@@ -97,6 +98,8 @@
 046 主控亲读目录迁移及全部内容变化，最终候选 216 项 UI 单测、9 项发布守卫、严格 Clippy、生产 WASM/release 构建、中英文 1068 键、样式与资源预算检查通过。模型四入口、FIFO、有序技能、键盘、明确冲突和 Unknown 共 13 项浏览器请求场景在队列修复候选通过；其后错误提示修复重验 5 项受影响场景，最后收件人恢复修复在最终构建重验。不同构建的证据分别保留，未冒充全部场景在最终构建重跑。创建响应丢失时不再次创建，运行结果不明时仅显式原请求重试；目录版本冲突要求重新选择。首次读回操作漏选模型的失败记录保留并按原预期重做。浏览器使用合成 HTTP/SSE 后端；实际厂商、PG组合、Wry、完整可访问性与首发 A 门仍待。CSS 为 130505/131072 字节，已超过预警线，未放宽预算。UI 依赖守卫使用 locked/offline 元数据选中的实际来源通过；默认全局缓存因重复 registry 源首次拒绝，失败保留，未修改全局缓存或依赖。
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
+
+053 Copilot（临时实施执行方）完成实现与本机验证，待主控独立验收：修复 `openbot-testkit/tests/transport_parity.rs` 里 `http_route_of` 穷举 match 缺失的 5 个 ModelConnection 变体（`AppCommand::E0004`，issue #63），阻塞的是 `cargo build/test/clippy --workspace --all-targets` 本身，不是 clippy 告警。确认这 5 个变体已有真实 HTTP 路由（`openbot-server/src/http/model_connections.rs`）及专项覆盖（`openbot-server/tests/model_connections_http_postgres.rs` 的真实 PG+HTTP CRUD 旅程），故沿用本文件对 People/audit/policy/thread/MCP/approval/UI-preference 等命令的既有约定，将其映射为 `None` 并在注释里点名专项覆盖来源，未新写 URI 拼装逻辑。独立 worktree（`origin/main` @ `66274f8`）验证：`cargo check --workspace --all-targets --all-features --offline --locked` 由硬编译失败变为完整通过（只剩其他 issue 已跟踪的既有 warning）；`cargo clippy -p openbot-testkit --all-targets --no-deps -- -D warnings` 干净；`cargo fmt -p openbot-testkit -- --check` 干净；`cargo test -p openbot-testkit --all-targets` 33 通过、0 失败、10 项既有 ignored（需要真实基础设施，与本次改动无关）。只改了这一个文件的 5 行 match 分支与注释扩展，未触碰 `command.rs`/`model_connections.rs`/其他文件，未新增测试。
 
 ## 仍未完成
 
