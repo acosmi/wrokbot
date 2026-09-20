@@ -138,8 +138,7 @@ async fn enrollment_binds_current_actor_vault_identity_and_ready_catalogue() {
                         Arc::new(Outcomes::default()),
                     )
                     .await
-                    .err()
-                    .expect("negative currentness case must fail"),
+                    .expect_err("negative currentness case must fail"),
                 expected
             );
         }
@@ -164,8 +163,7 @@ async fn enrollment_binds_current_actor_vault_identity_and_ready_catalogue() {
                     Arc::new(Outcomes::default()),
                 )
                 .await
-                .err()
-                .expect("cross deployment must fail"),
+                .expect_err("cross deployment must fail"),
             GatewayAuthorityError::NotVisible
         );
         let outcomes = Arc::new(Outcomes::default());
@@ -220,8 +218,7 @@ async fn enrollment_rechecks_scope_role_and_auth_generation_before_any_socket() 
             fixture
                 .accounts
                 .prepare_enrollment(wrong_scope, "Wrong scope", CLIENT_ID)
-                .err()
-                .expect("scope mismatch must fail"),
+                .expect_err("scope mismatch must fail"),
             GatewayAuthorityError::NotVisible
         );
         let stale = fixture
@@ -238,8 +235,7 @@ async fn enrollment_rechecks_scope_role_and_auth_generation_before_any_socket() 
                     Arc::new(Outcomes::default()),
                 )
                 .await
-                .err()
-                .expect("stale generation must fail before metadata"),
+                .expect_err("stale generation must fail before metadata"),
             GatewayAuthorityError::AccountProtocol
         );
         let no_role = fixture
@@ -256,8 +252,7 @@ async fn enrollment_rechecks_scope_role_and_auth_generation_before_any_socket() 
                     Arc::new(Outcomes::default()),
                 )
                 .await
-                .err()
-                .expect("database role mismatch must fail before metadata"),
+                .expect_err("database role mismatch must fail before metadata"),
             GatewayAuthorityError::AccountProtocol
         );
         assert_eq!(tls.count(), 0);
@@ -318,8 +313,7 @@ async fn malformed_token_sets_are_rejected_before_fence_socket_or_pg_rows() {
                         outcomes.clone(),
                     )
                     .await
-                    .err()
-                    .expect("malformed TokenSet must fail"),
+                    .expect_err("malformed TokenSet must fail"),
                 GatewayAuthorityError::InvalidInput
             );
         }

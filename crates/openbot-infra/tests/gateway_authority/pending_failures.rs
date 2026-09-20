@@ -40,6 +40,10 @@ async fn assert_pending_without_second_post(
         )
         .await
         .unwrap();
+    // `acosmi::Client` intentionally does not implement `Debug` (it can hold live tokens), so
+    // `Result::expect_err` cannot be used here: it requires `T: Debug` for its panic message
+    // even on the `Err` path we're asserting.
+    #[allow(clippy::err_expect)]
     let error = Client::create_with_authority(
         sdk_config(&tls.endpoint()),
         operation.transport(),
@@ -312,8 +316,7 @@ async fn audit_failure_rolls_back_enrollment_after_real_identity_reads() {
                 Arc::new(Outcomes::default()),
             )
             .await
-            .err()
-            .expect("audit failure cannot produce enrollment success");
+            .expect_err("audit failure cannot produce enrollment success");
         assert!(matches!(
             error,
             GatewayAuthorityError::Unavailable

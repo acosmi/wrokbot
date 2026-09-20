@@ -26,6 +26,9 @@ impl ResponsePlan {
 struct Capture {
     method: String,
     path: String,
+    // Read by gateway_sdk_transport's own tests (header-forwarding assertions); this file is
+    // shared via `include!` with gateway_authority, whose tests never inspect captured headers.
+    #[allow(dead_code)]
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
 }
@@ -55,6 +58,9 @@ struct TlsFixture {
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
     closed: Arc<AtomicUsize>,
+    // Read by gateway_sdk_transport's own TLS-failure-retry tests; this file is shared via
+    // `include!` with gateway_authority, whose tests never assert on TLS failure counts.
+    #[allow(dead_code)]
     tls_failures: Arc<AtomicUsize>,
 }
 impl TlsFixture {
@@ -259,6 +265,9 @@ async fn read_http<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Capture> {
         body,
     })
 }
+// Used by gateway_sdk_transport's own OpenAI-shaped chat fixture; this file is shared via
+// `include!` with gateway_authority, which never exercises the OpenAI chat wire shape.
+#[allow(dead_code)]
 fn chat_text() -> String {
     format!(
         "data: {}\n\ndata: [DONE]\n\n",

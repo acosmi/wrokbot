@@ -60,6 +60,7 @@
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 仅规划，本批未启动实施 | 待创建 | 尚未实施 |
+| V6-PR-051 | 修复 clippy 第二波遗留（err_expect / dead_code） | 已实施，等待验收 | [#64](https://github.com/acosmi/wrokbot/pull/64) | 待合并 |
 
 ## macOS 首发进度
 
@@ -97,6 +98,8 @@
 046 主控亲读目录迁移及全部内容变化，最终候选 216 项 UI 单测、9 项发布守卫、严格 Clippy、生产 WASM/release 构建、中英文 1068 键、样式与资源预算检查通过。模型四入口、FIFO、有序技能、键盘、明确冲突和 Unknown 共 13 项浏览器请求场景在队列修复候选通过；其后错误提示修复重验 5 项受影响场景，最后收件人恢复修复在最终构建重验。不同构建的证据分别保留，未冒充全部场景在最终构建重跑。创建响应丢失时不再次创建，运行结果不明时仅显式原请求重试；目录版本冲突要求重新选择。首次读回操作漏选模型的失败记录保留并按原预期重做。浏览器使用合成 HTTP/SSE 后端；实际厂商、PG组合、Wry、完整可访问性与首发 A 门仍待。CSS 为 130505/131072 字节，已超过预警线，未放宽预算。UI 依赖守卫使用 locked/offline 元数据选中的实际来源通过；默认全局缓存因重复 registry 源首次拒绝，失败保留，未修改全局缓存或依赖。
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
+
+051 主控亲读 gateway_authority 三个测试文件与 gateway_sdk_transport/tls.rs，修复 issue #61 记录的第二波既有 clippy 问题（此前被 #58 的库编译失败长期遮蔽）：10 处（原报告 9 处，复核时另发现 1 处未覆盖的同构代码）`.err().expect(msg)`，其中 9 处机械改为等价的 `.expect_err(msg)`；第 10 处（`pending_failures.rs` 的 `assert_pending_without_second_post`）因 `Ok` 类型 `acosmi::Client` 有意不实现 `Debug`（避免意外泄漏存活 token）导致该改法无法编译，保留原写法并加定点 `#[allow(clippy::err_expect)]` 及理由注释。`gateway_sdk_transport/tls.rs` 的 3 处 `dead_code`（`Capture::headers`、`TlsFixture::tls_failures`、`chat_text`）根因是该文件被 `gateway_authority.rs` 与 `gateway_sdk_transport.rs` 两个测试二进制通过 `include!` 共享，字段/函数在后者的编译单元里有真实读取、在前者里没有；加 `#[allow(dead_code)]` 及理由注释，未做删除（删除会破坏真正用到它们的二进制）。验证：`cargo clippy -p openbot-infra --all-targets -- -D warnings` 干净；`gateway_authority`（12 项）与 `gateway_sdk_transport`（24 项）在真实 PostgreSQL 17 下 `--include-ignored` 全通过；lib 370 项不受影响。核实全工作区 `cargo clippy --workspace --all-targets` 目前仍会在 `openbot-testkit` 的 `transport_parity.rs` 处以硬编译错误（E0004，非 clippy 告警）终止，与本次改动无关，系初始快照自带的既有缺口（已用 git stash 在无关干净副本上单独复现确认），已单独归档为 issue #63，未在本 PR 修复范围内。
 
 ## 仍未完成
 

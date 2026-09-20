@@ -353,8 +353,7 @@ async fn people_generation_advance_makes_old_and_new_contexts_auth_required() {
                     Arc::new(Outcomes::default()),
                 )
                 .await
-                .err()
-                .expect("old auth generation must fail"),
+                .expect_err("old auth generation must fail"),
             GatewayAuthorityError::NotVisible
         );
         assert_eq!(
@@ -369,8 +368,7 @@ async fn people_generation_advance_makes_old_and_new_contexts_auth_required() {
                     Arc::new(Outcomes::default()),
                 )
                 .await
-                .err()
-                .expect("new generation still requires explicit reconfirmation"),
+                .expect_err("new generation still requires explicit reconfirmation"),
             GatewayAuthorityError::Conflict
         );
         assert_eq!(tls.count(), 2);
