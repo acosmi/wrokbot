@@ -60,6 +60,7 @@
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 仅规划，本批未启动实施 | 待创建 | 尚未实施 |
+| V6-PR-049 | 修复既有Clippy红：archive_bundle::hex_decode的manual_is_multiple_of | 已实施，待审 | [#60](https://github.com/acosmi/wrokbot/pull/60) | [a86d4cbdf8](https://github.com/acosmi/wrokbot/commit/a86d4cbdf89c63f31e4fde5b695ab39fe8a2d3c0) |
 
 ## macOS 首发进度
 
@@ -98,6 +99,8 @@
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
 
+049 修复 archive_bundle.rs::hex_decode 中 `value.len() % 2 != 0` 触发的 clippy::manual_is_multiple_of（issue #58）。该 lint 在当前 rustc/clippy 1.98.0 下会使严格门禁 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 对任何 PR 必现失败，属既有代码、与具体改动无关。改为 `!value.len().is_multiple_of(2)`，语义等价，无行为变化。`cargo clippy -p openbot-infra --lib --offline --locked -- -D warnings` 转绿；`cargo test -p openbot-infra --lib --offline --locked` 370 项通过。修复后补跑全量 `--workspace --all-targets`，发现被该 lib 编译失败长期掩盖的第二波既有红（gateway_authority 测试 9 处 err_expect、gateway_sdk_transport/tls.rs 3 处 dead_code），已登记为 issue #61，作为独立后续任务处理，未在本次改动。
+
 ## 仍未完成
 
 - 归档容器容量仍是单独预算，不能将 4 MiB 理论明文上限当作外层 8 MiB 容器的可承载保证。
@@ -107,5 +110,6 @@
 - SDK 的 App 登录、连接目录、v2 Provider 组合及三种模型完整旅程；PG/Vault 持久授权已由 047 验收，账户桥 Rust 接入与真实厂商旅程仍待完成。
 - Browser 与原生电脑的完整产品链、A0–A7 同一候选验收和 24 小时 soak。
 - M1 事件与同节点协作、M2 节点与文件能力，以及完整平台、安全和发布验收。
+- 严格 Clippy 门禁的第二波既有红（gateway_authority 测试 9 处 err_expect、gateway_sdk_transport/tls.rs 3 处 dead_code，见 issue #61），此前被 049 修复前的 lib 编译失败长期掩盖，从未被 clippy 实际检查到；049 只处理了 issue #58 报告的单点，未处理这批。
 
 040 只验证有界归档的认证消费，不授予恢复切换权限，不关闭以上工作。
