@@ -465,11 +465,20 @@ fn http_route_of(command: &AppCommand) -> Option<String> {
             );
             Some(format!("/api/channels/{}", channel_id.as_str()))
         }
-        // People/audit/policy/thread/MCP/approval/UI preference 的 HTTP 腿由同目录专项
-        // transport parity 或各自 handler framing 测试覆盖；本文件只维护 channel 专项矩阵。
+        // People/audit/policy/thread/MCP/approval/UI preference/model-connection 的 HTTP 腿
+        // 由同目录专项 transport parity 或各自 handler framing 测试覆盖；本文件只维护
+        // channel 专项矩阵。ModelConnection 的 5 个变体由
+        // `openbot-server/tests/model_connections_http_postgres.rs` 的真实 PG+HTTP 旅程
+        // （`GET/POST /api/me/model-connections`、`GET/PUT/DELETE
+        // /api/me/model-connections/{connection_id}`）覆盖。
         // InvokeTool 尚无公开 HTTP 路由。仍逐变体列出且无 wildcard：新增命令必须在这里明确
         // 选择“channel 矩阵有 route”或“由哪一份专项证据承担”。
         AppCommand::GetCurrentUser
+        | AppCommand::ListModelConnections(_)
+        | AppCommand::GetModelConnection { .. }
+        | AppCommand::CreateModelConnection(_)
+        | AppCommand::UpdateModelConnection { .. }
+        | AppCommand::DeleteModelConnection { .. }
         | AppCommand::CreateChannel { .. }
         | AppCommand::RouteChannelMessage { .. }
         | AppCommand::ListVisibleAgents { .. }
