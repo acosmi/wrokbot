@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-cdp-input-plan-v1",
+  "schema": "wrokbot-cdp-input-plan-v1",
   "upstream": {
     "repository": "CopilotKit/openbot",
     "commit": "891df72f1827454d8b353d108fe5dd2313b7e30d",

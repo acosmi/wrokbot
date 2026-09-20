@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use leptos::{ev::KeyboardEvent, html};
-pub use openbot_contracts::ui::UiTheme as Theme;
+pub use wrokbot_contracts::ui::UiTheme as Theme;
 
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
@@ -23,13 +23,13 @@ pub fn ThemeToggle() -> impl IntoView {
     };
     view! {
         <div
-            class="ob-segmented"
+            class="wrokbot-segmented"
             role="radiogroup"
             aria-label=move || t_string!(i18n, shell.theme_label).to_owned()
         >
             <button
                 type="button"
-                class="ob-segmented-button"
+                class="wrokbot-segmented-button"
                 node_ref=system_ref
                 role="radio"
                 aria-checked=move || if preferences.theme() == Theme::System { "true" } else { "false" }
@@ -51,7 +51,7 @@ pub fn ThemeToggle() -> impl IntoView {
             </button>
             <button
                 type="button"
-                class="ob-segmented-button"
+                class="wrokbot-segmented-button"
                 node_ref=light_ref
                 role="radio"
                 aria-checked=move || if preferences.theme() == Theme::Light { "true" } else { "false" }
@@ -73,7 +73,7 @@ pub fn ThemeToggle() -> impl IntoView {
             </button>
             <button
                 type="button"
-                class="ob-segmented-button"
+                class="wrokbot-segmented-button"
                 node_ref=dark_ref
                 role="radio"
                 aria-checked=move || if preferences.theme() == Theme::Dark { "true" } else { "false" }

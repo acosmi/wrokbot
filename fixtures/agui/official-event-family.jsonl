@@ -1,6 +1,6 @@
-{"type":"RUN_STARTED","threadId":"thread-official-001","runId":"run-official-001","parentRunId":"run-parent-000","input":{"threadId":"thread-official-001","runId":"run-official-001","messages":[{"id":"msg-user-1","role":"user","content":"Hello OpenBot"}],"tools":[{"name":"search_docs","description":"Search OpenBot docs","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}],"context":[{"description":"workspace","value":"/workspace"}],"forwardedProps":{},"state":{}}}
+{"type":"RUN_STARTED","threadId":"thread-official-001","runId":"run-official-001","parentRunId":"run-parent-000","input":{"threadId":"thread-official-001","runId":"run-official-001","messages":[{"id":"msg-user-1","role":"user","content":"Hello WrokBot"}],"tools":[{"name":"search_docs","description":"Search WrokBot docs","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}],"context":[{"description":"workspace","value":"/workspace"}],"forwardedProps":{},"state":{}}}
 {"type":"STEP_STARTED","stepName":"step-plan-and-execute"}
-{"type":"TEXT_MESSAGE_START","messageId":"msg-text-001","role":"assistant","name":"OpenBot"}
+{"type":"TEXT_MESSAGE_START","messageId":"msg-text-001","role":"assistant","name":"WrokBot"}
 {"type":"TEXT_MESSAGE_CONTENT","messageId":"msg-text-001","delta":"I am starting the analysis."}
 {"type":"TEXT_MESSAGE_END","messageId":"msg-text-001"}
 {"type":"TEXT_MESSAGE_CHUNK","messageId":"msg-chunk-002","role":"assistant","delta":"Streaming additional details."}
@@ -13,7 +13,7 @@
 {"type":"TOOL_CALL_CHUNK","delta":""}
 {"type":"STATE_SNAPSHOT","snapshot":{"stage":"analysis","items_processed":1,"metadata":{"version":"0.0.57"}}}
 {"type":"STATE_DELTA","delta":[{"op":"replace","path":"/items_processed","value":2},{"op":"add","path":"/stage_completed","value":true}]}
-{"type":"MESSAGES_SNAPSHOT","messages":[{"id":"msg-snapshot-1","role":"user","content":"Hello OpenBot"},{"id":"msg-snapshot-2","role":"assistant","content":"Analysis in progress","toolCalls":[{"id":"call-tool-001","type":"function","function":{"name":"search_docs","arguments":"{\"query\":\"AGUI official specification\"}"}}]}]}
+{"type":"MESSAGES_SNAPSHOT","messages":[{"id":"msg-snapshot-1","role":"user","content":"Hello WrokBot"},{"id":"msg-snapshot-2","role":"assistant","content":"Analysis in progress","toolCalls":[{"id":"call-tool-001","type":"function","function":{"name":"search_docs","arguments":"{\"query\":\"AGUI official specification\"}"}}]}]}
 {"type":"ACTIVITY_SNAPSHOT","messageId":"act-plan-001","activityType":"execution_plan","content":{"title":"AGUI Fixture Integration","progress":50},"replace":true}
 {"type":"ACTIVITY_DELTA","messageId":"act-plan-001","activityType":"execution_plan","patch":[{"op":"replace","path":"/progress","value":100}]}
 {"type":"RAW","event":{"vendor_channel":"sse_direct","packet_seq":42},"source":"agui_official_gateway"}

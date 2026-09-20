@@ -16,7 +16,7 @@
   "candidate": {
     "engine": "cel",
     "version": "0.14.3",
-    "note": "v3 §1.2 / §8.3 钉版。本文件不含 Rust 侧实测值：openbot-computer 的 CEL 求值面尚未存在，Rust 一侧由 T-FIX-0005 的 golden 对照测试在 crate 落地后填。"
+    "note": "v3 §1.2 / §8.3 钉版。本文件不含 Rust 侧实测值：wrokbot-computer 的 CEL 求值面尚未存在，Rust 一侧由 T-FIX-0005 的 golden 对照测试在 crate 落地后填。"
   },
   "result_class_vocabulary": {
     "values": [

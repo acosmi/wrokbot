@@ -9,7 +9,7 @@ fail() {
   exit 1
 }
 
-source=$(awk '/^mod tests \{/{exit} {print}' crates/openbot-desktop/src/tauri_background.rs)
+source=$(awk '/^mod tests \{/{exit} {print}' crates/wrokbot-desktop/src/tauri_background.rs)
 
 [[ $(rg -c '^[[:space:]]*\.app_data_dir\(\)' <<<"$source") == 1 ]] \
   || fail "setup must resolve exactly one Tauri app_data_dir authority"
@@ -34,7 +34,7 @@ done
 
 line_of() {
   local pattern="$1"
-  rg -n "$pattern" crates/openbot-desktop/src/tauri_background.rs \
+  rg -n "$pattern" crates/wrokbot-desktop/src/tauri_background.rs \
     | head -1 | cut -d: -f1
 }
 
@@ -46,25 +46,25 @@ window_line=$(line_of 'let window = lifecycle\.create_verified_window')
   || fail "prepare→protocol→owner→window order drift"
 
 python3 tools/tauri_background_assembly_guard.py \
-  crates/openbot-desktop/src/tauri_background.rs \
+  crates/wrokbot-desktop/src/tauri_background.rs \
   || fail "production Desktop Local staged shutdown structure drift"
 
-grep -Fq 'desktop-local-runtime = [' crates/openbot-desktop/Cargo.toml \
+grep -Fq 'desktop-local-runtime = [' crates/wrokbot-desktop/Cargo.toml \
   || fail "desktop-local-runtime feature missing"
-grep -Fq '    "openbot-infra/server-runtime",' crates/openbot-desktop/Cargo.toml \
+grep -Fq '    "wrokbot-infra/server-runtime",' crates/wrokbot-desktop/Cargo.toml \
   || fail "full Desktop runtime lost shared Infra adapters"
-grep -Fq '    "dep:openbot-agent",' crates/openbot-desktop/Cargo.toml \
+grep -Fq '    "dep:wrokbot-agent",' crates/wrokbot-desktop/Cargo.toml \
   || fail "full Desktop runtime lost built-in Agent host"
-if rg -n 'openbot-infra/server-sso' crates/openbot-desktop/Cargo.toml >/dev/null; then
+if rg -n 'wrokbot-infra/server-sso' crates/wrokbot-desktop/Cargo.toml >/dev/null; then
   fail "Desktop runtime pulled Server SSO/xmlsec"
 fi
 
-[[ $(rg -c 'ui_preferences: Arc<dyn UiPreferenceAdministration>' crates/openbot-infra/src/application_assembly.rs) == 1 ]] \
+[[ $(rg -c 'ui_preferences: Arc<dyn UiPreferenceAdministration>' crates/wrokbot-infra/src/application_assembly.rs) == 1 ]] \
   || fail "shared assembly host preference port missing"
-[[ $(rg -c 'ui_preferences: Arc::new\(PostgresUiPreferenceAdministration::new' crates/openbot-server/src/main.rs) == 1 ]] \
+[[ $(rg -c 'ui_preferences: Arc::new\(PostgresUiPreferenceAdministration::new' crates/wrokbot-server/src/main.rs) == 1 ]] \
   || fail "Server must inject its PostgreSQL preference adapter once"
 
-agent_source=$(awk '/^#\[cfg\(test\)\]/{exit} {print}' crates/openbot-desktop/src/desktop_agent_runtime.rs)
+agent_source=$(awk '/^#\[cfg\(test\)\]/{exit} {print}' crates/wrokbot-desktop/src/desktop_agent_runtime.rs)
 [[ $(rg -c 'RunRelay::start_with_database\(' <<<"$agent_source") == 1 ]] \
   || fail "Desktop durable RunRelay count drift"
 [[ $(rg -c 'BuiltInAgentRuntime::start_with_remote_interrupts\(' <<<"$agent_source") == 1 ]] \
@@ -75,7 +75,7 @@ if rg -n 'std::env|allow_http|environment_api_key|SchemePolicy::HttpOrHttps' <<<
   fail "Desktop Agent host gained environment or plaintext HTTP fallback"
 fi
 
-slot_source=$(awk '/^mod tests \{/{exit} {print}' crates/openbot-desktop/src/tauri_host.rs)
+slot_source=$(awk '/^mod tests \{/{exit} {print}' crates/wrokbot-desktop/src/tauri_host.rs)
 [[ $(rg -c 'empty_response\(StatusCode::SERVICE_UNAVAILABLE\)' <<<"$slot_source") == 1 ]] \
   || fail "pending custom protocol no longer returns fail-closed 503"
 [[ $(rg -c 'ProtocolAlreadyReady' <<<"$slot_source") -ge 3 ]] \

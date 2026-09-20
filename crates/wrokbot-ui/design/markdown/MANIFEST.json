@@ -84,10 +84,10 @@
     }
   ],
   "pack": {
-    "file": "openbot_syntaxes.packdump",
+    "file": "wrokbot_syntaxes.packdump",
     "bytes": 460072,
     "sha256": "850817c7a148b5a96434cb51c14636330ce922229c915b2f986eef0b41f23212",
-    "builder": "cargo run -p openbot-ui --example pack_markdown --locked --offline"
+    "builder": "cargo run -p wrokbot-ui --example pack_markdown --locked --offline"
   },
   "licenses": [
     {

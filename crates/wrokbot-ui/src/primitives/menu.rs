@@ -58,7 +58,7 @@ pub fn Menu(
     install_open_focus(context.clone());
     view! {
         <Provider value=context>
-            <span class="ob-menu-root">{children()}</span>
+            <span class="wrokbot-menu-root">{children()}</span>
         </Provider>
     }
 }
@@ -78,7 +78,7 @@ pub fn MenuTrigger(
         <button
             id=trigger_id
             type="button"
-            class="ob-menu-trigger"
+            class="wrokbot-menu-trigger"
             node_ref=context.trigger_ref
             data-state=move || menu_state_tokens(
                 context.open.get(),
@@ -135,14 +135,14 @@ pub fn MenuContent(children: Children) -> impl IntoView {
     view! {
         {is_root.then(|| view! {
             <div
-                class="ob-menu-dismiss"
+                class="wrokbot-menu-dismiss"
                 hidden=move || !context.open.get()
                 on:click=move |_| close_root(dismiss_root.clone(), true)
             ></div>
         })}
         <div
             id=content_id
-            class="ob-menu-content"
+            class="wrokbot-menu-content"
             role="menu"
             aria-labelledby=trigger_id
             hidden=move || !context.open.get()
@@ -175,7 +175,7 @@ pub fn MenuItem(
         <button
             id=id
             type="button"
-            class="ob-menu-item"
+            class="wrokbot-menu-item"
             role="menuitem"
             tabindex="-1"
             data-state=move || menu_state_tokens(false, disabled.get().unwrap_or(false))
@@ -203,7 +203,7 @@ pub fn MenuItem(
 /// Decorative separator inside a menu.
 #[component]
 pub fn MenuSeparator() -> impl IntoView {
-    view! { <div class="ob-menu-separator" role="separator"></div> }
+    view! { <div class="wrokbot-menu-separator" role="separator"></div> }
 }
 
 /// One nested submenu provider. Nested submenus beyond one level are intentionally unsupported.
@@ -238,7 +238,7 @@ pub fn MenuSub(#[prop(into)] id: String, children: Children) -> impl IntoView {
     view! {
         <Provider value=context>
             <span
-                class="ob-menu-sub"
+                class="wrokbot-menu-sub"
                 data-state=move || menu_state_tokens(sub_open.get(), false)
             >{children()}</span>
         </Provider>
@@ -264,7 +264,7 @@ pub fn MenuSubTrigger(
         <button
             id=trigger_id
             type="button"
-            class="ob-menu-item ob-menu-sub-trigger"
+            class="wrokbot-menu-item wrokbot-menu-sub-trigger"
             role="menuitem"
             tabindex="-1"
             data-state=move || menu_state_tokens(

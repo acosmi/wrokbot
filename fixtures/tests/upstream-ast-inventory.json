@@ -18919,7 +18919,7 @@
       "kind": "describe",
       "callee": "describe",
       "describe_chain": [],
-      "title": "OpenBot database schema",
+      "title": "WrokBot database schema",
       "title_kind": "string",
       "skip": false,
       "only": false,
@@ -18934,7 +18934,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "defines the core runtime records",
       "title_kind": "string",
@@ -18951,7 +18951,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "names the two kinds of OAuth secret separately from a shared token",
       "title_kind": "string",
@@ -18968,7 +18968,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "gives one person one credential per server, and makes that the key",
       "title_kind": "string",
@@ -18985,7 +18985,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "follows the person and the server when either goes away",
       "title_kind": "string",
@@ -19002,7 +19002,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "holds no copy of a customer's documents",
       "title_kind": "string",
@@ -19019,7 +19019,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "includes Better Auth's verified Google identity records",
       "title_kind": "string",
@@ -19036,7 +19036,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "defines the exact agent profile and roster preference contracts",
       "title_kind": "string",
@@ -19053,7 +19053,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "adds the callback token columns in their own migration",
       "title_kind": "string",
@@ -19070,7 +19070,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot database schema"
+        "WrokBot database schema"
       ],
       "title": "keeps the agent profile migration aligned with the schema",
       "title_kind": "string",
@@ -21810,7 +21810,7 @@
       "kind": "describe",
       "callee": "describe",
       "describe_chain": [],
-      "title": "OpenBot workspace",
+      "title": "WrokBot workspace",
       "title_kind": "string",
       "skip": false,
       "only": false,
@@ -21825,7 +21825,7 @@
       "kind": "test",
       "callee": "test",
       "describe_chain": [
-        "OpenBot workspace"
+        "WrokBot workspace"
       ],
       "title": "defines the app, server, and worker packages",
       "title_kind": "string",

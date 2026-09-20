@@ -34,7 +34,7 @@ pub fn Switch(
         <button
             id=control_id
             type="button"
-            class="ob-switch"
+            class="wrokbot-switch"
             role="switch"
             aria-label=move || {
                 let label = aria_label_value.get();
@@ -57,7 +57,7 @@ pub fn Switch(
                 }
             }
         >
-            <span class="ob-switch-thumb" aria-hidden="true"></span>
+            <span class="wrokbot-switch-thumb" aria-hidden="true"></span>
         </button>
     }
 }

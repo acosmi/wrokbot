@@ -46,7 +46,7 @@ impl SafeUrl {
 
         // A model-controlled protocol prefix cannot prove ownership or attachment authorization.
         // There is no registered attachment authority in this consumer yet.
-        if trimmed.starts_with("openbot-attachment://") {
+        if trimmed.starts_with("wrokbot-attachment://") {
             return Self::Inert {
                 raw: trimmed.to_owned(),
                 reason: "attachment_authority_missing",

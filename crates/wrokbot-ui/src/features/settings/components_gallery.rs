@@ -4,7 +4,7 @@
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
-use openbot_contracts::components::{CompiledComponentKind, ComponentRecord, ComponentRecords};
+use wrokbot_contracts::components::{CompiledComponentKind, ComponentRecord, ComponentRecords};
 
 use crate::api::component_gallery_href;
 #[cfg(target_arch = "wasm32")]
@@ -45,10 +45,10 @@ pub fn ComponentsGalleryPage() -> impl IntoView {
                 description=move || t_string!(i18n, gallery.components_description).to_owned()
             />
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, gallery.components_load_error)}</span>
                     <Button
                         variant=ButtonVariant::Ghost
@@ -63,7 +63,7 @@ pub fn ComponentsGalleryPage() -> impl IntoView {
                 <Show
                     when=move || !published.get().is_empty()
                     fallback=move || view! {
-                        <section class="ob-gallery-page-empty" aria-labelledby="components-gallery-empty-title">
+                        <section class="wrokbot-gallery-page-empty" aria-labelledby="components-gallery-empty-title">
                             <h2 id="components-gallery-empty-title">
                                 {move || t!(i18n, gallery.nothing_published)}
                             </h2>
@@ -71,7 +71,7 @@ pub fn ComponentsGalleryPage() -> impl IntoView {
                         </section>
                     }
                 >
-                    <div class="ob-gallery-grid">
+                    <div class="wrokbot-gallery-grid">
                         <For
                             each=move || published.get()
                             key=|component| component.name.clone()
@@ -82,12 +82,12 @@ pub fn ComponentsGalleryPage() -> impl IntoView {
                                 let title = component.title;
                                 let description = component.published_description.unwrap_or_default();
                                 view! {
-                                    <a class="ob-gallery-tile" href=href>
-                                        <div class="ob-gallery-tile-copy">
+                                    <a class="wrokbot-gallery-tile" href=href>
+                                        <div class="wrokbot-gallery-tile-copy">
                                             <h2>{title}</h2>
                                             <p>{description}</p>
                                         </div>
-                                        <div class="ob-gallery-tile-preview">
+                                        <div class="wrokbot-gallery-tile-preview">
                                             <ComponentPreview name />
                                         </div>
                                     </a>
@@ -134,10 +134,10 @@ pub fn ComponentGalleryDetailPage() -> impl IntoView {
                 />
             </PageTopbar>
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, gallery.components_load_error)}</span>
                     <Button
                         variant=ButtonVariant::Ghost
@@ -154,7 +154,7 @@ pub fn ComponentGalleryDetailPage() -> impl IntoView {
                     title=move || t_string!(i18n, gallery.no_such_component).to_owned()
                     description=move || t_string!(i18n, gallery.no_such_component_description).to_owned()
                 />
-                <div class="ob-gallery-not-found">
+                <div class="wrokbot-gallery-not-found">
                     <IconView icon=Icon::LayoutGrid size=IconSize::Navigation />
                     <a href="/settings/components-gallery">
                         {move || t!(i18n, gallery.back_to_gallery)}
@@ -174,14 +174,14 @@ pub fn ComponentGalleryDetailPage() -> impl IntoView {
                             title=title
                             description=description
                         />
-                        <div class="ob-gallery-detail-preview">
+                        <div class="wrokbot-gallery-detail-preview">
                             <ComponentPreview name />
                         </div>
                         <PageSection
                             heading_id="component-gallery-details"
                             title=move || t_string!(i18n, gallery.details).to_owned()
                         >
-                            <dl class="ob-gallery-facts">
+                            <dl class="wrokbot-gallery-facts">
                                 <div>
                                     <dt>{move || t!(i18n, gallery.kind)}</dt>
                                     <dd>{move || component_kind_label(i18n, kind)}</dd>

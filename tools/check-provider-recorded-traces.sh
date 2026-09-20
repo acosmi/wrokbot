@@ -13,7 +13,7 @@ provenance_files=(fixtures/provider/*.provenance.json)
 
 for provenance in "${provenance_files[@]}"; do
   jq -e '
-    .schema == "openbot-provider-recorded-trace-v1" and
+    .schema == "wrokbot-provider-recorded-trace-v1" and
     (.provider == "openai" or .provider == "anthropic" or .provider == "google") and
     (.protocol.api | type == "string" and length > 0) and
     (.protocol.transport | type == "string" and length > 0) and

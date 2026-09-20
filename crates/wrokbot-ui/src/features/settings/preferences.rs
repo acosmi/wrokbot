@@ -1,7 +1,7 @@
 //! Deployment-scoped user preferences at `/settings`.
 
 use leptos::prelude::*;
-use openbot_contracts::budget::{RunCostBudgetPreference, RunCostCapInput};
+use wrokbot_contracts::budget::{RunCostBudgetPreference, RunCostCapInput};
 
 #[cfg(target_arch = "wasm32")]
 use crate::api::{load_run_cost_budget, replace_run_cost_budget};
@@ -139,38 +139,38 @@ pub fn SettingsPage() -> impl IntoView {
                 heading_id="settings-general-title"
                 title=move || t_string!(i18n, settings.nav_general).to_owned()
             >
-                <div class="ob-settings-preference-list">
-                    <div class="ob-settings-preference-row">
-                        <div class="ob-settings-preference-copy">
+                <div class="wrokbot-settings-preference-list">
+                    <div class="wrokbot-settings-preference-row">
+                        <div class="wrokbot-settings-preference-copy">
                             <h3>{move || t!(i18n, settings.appearance_theme_label)}</h3>
                             <p>{move || t!(i18n, settings.appearance_theme_help)}</p>
                         </div>
-                        <div class="ob-settings-preference-actions">
+                        <div class="wrokbot-settings-preference-actions">
                             <ThemeToggle />
                         </div>
                     </div>
-                    <div class="ob-settings-preference-row">
-                        <div class="ob-settings-preference-copy">
+                    <div class="wrokbot-settings-preference-row">
+                        <div class="wrokbot-settings-preference-copy">
                             <h3>{move || t!(i18n, settings.nav_language)}</h3>
                             <p>{move || t!(i18n, settings.language_help)}</p>
                         </div>
-                        <div class="ob-settings-preference-actions">
+                        <div class="wrokbot-settings-preference-actions">
                             <LocaleSwitch id="settings-locale-switch" />
                         </div>
                     </div>
-                    <div class="ob-settings-preference-row">
-                        <div class="ob-settings-preference-copy">
+                    <div class="wrokbot-settings-preference-row">
+                        <div class="wrokbot-settings-preference-copy">
                             <h3>{move || t!(i18n, settings.run_cost_budget_label)}</h3>
                             <p>{move || t!(i18n, settings.run_cost_budget_help)}</p>
                         </div>
-                        <div class="ob-settings-preference-actions ob-run-cost-budget">
+                        <div class="wrokbot-settings-preference-actions wrokbot-run-cost-budget">
                             <Show when=move || loading.get()>
-                                <p class="ob-preference-saving" role="status">
+                                <p class="wrokbot-preference-saving" role="status">
                                     {move || t!(i18n, settings.run_cost_budget_loading)}
                                 </p>
                             </Show>
                             <Show when=move || load_error.get()>
-                                <div class="ob-alert" role="alert">
+                                <div class="wrokbot-alert" role="alert">
                                     <span>{move || t!(i18n, settings.run_cost_budget_load_error)}</span>
                                     <Button
                                         variant=ButtonVariant::Ghost
@@ -191,7 +191,7 @@ pub fn SettingsPage() -> impl IntoView {
                                     <Switch checked=cap_enabled on_change=toggle_cap />
                                 </Field>
                                 <Show when=move || cap_enabled.get()>
-                                    <div class="ob-run-cost-budget-fields">
+                                    <div class="wrokbot-run-cost-budget-fields">
                                         <Field
                                             control_id="run-cost-cap-currency"
                                             label=move || t_string!(i18n, settings.run_cost_budget_currency_label).to_owned()
@@ -217,7 +217,7 @@ pub fn SettingsPage() -> impl IntoView {
                                         </Field>
                                     </div>
                                 </Show>
-                                <div class="ob-run-cost-budget-footer">
+                                <div class="wrokbot-run-cost-budget-footer">
                                     <Button
                                         variant=ButtonVariant::Primary
                                         size=ButtonSize::Medium
@@ -227,12 +227,12 @@ pub fn SettingsPage() -> impl IntoView {
                                         {move || t!(i18n, common.save)}
                                     </Button>
                                     <Show when=move || saving.get()>
-                                        <p class="ob-preference-saving" role="status">
+                                        <p class="wrokbot-preference-saving" role="status">
                                             {move || t!(i18n, settings.run_cost_budget_saving)}
                                         </p>
                                     </Show>
                                     <Show when=move || saved_form.get().as_ref() == Some(&current_form())>
-                                        <p class="ob-run-cost-budget-saved" role="status">
+                                        <p class="wrokbot-run-cost-budget-saved" role="status">
                                             {move || if cap_enabled.get() {
                                                 t_string!(i18n, settings.run_cost_budget_saved).to_owned()
                                             } else {
@@ -242,7 +242,7 @@ pub fn SettingsPage() -> impl IntoView {
                                     </Show>
                                 </div>
                                 <Show when=move || save_error_form.get().as_ref() == Some(&current_form())>
-                                    <p class="ob-preference-error" role="alert">
+                                    <p class="wrokbot-preference-error" role="alert">
                                         {move || t!(i18n, settings.run_cost_budget_save_error)}
                                     </p>
                                 </Show>
@@ -250,7 +250,7 @@ pub fn SettingsPage() -> impl IntoView {
                         </div>
                     </div>
                 </div>
-                <div class="ob-settings-preference-status">
+                <div class="wrokbot-settings-preference-status">
                     <PreferenceSaveStatus />
                 </div>
             </PageSection>

@@ -118,7 +118,7 @@ impl SecretInputController {
 fn classify(value: &str, maximum: usize, policy: SecretInputPolicy) -> SecretInputStatus {
     let value = match policy {
         SecretInputPolicy::OpaqueToken => value,
-        SecretInputPolicy::Authorization => openbot_contracts::text::trim_ecmascript(value),
+        SecretInputPolicy::Authorization => wrokbot_contracts::text::trim_ecmascript(value),
     };
     if value.is_empty() {
         return SecretInputStatus::Empty;
@@ -180,7 +180,7 @@ pub fn SecretInput(
         }
     });
     view! {
-        <input id=control_id node_ref=controller.node class="ob-input" type="password"
+        <input id=control_id node_ref=controller.node class="wrokbot-input" type="password"
             autocomplete="off" spellcheck="false" autocapitalize="off"
             placeholder=move || { let hint=placeholder.get(); (!hint.is_empty()).then_some(hint) }
             aria-label=move || { let label=aria_label.get(); (!label.is_empty()).then_some(label) }

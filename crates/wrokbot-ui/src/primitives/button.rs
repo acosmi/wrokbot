@@ -117,7 +117,7 @@ pub fn Button(
             id=id
             aria-label=move || aria_label.as_ref().map(TextProp::get)
             type="button"
-            class="ob-button"
+            class="wrokbot-button"
             data-variant=variant.as_str()
             data-size=size.as_str()
             data-state=move || button_state_tokens(

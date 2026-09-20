@@ -71,7 +71,7 @@ pub fn SelectTrigger(
         <button
             id=trigger_id
             type="button"
-            class="ob-select-trigger"
+            class="wrokbot-select-trigger"
             role="combobox"
             data-state=move || owner_state(&state_context)
             aria-label=move || aria_label.get()
@@ -94,12 +94,12 @@ pub fn SelectTrigger(
             }
         >
             <span
-                class="ob-select-value"
+                class="wrokbot-select-value"
                 data-placeholder=move || explicit_bool(placeholder_context.committed_label.get().is_none())
             >
                 {move || value_context.committed_label.get().unwrap_or_else(|| placeholder.get().to_string())}
             </span>
-            <span class="ob-select-icon" aria-hidden="true">
+            <span class="wrokbot-select-icon" aria-hidden="true">
                 <IconView icon=Icon::ChevronsUpDown size=IconSize::Inline />
             </span>
         </button>
@@ -115,13 +115,13 @@ pub fn SelectContent(children: Children) -> impl IntoView {
 /// Semantic option group.
 #[component]
 pub fn SelectGroup(children: Children) -> impl IntoView {
-    view! { <div class="ob-select-group" role="group">{children()}</div> }
+    view! { <div class="wrokbot-select-group" role="group">{children()}</div> }
 }
 
 /// Optional visual group label.
 #[component]
 pub fn SelectLabel(children: Children) -> impl IntoView {
-    view! { <div class="ob-select-label">{children()}</div> }
+    view! { <div class="wrokbot-select-label">{children()}</div> }
 }
 
 /// One select option.
@@ -139,7 +139,7 @@ pub fn SelectItem(
 /// Decorative separator between groups.
 #[component]
 pub fn SelectSeparator() -> impl IntoView {
-    view! { <div class="ob-listbox-separator" role="separator"></div> }
+    view! { <div class="wrokbot-listbox-separator" role="separator"></div> }
 }
 
 const fn explicit_bool(value: bool) -> &'static str {

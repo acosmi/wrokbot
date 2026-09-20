@@ -16,7 +16,7 @@ class PublicationGuardTests(unittest.TestCase):
         for path in ['docs/notes.md', 'grok-bot/src/index.ts', 'crates/x/implementation.md', 'crates/x/.env', '.local-private/backup.tar.gz', 'artifacts/logo.zip', 'crates/x/node_modules/a.js']:
             with self.subTest(path=path):
                 self.assertIsNotNone(guard.forbidden(path))
-        for path in ['README.md', 'IMPLEMENTATION_LEDGER.md', 'Cargo.lock', 'crates/wrokbot-ui/assets/brand/wrok-bot-motion.gif']:
+        for path in ['README.md', 'IMPLEMENTATION_LEDGER.md', 'Cargo.lock', 'crates/wrokbot-ui/assets/brand/wrokbot-motion.gif']:
             self.assertIsNone(guard.forbidden(path))
 
     def test_implementation_ledger_allowlist_is_exact(self):
@@ -39,7 +39,7 @@ class PublicationGuardTests(unittest.TestCase):
             'design/markdown/PROVENANCE.md',
             'locales/GLOSSARY.md',
         ]
-        for crate in ['openbot-ui', 'wrokbot-ui']:
+        for crate in ['wrokbot-ui', 'wrokbot-ui']:
             for suffix in reviewed_suffixes:
                 path = f'crates/{crate}/{suffix}'
                 with self.subTest(path=path):
@@ -55,12 +55,12 @@ class PublicationGuardTests(unittest.TestCase):
         limits = guard.POLICY['file_size_limits']
         expected = 31_457_280
         self.assertEqual(
-            limits['crates/openbot-ui/assets/brand/wrok-bot-logo-1024.gif'], expected
+            limits['crates/wrokbot-ui/assets/brand/wrokbot-logo-1024.gif'], expected
         )
         self.assertEqual(
-            limits['crates/wrokbot-ui/assets/brand/wrok-bot-logo-1024.gif'], expected
+            limits['crates/wrokbot-ui/assets/brand/wrokbot-logo-1024.gif'], expected
         )
-        self.assertNotIn('crates/openbot-ui/assets/brand/other.gif', limits)
+        self.assertNotIn('crates/wrokbot-ui/assets/brand/other.gif', limits)
         self.assertNotIn('crates/wrokbot-ui/assets/brand/other.gif', limits)
 
     def test_content_rules_preserve_public_status_but_block_internal_plans(self):

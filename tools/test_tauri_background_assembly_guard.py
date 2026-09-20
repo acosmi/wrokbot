@@ -15,7 +15,7 @@ sys.path.insert(0, str(TOOLS))
 from tauri_background_assembly_guard import GuardError, check_source  # noqa: E402
 
 
-SOURCE_PATH = ROOT / "crates/openbot-desktop/src/tauri_background.rs"
+SOURCE_PATH = ROOT / "crates/wrokbot-desktop/src/tauri_background.rs"
 
 
 def replace_once(source: str, old: str, new: str) -> str:

@@ -58,7 +58,7 @@ pub fn BarChartCard(
                 when=move || !points.get().is_empty()
                 fallback=move || view! { <ChartEmpty /> }
             >
-                <div class="ob-gallery-bar-chart" aria-label=move || t_string!(i18n, gallery.chart_data).to_owned()>
+                <div class="wrokbot-gallery-bar-chart" aria-label=move || t_string!(i18n, gallery.chart_data).to_owned()>
                     <For
                         each=move || points.get().into_iter().enumerate()
                         key=|(index, _)| *index
@@ -71,7 +71,7 @@ pub fn BarChartCard(
                             view! {
                                 <div>
                                     <span>{format_number(point.value)}</span>
-                                    <div class="ob-gallery-bar-track">
+                                    <div class="wrokbot-gallery-bar-track">
                                         <span
                                             data-series=(index % 5).to_string()
                                             style:height=format!("{height}%")
@@ -136,7 +136,7 @@ pub fn PieChartCard(
                 when=move || has_data
                 fallback=move || view! { <ChartEmpty /> }
             >
-                <div class="ob-gallery-pie-chart">
+                <div class="wrokbot-gallery-pie-chart">
                     <svg aria-hidden="true" viewBox="0 0 160 160">
                         <For
                             each=move || slices.get().into_iter().enumerate()
@@ -220,7 +220,7 @@ fn PlotCard(
     view! {
         <GalleryFrame title caption=caption.unwrap_or_default()>
             <Show when=move || !empty fallback=move || view! { <ChartEmpty /> }>
-                <div class="ob-gallery-plot">
+                <div class="wrokbot-gallery-plot">
                     <svg aria-hidden="true" viewBox="0 0 520 180" preserveAspectRatio="none">
                         <line x1="8" x2="512" y1="85" y2="85"></line>
                         <line x1="8" x2="512" y1="162" y2="162"></line>
@@ -237,7 +237,7 @@ fn PlotCard(
                             }
                         />
                     </svg>
-                    <div class="ob-gallery-axis-labels">
+                    <div class="wrokbot-gallery-axis-labels">
                         <For
                             each=move || labels.get().into_iter().enumerate()
                             key=|(index, _)| *index
@@ -245,7 +245,7 @@ fn PlotCard(
                         />
                     </div>
                     <Show when=move || multiple_lines>
-                        <ul class="ob-gallery-chart-legend">
+                        <ul class="wrokbot-gallery-chart-legend">
                             <For
                                 each=move || lines.get().into_iter().enumerate()
                                 key=|(index, _)| *index
@@ -275,7 +275,7 @@ pub fn ProgressChartCard(
                 when=move || !points.get().is_empty()
                 fallback=move || view! { <ChartEmpty /> }
             >
-                <ul class="ob-gallery-progress-chart">
+                <ul class="wrokbot-gallery-progress-chart">
                     <For
                         each=move || points.get().into_iter().enumerate()
                         key=|(index, _)| *index
@@ -302,7 +302,7 @@ pub fn ProgressChartCard(
 #[component]
 fn ChartEmpty() -> impl IntoView {
     let i18n = use_i18n();
-    view! { <p class="ob-gallery-chart-empty">{move || t!(i18n, gallery.no_chart_data)}</p> }
+    view! { <p class="wrokbot-gallery-chart-empty">{move || t!(i18n, gallery.no_chart_data)}</p> }
 }
 
 fn plot_geometry(labels: &[String], series: &[ChartSeries]) -> (Vec<PlotLine>, Vec<String>) {

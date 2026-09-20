@@ -1,0 +1,15 @@
+[package]
+name = "wrokbot-macos-process"
+description = "Read-only macOS process birth and boot-session observation boundary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys.workspace = true
+libc.workspace = true

@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use openbot_contracts::mcp::{
+use wrokbot_contracts::mcp::{
     McpAdminPage, McpAdminSkill, PluginGrantKind, PluginGrantMutation, PluginSkillMutation,
     PluginSkills,
 };
@@ -91,7 +91,7 @@ pub(crate) struct SkillChoice {
 
 pub(crate) async fn granted_choices(agent_id: &str) -> Result<Vec<SkillChoice>, ApiError> {
     super::bot_chat_href(agent_id)?;
-    let granted: openbot_contracts::mcp::GrantedPlugins = serde_json::from_value(
+    let granted: wrokbot_contracts::mcp::GrantedPlugins = serde_json::from_value(
         super::plugins::request(
             "GET",
             &format!("/api/plugins/for/{}", encode_url_component(agent_id)),

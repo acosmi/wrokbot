@@ -1,4 +1,4 @@
-//! Syntax pack definition and builder for OpenBot Markdown code block highlighting.
+//! Syntax pack definition and builder for WrokBot Markdown code block highlighting.
 //!
 //! Enforces the 24 required programming languages specified in GUI Design Specification §6.4:
 //! bash, sh, powershell, rust, toml, json, yaml, sql, ts, tsx, js, jsx, html, css, md, py, go,
@@ -38,7 +38,7 @@ pub const TARGET_LANGUAGES: [(&str, &str); 24] = [
 ];
 
 /// Builds a complete `SyntaxSet` incorporating syntect's defaults and the 8 extra syntax definitions.
-pub fn build_openbot_syntax_set(syntax_dir: &Path) -> Result<SyntaxSet, String> {
+pub fn build_wrokbot_syntax_set(syntax_dir: &Path) -> Result<SyntaxSet, String> {
     let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
     let entries = [
         "dockerfile.sublime-syntax",
@@ -63,7 +63,7 @@ pub fn build_openbot_syntax_set(syntax_dir: &Path) -> Result<SyntaxSet, String> 
 }
 
 /// Dumps the full 24-language syntax set to the given packdump path.
-pub fn dump_openbot_syntax_pack(syntax_dir: &Path, out_path: &Path) -> Result<(), String> {
-    let set = build_openbot_syntax_set(syntax_dir)?;
+pub fn dump_wrokbot_syntax_pack(syntax_dir: &Path, out_path: &Path) -> Result<(), String> {
+    let set = build_wrokbot_syntax_set(syntax_dir)?;
     dump_to_uncompressed_file(&set, out_path).map_err(|e| format!("failed to write packdump: {e}"))
 }

@@ -31,8 +31,8 @@ entries:
 - id: policy-cel-corpus
   upstream: server/src/computer/policy.ts::POLICY_FUNCTIONS
   label: parity
-  target: fixtures/policy/cel-corpus.json -> openbot_domain::policy::cel
-  owner: openbot-domain
+  target: fixtures/policy/cel-corpus.json -> wrokbot_domain::policy::cel
+  owner: wrokbot-domain
   test_id: T-FIX-0001
   migration_rule: 'preserve: 表达式、context 与结果类别逐条保留；Rust 引擎注册同名同签名同大小写语义的 contains / matches 两个全局函数'
   status: done
@@ -43,8 +43,8 @@ entries:
 - id: ui-seed
   upstream: app/src/routes
   label: parity
-  target: fixtures/ui/seed.json -> openbot_testkit::fake::ApplicationService
-  owner: openbot-testkit
+  target: fixtures/ui/seed.json -> wrokbot_testkit::fake::ApplicationService
+  owner: wrokbot-testkit
   test_id: T-FIX-0002
   migration_rule: 'n/a: 新造的确定性数据集，不是上游数据的迁移'
   status: done
@@ -55,21 +55,21 @@ entries:
 - id: ui-golden-manifest
   upstream: '-'
   label: 新增
-  target: fixtures/ui/golden/MANIFEST.toml -> openbot_testkit::golden
-  owner: openbot-testkit
+  target: fixtures/ui/golden/MANIFEST.toml -> wrokbot_testkit::golden
+  owner: wrokbot-testkit
   test_id: T-FIX-0003
   migration_rule: 'n/a: 上游没有视觉 oracle'
   status: done
   evidence: python3 -c "import tomllib,pathlib;d=tomllib.loads(...);print(sum(m['count'] for m in d['matrix']))"
     => 245；len(d['matrix']) => 4；fonts bytes sum => 740216
   done_evidence: fixtures/ui/golden/MANIFEST.toml v2；seed-derived exact 245-path inventory、4条matrix、3条bundle预算（CSS
-    128KiB/120KiB warning）、mask清单为空；openbot-testkit RGBA core=18/0/0，xtask PNG/manifest/diff gate=7/0/0；check-manifest实得matrix245/masks0/ready=false，formal
+    128KiB/120KiB warning）、mask清单为空；wrokbot-testkit RGBA core=18/0/0，xtask PNG/manifest/diff gate=7/0/0；check-manifest实得matrix245/masks0/ready=false，formal
     inventory对空目录/仅数量对但错名及verify对TBD provenance均保持红
 - id: db-schema-0012
   upstream: server/drizzle/0000_schema.sql .. server/drizzle/0012_truncate_is_not_a_way_around_append_only.sql
   label: parity
-  target: fixtures/db/schema-0012.json -> openbot_infra::db::baseline
-  owner: openbot-infra
+  target: fixtures/db/schema-0012.json -> wrokbot_infra::db::baseline
+  owner: wrokbot-infra
   test_id: T-FIX-0027
   migration_rule: 'preserve: Rust baseline 建出的库必须与走完 13 条 migration 的库 schema 事实逐字段相等；兼容期只允许 expand（v3 §14.3）'
   status: done
@@ -80,8 +80,8 @@ entries:
 - id: db-schema-0013
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0013.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0013.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0029
   migration_rule: 'n/a: Rust-owned expand-only 0013 的 post-migration schema 事实；不改写上游 0012 oracle'
   status: done
@@ -92,8 +92,8 @@ entries:
 - id: db-schema-0014
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0014.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0014.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0030
   migration_rule: 'n/a: W-3 前置的 expand-only user auth generation；旧 NULL 按 generation 0 读取'
   status: done
@@ -103,8 +103,8 @@ entries:
 - id: db-schema-0015
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0015.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0015.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0031
   migration_rule: 'n/a: W-4 session 签发代际；旧 Better Auth session 统一重新登录'
   status: done
@@ -114,8 +114,8 @@ entries:
 - id: db-schema-0016
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0016.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0016.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0032
   migration_rule: 'n/a: G3 native thread/realtime/memory 十表的 expand-only post-migration 事实'
   status: done
@@ -126,8 +126,8 @@ entries:
 - id: db-schema-0017
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0017.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0017.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0033
   migration_rule: 'n/a: G4 RMCP catalog generation/stale grant 与跨 replica tool sequence 的 expand-only post-migration
     事实'
@@ -139,8 +139,8 @@ entries:
 - id: db-schema-0018
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0018.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0018.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0034
   migration_rule: 'n/a: G4 MCP deployment credential generation 进入 server/grant identity 的 expand-only post-migration
     事实'
@@ -152,8 +152,8 @@ entries:
 - id: db-schema-0019
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0019.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0019.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0035
   migration_rule: 'n/a: G4 MCP/Google Drive 封闭 vendor transport identity 的 expand-only post-migration 事实'
   status: done
@@ -164,8 +164,8 @@ entries:
 - id: db-schema-0020
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0020.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0020.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0036
   migration_rule: 'n/a: G4 durable human approval 与 tool decision approval identity 的 expand-only post-migration
     事实'
@@ -177,8 +177,8 @@ entries:
 - id: db-schema-0021
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0021.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0021.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0037
   migration_rule: 'n/a: G6 actor/deployment/tenant scoped UI theme/locale preference 的 expand-only post-migration
     事实'
@@ -190,8 +190,8 @@ entries:
 - id: db-schema-0022
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0022.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0022.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0038
   migration_rule: 'n/a: G3 actor/tenant scoped runtime memory-write control 的 expand-only post-migration 事实'
   status: done
@@ -202,8 +202,8 @@ entries:
 - id: db-schema-0023
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0023.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0023.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0039
   migration_rule: 'n/a: G6 compiled useHumanInTheLoop durable state 的 expand-only post-migration 事实'
   status: done
@@ -214,8 +214,8 @@ entries:
 - id: db-schema-0024
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0024.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0024.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0040
   migration_rule: 'n/a: G4 run-wide normalized provider token accounting 的 expand-only post-migration 事实'
   status: done
@@ -227,8 +227,8 @@ entries:
 - id: db-schema-0025
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0025.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0025.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0041
   migration_rule: 'n/a: G4 operator-attested maximum provider rate snapshot 与 exact run cost upper bound 的 expand-only
     post-migration 事实'
@@ -240,8 +240,8 @@ entries:
 - id: db-schema-0026
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0026.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0026.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0042
   migration_rule: 'n/a: G4 actor-scoped currency-bound per-run cost cap 与 immutable run snapshot 的 expand-only post-migration
     事实'
@@ -253,8 +253,8 @@ entries:
 - id: db-schema-0027
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0027.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0027.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0043
   migration_rule: 'n/a: G4 AG-UI reasoning 只保留到 run terminal 的具名隐私数据回填；schema 本身不变'
   status: done
@@ -265,8 +265,8 @@ entries:
 - id: db-schema-0028
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0028.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0028.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0044
   migration_rule: 'n/a: G4 AG-UI interrupt/resume actor-scoped durable state与terminal scrub的expand-only post-migration事实'
   status: done
@@ -278,8 +278,8 @@ entries:
 - id: db-schema-0029
   upstream: '-'
   label: 新增
-  target: fixtures/db/schema-0029.json -> openbot_infra::db::native
-  owner: openbot-infra
+  target: fixtures/db/schema-0029.json -> wrokbot_infra::db::native
+  owner: wrokbot-infra
   test_id: T-FIX-0045
   migration_rule: 'n/a: custom MCP private-egress exact CIDR authority的expand-only post-migration事实'
   status: done
@@ -290,8 +290,8 @@ entries:
 - id: provider-openai-responses-recorded-trace
   upstream: openai/openai-dotnet@19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5::ResponsesToolTests/FunctionToolStreamingWorks
   label: 新增
-  target: fixtures/provider/openai-responses-function-tool-stream.sse -> openbot_infra::provider::openai
-  owner: openbot-infra
+  target: fixtures/provider/openai-responses-function-tool-stream.sse -> wrokbot_infra::provider::openai
+  owner: wrokbot-infra
   test_id: T-FIX-0046
   migration_rule: 'n/a: v4 §24 G4 provider gate 的 OpenAI Responses 官方 recorded vendor trace'
   status: done
@@ -304,8 +304,8 @@ entries:
 - id: mcp-run-protocol-cancellation
   upstream: '-'
   label: 新增
-  target: fixtures/mcp/rmcp-run-cancellation.json -> openbot_agent::runtime + openbot_infra::mcp
-  owner: openbot-agent
+  target: fixtures/mcp/rmcp-run-cancellation.json -> wrokbot_agent::runtime + wrokbot_infra::mcp
+  owner: wrokbot-agent
   test_id: T-FIX-0047
   migration_rule: 'n/a: v4 §7.4/§9.1 Rust-owned run cancellation向RMCP tools/list与tools/call传播的协议级安全闭包'
   status: done
@@ -320,36 +320,36 @@ entries:
 - id: browser-runtime-budget
   upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/browser-eviction.ts+profiles.ts
   label: 新增
-  target: fixtures/computer/browser-runtime-budget.json -> openbot_computer::browser::eviction + openbot_computer::manager
-  owner: openbot-computer
+  target: fixtures/computer/browser-runtime-budget.json -> wrokbot_computer::browser::eviction + wrokbot_computer::manager
+  owner: wrokbot-computer
   test_id: T-FIX-0048
   migration_rule: 'preserve: fixed LRU/idle behavior + strengthen with full ComputerSecurityScope, generation fencing,
     active-lease refusal and owned-driver retirement'
   status: done
   evidence: closed fixture固定max=8、idle=1800000ms与七类runtime case；13条固定上游selector测试逐项相等，manager另证同scope并发冷启动1次、非活动LRU实际close、all-leased
     effect前busy、idle inclusive且跳过lease、generation/stale/collision、launch rollback、shutdown
-  done_evidence: fixture=1579 bytes/SHA-256 1dc491809ec8f7b84919349f492cfbff955ce034923ccc4b15858aea5c6e53ce；openbot-computer=43/0/2
+  done_evidence: fixture=1579 bytes/SHA-256 1dc491809ec8f7b84919349f492cfbff955ce034923ccc4b15858aea5c6e53ce；wrokbot-computer=43/0/2
     ignored，其中selector=15/0/0、manager=10/0/0；all-target/all-feature locked Clippy -D warnings与fmt绿。BrowserInstance按完整ComputerSecurityScope
     digest+ComputerId+generation绑定，driver handle由manager独占；cap/idle只选leases=0项，全部在用时computer_runtime_busy且extra
     launch=0；launch失败恢复预留victim；Display/Debug只出stable code不出driver canary
 - id: browser-cdp-input-plan
   upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/screencast.ts
   label: 新增
-  target: fixtures/computer/cdp-input-plan.json -> openbot_computer::browser::cdp_input
-  owner: openbot-computer
+  target: fixtures/computer/cdp-input-plan.json -> wrokbot_computer::browser::cdp_input
+  owner: wrokbot-computer
   test_id: T-FIX-0049
   migration_rule: 'preserve: fixed BrowserInput→CDP parameter mapping, including all 17 named virtual-key codes
     and unknown multi-UTF-16 fallback 0'
   status: done
   evidence: 固定上游screencast.ts=6906 bytes、Git blob 9bc27c11fc1b4cd296f7fc9df412aea0bedbbb22、SHA-256 be79bde5007f03f37e3b99a1ef1388ba672d684ba32ec2b9090c417f9f47f566；VIRTUAL_KEY_CODES逐项17条且包含空格→32，未知多UTF-16单元键返回0
-  done_evidence: fixtures/computer/cdp-input-plan.json=1315 bytes/SHA-256 e6cf14b947d86cd2bc458adc27b75272b619cc90c4f41558c0a3b1438424463f，与openbot-computer
+  done_evidence: fixtures/computer/cdp-input-plan.json=1315 bytes/SHA-256 e6cf14b947d86cd2bc458adc27b75272b619cc90c4f41558c0a3b1438424463f，与wrokbot-computer
     cdp_input 11条单测机械join；move/down/up/wheel、keyDown/rawKeyDown/keyUp、17键表、single-unit uppercase首UTF-16 unit、unknown
-    multi-unit=0、insertText与SecretInsert ordinary-plan拒绝均通过；完整openbot-computer lib=54/0/0
+    multi-unit=0、insertText与SecretInsert ordinary-plan拒绝均通过；完整wrokbot-computer lib=54/0/0
 - id: browser-engine-input-wire-v2
   upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/screencast.ts
   label: 新增
-  target: fixtures/computer/engine-input-wire-v2.json -> openbot_computer::engine::EngineProcess::apply_human_input
-  owner: openbot-computer
+  target: fixtures/computer/engine-input-wire-v2.json -> wrokbot_computer::engine::EngineProcess::apply_human_input
+  owner: wrokbot-computer
   test_id: T-FIX-0050
   migration_rule: 'preserve: execute the closed BrowserInput CDP plan behind fresh HumanLease authority; version
     the incompatible engine wire and strengthen with exact frame/effect evidence'
@@ -365,8 +365,8 @@ entries:
 - id: screen-hub-ticket-core-v1
   upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/index.ts::serve.websocket
   label: 新增
-  target: fixtures/computer/screen-hub-ticket-core-v1.json -> openbot_computer::screen::ScreenHub
-  owner: openbot-computer
+  target: fixtures/computer/screen-hub-ticket-core-v1.json -> wrokbot_computer::screen::ScreenHub
+  owner: wrokbot-computer
   test_id: T-FIX-0051
   migration_rule: 'preserve: latest screen stream and human viewer behavior; replace the shared JSON/base64 socket
     with actor-scoped generation-bound tickets and a shared binary latest-frame core'
@@ -374,15 +374,15 @@ entries:
   evidence: v4 §12.2–§12.4/§12.6；ScreenHub只接受EngineProcess一次性EngineScreenSource；ticket用OS CSPRNG 16 bytes、固定30秒、仅存SHA-256
     digest，绑定tenant/actor/auth generation/stream/origin与Desktop window generation；viewer binary不含scope/computer/tab/ticket/CDP
     session
-  done_evidence: fixture=2368 bytes/SHA-256 8559fec9d7442990a0e416a09c2b5e86d54799559c6ba39902c94b3d36f4c83f；openbot-computer
+  done_evidence: fixture=2368 bytes/SHA-256 8559fec9d7442990a0e416a09c2b5e86d54799559c6ba39902c94b3d36f4c83f；wrokbot-computer
     screen单测=2/0/0；macOS arm64官方Electron 43.3.0 BrowserComputer与SandboxedComponent两真实Seatbelt role各接同一ScreenHub双viewer，include-ignored
     conformance role=2/0/0：两viewer下一帧sequence相等且Arc同一分配，错误actor发票拒绝、错误binding不烧票、ticket replay拒绝、auth generation推进后双viewer关闭；sole
     source二次领取拒绝；viewer cap含pending ticket
 - id: screen-coordinate-input-journey-v1
   upstream: ChromeDevTools/devtools-frontend@036dd84bc4fdfb0fd4be2a5ddb3fe37ef24939cd:front_end/panels/screencast/InputModel.ts+ScreencastView.ts
   label: 新增
-  target: fixtures/computer/screen-coordinate-input-journey-v1.json -> openbot_computer::screen::coordinates
-  owner: openbot-computer
+  target: fixtures/computer/screen-coordinate-input-journey-v1.json -> wrokbot_computer::screen::coordinates
+  owner: wrokbot-computer
   test_id: T-FIX-0052
   migration_rule: 'n/a: v4 §12.5/§12.6 adds a fail-closed viewer canvas/DPI/zoom/scroll coordinate boundary and
     requires completed-IME plus down-move-up journeys'
@@ -397,8 +397,8 @@ entries:
 - id: server-screen-websocket-v1
   upstream: CopilotKit/openbot@891df72f1827454d8b353d108fe5dd2313b7e30d:agent-computer/src/index.ts::serve.websocket
   label: 新增
-  target: fixtures/computer/server-screen-websocket-v1.json -> openbot_server::http::screen + openbot_computer::screen::ScreenSessionService
-  owner: openbot-server
+  target: fixtures/computer/server-screen-websocket-v1.json -> wrokbot_server::http::screen + wrokbot_computer::screen::ScreenSessionService
+  owner: wrokbot-server
   test_id: T-FIX-0053
   migration_rule: 'preserve: authenticated latest screen stream; replace shared JSON/base64 socket with same-origin
     binary WebSocket and ApplicationService-issued one-time subprotocol ticket'
@@ -413,8 +413,8 @@ entries:
 - id: db-seed-0012
   upstream: '-'
   label: 新增
-  target: fixtures/db/seed-0012.sql -> openbot_infra::db::tables
-  owner: openbot-infra
+  target: fixtures/db/seed-0012.sql -> wrokbot_infra::db::tables
+  owner: wrokbot-infra
   test_id: T-FIX-0028
   migration_rule: 'n/a: 上游没有对抗性数据集，这是为验证类型映射保真而新造的'
   status: done
@@ -425,7 +425,7 @@ entries:
   upstream: '-'
   label: 新增
   target: fixtures/ui/golden/web/*.png
-  owner: openbot-testkit
+  owner: wrokbot-testkit
   test_id: T-FIX-0004
   migration_rule: n/a
   status: todo
@@ -434,7 +434,7 @@ entries:
   upstream: '-'
   label: 新增
   target: fixtures/ui/golden/web/*.zh-CN.light.1440x900.png
-  owner: openbot-testkit
+  owner: wrokbot-testkit
   test_id: T-FIX-0005
   migration_rule: n/a
   status: todo
@@ -443,7 +443,7 @@ entries:
   upstream: '-'
   label: 新增
   target: fixtures/ui/golden/macos-arm64/*.png
-  owner: openbot-testkit
+  owner: wrokbot-testkit
   test_id: T-FIX-0006
   migration_rule: n/a
   status: todo
@@ -452,7 +452,7 @@ entries:
   upstream: '-'
   label: 新增
   target: fixtures/ui/golden/windows-x64/*.png
-  owner: openbot-testkit
+  owner: wrokbot-testkit
   test_id: T-FIX-0007
   migration_rule: n/a
   status: todo
@@ -461,7 +461,7 @@ entries:
   upstream: '-'
   label: 新增
   target: fixtures/ui/golden/MANIFEST.toml::image.digest
-  owner: openbot-testkit
+  owner: wrokbot-testkit
   test_id: T-FIX-0008
   migration_rule: n/a
   status: todo
@@ -469,12 +469,12 @@ entries:
 - id: policy-cel-rust-oracle-diff
   upstream: server/src/computer/policy.ts::evaluateActionPolicy
   label: parity
-  target: openbot_domain::policy::cel（golden 对照测试）
-  owner: openbot-domain
+  target: wrokbot_domain::policy::cel（golden 对照测试）
+  owner: wrokbot-domain
   test_id: T-FIX-0009
   migration_rule: 'preserve: 结果类别（true/false/error）任一不同即在迁移报告高亮并要求管理员逐条确认'
   status: done
-  done_evidence: crates/openbot-domain/tests/cel_corpus_parity.rs（`cargo test -p openbot-domain --test cel_corpus_parity`
+  done_evidence: crates/wrokbot-domain/tests/cel_corpus_parity.rs（`cargo test -p wrokbot-domain --test cel_corpus_parity`
     = 6 passed）。 69 条逐条在 Rust cel 0.14.3 上求值，判据不是"全部相同"而是"分歧集合恰好等于 DIVERGENCE_LEDGER 这张写死的 6 条台账" —— `assert_eq!`
     于两个 BTreeMap 上是双向集合相等，多一条（既有规则语义悄悄翻转）与少一条（cel 改了行为）都判红； 另有 `assert_eq!(evaluated, 69)` 防跳过。6 条分歧全是 oracle=error
     → Rust 非 error，其中 deny 侧放宽 2 条、 allow 侧放宽 4 条，由 preflight 逐条给出两侧后果（`preflight_flags_every_ledger_row_with_its_direction`）。
@@ -483,12 +483,12 @@ entries:
 - id: agui-official-event-family
   upstream: '-'
   label: 新增
-  target: fixtures/agui/official-event-family.jsonl -> openbot_agent::agui::AguiDecoder
-  owner: openbot-agent
+  target: fixtures/agui/official-event-family.jsonl -> wrokbot_agent::agui::AguiDecoder
+  owner: wrokbot-agent
   test_id: T-FIX-0010
   migration_rule: 'n/a: official AG-UI schema corpus; third-party wire stays in Agent decoder, not domain/contracts'
   status: done
-  evidence: cargo test -p openbot-agent --test agui_official_fixture --locked；official Git tree/blob + registry
+  evidence: cargo test -p wrokbot-agent --test agui_official_fixture --locked；official Git tree/blob + registry
     source metadata check
   done_evidence: ': fixed @ag-ui/core0.0.57 schema source54f13419…，六个官方文件Git blob/bytes/SHA逐项复核；fixture39行/33type/三scenario，4426B/SHA256
     6c13dad31a54a85a7c38b2d8e7623b9799a31d546eb0502d58000244708ec5ab。官方EventType/fixture/Rust三向集合相等，公共AguiDecoder
@@ -497,8 +497,8 @@ entries:
 - id: agui-malformed-and-drift
   upstream: '-'
   label: 新增
-  target: fixtures/agui/malformed-and-drift.jsonl -> openbot_agent::agui
-  owner: openbot-agent
+  target: fixtures/agui/malformed-and-drift.jsonl -> wrokbot_agent::agui
+  owner: wrokbot-agent
   test_id: T-FIX-0011
   migration_rule: n/a
   status: todo
@@ -506,8 +506,8 @@ entries:
 - id: agui-transport-interruption-resume
   upstream: '-'
   label: 新增
-  target: fixtures/agui/transport-interruption.jsonl -> openbot_agent::agui
-  owner: openbot-agent
+  target: fixtures/agui/transport-interruption.jsonl -> wrokbot_agent::agui
+  owner: wrokbot-agent
   test_id: T-FIX-0012
   migration_rule: n/a
   status: todo
@@ -516,8 +516,8 @@ entries:
 - id: provider-skeleton-stream
   upstream: '-'
   label: 新增
-  target: fixtures/provider/skeleton.jsonl -> openbot_infra::provider
-  owner: openbot-infra
+  target: fixtures/provider/skeleton.jsonl -> wrokbot_infra::provider
+  owner: wrokbot-infra
   test_id: T-FIX-0013
   migration_rule: n/a
   status: todo
@@ -525,8 +525,8 @@ entries:
 - id: provider-partial-json-and-utf8-split
   upstream: '-'
   label: 新增
-  target: fixtures/provider/partial-json-utf8-split.jsonl -> openbot_infra::provider
-  owner: openbot-infra
+  target: fixtures/provider/partial-json-utf8-split.jsonl -> wrokbot_infra::provider
+  owner: wrokbot-infra
   test_id: T-FIX-0014
   migration_rule: n/a
   status: todo
@@ -534,8 +534,8 @@ entries:
 - id: provider-interleaved-parallel-tool-calls
   upstream: '-'
   label: 新增
-  target: fixtures/provider/interleaved-tool-calls.jsonl -> openbot_infra::provider
-  owner: openbot-infra
+  target: fixtures/provider/interleaved-tool-calls.jsonl -> wrokbot_infra::provider
+  owner: wrokbot-infra
   test_id: T-FIX-0015
   migration_rule: n/a
   status: todo
@@ -543,8 +543,8 @@ entries:
 - id: provider-error-and-cancel-race
   upstream: '-'
   label: 新增
-  target: fixtures/provider/error-and-cancel-race.jsonl -> openbot_infra::provider
-  owner: openbot-infra
+  target: fixtures/provider/error-and-cancel-race.jsonl -> wrokbot_infra::provider
+  owner: wrokbot-infra
   test_id: T-FIX-0016
   migration_rule: n/a
   status: todo
@@ -552,8 +552,8 @@ entries:
 - id: provider-commit-divergence
   upstream: '-'
   label: 新增
-  target: fixtures/provider/commit-divergence.jsonl -> openbot_application
-  owner: openbot-application
+  target: fixtures/provider/commit-divergence.jsonl -> wrokbot_application
+  owner: wrokbot-application
   test_id: T-FIX-0017
   migration_rule: n/a
   status: todo
@@ -561,8 +561,8 @@ entries:
 - id: mcp-rmcp-conformance
   upstream: server/src/plugins/store.ts
   label: parity
-  target: fixtures/mcp/rmcp-conformance/*.json -> openbot_agent::mcp
-  owner: openbot-agent
+  target: fixtures/mcp/rmcp-conformance/*.json -> wrokbot_agent::mcp
+  owner: wrokbot-agent
   test_id: T-FIX-0018
   migration_rule: 'preserve: 上游已连的 MCP 服务器与工具目录语义原样保留'
   status: todo
@@ -571,8 +571,8 @@ entries:
 - id: mcp-catalog-generation-drift
   upstream: server/src/plugins/store.ts
   label: parity
-  target: fixtures/mcp/catalog-drift.json -> openbot_agent::mcp
-  owner: openbot-agent
+  target: fixtures/mcp/catalog-drift.json -> wrokbot_agent::mcp
+  owner: wrokbot-agent
   test_id: T-FIX-0019
   migration_rule: 'preserve: catalog generation 与 stale grant 的语义见 v3 §9.3'
   status: todo
@@ -580,8 +580,8 @@ entries:
 - id: mcp-oauth-2-1-pkce
   upstream: '-'
   label: 新增
-  target: fixtures/mcp/oauth-pkce/*.json -> openbot_agent::mcp::oauth
-  owner: openbot-agent
+  target: fixtures/mcp/oauth-pkce/*.json -> wrokbot_agent::mcp::oauth
+  owner: wrokbot-agent
   test_id: T-FIX-0020
   migration_rule: n/a
   status: todo
@@ -589,8 +589,8 @@ entries:
 - id: mcp-hostile-payloads
   upstream: '-'
   label: 新增
-  target: fixtures/mcp/hostile-payloads.json -> openbot_agent::mcp
-  owner: openbot-agent
+  target: fixtures/mcp/hostile-payloads.json -> wrokbot_agent::mcp
+  owner: wrokbot-agent
   test_id: T-FIX-0021
   migration_rule: n/a
   status: todo
@@ -598,8 +598,8 @@ entries:
 - id: browser-operation-closed-enum
   upstream: agent-computer/src/control.ts
   label: parity
-  target: fixtures/browser/operations.json -> openbot_computer::browser
-  owner: openbot-computer
+  target: fixtures/browser/operations.json -> wrokbot_computer::browser
+  owner: wrokbot-computer
   test_id: T-FIX-0022
   migration_rule: 'preserve: BrowserOperation 的 R1 成员与固定 commit 的 agent-computer 浏览器面一一对应'
   status: todo
@@ -607,8 +607,8 @@ entries:
 - id: browser-stale-ref-rejection
   upstream: server/src/computer/gateway.ts::resolve
   label: parity
-  target: fixtures/browser/stale-ref.json -> openbot_computer::browser
-  owner: openbot-computer
+  target: fixtures/browser/stale-ref.json -> wrokbot_computer::browser
+  owner: wrokbot-computer
   test_id: T-FIX-0023
   migration_rule: 'preserve: 上游 resolve() 在 stored.snapshotId !== snapshotId 时返回 undefined'
   status: todo
@@ -617,8 +617,8 @@ entries:
 - id: browser-refused-side-effects
   upstream: '-'
   label: 新增
-  target: fixtures/browser/refused-side-effects.json -> openbot_computer::browser
-  owner: openbot-computer
+  target: fixtures/browser/refused-side-effects.json -> wrokbot_computer::browser
+  owner: wrokbot-computer
   test_id: T-FIX-0024
   migration_rule: 'n/a: 上游没有这两条规范化事件，是本项目新增的 fail-closed 面'
   status: todo
@@ -626,8 +626,8 @@ entries:
 - id: browser-screencast-frame-contract
   upstream: agent-computer/src/screencast.ts
   label: parity
-  target: fixtures/computer/screencast-backpressure-v3.json -> openbot_computer::engine::ScreenIngress
-  owner: openbot-computer
+  target: fixtures/computer/screencast-backpressure-v3.json -> wrokbot_computer::engine::ScreenIngress
+  owner: wrokbot-computer
   test_id: T-FIX-0025
   migration_rule: 'preserve: frame contract 见 v3 §12.3'
   status: done
@@ -641,7 +641,7 @@ entries:
   upstream: server/tests
   label: parity
   target: fixtures/upstream-baseline/README.md + 原始输出归档
-  owner: openbot-testkit
+  owner: wrokbot-testkit
   test_id: T-FIX-0026
   migration_rule: 'n/a: 归档，不迁移'
   status: todo
@@ -649,12 +649,12 @@ entries:
 - id: screen-delivery-budget
   upstream: '-'
   label: 新增
-  target: fixtures/computer/screen-delivery-budget-v1.json -> openbot_server::http::screen
-  owner: openbot-server
+  target: fixtures/computer/screen-delivery-budget-v1.json -> wrokbot_server::http::screen
+  owner: wrokbot-server
   test_id: T-FIX-0054
   migration_rule: 'n/a: v4 per-viewer bandwidth, idle and bounded writer; fixed host defaults added by R189'
   status: done
-  evidence: cargo test -p openbot-server --lib --locked；cargo test -p openbot-server --test screen_engine_conformance
+  evidence: cargo test -p wrokbot-server --lib --locked；cargo test -p wrokbot-server --test screen_engine_conformance
     --locked -- --ignored --nocapture
   done_evidence: fixture=1301 bytes/SHA-256 2e7a844fc68e559c9b789e4dd8c7d8940819165fb096a3f59740281e26ea9ad2；Server
     lib233/0/0、screen11/0/0。真实TCP覆盖带宽/control flood关闭、active slot409及断线释放、静态画面matching Pong续期/持续outgoing不续期；macOS真实Engine以生产10秒Ping/30秒idle实跑1/0/0（49.92秒），随后显式stop/shutdown。整数纳秒byte
@@ -662,21 +662,21 @@ entries:
 - id: screen-demand-lifecycle
   upstream: '-'
   label: 新增
-  target: fixtures/computer/screen-demand-lifecycle-v4.json -> openbot_computer::screen::engine_owner
-  owner: openbot-computer
+  target: fixtures/computer/screen-demand-lifecycle-v4.json -> wrokbot_computer::screen::engine_owner
+  owner: wrokbot-computer
   test_id: T-FIX-0055
   migration_rule: 'n/a: v4 §12.6 last-viewer stop requires a Rust-owned engine lifecycle preserving the document'
   status: done
-  evidence: cargo test -p openbot-computer --test engine_conformance --locked -- --include-ignored --nocapture；cargo
-    test -p openbot-server --test screen_engine_conformance --locked -- --ignored --nocapture
+  evidence: cargo test -p wrokbot-computer --test engine_conformance --locked -- --include-ignored --nocapture；cargo
+    test -p wrokbot-server --test screen_engine_conformance --locked -- --ignored --nocapture
   done_evidence: fixture=1411 bytes/SHA-256 2a510ef64d7710c878c6181a5d726d607fb8d94a138d74ff261b8e1a3439598d；protocol/epoch4，595/600
     LOC shim。macOS双role真实last-viewer pause<2秒、paused received=ack=4且250ms不增长、相同renderer与scroll400恢复；queued stale
     epoch在pipe前拒绝，current ControlService guard持有到input ACK。真实Server默认heartbeat/idle→owner自动pause纵切1/0/0（48.21秒）；Hub两个新负向锁定pending不算viewer、detach不等旧handle、旧source/owner不能清除同key替代stream。
 - id: provider-anthropic-messages-recorded-traces
   upstream: '-'
   label: 新增
-  target: fixtures/provider/anthropic-messages-tool-use-stream.sse + anthropic-messages-thinking-stream.sse -> openbot_infra::provider::anthropic
-  owner: openbot-infra
+  target: fixtures/provider/anthropic-messages-tool-use-stream.sse + anthropic-messages-thinking-stream.sse -> wrokbot_infra::provider::anthropic
+  owner: wrokbot-infra
   test_id: T-FIX-0056
   migration_rule: 'n/a: v4 §24 G4 Anthropic 官方发布的 recorded/captured response-body 证据'
   status: done
@@ -689,13 +689,13 @@ entries:
 - id: scoped-egress-gateway-substrate
   upstream: '-'
   label: 新增
-  target: fixtures/computer/scoped-egress-v1.json -> openbot_infra::net::scope_gateway
-  owner: openbot-infra
+  target: fixtures/computer/scoped-egress-v1.json -> wrokbot_infra::net::scope_gateway
+  owner: wrokbot-infra
   test_id: T-FIX-0057
   migration_rule: 'n/a: v4 §10.5 Rust-owned network gateway substrate; production ComputerManager/Engine/namespace
     assembly is separate'
   status: done
-  evidence: cargo test -p openbot-infra --test scoped_egress --locked：macOS真实loopback HTTP/CONNECT/WebSocket/TLS、认证前DNS0、deny/空allow/host/port/private拒绝、resolver
+  evidence: cargo test -p wrokbot-infra --test scoped_egress --locked：macOS真实loopback HTTP/CONNECT/WebSocket/TLS、认证前DNS0、deny/空allow/host/port/private拒绝、resolver
     port覆盖、逐连接fresh DNS、header清理与不自动redirect/retry、IPv6、实际body/tunnel预算、共享rate、idle/lifetime/cancel/Drop
   done_evidence: fixture=3310 bytes/SHA-256 adfe8295ecb2435bb4a8bc68a8c74926a5033e6b5fdb70b52d8703afd1987928；15/0/0，原safe_http14/0/0、provider32/0/0、官方recorded4/0/0；Infra
     all-target/all-feature Clippy与唯一出网guard绿。IPv6测试先失败，改typed URL host后实际::1可达且DNS0。HTTP/CONNECT/WS完全经过SafeDialer私有ProxyHop；无第二DNS/connect/HTTP
@@ -703,8 +703,8 @@ entries:
 - id: engine-child-environment-isolation
   upstream: '-'
   label: 新增
-  target: fixtures/computer/engine-child-environment-v1.json -> openbot_computer::engine + openbot_windows_sandbox
-  owner: openbot-computer
+  target: fixtures/computer/engine-child-environment-v1.json -> wrokbot_computer::engine + wrokbot_windows_sandbox
+  owner: wrokbot-computer
   test_id: T-FIX-0058
   migration_rule: 'n/a: v4 §11.2/§11.3 Engine must not receive host provider/DB credentials or arbitrary environment'
   status: done
@@ -716,8 +716,8 @@ entries:
 - id: macos-engine-main-direct-read-boundary
   upstream: '-'
   label: 新增
-  target: fixtures/computer/macos-engine-main-read-v1.json -> openbot_computer::engine::process::sandbox_profile
-  owner: openbot-computer
+  target: fixtures/computer/macos-engine-main-read-v1.json -> wrokbot_computer::engine::process::sandbox_profile
+  owner: wrokbot-computer
   test_id: T-FIX-0059
   migration_rule: 'n/a: v4 §10.1/§10.3/§17.2 direct Engine main filesystem read confinement'
   status: done
@@ -729,8 +729,8 @@ entries:
 - id: macos-engine-main-exact-outbound-pipes
   upstream: '-'
   label: 新增
-  target: fixtures/computer/macos-engine-main-network-v1.json -> openbot_computer::engine::process::sandbox_profile
-  owner: openbot-computer
+  target: fixtures/computer/macos-engine-main-network-v1.json -> wrokbot_computer::engine::process::sandbox_profile
+  owner: wrokbot-computer
   test_id: T-FIX-0060
   migration_rule: 'n/a: v4 §10.5/§11.2 exact Engine-main control/frame UDS network authority'
   status: done

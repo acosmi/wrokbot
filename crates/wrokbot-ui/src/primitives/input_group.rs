@@ -30,7 +30,7 @@ pub fn InputGroup(
 ) -> impl IntoView {
     view! {
         <div
-            class="ob-input-group"
+            class="wrokbot-input-group"
             data-state=preview_focus_within.then_some("focus-within")
         >
             {children()}
@@ -42,7 +42,7 @@ pub fn InputGroup(
 #[component]
 pub fn InputGroupAffix(position: InputGroupAffixPosition, children: Children) -> impl IntoView {
     view! {
-        <span class="ob-input-group-affix" data-position=position.as_str()>
+        <span class="wrokbot-input-group-affix" data-position=position.as_str()>
             {children()}
         </span>
     }

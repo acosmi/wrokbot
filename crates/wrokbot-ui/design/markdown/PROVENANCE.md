@@ -17,4 +17,4 @@ The UI exposes 24 language tokens (bash/sh share a grammar), with Plain Text for
 
 `MANIFEST.json` records byte lengths and SHA-256 values. Original notices are shipped through `assets/notices/markdown/`; the custom Sublime Packages permission text is preserved verbatim. The JSX adaptation is recorded in `jsx-fancy-compat.patch`, and the TSX file was replaced because the inherited asset could not be matched to the claimed source.
 
-Rebuild with `cargo run -p openbot-ui --example pack_markdown --locked --offline`; then rerun UI tests, release WASM build, syntax token checks and bundle budget. The source `.sublime-syntax` files are build inputs, not downloaded at runtime. Clipboard operations require an explicit user click; unknown languages and large code blocks keep plain text.
+Rebuild with `cargo run -p wrokbot-ui --example pack_markdown --locked --offline`; then rerun UI tests, release WASM build, syntax token checks and bundle budget. The source `.sublime-syntax` files are build inputs, not downloaded at runtime. Clipboard operations require an explicit user click; unknown languages and large code blocks keep plain text.

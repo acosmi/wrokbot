@@ -40,8 +40,8 @@ pub fn Badge(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <span class="ob-badge" data-tone=tone.as_str()>
-            <span class="ob-badge-dot" aria-hidden="true"></span>
+        <span class="wrokbot-badge" data-tone=tone.as_str()>
+            <span class="wrokbot-badge-dot" aria-hidden="true"></span>
             {children()}
         </span>
     }

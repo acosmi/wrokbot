@@ -103,7 +103,7 @@ multiple-versions = "warn"
 # 通配符依赖（`foo = "*"`）直接拒绝：它让 `Cargo.lock` 之外再无版本约束，
 # 与 repository contract §3"禁止静默升 lockfile"直接冲突。
 wildcards = "deny"
-# 但**工作区内部的 path 依赖除外**。`openbot-contracts = { path = "..." }` 没有版本号，
+# 但**工作区内部的 path 依赖除外**。`wrokbot-contracts = { path = "..." }` 没有版本号，
 # cargo-deny 按 wildcard 处理；而 wildcards 这条判据要挡的是"从 registry 拉任意版本"，
 # 内部 crate 根本不经 registry、版本恒等于本仓当前源码，不存在那个风险。
 # 全仓 crate 都是 `publish = false`（见根 [workspace.package]），不会外发。
@@ -183,7 +183,7 @@ allow-build-scripts = [
     "thiserror",
     "wasm-bindgen",
     "wasm-bindgen-shared",
-    # 2026-08-22 第四批：随 openbot-server 的 axum/hyper 依赖面进入。逐字读过（133 行）：
+    # 2026-08-22 第四批：随 wrokbot-server 的 axum/hyper 依赖面进入。逐字读过（133 行）：
     #   - httparse 1.10.1：`Command::new(RUSTC).arg("--version")` 取版本 + 读 `CARGO_CFG_TARGET_FEATURE`
     #     等环境变量，据此 emit `httparse_simd*` 系列 cfg 决定走编译期还是运行期 SIMD 检测。
     #     与 libc / thiserror 同族：无网络、无下载、不执行第三方二进制、不写源码树。
@@ -362,7 +362,7 @@ allow-build-scripts = [
     # - wry: desktop targets only emit link cfg; Android Kotlin generation is target-unreachable;
     # - tauri: emits desktop cfg, generates deterministic permission material in OUT_DIR and upstream
     #   registry-source documentation; its Android and in-Tauri-workspace branches are unreachable;
-    # - swift-rs: the actual Cargo build target is a 21-line no-op unless TEST_SWIFT_RS=true. OpenBot
+    # - swift-rs: the actual Cargo build target is a 21-line no-op unless TEST_SWIFT_RS=true. WrokBot
     #   force-sets that variable false in .cargo/config.toml; the dormant 574-line toolchain module is
     #   hash-locked too, so Swift/xcrun/clang/nm/llvm-objcopy cannot be enabled by ambient state.
     # None of the 13 scripts performs network access or downloads.
@@ -486,7 +486,7 @@ allow-globs = ["template/createfn.sh"]
 crate = "webview2-com-sys@0.38.2"
 # Windows Tauri links Microsoft's packaged WebView2 loader. build.rs copies exactly one target
 # directory to OUT_DIR; all three architectures remain in the crates.io archive, so every shipped
-# DLL/import/static library is byte-locked by tools/check-tauri-dependencies.sh. The released OpenBot
+# DLL/import/static library is byte-locked by tools/check-tauri-dependencies.sh. The released WrokBot
 # Desktop target is x64; keeping all nine explicit here means a new architecture/file still fails.
 allow-globs = [
     "arm64/WebView2Loader.dll",

@@ -1,7 +1,7 @@
 {
-  "schema": "openbot-macos-engine-main-read-v1",
+  "schema": "wrokbot-macos-engine-main-read-v1",
   "target": "Engine main SBPL direct filesystem access",
-  "production_generator": "openbot_computer::engine::process::sandbox_profile",
+  "production_generator": "wrokbot_computer::engine::process::sandbox_profile",
   "role_protocol_epoch": 4,
   "policy": {
     "file_read_default": "deny",

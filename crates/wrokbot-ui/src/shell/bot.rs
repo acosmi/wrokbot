@@ -9,8 +9,8 @@ mod bot_thread;
 
 use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_query_map};
-use openbot_contracts::agent::AgentProfile;
-use openbot_contracts::ids::{BotId, ThreadId};
+use wrokbot_contracts::agent::AgentProfile;
+use wrokbot_contracts::ids::{BotId, ThreadId};
 
 #[cfg(target_arch = "wasm32")]
 use self::bot_thread::{
@@ -73,10 +73,10 @@ pub fn BotChatPage() -> impl IntoView {
                 description=move || t_string!(i18n, bot_chat.intro).to_owned()
             />
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, bot_chat.agent_load_error)}</span>
                     <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry>
                         {move || t!(i18n, common.retry)}
@@ -84,10 +84,10 @@ pub fn BotChatPage() -> impl IntoView {
                 </div>
             </Show>
             <Show when=move || !loading.get() && !load_error.get() && selected_profile.get().is_none()>
-                <p class="ob-page-empty">{move || t!(i18n, bot_chat.no_agents)}</p>
+                <p class="wrokbot-page-empty">{move || t!(i18n, bot_chat.no_agents)}</p>
             </Show>
             <Show when=move || selected_profile.get().is_some()>
-                <div class="ob-bot-chat-selector">
+                <div class="wrokbot-bot-chat-selector">
                     <RecipientField
                         agents=Signal::derive(move || agents.get())
                         selected
@@ -168,7 +168,7 @@ fn BotThreadPane(agent: AgentProfile) -> impl IntoView {
     };
 
     view! {
-        <div class="ob-bot-thread-toolbar">
+        <div class="wrokbot-bot-thread-toolbar">
             <Button
                 variant=ButtonVariant::Ghost
                 size=ButtonSize::Medium
@@ -184,7 +184,7 @@ fn BotThreadPane(agent: AgentProfile) -> impl IntoView {
             <p class="ob-alert" role="alert">{move || t!(i18n, bot_chat.history_unavailable)}</p>
         </Show>
         <Show when=move || thread_error.get()>
-            <div class="ob-alert" role="alert">
+            <div class="wrokbot-alert" role="alert">
                 <span>{move || t!(i18n, bot_chat.thread_error)}</span>
                 <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry>
                     {move || t!(i18n, common.retry)}
@@ -192,10 +192,10 @@ fn BotThreadPane(agent: AgentProfile) -> impl IntoView {
             </div>
         </Show>
         <Show when=move || new_error.get()>
-            <p class="ob-alert" role="alert">{move || t!(i18n, bot_chat.new_chat_error)}</p>
+            <p class="wrokbot-alert" role="alert">{move || t!(i18n, bot_chat.new_chat_error)}</p>
         </Show>
         <Show when=move || loading.get()>
-            <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+            <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
         </Show>
         <For
             each=move || thread.get().into_iter()

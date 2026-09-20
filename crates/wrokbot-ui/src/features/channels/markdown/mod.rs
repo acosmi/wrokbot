@@ -15,7 +15,7 @@ use sanitize::{ImagePolicy, SafeUrl};
 
 #[component]
 pub(crate) fn MarkdownBody(content: String) -> impl IntoView {
-    view! { <div class="ob-markdown">{parser::parse_markdown(&content).into_iter().map(block_view).collect_view()}</div> }
+    view! { <div class="wrokbot-markdown">{parser::parse_markdown(&content).into_iter().map(block_view).collect_view()}</div> }
 }
 
 #[component]
@@ -26,7 +26,7 @@ pub(crate) fn StreamingMarkdownBody(content: Signal<String>) -> impl IntoView {
         cache.update_value(|cache| result = cache.process_stream("stream", &content.get()));
         result
     });
-    view! { <div class="ob-markdown" data-streaming="true"><For each=move || blocks.get() key=|block| block.view_key() children=move |entry| block_view((*entry.block).clone())/></div> }
+    view! { <div class="wrokbot-markdown" data-streaming="true"><For each=move || blocks.get() key=|block| block.view_key() children=move |entry| block_view((*entry.block).clone())/></div> }
 }
 
 fn inline_views(children: Vec<MarkdownInline>) -> impl IntoView {
@@ -56,14 +56,14 @@ fn block_view(block: MarkdownBlock) -> AnyView {
         },
         MarkdownBlock::Table { alignments, headers, rows } => {
             let header_align = alignments.clone();
-            view! { <div class="ob-markdown-table" role="region" tabindex="0" aria-label=move || t_string!(i18n, channels.md_table).to_owned()><table>
+            view! { <div class="wrokbot-markdown-table" role="region" tabindex="0" aria-label=move || t_string!(i18n, channels.md_table).to_owned()><table>
                 <thead><tr>{headers.into_iter().enumerate().map(|(i, cell)| view! { <th scope="col" data-align=alignment(header_align.get(i))>{inline_views(cell.children)}</th> }).collect_view()}</tr></thead>
                 <tbody>{rows.into_iter().map(|row| view! { <tr>{row.into_iter().enumerate().map(|(i, cell)| view! { <td data-align=alignment(alignments.get(i))>{inline_views(cell.children)}</td> }).collect_view()}</tr> }).collect_view()}</tbody>
             </table></div> }.into_any()
         },
         MarkdownBlock::Rule => view! { <hr/> }.into_any(),
-        MarkdownBlock::HtmlRaw(raw) => view! { <pre class="ob-transcript-text">{raw}</pre> }.into_any(),
-        MarkdownBlock::Limited { preview, .. } => view! { <div><p role="status">{move || t!(i18n, channels.md_limited)}</p><pre class="ob-transcript-text">{preview}</pre></div> }.into_any(),
+        MarkdownBlock::HtmlRaw(raw) => view! { <pre class="wrokbot-transcript-text">{raw}</pre> }.into_any(),
+        MarkdownBlock::Limited { preview, .. } => view! { <div><p role="status">{move || t!(i18n, channels.md_limited)}</p><pre class="wrokbot-transcript-text">{preview}</pre></div> }.into_any(),
     }
 }
 fn alignment(value: Option<&TableAlignment>) -> &'static str {
@@ -137,8 +137,8 @@ fn external_navigation_available() -> bool {
 }
 fn link_view(url: SafeUrl, title: Option<String>, content: AnyView) -> AnyView {
     match url {
-        SafeUrl::External { href, domain } if external_navigation_available() => view! { <a href=href title=title target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{content}<small class="ob-markdown-domain">{domain}</small></a> }.into_any(),
-        SafeUrl::External { domain, .. } => view! { <span>{content}<small class="ob-markdown-domain">{domain}</small></span> }.into_any(),
+        SafeUrl::External { href, domain } if external_navigation_available() => view! { <a href=href title=title target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{content}<small class="wrokbot-markdown-domain">{domain}</small></a> }.into_any(),
+        SafeUrl::External { domain, .. } => view! { <span>{content}<small class="wrokbot-markdown-domain">{domain}</small></span> }.into_any(),
         SafeUrl::Inert { .. } => view! { <span>{content}</span> }.into_any(),
     }
 }
@@ -174,7 +174,7 @@ fn CodeBlock(lang: String, code: String) -> impl IntoView {
             });
         });
     };
-    view! { <div class="ob-markdown-code"><div class="ob-skill-chips"><code>{if lang.is_empty() { "text".to_owned() } else { lang }}</code>
+    view! { <div class="wrokbot-markdown-code"><div class="wrokbot-skill-chips"><code>{if lang.is_empty() { "text".to_owned() } else { lang }}</code>
         <Button variant=ButtonVariant::Ghost size=ButtonSize::Small disabled=Signal::derive(move || status.get() == CopyStatus::Pending) on_activate=copy>{move || if status.get() == CopyStatus::Copied { t_string!(i18n, channels.md_copied).to_owned() } else { t_string!(i18n, channels.md_copy).to_owned() }}</Button>
     </div><pre><code>{spans}</code></pre>
     <Show when=move || status.get() == CopyStatus::Failed><p role="status">{move || t!(i18n, channels.md_copy_error)}</p></Show></div> }
@@ -190,7 +190,7 @@ mod tests {
             "\nhttps://example.test",
             "https://user:pass@example.test",
             "/api/private/file",
-            "openbot-attachment://secret",
+            "wrokbot-attachment://secret",
             "data:image/png,x",
         ] {
             assert!(
@@ -297,7 +297,7 @@ mod tests {
 #[component]
 pub(crate) fn MarkdownPreview() -> impl IntoView {
     let source = RwSignal::new("## 工作计划 · Plan\n\n这是 **重点**、*说明*、~~旧项~~和 `inline code`。\n\n3. 核对来源\n4. 交付结果\n\n- [x] 已完成\n- [ ] 待复核\n\n> 引用保持层级。\n\n| 模块 | 状态 |\n|:---|---:|\n| 技能 | 已接通 |\n| Screen | 待接通 |\n\n```rust\n// Evidence first\nfn main() {\n    let text = \"你好，Wrok Bot\";\n    println!(\"{}\", text);\n}\n```\n\n[参考来源](https://example.test/reference)\n\n![remote pixel](https://example.test/pixel.png)\n\n<script>alert('inert')</script>\n".to_owned());
-    view! { <section class="ob-page" id="markdown-preview"><h1 class="ob-page-title">"Markdown preview"</h1><crate::primitives::Textarea value=source id="markdown-preview-source" aria_label="Markdown source"/>
+    view! { <section class="wrokbot-page" id="markdown-preview"><h1 class="wrokbot-page-title">"Markdown preview"</h1><crate::primitives::Textarea value=source id="markdown-preview-source" aria_label="Markdown source"/>
         <StreamingMarkdownBody content=Signal::derive(move || source.get())/>
     </section> }
 }

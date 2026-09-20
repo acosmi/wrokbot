@@ -1,5 +1,5 @@
 [package]
-name = "openbot-ui"
+name = "wrokbot-ui"
 description = "Leptos CSR/WASM（v3 §5.1 / §13.1；视觉真源 = 设计系统文档）"
 version.workspace = true
 edition.workspace = true
@@ -16,7 +16,7 @@ default = "en"
 locales = ["en", "zh-CN"]
 locales-dir = "locales"
 
-[package.metadata.openbot-ui]
+[package.metadata.wrokbot-ui]
 generated-assets = ["design/tokens.css"]
 
 [lints]
@@ -29,7 +29,7 @@ default = []
 design-gallery = []
 
 [dependencies]
-openbot-contracts.workspace = true
+wrokbot-contracts.workspace = true
 serde_json.workspace = true
 base64.workspace = true
 time.workspace = true

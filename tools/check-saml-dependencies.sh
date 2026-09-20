@@ -10,7 +10,7 @@ fail() {
 grep -qF 'samael = { version = "=0.0.22", default-features = false, features = ["xmlsec"] }' Cargo.toml \
   || fail 'samael 必须精确钉 0.0.22 且显式开启 xmlsec'
 
-tree=$(cargo tree -p openbot-infra -e all --prefix none --locked | sed -E 's/ \(proc-macro\)$//; s/ \(\*\)$//' | sort -u)
+tree=$(cargo tree -p wrokbot-infra -e all --prefix none --locked | sed -E 's/ \(proc-macro\)$//; s/ \(\*\)$//' | sort -u)
 for exact in \
   'adler2 v2.0.1' 'bindgen v0.72.1' 'cexpr v0.6.0' 'clang-sys v1.9.1' \
   'crc32fast v1.5.1' 'darling v0.20.11' 'darling_core v0.20.11' \
@@ -25,7 +25,7 @@ for exact in \
   grep -qxF "$exact" <<< "$tree" || fail "依赖图缺少精确版本 $exact"
 done
 
-feature_tree=$(cargo tree -p openbot-infra -e features --prefix none --locked | sed -E 's/ \(\*\)$//' | sort -u)
+feature_tree=$(cargo tree -p wrokbot-infra -e features --prefix none --locked | sed -E 's/ \(\*\)$//' | sort -u)
 grep -qxF 'samael feature "xmlsec"' <<< "$feature_tree" \
   || fail 'samael xmlsec feature 未生效'
 
@@ -94,7 +94,7 @@ for name,entries in d.get("exemptions",{}).items():
 assert seen==expected,(seen,expected)
 ' || fail '30 条 W-7b Cargo Vet exemption 集合/owner/诚实说明漂移'
 
-saml_source='crates/openbot-infra/src/auth/sso/saml.rs'
+saml_source='crates/wrokbot-infra/src/auth/sso/saml.rs'
 grep -qF 'ReduceMode::ValidateAndMarkNoAncestors' "$saml_source" \
   || fail 'SAML 未固定 XSW-resistant signed-root reduction'
 grep -qF 'xml.contains("<!DOCTYPE")' "$saml_source" || fail 'SAML 未拒绝 DOCTYPE'
@@ -112,11 +112,11 @@ grep -qF 'const MAX_ASSERTION_LIFETIME: Duration = Duration::minutes(10);' "$sam
   || fail 'SAML assertion 最大有效期未锁为 10 分钟'
 grep -qF 'const MAX_GROUP_CLAIM_VALUES: usize = 256;' "$saml_source" \
   || fail 'SAML group claim 数量上限漂移或消失'
-grep -qF 'validate_saml_entity_id(&input.issuer)?;' crates/openbot-infra/src/auth/sso/config.rs \
+grep -qF 'validate_saml_entity_id(&input.issuer)?;' crates/wrokbot-infra/src/auth/sso/config.rs \
   || fail 'SAML EntityID 被错误套用 OIDC HTTPS issuer 规则'
 grep -qF 'Ok(effective_expiry + MAX_CLOCK_SKEW)' "$saml_source" \
   || fail 'SAML replay expiry 未覆盖 verifier 接受的 clock-skew 尾窗'
-ephemeral_source='crates/openbot-infra/src/auth/sso/ephemeral.rs'
+ephemeral_source='crates/wrokbot-infra/src/auth/sso/ephemeral.rs'
 grep -qF 'const MAX_ASSERTION_REPLAY_RETENTION: Duration = Duration::minutes(14);' "$ephemeral_source" \
   || fail 'SAML replay store 未锁 10 分钟 assertion + 双向 clock-skew 上界'
 if rg -q 'assertion_expires_at\.min\(' "$ephemeral_source"; then
@@ -127,14 +127,14 @@ if rg -q 'openssl::(ssl|ocsp|pkcs12|quic)' crates --glob '*.rs'; then
 fi
 
 vault_users=$(rg -l 'SsoConfigVault' crates --glob '*.rs' | sort)
-expected_vault_users=$'crates/openbot-infra/src/auth/sso/service.rs\ncrates/openbot-infra/src/auth/sso/store.rs\ncrates/openbot-infra/src/auth/sso/vault.rs'
+expected_vault_users=$'crates/wrokbot-infra/src/auth/sso/service.rs\ncrates/wrokbot-infra/src/auth/sso/store.rs\ncrates/wrokbot-infra/src/auth/sso/vault.rs'
 [[ "$vault_users" == "$expected_vault_users" ]] \
   || fail 'SSO config vault 逃出显式 service/store/vault 边界，可能重新变成全局 model hook'
-grep -qF 'pub(crate) struct SsoConfigVault' crates/openbot-infra/src/auth/sso/vault.rs \
+grep -qF 'pub(crate) struct SsoConfigVault' crates/wrokbot-infra/src/auth/sso/vault.rs \
   || fail 'SSO config vault 可见性不再局限于 infra crate'
-grep -qF 'pub(crate) enum SsoSecretColumn' crates/openbot-infra/src/auth/sso/vault.rs \
+grep -qF 'pub(crate) enum SsoSecretColumn' crates/wrokbot-infra/src/auth/sso/vault.rs \
   || fail 'SSO config vault 列名不再由 OIDC/SAML 封闭枚举承载'
-store_source='crates/openbot-infra/src/auth/sso/store.rs'
+store_source='crates/wrokbot-infra/src/auth/sso/store.rs'
 grep -qF 'assert_deployment_owned_row(row)?;' "$store_source" \
   || fail '历史 organization-scoped provider 可能被放大成 deployment-owned'
 grep -qF 'let canonical_domain = domains_column(&domains);' "$store_source" \

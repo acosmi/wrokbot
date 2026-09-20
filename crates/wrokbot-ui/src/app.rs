@@ -251,9 +251,9 @@ fn SettingsComponentGalleryDetailRoute() -> impl IntoView {
 fn NotFound() -> impl IntoView {
     let i18n = use_i18n();
     view! {
-        <section class="ob-page">
-            <h1 class="ob-page-title">{move || t!(i18n, errors.not_found_title)}</h1>
-            <p class="ob-page-intro">{move || t!(i18n, errors.not_found_body)}</p>
+        <section class="wrokbot-page">
+            <h1 class="wrokbot-page-title">{move || t!(i18n, errors.not_found_title)}</h1>
+            <p class="wrokbot-page-intro">{move || t!(i18n, errors.not_found_body)}</p>
         </section>
     }
 }

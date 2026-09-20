@@ -2,10 +2,10 @@
   "schema": "ui-seed",
   "schema_version": 1,
   "upstream_commit": "891df72f1827454d8b353d108fe5dd2313b7e30d",
-  "purpose": "GUI 设计系统与视觉规格 §10.2 的确定性数据源。openbot-server 在 cargo feature `golden` 下由 openbot-testkit 的 fake ApplicationService 从本文件装载，全程无 PostgreSQL、无模型调用、无网络。",
+  "purpose": "GUI 设计系统与视觉规格 §10.2 的确定性数据源。wrokbot-server 在 cargo feature `golden` 下由 wrokbot-testkit 的 fake ApplicationService 从本文件装载，全程无 PostgreSQL、无模型调用、无网络。",
   "clock": {
     "now": "2026-01-01T00:00:00Z",
-    "injected_via": "openbot_testkit::Clock",
+    "injected_via": "wrokbot_testkit::Clock",
     "rule": "GUI 取时间只经注入的 Clock；本文件里任何时间戳都不得晚于 now，相对时间文案（“3 天前”）由 now 减去字段值算出，因此 now 变了 golden 就必须重截。"
   },
   "conventions": {
@@ -51,11 +51,11 @@
   ],
   "entities": {
     "users": [
-      { "id": "usr-ada", "email": "ada@openbot.example", "name": "Ada Okonkwo", "image": null, "email_verified": true, "groups": ["engineering", "admins"], "created_at": "2025-09-02T09:00:00Z", "updated_at": "2025-12-30T11:20:00Z" },
-      { "id": "usr-bo", "email": "bo@openbot.example", "name": "Bo Lindqvist", "image": null, "email_verified": true, "groups": ["engineering"], "created_at": "2025-09-14T13:30:00Z", "updated_at": "2025-12-29T08:05:00Z" },
-      { "id": "usr-chen", "email": "chen@openbot.example", "name": "陈墨", "image": null, "email_verified": true, "groups": ["support"], "created_at": "2025-10-06T02:15:00Z", "updated_at": "2025-12-31T15:45:00Z" },
-      { "id": "usr-dana", "email": "dana@openbot.example", "name": "Dana Ruiz", "image": null, "email_verified": false, "groups": [], "created_at": "2025-12-20T17:40:00Z", "updated_at": "2025-12-20T17:40:00Z" },
-      { "id": "usr-eli", "email": "eli@openbot.example", "name": "Eli Vance", "image": null, "email_verified": true, "groups": ["engineering"], "created_at": "2025-08-11T10:00:00Z", "updated_at": "2025-12-18T09:00:00Z" }
+      { "id": "usr-ada", "email": "ada@wrokbot.example", "name": "Ada Okonkwo", "image": null, "email_verified": true, "groups": ["engineering", "admins"], "created_at": "2025-09-02T09:00:00Z", "updated_at": "2025-12-30T11:20:00Z" },
+      { "id": "usr-bo", "email": "bo@wrokbot.example", "name": "Bo Lindqvist", "image": null, "email_verified": true, "groups": ["engineering"], "created_at": "2025-09-14T13:30:00Z", "updated_at": "2025-12-29T08:05:00Z" },
+      { "id": "usr-chen", "email": "chen@wrokbot.example", "name": "陈墨", "image": null, "email_verified": true, "groups": ["support"], "created_at": "2025-10-06T02:15:00Z", "updated_at": "2025-12-31T15:45:00Z" },
+      { "id": "usr-dana", "email": "dana@wrokbot.example", "name": "Dana Ruiz", "image": null, "email_verified": false, "groups": [], "created_at": "2025-12-20T17:40:00Z", "updated_at": "2025-12-20T17:40:00Z" },
+      { "id": "usr-eli", "email": "eli@wrokbot.example", "name": "Eli Vance", "image": null, "email_verified": true, "groups": ["engineering"], "created_at": "2025-08-11T10:00:00Z", "updated_at": "2025-12-18T09:00:00Z" }
     ],
     "user_roles": [
       { "user_id": "usr-ada", "role": "admin", "created_at": "2025-09-02T09:00:00Z" },
@@ -65,17 +65,17 @@
       { "user_id": "usr-eli", "role": "user", "created_at": "2025-08-11T10:00:00Z" }
     ],
     "revoked_access": [
-      { "email": "eli@openbot.example", "revoked_at": "2025-12-18T09:05:00Z", "revoked_by": "usr-ada" }
+      { "email": "eli@wrokbot.example", "revoked_at": "2025-12-18T09:05:00Z", "revoked_by": "usr-ada" }
     ],
     "sessions": [
-      { "id": "ses-golden-0001", "user_id": "usr-ada", "token": "golden-session-token-not-a-secret", "expires_at": "2026-01-08T00:00:00Z", "ip_address": "127.0.0.1", "user_agent": "openbot-golden-harness/1", "created_at": "2025-12-31T23:00:00Z", "updated_at": "2025-12-31T23:00:00Z" }
+      { "id": "ses-golden-0001", "user_id": "usr-ada", "token": "golden-session-token-not-a-secret", "expires_at": "2026-01-08T00:00:00Z", "ip_address": "127.0.0.1", "user_agent": "wrokbot-golden-harness/1", "created_at": "2025-12-31T23:00:00Z", "updated_at": "2025-12-31T23:00:00Z" }
     ],
     "sso_providers": [
-      { "id": "sso-corp-oidc", "issuer": "https://login.example.com", "oidc_config": "{\"clientId\":\"openbot-golden\",\"scopes\":[\"openid\",\"email\",\"profile\"]}", "saml_config": null, "user_id": null, "provider_id": "corp-oidc", "organization_id": "org-example", "domain": "example.com" },
-      { "id": "sso-partner-saml", "issuer": "https://sso.partner.example", "oidc_config": null, "saml_config": "{\"entityId\":\"openbot-golden\"}", "user_id": null, "provider_id": "partner-saml", "organization_id": "org-partner", "domain": "partner.example" }
+      { "id": "sso-corp-oidc", "issuer": "https://login.example.com", "oidc_config": "{\"clientId\":\"wrokbot-golden\",\"scopes\":[\"openid\",\"email\",\"profile\"]}", "saml_config": null, "user_id": null, "provider_id": "corp-oidc", "organization_id": "org-example", "domain": "example.com" },
+      { "id": "sso-partner-saml", "issuer": "https://sso.partner.example", "oidc_config": null, "saml_config": "{\"entityId\":\"wrokbot-golden\"}", "user_id": null, "provider_id": "partner-saml", "organization_id": "org-partner", "domain": "partner.example" }
     ],
     "deployment_packages": [
-      { "id": "11111111-1111-4111-8111-111111111111", "tenant_id": "golden-tenant", "source_path": "/srv/openbot/packages/golden-tenant", "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000001", "loaded_at": "2025-12-01T00:00:00Z" }
+      { "id": "11111111-1111-4111-8111-111111111111", "tenant_id": "golden-tenant", "source_path": "/srv/wrokbot/packages/golden-tenant", "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000001", "loaded_at": "2025-12-01T00:00:00Z" }
     ],
     "agents": [
       { "id": "concierge", "name": "Concierge", "type": "built_in", "configuration": { "model": "golden-model", "tools": ["remember", "computer_read"] }, "package_id": "11111111-1111-4111-8111-111111111111", "override": null, "created_at": "2025-09-02T09:10:00Z", "updated_at": "2025-12-30T11:20:00Z" },
@@ -187,7 +187,7 @@
       { "id": "33333333-3333-4333-8333-333333333301", "actor_user_id": "usr-ada", "event_type": "policy.updated", "target_type": "action_policy", "target_id": "current", "payload": { "mode": "enforce", "deny_count": 2, "allow_count": 1 }, "created_at": "2025-12-30T11:00:00Z" },
       { "id": "33333333-3333-4333-8333-333333333302", "actor_user_id": null, "event_type": "computer.action.refused", "target_type": "computer", "target_id": "risk-analyst", "payload": { "tool": "computer_click", "rule": "(intent == \"activate\" && contains(element.name, \"submit\")) || ((tool.name == \"computer_key\" || tool.name == \"computer_type\") && key == \"Enter\")", "source": "deny", "mode": "enforce" }, "created_at": "2025-12-31T22:41:00Z" },
       { "id": "33333333-3333-4333-8333-333333333303", "actor_user_id": null, "event_type": "computer.action.allowed", "target_type": "computer", "target_id": "risk-analyst", "payload": { "tool": "computer_read", "source": "allow", "mode": "enforce" }, "created_at": "2025-12-31T22:39:00Z" },
-      { "id": "33333333-3333-4333-8333-333333333304", "actor_user_id": "usr-ada", "event_type": "person.access.revoked", "target_type": "user", "target_id": "usr-eli", "payload": { "email_domain": "openbot.example" }, "created_at": "2025-12-18T09:05:00Z" },
+      { "id": "33333333-3333-4333-8333-333333333304", "actor_user_id": "usr-ada", "event_type": "person.access.revoked", "target_type": "user", "target_id": "usr-eli", "payload": { "email_domain": "wrokbot.example" }, "created_at": "2025-12-18T09:05:00Z" },
       { "id": "33333333-3333-4333-8333-333333333305", "actor_user_id": "usr-ada", "event_type": "credential.revoked", "target_type": "credential", "target_id": "22222222-2222-4222-8222-222222222205", "payload": { "kind": "mcp", "provider": "tickets" }, "created_at": "2025-12-19T08:00:00Z" },
       { "id": "33333333-3333-4333-8333-333333333306", "actor_user_id": "usr-ada", "event_type": "plugin.grant.added", "target_type": "agent", "target_id": "knowledge", "payload": { "kind": "mcp_tool", "ref": "notes/search_notes" }, "created_at": "2025-11-05T11:10:00Z" },
       { "id": "33333333-3333-4333-8333-333333333307", "actor_user_id": "usr-chen", "event_type": "skill.created", "target_type": "skill", "target_id": "skl-tone-zh", "payload": { "slug": "tone-zh" }, "created_at": "2025-10-25T04:00:00Z" },

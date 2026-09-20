@@ -59,8 +59,8 @@ fn matcher() -> &'static ScopeMatcher {
 /// Returns a reference to the global 24-language SyntaxSet.
 pub fn get_syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(|| {
-        let dump_bytes = include_bytes!("../../../../design/markdown/openbot_syntaxes.packdump");
-        from_uncompressed_data(dump_bytes).expect("corrupt openbot_syntaxes.packdump")
+        let dump_bytes = include_bytes!("../../../../design/markdown/wrokbot_syntaxes.packdump");
+        from_uncompressed_data(dump_bytes).expect("corrupt wrokbot_syntaxes.packdump")
     })
 }
 

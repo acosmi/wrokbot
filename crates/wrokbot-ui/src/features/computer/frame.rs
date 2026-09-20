@@ -1,7 +1,7 @@
 //! UI boundary for the existing OBSCRN01 v1 ScreenHub binary envelope.
 //! The target comes from Rust authority; frame metadata never mints control permission.
 #![cfg_attr(not(test), allow(dead_code))]
-use openbot_contracts::engine::MAX_ENGINE_IMAGE_BYTES;
+use wrokbot_contracts::engine::MAX_ENGINE_IMAGE_BYTES;
 
 const HEADER: usize = 68;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

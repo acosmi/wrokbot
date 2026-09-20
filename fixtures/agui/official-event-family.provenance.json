@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-fixture-provenance-v1",
+  "schema": "wrokbot-fixture-provenance-v1",
   "protocol": "AG-UI",
   "version": "0.0.57",
   "provenance": {
@@ -37,7 +37,7 @@
       "README.md": {
         "bytes": 1341,
         "sha256": "3c194484b1edafc01619c4545285c796d89369dee26dc5dee056e876192fe5e7",
-        "source": "OpenBot-authored documentation"
+        "source": "WrokBot-authored documentation"
       },
       "capabilities.ts": {
         "bytes": 14030,
@@ -77,7 +77,7 @@
     "bytes": 4426,
     "sha256": "6c13dad31a54a85a7c38b2d8e7623b9799a31d546eb0502d58000244708ec5ab",
     "distinct_event_types_count": 33,
-    "exact_match_with_openbot_agui_event_types": true,
+    "exact_match_with_wrokbot_agui_event_types": true,
     "all_33_event_types": [
       "ACTIVITY_DELTA",
       "ACTIVITY_SNAPSHOT",

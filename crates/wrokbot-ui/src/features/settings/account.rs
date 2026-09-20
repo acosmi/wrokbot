@@ -6,7 +6,7 @@ use crate::{
     primitives::{Button, ButtonSize, ButtonVariant},
 };
 use leptos::prelude::*;
-use openbot_contracts::auth::Role;
+use wrokbot_contracts::auth::Role;
 
 #[component]
 pub(super) fn AccountSummary() -> impl IntoView {
@@ -14,21 +14,21 @@ pub(super) fn AccountSummary() -> impl IntoView {
     let user = LocalResource::new(load_current_user);
     view! {
         <PageSection heading_id="settings-account-title" title=move || t_string!(i18n, account.title).to_owned()>
-            <Suspense fallback=move || view! { <p class="ob-page-intro" role="status">{move || t!(i18n, account.loading)}</p> }>
+            <Suspense fallback=move || view! { <p class="wrokbot-page-intro" role="status">{move || t!(i18n, account.loading)}</p> }>
                 {move || user.get().map(|result| match result {
                     Ok(identity) => {
                         let name = identity.name.filter(|name| !name.trim().is_empty()).unwrap_or_else(|| identity.email.clone());
                         let administrator = identity.role == Role::Admin;
                         view! {
-                            <div class="ob-settings-preference-row">
-                                <div class="ob-settings-preference-copy"><h3>{name}</h3><p>{identity.email}</p></div>
+                            <div class="wrokbot-settings-preference-row">
+                                <div class="wrokbot-settings-preference-copy"><h3>{name}</h3><p>{identity.email}</p></div>
                                 <span>{move || if administrator { t_string!(i18n, account.role_admin).to_owned() } else { t_string!(i18n, account.role_member).to_owned() }}</span>
                             </div>
-                            <p class="ob-page-intro">{move || t!(i18n, account.profile_source)}</p>
+                            <p class="wrokbot-page-intro">{move || t!(i18n, account.profile_source)}</p>
                         }.into_any()
                     }
                     Err(_) => view! {
-                        <div class="ob-alert" role="alert">
+                        <div class="wrokbot-alert" role="alert">
                             <span>{move || t!(i18n, account.load_failed)}</span>
                             <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=move |_| user.refetch()>{move || t!(i18n, common.retry)}</Button>
                         </div>
@@ -37,8 +37,8 @@ pub(super) fn AccountSummary() -> impl IntoView {
             </Suspense>
         </PageSection>
         <PageSection heading_id="settings-account-usage" title=move || t_string!(i18n, account.usage_title).to_owned()>
-            <p class="ob-page-intro">{move || t!(i18n, account.usage_pending)}</p>
-            <p class="ob-page-intro">{move || t!(i18n, account.cap_boundary)}</p>
+            <p class="wrokbot-page-intro">{move || t!(i18n, account.usage_pending)}</p>
+            <p class="wrokbot-page-intro">{move || t!(i18n, account.cap_boundary)}</p>
         </PageSection>
     }
 }

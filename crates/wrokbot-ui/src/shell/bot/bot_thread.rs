@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 
-use openbot_contracts::ids::ThreadId;
+use wrokbot_contracts::ids::ThreadId;
 
 const BOT_THREAD_KEY_PREFIX: &str = "openbot.bot-thread";
 

@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::sandboxed::SaveSandboxedComponentRequest;
-use openbot_contracts::sandboxed::{
+use wrokbot_contracts::sandboxed::SaveSandboxedComponentRequest;
+use wrokbot_contracts::sandboxed::{
     PublishedSandboxedComponent, SandboxedComponentRecord, is_sandboxed_component_name,
 };
 use serde_json::Value;
@@ -227,7 +227,7 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                 title=move || t_string!(i18n, admin.playground_title).to_owned()
                 description=move || t_string!(i18n, admin.playground_intro).to_owned()
             />
-            <div class="ob-playground-actions">
+            <div class="wrokbot-playground-actions">
                 <Button
                     variant=ButtonVariant::Chip
                     size=ButtonSize::Small
@@ -244,19 +244,19 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                 >{move || t!(i18n, admin.playground_publish)}</Button>
             </div>
             <Show when=move || action_error.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, admin.playground_action_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, admin.playground_action_error)}</p>
             </Show>
             <Show when=move || load_error.get().is_some()>
-                <p class="ob-alert" role="alert">{move || if load_error.get() == Some(ApiError::Forbidden) {
+                <p class="wrokbot-alert" role="alert">{move || if load_error.get() == Some(ApiError::Forbidden) {
                     t_string!(i18n, admin.playground_forbidden).to_owned()
                 } else {
                     t_string!(i18n, admin.playground_load_error).to_owned()
                 }}</p>
             </Show>
-            <div class="ob-playground-grid">
-                <section class="ob-playground-editor" aria-labelledby="sandbox-editor-title">
+            <div class="wrokbot-playground-grid">
+                <section class="wrokbot-playground-editor" aria-labelledby="sandbox-editor-title">
                     <h2 id="sandbox-editor-title">{move || t!(i18n, admin.playground_editor)}</h2>
-                    <div class="ob-playground-identity">
+                    <div class="wrokbot-playground-identity">
                         <EditorField
                             id="sandbox-name"
                             label=move || t_string!(i18n, admin.playground_name).to_owned()
@@ -292,10 +292,10 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                         invalid=Signal::derive(move || sample.get().is_none())
                     />
                 </section>
-                <section class="ob-playground-preview" aria-labelledby="sandbox-preview-title">
+                <section class="wrokbot-playground-preview" aria-labelledby="sandbox-preview-title">
                     <h2 id="sandbox-preview-title">{move || t!(i18n, admin.playground_preview)}</h2>
                     <Show when=move || sample.get().is_none()>
-                        <p class="ob-alert" role="alert">
+                        <p class="wrokbot-alert" role="alert">
                             {move || t!(i18n, admin.playground_sample_invalid)}
                         </p>
                     </Show>
@@ -310,15 +310,15 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                             />
                         }
                     />
-                    <div class="ob-playground-saved">
+                    <div class="wrokbot-playground-saved">
                         <h2>{move || t!(i18n, admin.playground_saved)}</h2>
                         <Show when=move || loading.get()>
-                            <p class="ob-loading" role="status">{move || t!(i18n, common.loading)}</p>
+                            <p class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</p>
                         </Show>
                         <Show when=move || !loading.get() && components.get().is_empty()>
-                            <p class="ob-empty-body">{move || t!(i18n, admin.playground_empty)}</p>
+                            <p class="wrokbot-empty-body">{move || t!(i18n, admin.playground_empty)}</p>
                         </Show>
-                        <ul class="ob-playground-list">
+                        <ul class="wrokbot-playground-list">
                             <For
                                 each=move || components.get()
                                 key=sandboxed_component_row_key
@@ -341,7 +341,7 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                                                 <code>{component.name}</code>
                                                 <p>{status}</p>
                                             </div>
-                                            <div class="ob-playground-row-actions">
+                                            <div class="wrokbot-playground-row-actions">
                                                 <Button
                                                     size=ButtonSize::Small
                                                     variant=ButtonVariant::Chip
@@ -419,7 +419,7 @@ fn CodeField(
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
-        <div class="ob-playground-code">
+        <div class="wrokbot-playground-code">
             <Field
                 control_id=id
                 label

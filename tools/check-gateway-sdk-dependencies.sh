@@ -14,7 +14,7 @@ workspace=tomllib.loads((root/'Cargo.toml').read_text())['workspace']['dependenc
 sdk=workspace['acosmi-sdk']
 require(sdk == {'version':'=5.0.0','default-features':False,'features':['custom-transport','sanitize']},'SDK declaration changed')
 require(workspace['tokio-util']=={'version':'=0.7.19','default-features':False},'cancellation type direct edge changed')
-infra=tomllib.loads((root/'crates/openbot-infra/Cargo.toml').read_text())
+infra=tomllib.loads((root/'crates/wrokbot-infra/Cargo.toml').read_text())
 for dep in ['acosmi-sdk','tokio-util']:
     require(infra['dependencies'][dep]=={'workspace':True,'optional':True},'Infra optional edge changed: '+dep)
     require('dep:'+dep in infra['features']['server-runtime'],'runtime feature omitted: '+dep)
@@ -55,7 +55,7 @@ for name,(version,size,digest,license_hash,commit,proc) in expected.items():
 sdk_id=selected['acosmi-sdk']['id']
 require(set(nodes[sdk_id]['features'])=={'custom-transport','sanitize'},'SDK optional network/default/loopback feature enabled')
 parents={packages[n['id']]['name'] for n in nodes.values() if any(e['pkg']==sdk_id for e in n['deps'])}
-require(parents=={'openbot-infra'},'SDK escaped sole Infra dependency boundary: '+str(parents))
+require(parents=={'wrokbot-infra'},'SDK escaped sole Infra dependency boundary: '+str(parents))
 def closure(start):
     seen=set();pending=[start]
     while pending:
@@ -68,9 +68,9 @@ def closure(start):
 names={packages[x]['name'] for x in closure(sdk_id)}
 for forbidden in ['reqwest','hyper','hyper-util','hyper-rustls','rustls','native-tls','openssl','openssl-sys','tokio-tungstenite','tungstenite','aws-lc-rs','aws-lc-sys']:
     require(forbidden not in names,'SDK rebuilt HTTP/TLS/WS closure: '+forbidden)
-ui=[p for p in packages.values() if p['name']=='openbot-ui']
+ui=[p for p in packages.values() if p['name']=='wrokbot-ui']
 require(len(ui)==1 and sdk_id not in closure(ui[0]['id']),'SDK reached UI normal/build graph')
-allowed={root/'crates/openbot-infra/src/gateway_transport.rs',root/'crates/openbot-infra/src/gateway_transport/framing.rs',root/'crates/openbot-infra/src/gateway_account.rs',root/'crates/openbot-infra/src/gateway_authority.rs',root/'crates/openbot-infra/src/gateway_authority/store.rs',root/'crates/openbot-infra/src/gateway_authority/strict.rs'}
+allowed={root/'crates/wrokbot-infra/src/gateway_transport.rs',root/'crates/wrokbot-infra/src/gateway_transport/framing.rs',root/'crates/wrokbot-infra/src/gateway_account.rs',root/'crates/wrokbot-infra/src/gateway_authority.rs',root/'crates/wrokbot-infra/src/gateway_authority/store.rs',root/'crates/wrokbot-infra/src/gateway_authority/strict.rs'}
 for path in (root/'crates').glob('*/src/**/*.rs'):
     text=path.read_text()
     if 'acosmi::' in text:require(path in allowed,'SDK type escaped adapter: '+str(path.relative_to(root)))

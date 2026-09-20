@@ -5,8 +5,8 @@ mod state;
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
-use openbot_contracts::agent::AgentProfile;
-use openbot_contracts::mcp::{
+use wrokbot_contracts::agent::AgentProfile;
+use wrokbot_contracts::mcp::{
     McpAdminAuthentication, McpAdminServer, McpAdminTool, McpAdminToolEffect,
 };
 
@@ -54,13 +54,13 @@ pub fn AdminPluginsPage() -> impl IntoView {
                     <PageHeader heading_id="plugins-title" title=heading description=move || t_string!(i18n, plugins.intro).to_owned() />
                 }
             }}
-            <Show when=move || actions.busy.get()><p class="ob-loading" role="status">{move || t!(i18n, plugins.saving)}</p></Show>
+            <Show when=move || actions.busy.get()><p class="wrokbot-loading" role="status">{move || t!(i18n, plugins.saving)}</p></Show>
             <Show when=move || actions.failed.get() && scope.get().0.is_none_or(|id| actions.target.get().as_deref() == Some(&id))>
-                <p class="ob-alert" role="alert">{move || t!(i18n, plugins.write_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, plugins.write_error)}</p>
             </Show>
-            <Show when=move || state.loading.get()><p class="ob-loading" role="status">{move || t!(i18n, common.loading)}</p></Show>
+            <Show when=move || state.loading.get()><p class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</p></Show>
             <Show when=move || state.error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, plugins.load_error)}</span>
                     <Button variant=ButtonVariant::Ghost on_activate=move |_| state.reload()>{move || t!(i18n, common.retry)}</Button>
                 </div>
@@ -91,7 +91,7 @@ fn PluginIndex(data: PluginData, dialog: RwSignal<Option<PluginDialog>>) -> impl
         .filter(|entry| !connected.iter().any(|server| server.id == entry.key))
         .collect::<Vec<_>>();
     view! {
-        <div class="ob-page-primary-action"><Button id="plugin-add" variant=ButtonVariant::Primary disabled=actions.busy
+        <div class="wrokbot-page-primary-action"><Button id="plugin-add" variant=ButtonVariant::Primary disabled=actions.busy
             on_activate=move |_| dialog.set(Some(PluginDialog::Custom))>{move || t!(i18n, plugins.custom_add)}</Button></div>
         <PageSection heading_id="plugins-connected" title=move || t_string!(i18n, plugins.connected).to_owned()>
             {if connected.is_empty() { view! { <PageEmpty>{move || t!(i18n, plugins.empty)}</PageEmpty> }.into_any() }
@@ -117,9 +117,9 @@ fn PluginLink(
     description: String,
     #[prop(into)] suffix: TextProp,
 ) -> impl IntoView {
-    view! { <a class="ob-plugin-link" href=href>
+    view! { <a class="wrokbot-plugin-link" href=href>
         <IconView icon=Icon::Plug size=IconSize::Navigation />
-        <span class="ob-plugin-copy"><strong>{title}</strong><span class="text-fg-secondary">{description}</span></span>
+        <span class="wrokbot-plugin-copy"><strong>{title}</strong><span class="text-fg-secondary">{description}</span></span>
         <span class="text-fg-muted">{move || suffix.get()}</span><IconView icon=Icon::ChevronRight size=IconSize::Inline />
     </a> }
 }
@@ -180,7 +180,7 @@ fn PluginDetail(
         actions.launch(id.clone(), async move { api::refresh(&id).await }, |_| {});
     };
     view! {
-        <section class="ob-plugin-controls">
+        <section class="wrokbot-plugin-controls">
             <h2 class="text-lg">{move || t!(i18n, plugins.deployment)}</h2>
             <p class="text-fg-secondary">{move || if enabled { t_string!(i18n, plugins.enabled).to_owned() } else { t_string!(i18n, plugins.disabled).to_owned() }}</p>
             <Show when=move || !enabled>
@@ -208,12 +208,12 @@ fn PluginDetail(
                             on_activate=move |_| connect_own_account(key.get_value(), connecting, connect_error)>{move || t!(i18n, plugins.personal_connect)}</Button>
                     </Show>
                     <Show when=move || key.get_value() == "google-drive">
-                        <a class="ob-button" href=api::account_href(&key.get_value()).expect("validated server")>{move || t!(i18n, plugins.personal_manage)}</a>
+                        <a class="wrokbot-button" href=api::account_href(&key.get_value()).expect("validated server")>{move || t!(i18n, plugins.personal_manage)}</a>
                     </Show>
-                    <Show when=move || connect_error.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.connect_error)}</p></Show>
+                    <Show when=move || connect_error.get()><p class="wrokbot-alert" role="alert">{move || t!(i18n, plugins.connect_error)}</p></Show>
                 </Show>
-                <Show when=move || !callback_available><p class="ob-alert">{move || t!(i18n, plugins.callback_unavailable)}</p></Show>
-                {callback.get_value().map(|uri| view! { <div class="ob-plugin-value"><span>{move || t!(i18n, plugins.redirect_uri)}</span><code>{uri}</code></div> })}
+                <Show when=move || !callback_available><p class="wrokbot-alert">{move || t!(i18n, plugins.callback_unavailable)}</p></Show>
+                {callback.get_value().map(|uri| view! { <div class="wrokbot-plugin-value"><span>{move || t!(i18n, plugins.redirect_uri)}</span><code>{uri}</code></div> })}
             </PageSection>
             {server.get_value().map(|server| view! { <ServerFacts server /> })}
             <PageSection heading_id="plugin-tools" title=move || t_string!(i18n, plugins.tools).to_owned()>
@@ -234,9 +234,9 @@ fn PluginDetail(
 fn ServerFacts(server: McpAdminServer) -> impl IntoView {
     let i18n = use_i18n();
     view! {
-        <div class="ob-plugin-value"><span>{move || t!(i18n, plugins.endpoint)}</span><code>{server.url}</code></div>
-        <div class="ob-plugin-value"><span>{move || t!(i18n, plugins.private_egress)}</span><code>{if server.egress_allow_cidrs.is_empty() { "—".to_owned() } else { server.egress_allow_cidrs.join(", ") }}</code></div>
-        {server.last_error.map(|_| view! { <p class="ob-alert" role="alert">{move || t!(i18n, plugins.catalog_error)}</p> })}
+        <div class="wrokbot-plugin-value"><span>{move || t!(i18n, plugins.endpoint)}</span><code>{server.url}</code></div>
+        <div class="wrokbot-plugin-value"><span>{move || t!(i18n, plugins.private_egress)}</span><code>{if server.egress_allow_cidrs.is_empty() { "—".to_owned() } else { server.egress_allow_cidrs.join(", ") }}</code></div>
+        {server.last_error.map(|_| view! { <p class="wrokbot-alert" role="alert">{move || t!(i18n, plugins.catalog_error)}</p> })}
     }
 }
 
@@ -335,8 +335,8 @@ fn ToolGrantRow(agent: AgentProfile, tool: McpAdminTool) -> impl IntoView {
             |_| {},
         );
     });
-    view! { <div class="ob-plugin-grant">
-        <div class="ob-plugin-copy"><strong>{agent.name}</strong><span class="text-fg-secondary">{move || {
+    view! { <div class="wrokbot-plugin-grant">
+        <div class="wrokbot-plugin-copy"><strong>{agent.name}</strong><span class="text-fg-secondary">{move || {
             if !granted { t_string!(i18n, plugins.not_granted).to_owned() }
             else if remote_missing_callback { t_string!(i18n, plugins.callback_missing).to_owned() }
             else { t_string!(i18n, plugins.granted).to_owned() }

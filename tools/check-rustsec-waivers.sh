@@ -19,8 +19,8 @@ actual="$(cargo tree -i rsa -e normal --all-features --prefix depth --charset as
   | awk '{name=$1; sub(/^[0-9]+/, "", name); print name " " $2}')"
 expected='rsa v0.9.10
 openidconnect v4.0.1
-openbot-infra v0.0.0
-openbot-server v0.0.0'
+wrokbot-infra v0.0.0
+wrokbot-server v0.0.0'
 
 if [[ "$actual" != "$expected" ]]; then
   printf '%s\n' 'RUSTSEC-2023-0071 豁免失效：RSA 版本或反向生产依赖链已变，必须重新审查。' >&2

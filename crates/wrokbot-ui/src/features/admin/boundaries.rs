@@ -2,10 +2,10 @@
 
 use leptos::ev::SubmitEvent;
 use leptos::prelude::*;
-use openbot_contracts::policy::{
+use wrokbot_contracts::policy::{
     ActionPolicyDocument, ActionPolicyMode, MAX_ACTION_POLICY_EXPRESSION_BYTES,
 };
-use openbot_contracts::text::trim_ecmascript;
+use wrokbot_contracts::text::trim_ecmascript;
 
 #[cfg(target_arch = "wasm32")]
 use crate::api::{load_action_policy, save_action_policy};
@@ -145,17 +145,17 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                 title=move || t_string!(i18n, boundaries.title).to_owned()
                 description=move || t_string!(i18n, boundaries.intro).to_owned()
             />
-            <p class="ob-boundaries-audit-link">
+            <p class="wrokbot-boundaries-audit-link">
                 <a href="/admin/audit">{move || t!(i18n, boundaries.open_audit)}</a>
             </p>
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">
+                <div class="wrokbot-loading" role="status">
                     <IconView icon=Icon::LoaderCircle size=IconSize::Navigation />
                     <span>{move || t!(i18n, common.loading)}</span>
                 </div>
             </Show>
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, boundaries.load_error)}</span>
                     <Button
                         variant=ButtonVariant::Ghost
@@ -167,10 +167,10 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                 </div>
             </Show>
             <Show when=move || save_error.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, boundaries.save_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, boundaries.save_error)}</p>
             </Show>
             <Show when=move || saved.get()>
-                <p class="ob-status" role="status">{move || t!(i18n, boundaries.saved)}</p>
+                <p class="wrokbot-status" role="status">{move || t!(i18n, boundaries.saved)}</p>
             </Show>
             <Show when=move || {
                 !loading.get() && !load_error.get() && policy.get().is_none()
@@ -187,7 +187,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                     title=move || t_string!(i18n, boundaries.mode_title).to_owned()
                     description=move || t_string!(i18n, boundaries.mode_intro).to_owned()
                 >
-                    <div class="ob-boundary-mode-actions">
+                    <div class="wrokbot-boundary-mode-actions">
                         <Button
                             variant=ButtonVariant::Chip
                             size=ButtonSize::Small
@@ -215,7 +215,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                             {move || t!(i18n, boundaries.mode_dry_run)}
                         </Button>
                     </div>
-                    <p class="ob-boundary-mode-help">
+                    <p class="wrokbot-boundary-mode-help">
                         {move || match policy.get().map(|policy| policy.mode) {
                             Some(ActionPolicyMode::Enforce) => {
                                 t_string!(i18n, boundaries.mode_enforce_help).to_owned()
@@ -239,7 +239,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                             <PageEmpty>{move || t!(i18n, boundaries.deny_empty)}</PageEmpty>
                         }
                     >
-                        <ul class="ob-boundary-rule-list">
+                        <ul class="wrokbot-boundary-rule-list">
                             <For
                                 each=move || policy.get().map_or_else(Vec::new, |policy| {
                                     policy.deny.into_iter().enumerate().collect::<Vec<_>>()
@@ -282,7 +282,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                         </ul>
                     </Show>
 
-                    <form class="ob-boundary-rule-form" on:submit=submit_rule>
+                    <form class="wrokbot-boundary-rule-form" on:submit=submit_rule>
                         <Input
                             value=draft
                             input_type=InputType::Text
@@ -303,12 +303,12 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                         </Button>
                     </form>
                     <Show when=move || draft_error.get().is_some()>
-                        <p class="ob-boundary-draft-error" role="alert">
+                        <p class="wrokbot-boundary-draft-error" role="alert">
                             {move || draft_error_text(i18n, draft_error.get())}
                         </p>
                     </Show>
 
-                    <ul class="ob-boundary-presets">
+                    <ul class="wrokbot-boundary-presets">
                         <For
                             each=move || BOUNDARY_PRESETS
                             key=|preset| preset.kind
@@ -357,7 +357,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                     {move || policy.get().map(|document| {
                         let shape = baseline_shape(&document);
                         view! {
-                            <ul class="ob-boundary-allow-list">
+                            <ul class="wrokbot-boundary-allow-list">
                                 {document.allow.into_iter().map(|rule| view! {
                                     <li><code>{if rule == ALLOW_EVERYTHING_RULE {
                                         t_string!(i18n, boundaries.allow_true).to_owned()
@@ -369,7 +369,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                                 }).collect_view()}
                             </ul>
                             <Show when=move || shape == BaselineShape::DefaultDeny>
-                                <p class="ob-page-empty">{move || t!(i18n, boundaries.allow_none)}</p>
+                                <p class="wrokbot-page-empty">{move || t!(i18n, boundaries.allow_none)}</p>
                                 <Button
                                     variant=ButtonVariant::Chip
                                     size=ButtonSize::Small
@@ -390,7 +390,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                                 </Button>
                             </Show>
                             <Show when=move || shape == BaselineShape::Custom>
-                                <p class="ob-boundary-custom-allow">
+                                <p class="wrokbot-boundary-custom-allow">
                                     {move || t!(i18n, boundaries.custom_allow_read_only)}
                                 </p>
                             </Show>
@@ -415,7 +415,7 @@ fn FirstSetup(
             title=move || t_string!(i18n, boundaries.first_setup_title).to_owned()
             description=move || t_string!(i18n, boundaries.first_setup_intro).to_owned()
         >
-            <div class="ob-boundary-first-setup">
+            <div class="wrokbot-boundary-first-setup">
                 <article>
                     <h3>{move || t!(i18n, boundaries.first_setup_strict)}</h3>
                     <p>{move || t!(i18n, boundaries.first_setup_strict_help)}</p>

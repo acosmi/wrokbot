@@ -8,7 +8,7 @@ use crate::features::settings::ComputerPlaceholderArt;
 #[component]
 pub fn ComputerPlaceholder() -> impl IntoView {
     view! {
-        <div class="ob-computer-placeholder" aria-hidden="true">
+        <div class="wrokbot-computer-placeholder" aria-hidden="true">
             <ComputerPlaceholderArt />
         </div>
     }

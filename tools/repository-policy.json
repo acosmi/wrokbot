@@ -45,8 +45,8 @@
     "__pycache__"
   ],
   "blocked_paths": [
-    "apps/wrok-bot-mobile/contracts.md",
-    "crates/openbot-testkit/src/xtask/grok_inventory.rs"
+    "apps/wrokbot-mobile/contracts.md",
+    "crates/wrokbot-testkit/src/xtask/grok_inventory.rs"
   ],
   "blocked_names": "(^\\.env(?!\\.(example|sample)$)|^(CLAUDE|AGENTS|.*HANDOFF.*)\\.md$|\\.(pem|key|p12|pfx|keystore|jks|mobileprovision|log|sqlite3?|db|bak|zip|tar|tgz|pyc)$|\\.tar\\.gz$|^id_(rsa|ed25519)$|^credentials\\.json$|^\\.DS_Store$)",
   "document_extensions": [
@@ -65,20 +65,20 @@
     "IMPLEMENTATION_LEDGER.md",
     "README.md",
     "README.zh-CN.md",
-    "apps/wrok-bot-mobile/README.md",
-    "crates/openbot-ui/assets/fonts/LICENSE.txt",
-    "crates/openbot-ui/assets/notices/markdown/README.txt",
-    "crates/openbot-ui/assets/notices/markdown/SublimeText_PowerShell_LICENSE.txt",
-    "crates/openbot-ui/assets/notices/markdown/guille_sublime-kotlin_LICENSE.md",
-    "crates/openbot-ui/design/markdown/PROVENANCE.md",
-    "crates/openbot-ui/locales/GLOSSARY.md",
+    "apps/wrokbot-mobile/README.md",
     "crates/wrokbot-ui/assets/fonts/LICENSE.txt",
     "crates/wrokbot-ui/assets/notices/markdown/README.txt",
     "crates/wrokbot-ui/assets/notices/markdown/SublimeText_PowerShell_LICENSE.txt",
     "crates/wrokbot-ui/assets/notices/markdown/guille_sublime-kotlin_LICENSE.md",
     "crates/wrokbot-ui/design/markdown/PROVENANCE.md",
     "crates/wrokbot-ui/locales/GLOSSARY.md",
-    "crates/openbot-windows-sandbox/SECURITY.md",
+    "crates/wrokbot-ui/assets/fonts/LICENSE.txt",
+    "crates/wrokbot-ui/assets/notices/markdown/README.txt",
+    "crates/wrokbot-ui/assets/notices/markdown/SublimeText_PowerShell_LICENSE.txt",
+    "crates/wrokbot-ui/assets/notices/markdown/guille_sublime-kotlin_LICENSE.md",
+    "crates/wrokbot-ui/design/markdown/PROVENANCE.md",
+    "crates/wrokbot-ui/locales/GLOSSARY.md",
+    "crates/wrokbot-windows-sandbox/SECURITY.md",
     "fixtures/README.md",
     "fixtures/agui/schema-0.0.57/README.md",
     "fixtures/db/README.md",
@@ -100,8 +100,8 @@
     "git@github.com:acosmi/wrokbot.git"
   ],
   "file_size_limits": {
-    "crates/openbot-ui/assets/brand/wrok-bot-logo-1024.gif": 31457280,
-    "crates/wrokbot-ui/assets/brand/wrok-bot-logo-1024.gif": 31457280,
+    "crates/wrokbot-ui/assets/brand/wrokbot-logo-1024.gif": 31457280,
+    "crates/wrokbot-ui/assets/brand/wrokbot-logo-1024.gif": 31457280,
     ".github/assets/wrok-bot-logo-1024.gif": 31457280
   }
 }

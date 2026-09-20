@@ -4,12 +4,12 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
 use super::ApiError;
-use openbot_contracts::credential_admin::{
+use wrokbot_contracts::credential_admin::{
     CREDENTIAL_PAGE_SIZE, CredentialExternalRevocation, CredentialPage, CredentialStatus,
     CredentialWrite,
 };
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::credential_admin::{CredentialRevocationReceipt, CredentialWritten};
+use wrokbot_contracts::credential_admin::{CredentialRevocationReceipt, CredentialWritten};
 
 pub(crate) async fn load(cursor: Option<&str>) -> Result<CredentialPage, ApiError> {
     let path = match cursor {

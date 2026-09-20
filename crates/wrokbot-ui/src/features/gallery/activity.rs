@@ -4,12 +4,12 @@
 
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::components::SHOW_ACTIVITY_REPORT_COMPONENT_NAME;
-use openbot_contracts::components::{
+use wrokbot_contracts::components::SHOW_ACTIVITY_REPORT_COMPONENT_NAME;
+use wrokbot_contracts::components::{
     BOT_ACTIVITY_FUNCTION_NAME, BotActivityReport, ComponentDecisionRefusal, ComponentFunctionCall,
     ComponentFunctionData, RECENT_REFUSALS_FUNCTION_NAME, RecentRefusalsReport,
 };
-use openbot_contracts::ids::BotId;
+use wrokbot_contracts::ids::BotId;
 use time::format_description::well_known::Rfc3339;
 
 #[cfg(target_arch = "wasm32")]
@@ -96,12 +96,12 @@ pub fn ActivityReportCard(
                     title=runtime_title(i18n, title.get_value(), report)
                     caption=t_string!(i18n, gallery.activity_reading_caption).to_owned()
                 >
-                    <p class="ob-gallery-activity-state" role="status">{t!(i18n, gallery.activity_reading)}</p>
+                    <p class="wrokbot-gallery-activity-state" role="status">{t!(i18n, gallery.activity_reading)}</p>
                 </GalleryFrame>
             }.into_any(),
             ActivityState::Refused(refusal) => view! {
                 <GalleryFrame title=runtime_title(i18n, title.get_value(), report)>
-                    <div class="ob-gallery-activity-refused" role="status">
+                    <div class="wrokbot-gallery-activity-refused" role="status">
                         <p>{t!(i18n, gallery.activity_not_shown)}</p>
                         <span>{refusal_label(i18n, &refusal)}</span>
                     </div>
@@ -109,7 +109,7 @@ pub fn ActivityReportCard(
             }.into_any(),
             ActivityState::Failed => view! {
                 <GalleryFrame title=runtime_title(i18n, title.get_value(), report)>
-                    <p class="ob-gallery-activity-error" role="status">{t!(i18n, gallery.activity_read_failed)}</p>
+                    <p class="wrokbot-gallery-activity-error" role="status">{t!(i18n, gallery.activity_read_failed)}</p>
                 </GalleryFrame>
             }.into_any(),
             ActivityState::Activity(data) => view! {
@@ -186,12 +186,12 @@ fn BotActivityView(
             <Show
                 when=move || !rows.get().is_empty()
                 fallback=move || view! {
-                    <p class="ob-gallery-empty-copy">
+                    <p class="wrokbot-gallery-empty-copy">
                         {move || t_string!(i18n, gallery.activity_bot_empty, days = days).to_owned()}
                     </p>
                 }
             >
-                <ul class="ob-gallery-activity-bars">
+                <ul class="wrokbot-gallery-activity-bars">
                     <For
                         each=move || rows.get().into_iter().enumerate()
                         key=|(index, _)| *index
@@ -200,7 +200,7 @@ fn BotActivityView(
                             view! {
                                 <li>
                                     <span>{row.bot}</span>
-                                    <span class="ob-gallery-activity-track" aria-hidden="true">
+                                    <span class="wrokbot-gallery-activity-track" aria-hidden="true">
                                         <span
                                             data-series=(index % 5).to_string()
                                             style:width=format!("{width}%")
@@ -247,10 +247,10 @@ fn RecentRefusalsView(
             <Show
                 when=move || !rows.get().is_empty()
                 fallback=move || view! {
-                    <p class="ob-gallery-empty-copy">{t!(i18n, gallery.activity_refusals_empty)}</p>
+                    <p class="wrokbot-gallery-empty-copy">{t!(i18n, gallery.activity_refusals_empty)}</p>
                 }
             >
-                <ul class="ob-gallery-refusal-list">
+                <ul class="wrokbot-gallery-refusal-list">
                     <For
                         each=move || rows.get().into_iter().enumerate()
                         key=|(index, _)| *index
@@ -338,7 +338,7 @@ const REFUSAL_FOLLOW_UP: &str = "Explain the most recent refusal in that list, a
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openbot_contracts::components::{ComponentFunctionError, RecentRefusalRow};
+    use wrokbot_contracts::components::{ComponentFunctionError, RecentRefusalRow};
     use time::OffsetDateTime;
 
     #[test]

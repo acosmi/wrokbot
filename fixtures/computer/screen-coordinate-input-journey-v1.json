@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-screen-coordinate-input-journey-v1",
+  "schema": "wrokbot-screen-coordinate-input-journey-v1",
   "officialCdpUnits": {
     "devtoolsFrontendCommit": "036dd84bc4fdfb0fd4be2a5ddb3fe37ef24939cd",
     "inputModelGitBlob": "cfa97617c47f1b01957429f1bfdc96ebd6fe07d7",

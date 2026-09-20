@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-rmcp-run-cancellation-v2",
+  "schema": "wrokbot-rmcp-run-cancellation-v2",
   "transport": "streamable-http",
   "protocols": {
     "preferredModern": "2026-07-28",

@@ -16,9 +16,9 @@ pub fn EmptyState(
     body: TextProp,
 ) -> impl IntoView {
     view! {
-        <section class="ob-empty-state" aria-labelledby=heading_id>
-            <h2 id=heading_id class="ob-empty-title">{move || title.get()}</h2>
-            <p class="ob-empty-body">{move || body.get()}</p>
+        <section class="wrokbot-empty-state" aria-labelledby=heading_id>
+            <h2 id=heading_id class="wrokbot-empty-title">{move || title.get()}</h2>
+            <p class="wrokbot-empty-body">{move || body.get()}</p>
         </section>
     }
 }

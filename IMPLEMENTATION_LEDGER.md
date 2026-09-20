@@ -2,7 +2,7 @@
 
 更新时间：2026-09-19。实施人：grokbot。GitHub任务实施人：wrok code。
 
-系统出现配额提醒时停止新增派发，收尾在途任务；独立验收通过后按序合并，未完成项准确保留。本批先收尾 046、047，048 尚未启动实施。
+系统出现配额提醒时停止新增派发，收尾在途任务；独立验收通过后按序合并，未完成项准确保留。046、047 已收尾；048（命名统一）已由 wrok code 实施并提交，待主控独立验收。
 
 本台账记录实施与验证事实，不定义产品能力或架构。每个任务对应一个独立 PR，按编号顺序集成。PR 链接中的合并状态与提交是远端集成事实；局部测试通过不表示产品阶段或发布验收完成。
 
@@ -59,7 +59,7 @@
 | V6-PR-045 | 固定网关账户身份读取与有界宿主传输 | 已合入 | [#52](https://github.com/acosmi/wrokbot/pull/52) | [38c7259a18](https://github.com/acosmi/wrokbot/commit/38c7259a187e719831b007202c5c4a3f5061f702) |
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
-| V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 仅规划，本批未启动实施 | 待创建 | 尚未实施 |
+| V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 已提交，待独立验收 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 尚未合入 |
 
 ## macOS 首发进度
 
@@ -77,10 +77,10 @@
 
 040 主控已亲读实现与测试，并在同一候选运行：
 
-- `cargo test -p openbot-infra --offline --locked --lib -- backup::archive_bundle`：22 通过，包括 13 项解包测试和 9 项容器回归。
-- `cargo test -p openbot-domain --offline --locked --lib -- backup::recovery_`：9 通过。
+- `cargo test -p wrokbot-infra --offline --locked --lib -- backup::archive_bundle`：22 通过，包括 13 项解包测试和 9 项容器回归。
+- `cargo test -p wrokbot-domain --offline --locked --lib -- backup::recovery_`：9 通过。
 - `python3 -m unittest tools.test_repository_guard`：8 通过。
-- `cargo check -p openbot-infra --offline --locked --no-default-features --features desktop-local-vault --lib`：通过。
+- `cargo check -p wrokbot-infra --offline --locked --no-default-features --features desktop-local-vault --lib`：通过。
 
 认证后的总长度不符、有效前缀后的外包末块、损坏和乱序均无成功结果。未执行 PostgreSQL 恢复或实际 OS 验收。
 
@@ -98,6 +98,14 @@
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
 
+048（wrok code 实施，待主控独立验收）按 N0 只读盘点（`target/qa/v6-pr-048-naming-20260919/`：静态词根 5 词根 641 文件/5579 命中 + 扩展词根 7432 内容命中，unknown 192 处/72 文件；运行时冻结清单 `runtime/runtime-identifiers.json` + `runtime/report.md`）对全仓 882 个文件执行第一方命名统一（701 处 `git mv` + 机械改名脚本），不含第三方 vendor 字节/依赖变化。
+
+**过程中发现并纠正的关键问题**：首轮机械改名逐字应用了 `static/inventory.json` 的 `symbol_map`（698 条，纯词法建议，`old`/`new` 映射不带任何运行时语义），越界改写了约 85 处本应冻结的协议/加密/协调身份，包括 Postgres LISTEN/NOTIFY 频道名与 advisory lock key/哈希、`openbot_internal` schema（50 个文件）、OIDC/SSO/MCP-OAuth 的 AEAD AAD 域、备份归档恢复 schema、Desktop 崩溃恢复 journal 协议字符串、engine 协议/bundle 标识。复读 048 自身的 `runtime-identifiers.json` 冻结清单后逐项识别，用改名前基线提交逐文件字节比对确认后全部回退；`application_name` 标签（`wrokbot-desktop-local` 等 3 项）经 N0 报告明确允许改名，保留新名不回退。随后把 `symbol_map` 中协议/持久化敏感词根（45 条）逐条与现状核对，确认均为已冻结未动或安全可改的临时/测试值（临时目录、mock 服务名、JSON-RPC 关联 ID、测试 fixture schema）。全仓复核剩余小写 `openbot`（145 文件/409 处）逐一分类，除以下 2 处外均为正确保留（溯源引用、冻结加密域、冻结协议/wire 标识、冻结环境变量、冻结数据库/schema 名）：`wrokbot-server/src/bin/wrokbot-ui-fixture.rs` 的 `FIXTURE_SSO_ROUTE_COOKIE` 常量与同文件其余 3 处不一致（改名遗漏，已改为 `wrokbot_sso_route=...`）；`wrokbot-testkit/src/xtask/test_inventory.rs` 内一处自引用路径过期字符串（已更新）。另确认 `crates/wrokbot-server/src/config/launch.rs` 是既有、完整的品牌环境变量转译层：新 `WROK_BOT_*`（两词拼写，对应"Wrok Bot"展示名）操作侧变量在启动时转译为冻结的旧 `OPENBOT_*`/裸名再交给共享解析器；这确认了内部 `OPENBOT_*` 环境变量须保持冻结、`WROK_BOT_` 拆分拼写是新品牌变量的既定约定，而非需要统一成 `WROKBOT_` 连写的不一致。
+
+**同候选验证**：`cargo check --workspace --all-targets --offline --locked` 干净（仅 1 项已知无关既有失败 `transport_parity.rs` E0004，与本次改名无涉）；`cargo test --workspace --lib --offline --locked` 13 个套件全通过（含 `wrokbot-ui` 216 项）；`cargo check -p wrokbot-ui --target wasm32-unknown-unknown --offline --locked` 通过（未安装 trunk，未跑完整 Tailwind/wasm-bindgen 资产管线）。独立 PostgreSQL 17.11 下 `wrokbot-infra --tests --include-ignored` 4 项失败均判定与本次改动无关：`native_0027`/`native_0028` 为既有 ledger 回放不一致（已用基线提交逐行 diff 排除改名因素，根因未定位，登记 issue #57）；`remote_interrupt` 单独重跑（`--test-threads=1`）通过，判定为并行执行下的 flaky；`schema_baseline_parity` 的密码用例因本机 `pg_hba.conf` 为 `trust` 认证、无法制造真实认证失败前提而按设计拒绝给出假通过，非产品缺陷。`wrokbot-server` 同条件 2 项失败：`intelligence_import_cli` 当时误判为测试自身 `connection_string()` 硬编码字面量未插入 password 变量导致 DSN 非法（登记 issue #56），后经复核确认该处源码本身已正确插值 password，此前判断是本机工具输出管道对 `password=值` 文本存在显示层脱敏、误把脱敏星号当作源码字面量所致；已撤销结论并关闭 issue #56，非真实缺陷；`screen_engine_conformance` 的 `real_engine_frame_crosses_ticketed_server_binary_websocket` 标注需先执行 `cargo xtask engine bundle` 并具备受限 Electron 运行权限，本机未构建该前置产物，未在此候选验证，非改名回归。额外发现并登记 issue #58：`archive_bundle.rs` 既有 `value.len() % 2 != 0` 写法在当前 clippy 下触发 `manual_is_multiple_of`，导致 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 对任何 PR 都必现失败，已用基线提交确认与本次改名无关，未在 048 内顺手修复（保持改名单一职责）。
+
+048 不含任何产品能力变化，只做命名与其伴随的既有测试/文档路径修正；不改变 A0–A7 完成比例，不关闭以上未完成项。
+
 ## 仍未完成
 
 - 归档容器容量仍是单独预算，不能将 4 MiB 理论明文上限当作外层 8 MiB 容器的可承载保证。
@@ -107,5 +115,6 @@
 - SDK 的 App 登录、连接目录、v2 Provider 组合及三种模型完整旅程；PG/Vault 持久授权已由 047 验收，账户桥 Rust 接入与真实厂商旅程仍待完成。
 - Browser 与原生电脑的完整产品链、A0–A7 同一候选验收和 24 小时 soak。
 - M1 事件与同节点协作、M2 节点与文件能力，以及完整平台、安全和发布验收。
+- 048 登记的既有缺陷：issue #56 经复核为误判（显示层脱敏导致误读源码），已撤销并关闭，非真实缺陷；仍未修：issue #57（`native_0027`/`native_0028` 真实 PG 回放不一致，根因未定位）、issue #58（`archive_bundle.rs` 的 `manual_is_multiple_of` 导致严格 Clippy 对任何 PR 必现失败）。
 
 040 只验证有界归档的认证消费，不授予恢复切换权限，不关闭以上工作。

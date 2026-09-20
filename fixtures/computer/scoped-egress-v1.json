@@ -1,13 +1,13 @@
 {
-  "schema": "openbot-scoped-egress-v1",
+  "schema": "wrokbot-scoped-egress-v1",
   "source_lineage": [
-    "OpenBot v4 §10.5",
+    "WrokBot v4 §10.5",
     "RFC 9110 §7.6/§9.3.6",
     "RFC 9112 §3.2",
     "RFC 6455"
   ],
-  "implementation": "openbot_infra::net::scope_gateway",
-  "dialer": "openbot_infra::net::safe_http",
+  "implementation": "wrokbot_infra::net::scope_gateway",
+  "dialer": "wrokbot_infra::net::safe_http",
   "capability": {
     "listener": "IPv4 loopback, ephemeral port, one instance owner",
     "secret_bits": 256,

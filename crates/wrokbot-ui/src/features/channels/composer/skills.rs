@@ -5,8 +5,8 @@ use crate::features::admin::plugins::PluginActions;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::primitives::{Button, ButtonSize, ButtonVariant};
 use leptos::{ev::KeyboardEvent, prelude::*};
-use openbot_contracts::command::{MAX_SELECTED_SKILLS, valid_selected_skill_slugs};
-use openbot_contracts::ids::BotId;
+use wrokbot_contracts::command::{MAX_SELECTED_SKILLS, valid_selected_skill_slugs};
+use wrokbot_contracts::ids::BotId;
 
 /// A trailing slash token must start at a word boundary; URLs and paths remain ordinary text.
 fn slash_query(text: &str) -> Option<(usize, &str)> {
@@ -22,7 +22,7 @@ fn slash_query(text: &str) -> Option<(usize, &str)> {
 }
 
 pub(crate) fn selected_draft(text: String, slugs: Vec<String>) -> ComposerDraft {
-    let is_empty = openbot_contracts::text::trim_ecmascript(&text).is_empty() && slugs.is_empty();
+    let is_empty = wrokbot_contracts::text::trim_ecmascript(&text).is_empty() && slugs.is_empty();
     ComposerDraft {
         text,
         agent_id: None,
@@ -238,8 +238,8 @@ impl SkillComposer {
 pub(crate) fn SkillPicker(state: SkillComposer, disabled: Signal<bool>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
-        <div class="ob-skill-picker">
-            <div class="ob-skill-chips">
+        <div class="wrokbot-skill-picker">
+            <div class="wrokbot-skill-chips">
                 <Button variant=ButtonVariant::Ghost size=ButtonSize::Small disabled=disabled
                     on_activate=move |_| { if state.open.get_untracked() { state.close(); } else { state.manual_open.set(true); state.active.set(0); state.reload(); } }>
                     {move || t!(i18n, skills.choose)}
@@ -255,7 +255,7 @@ pub(crate) fn SkillPicker(state: SkillComposer, disabled: Signal<bool>) -> impl 
                 }/>
             </div>
             <Show when=move || state.open.get() && !disabled.get()>
-                <div class="ob-home-mention-results" id="channel-skill-results" role="listbox" aria-label=move || t_string!(i18n, skills.choose).to_owned()>
+                <div class="wrokbot-home-mention-results" id="channel-skill-results" role="listbox" aria-label=move || t_string!(i18n, skills.choose).to_owned()>
                     <For each=move || { state.matches.get().into_iter().enumerate().collect::<Vec<_>>() } key=|(index, s)| (*index, s.slug.clone(), s.title.clone()) children=move |(index, skill)| {
                         let slug = skill.slug.clone();
                         view! { <button type="button" role="option" id=format!("skill-choice-{index}")
@@ -266,13 +266,13 @@ pub(crate) fn SkillPicker(state: SkillComposer, disabled: Signal<bool>) -> impl 
                         </button> }
                     }/>
                 </div>
-                <Show when=move || state.loading.get()><p class="ob-page-empty" role="status">{move || t!(i18n, common.loading)}</p></Show>
-                <Show when=move || state.error.get()><p class="ob-alert" role="alert">{move || t!(i18n, skills.choices_error)}</p></Show>
-                <Show when=move || state.agent.get().is_some() && !state.loading.get() && !state.error.get() && state.matches.get().is_empty()><p class="ob-page-empty">{move || t!(i18n, skills.choices_empty)}</p></Show>
-                <Show when=move || state.agent.get().is_none()><p class="ob-page-empty">{move || t!(i18n, skills.choose_agent_first)}</p></Show>
-                <a class="ob-plugin-link" href="/skills">{move || t!(i18n, skills.manage)}</a>
+                <Show when=move || state.loading.get()><p class="wrokbot-page-empty" role="status">{move || t!(i18n, common.loading)}</p></Show>
+                <Show when=move || state.error.get()><p class="wrokbot-alert" role="alert">{move || t!(i18n, skills.choices_error)}</p></Show>
+                <Show when=move || state.agent.get().is_some() && !state.loading.get() && !state.error.get() && state.matches.get().is_empty()><p class="wrokbot-page-empty">{move || t!(i18n, skills.choices_empty)}</p></Show>
+                <Show when=move || state.agent.get().is_none()><p class="wrokbot-page-empty">{move || t!(i18n, skills.choose_agent_first)}</p></Show>
+                <a class="wrokbot-plugin-link" href="/skills">{move || t!(i18n, skills.manage)}</a>
             </Show>
-            <Show when=move || state.invalid.get()><p class="ob-alert" role="alert">{move || t!(i18n, skills.selection_invalid)}</p></Show>
+            <Show when=move || state.invalid.get()><p class="wrokbot-alert" role="alert">{move || t!(i18n, skills.selection_invalid)}</p></Show>
         </div>
     }
 }

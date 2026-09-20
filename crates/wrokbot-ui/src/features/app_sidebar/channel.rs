@@ -1,7 +1,7 @@
 //! One channel roster row with bounded same-origin navigation.
 
 use leptos::prelude::*;
-use openbot_contracts::command::ChannelSummary;
+use wrokbot_contracts::command::ChannelSummary;
 use time::OffsetDateTime;
 
 use crate::api::channel_route_href;
@@ -40,29 +40,29 @@ pub fn ChannelRow(
     });
     let description = format!("{visible_name} — {last_message}");
     view! {
-        <li class="ob-sidebar-list-item">
+        <li class="wrokbot-sidebar-list-item">
             <a
-                class="ob-channel-row"
+                class="wrokbot-channel-row"
                 href=href
                 title=description
                 aria-current=move || current.get().unwrap_or(false).then_some("page")
                 data-state=move || current.get().unwrap_or(false).then_some("current")
             >
-                <span class="ob-channel-avatar" aria-hidden="true">
+                <span class="wrokbot-channel-avatar" aria-hidden="true">
                     <Avatar
                         principal_id=avatar_principal
                         name=avatar_name
                         size=AvatarSize::Medium
                     />
                 </span>
-                <span class="ob-channel-copy">
-                    <span class="ob-channel-heading">
-                        <span class="ob-channel-name">{visible_name}</span>
+                <span class="wrokbot-channel-copy">
+                    <span class="wrokbot-channel-heading">
+                        <span class="wrokbot-channel-name">{visible_name}</span>
                         {timestamp.map(|(datetime, label)| view! {
-                            <time class="ob-channel-time" datetime=datetime>{label}</time>
+                            <time class="wrokbot-channel-time" datetime=datetime>{label}</time>
                         })}
                     </span>
-                    <span class="ob-channel-preview">{last_message}</span>
+                    <span class="wrokbot-channel-preview">{last_message}</span>
                 </span>
             </a>
         </li>

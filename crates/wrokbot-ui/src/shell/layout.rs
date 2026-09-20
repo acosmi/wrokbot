@@ -18,7 +18,7 @@ use crate::shell::AppSidebar;
 #[component]
 pub fn RootLayout(children: Children) -> impl IntoView {
     view! {
-        <div class="ob-root-layout" data-layout="root">
+        <div class="wrokbot-root-layout" data-layout="root">
             {children()}
         </div>
     }
@@ -31,7 +31,7 @@ pub fn AppLayout(children: Children) -> impl IntoView {
     provide_ui_preferences(i18n);
     let collapsed = RwSignal::new(false);
     view! {
-        <a class="ob-skip-link" href="#main-content">
+        <a class="wrokbot-skip-link" href="#main-content">
             {move || t!(i18n, shell.skip_to_content)}
         </a>
         <SidebarProvider
@@ -41,31 +41,31 @@ pub fn AppLayout(children: Children) -> impl IntoView {
             mobile_title=move || t_string!(i18n, shell.sidebar_mobile_title).to_owned()
             mobile_description=move || t_string!(i18n, shell.sidebar_mobile_description).to_owned()
         >
-            <div class="ob-app-shell" data-layout="app">
+            <div class="wrokbot-app-shell" data-layout="app">
                 <Sidebar>
                     <AppSidebar />
                 </Sidebar>
-                <div class="ob-app-stage">
-                    <header class="ob-shell-topbar" on:mousedown=crate::api::desktop_chrome::start_drag>
+                <div class="wrokbot-app-stage">
+                    <header class="wrokbot-shell-topbar" on:mousedown=crate::api::desktop_chrome::start_drag>
                         <SidebarTrigger aria_label=move || t_string!(i18n, shell.sidebar_toggle).to_owned() />
-                        <div class="ob-shell-identity">
-                            <a class="ob-shell-product" href="/" aria-label=move || t_string!(i18n, common.app_name).to_owned()>
+                        <div class="wrokbot-shell-identity">
+                            <a class="wrokbot-shell-product" href="/" aria-label=move || t_string!(i18n, common.app_name).to_owned()>
                                 <crate::primitives::BrandMark/>
-                                <span class="ob-brand-wordmark" aria-hidden="true"></span>
+                                <span class="wrokbot-brand-wordmark" aria-hidden="true"></span>
                             </a>
-                            <div class="ob-shell-context"
+                            <div class="wrokbot-shell-context"
                                 role="status"
                                 aria-label=move || t_string!(i18n, shell.env_tooltip).to_owned()
                                 title=move || t_string!(i18n, shell.env_tooltip).to_owned()
                             >
                                 <IconView icon=Icon::Monitor size=IconSize::Navigation />
-                                <span class="ob-shell-context-label">
+                                <span class="wrokbot-shell-context-label">
                                     {move || format!("{}: {}", t_string!(i18n, shell.env_summary), t_string!(i18n, shell.env_unassigned))}
                                 </span>
                             </div>
                         </div>
                     </header>
-                    <main id="main-content" class="ob-main" tabindex="-1">
+                    <main id="main-content" class="wrokbot-main" tabindex="-1">
                         {children()}
                     </main>
                 </div>

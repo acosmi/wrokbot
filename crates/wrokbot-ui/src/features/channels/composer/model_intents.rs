@@ -1,9 +1,9 @@
 //! Frozen per-run intent and an app-owned unknown-write barrier.
 
 use leptos::prelude::*;
-use openbot_contracts::command::{ChannelDetail, ThreadRunAnchor};
-use openbot_contracts::ids::{BotId, RunId, ThreadId};
-use openbot_contracts::model_connections::RunModelSelection;
+use wrokbot_contracts::command::{ChannelDetail, ThreadRunAnchor};
+use wrokbot_contracts::ids::{BotId, RunId, ThreadId};
+use wrokbot_contracts::model_connections::RunModelSelection;
 
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::api::ApiError;

@@ -2,9 +2,9 @@
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
-use openbot_contracts::agent::{AgentProfile, AgentVisibility};
-use openbot_contracts::ids::BotId;
-use openbot_contracts::text::trim_ecmascript;
+use wrokbot_contracts::agent::{AgentProfile, AgentVisibility};
+use wrokbot_contracts::ids::BotId;
+use wrokbot_contracts::text::trim_ecmascript;
 
 use crate::api::channel_new_href;
 #[cfg(target_arch = "wasm32")]
@@ -346,16 +346,16 @@ pub fn HomePage() -> impl IntoView {
 
     view! {
         <PageShell width=PageWidth::Chat>
-            <div class="ob-home">
-                <header class="ob-home-header">
+            <div class="wrokbot-home">
+                <header class="wrokbot-home-header">
 
                     <h1>{move || t!(i18n, home.title)}</h1>
                 </header>
                 <Show when=move || loading.get()>
-                    <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                    <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
                 </Show>
                 <Show when=move || load_error.get()>
-                    <div class="ob-alert" role="alert">
+                    <div class="wrokbot-alert" role="alert">
                         <span>{move || t!(i18n, home.agents_load_error)}</span>
                         <Button
                             size=ButtonSize::Small
@@ -366,7 +366,7 @@ pub fn HomePage() -> impl IntoView {
                         </Button>
                     </div>
                 </Show>
-                <div class="ob-home-composer" aria-busy=move || submitting.get().to_string()>
+                <div class="wrokbot-home-composer" aria-busy=move || submitting.get().to_string()>
                     <Textarea
                         value=draft
                         id="home-message"
@@ -382,7 +382,7 @@ pub fn HomePage() -> impl IntoView {
                     <Show when=move || mention_open.get()>
                         <div
                             id="home-mention-results"
-                            class="ob-home-mention-results"
+                            class="wrokbot-home-mention-results"
                             role="listbox"
                             aria-label=move || t_string!(i18n, home.mention_results).to_owned()
                         >
@@ -431,18 +431,18 @@ pub fn HomePage() -> impl IntoView {
                     </Show>
                     <ModelPicker state=model_composer disabled=inputs_locked/>
                     <SkillPicker state=skill_composer disabled=inputs_locked/>
-                    <div class="ob-home-composer-actions">
-                        <details class="ob-composer-options" on:keydown=crate::primitives::dismiss_disclosure on:click=crate::primitives::dismiss_disclosure_link>
+                    <div class="wrokbot-home-composer-actions">
+                        <details class="wrokbot-composer-options" on:keydown=crate::primitives::dismiss_disclosure on:click=crate::primitives::dismiss_disclosure_link>
                             <summary aria-label=move || t_string!(i18n, home.actions).to_owned()>
                                 <IconView icon=Icon::Plus size=IconSize::Navigation />
                             </summary>
-                            <div class="ob-composer-options-panel">
+                            <div class="wrokbot-composer-options-panel">
                                 <a href="/channel/new"><IconView icon=Icon::Pencil size=IconSize::Inline />{move || t!(i18n, shell.new_channel)}</a>
                                 <a href="/settings/components-gallery"><IconView icon=Icon::Archive size=IconSize::Inline />{move || t!(i18n, shell.nav_library)}</a>
                             </div>
                         </details>
-                        <div class="ob-composer-spacer"></div>
-                        <button class="ob-composer-mode" type="button"
+                        <div class="wrokbot-composer-spacer"></div>
+                        <button class="wrokbot-composer-mode" type="button"
                             disabled=inputs_locked
                             aria-label=move || t_string!(i18n, home.choose_agent).to_owned()
                             aria-expanded=move || agent_picker_open.get().to_string()
@@ -467,7 +467,7 @@ pub fn HomePage() -> impl IntoView {
                             on_activate=move |_| send.run(())
                         >
                             <IconView icon=Icon::ArrowUp size=IconSize::Navigation />
-                            <span class="ob-visually-hidden">{move || if begin_unknown.get() {
+                            <span class="wrokbot-visually-hidden">{move || if begin_unknown.get() {
                                 t_string!(i18n, common.retry).to_owned()
                             } else {
                                 t_string!(i18n, channels.composer_send).to_owned()
@@ -475,35 +475,35 @@ pub fn HomePage() -> impl IntoView {
                         </Button>
                     </div>
                 </div>
-                <p class="ob-home-model-preset-note" role="note">{move || t!(i18n, home.model_preset_note)}</p>
+                <p class="wrokbot-home-model-preset-note" role="note">{move || t!(i18n, home.model_preset_note)}</p>
                 <Show when=move || !loading.get() && !load_error.get() && fallback.get().is_none()>
-                    <p class="ob-home-routing-hint" role="status">
+                    <p class="wrokbot-home-routing-hint" role="status">
                         <a href="/agents">{move || t!(i18n, home.no_agents)}</a>
                     </p>
                 </Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::Conflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::Rejected)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::NavigationFailed)><p class="ob-alert" role="alert">{move || t!(i18n, channels.navigation_failed)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::Conflict)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::Rejected)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::NavigationFailed)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.navigation_failed)}</p></Show>
                 <Show when=move || uncertain_create.get()>
-                    <div class="ob-alert" role="alert">
+                    <div class="wrokbot-alert" role="alert">
                         <p>{move || t!(i18n, channels.create_uncertain)}</p>
                         <a href="/">{move || t!(i18n, home.title)}</a>
                     </div>
                 </Show>
                 <Show when=move || begin_unknown.get()>
-                    <p class="ob-alert" role="alert">{move || t!(i18n, channels.begin_unknown)}</p>
+                    <p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.begin_unknown)}</p>
                 </Show>
                 <Show when=move || submission_blocked.get()>
-                    <a class="ob-alert" role="alert" href=move || submissions.barrier().and_then(|barrier| barrier.href()).unwrap_or_else(|| "/".to_owned())>
+                    <a class="wrokbot-alert" role="alert" href=move || submissions.barrier().and_then(|barrier| barrier.href()).unwrap_or_else(|| "/".to_owned())>
                         {move || t!(i18n, channels.submission_blocked)}
                     </a>
                 </Show>
-                <section id="home-agent-picker" class="ob-home-explore" hidden=move || !agent_picker_open.get() aria-labelledby="home-explore-title">
+                <section id="home-agent-picker" class="wrokbot-home-explore" hidden=move || !agent_picker_open.get() aria-labelledby="home-explore-title">
                     <h2 id="home-explore-title">{move || t!(i18n, home.choose_agent)}</h2>
-                    <p class="ob-home-routing-hint">{move || t!(i18n, home.routing_hint)}</p>
-                    <div class="ob-home-agent-list">
+                    <p class="wrokbot-home-routing-hint">{move || t!(i18n, home.routing_hint)}</p>
+                    <div class="wrokbot-home-agent-list">
                         <For each=move || { agents.get().into_iter().filter(valid_home_agent).collect::<Vec<_>>() } key=|agent| agent.id.clone()
                             children=move |agent| {
                                 let selected_agent = agent.clone();
@@ -523,8 +523,8 @@ pub fn HomePage() -> impl IntoView {
                                 }
                             } />
                     </div>
-                    <Show when=move || agents.get().is_empty()><p class="ob-page-empty">{move || t!(i18n, home.explore_empty)}</p></Show>
-                    <a class="ob-home-agent-manage" href="/agents">{move || t!(i18n, home.explore_agents)}<IconView icon=Icon::ArrowUpRight size=IconSize::Inline /></a>
+                    <Show when=move || agents.get().is_empty()><p class="wrokbot-page-empty">{move || t!(i18n, home.explore_empty)}</p></Show>
+                    <a class="wrokbot-home-agent-manage" href="/agents">{move || t!(i18n, home.explore_agents)}<IconView icon=Icon::ArrowUpRight size=IconSize::Inline /></a>
                 </section>
             </div>
         </PageShell>
@@ -696,7 +696,7 @@ fn insert_mention(
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::ids::BotId;
+    use wrokbot_contracts::ids::BotId;
 
     use super::*;
 

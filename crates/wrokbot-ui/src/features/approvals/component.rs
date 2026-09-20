@@ -4,10 +4,10 @@ use std::collections::BTreeSet;
 
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::command::{AppEvent, SubscriptionRequest};
+use wrokbot_contracts::command::{AppEvent, SubscriptionRequest};
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::tool::MAX_PENDING_TOOL_APPROVALS;
-use openbot_contracts::tool::{ToolApprovalClass, ToolApprovalDecision, ToolApprovalEffect};
+use wrokbot_contracts::tool::MAX_PENDING_TOOL_APPROVALS;
+use wrokbot_contracts::tool::{ToolApprovalClass, ToolApprovalDecision, ToolApprovalEffect};
 use time::format_description::well_known::Rfc3339;
 
 use super::ApprovalCardView;
@@ -81,7 +81,7 @@ pub fn ApprovalPage() -> impl IntoView {
     view! {
         <PageShell width=PageWidth::Content>
             <PageTopbar>
-                <p class="ob-eyebrow">{move || t!(i18n, admin.approval_pending)}</p>
+                <p class="wrokbot-eyebrow">{move || t!(i18n, admin.approval_pending)}</p>
                 <Button
                     variant=ButtonVariant::Chip
                     size=ButtonSize::Medium
@@ -100,18 +100,18 @@ pub fn ApprovalPage() -> impl IntoView {
             />
 
             <Show when=move || load_error.get().is_some()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <IconView icon=Icon::TriangleAlert size=IconSize::Inline />
                     <span>{move || t!(i18n, admin.approval_load_error)}</span>
                 </div>
             </Show>
             <Show when=move || decision_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <IconView icon=Icon::TriangleAlert size=IconSize::Inline />
                     <span>{move || t!(i18n, admin.approval_decision_error)}</span>
                     <button
                         type="button"
-                        class="ob-alert-dismiss"
+                        class="wrokbot-alert-dismiss"
                         aria-label=move || t_string!(i18n, common.dismiss).to_owned()
                         on:click=move |_| decision_error.set(false)
                     >
@@ -120,7 +120,7 @@ pub fn ApprovalPage() -> impl IntoView {
                 </div>
             </Show>
             <Show when=move || notice.get().is_some()>
-                <div class="ob-status" role="status">
+                <div class="wrokbot-status" role="status">
                     <IconView icon=Icon::CircleCheck size=IconSize::Inline />
                     <span>{move || match notice.get() {
                         Some(ToolApprovalDecision::Grant) => {
@@ -137,7 +137,7 @@ pub fn ApprovalPage() -> impl IntoView {
             {move || {
                 if loading.get() && approvals.with(Vec::is_empty) {
                     view! {
-                        <div class="ob-loading" role="status">
+                        <div class="wrokbot-loading" role="status">
                             <IconView icon=Icon::LoaderCircle size=IconSize::Navigation />
                             <span>{t!(i18n, common.loading)}</span>
                         </div>
@@ -154,7 +154,7 @@ pub fn ApprovalPage() -> impl IntoView {
                     .into_any()
                 } else {
                     view! {
-                        <div class="ob-approval-list">
+                        <div class="wrokbot-approval-list">
                             <For
                                 each=move || approvals.get()
                                 key=|card| card.approval_id.clone()
@@ -238,13 +238,13 @@ fn ApprovalCard(
     let change = card.change.clone();
 
     view! {
-        <article class="ob-approval-card" aria-labelledby=article_heading_id>
-            <header class="ob-approval-card-header">
-                <div class="ob-approval-title-group">
+        <article class="wrokbot-approval-card" aria-labelledby=article_heading_id>
+            <header class="wrokbot-approval-card-header">
+                <div class="wrokbot-approval-title-group">
                     <IconView icon=Icon::ShieldCheck size=IconSize::Navigation />
                     <div>
-                        <h2 id=heading_id class="ob-approval-title">{card.tool_title}</h2>
-                        {server.map(|server| view! { <p class="ob-approval-server">{server}</p> })}
+                        <h2 id=heading_id class="wrokbot-approval-title">{card.tool_title}</h2>
+                        {server.map(|server| view! { <p class="wrokbot-approval-server">{server}</p> })}
                     </div>
                 </div>
                 <Badge tone=BadgeTone::Caution>
@@ -252,26 +252,26 @@ fn ApprovalCard(
                 </Badge>
             </header>
 
-            <dl class="ob-approval-facts">
-                <div class="ob-approval-fact">
+            <dl class="wrokbot-approval-facts">
+                <div class="wrokbot-approval-fact">
                     <dt>{move || t!(i18n, admin.approval_effect)}</dt>
                     <dd>{move || effect_label(i18n, effect)}</dd>
                 </div>
-                <div class="ob-approval-fact">
+                <div class="wrokbot-approval-fact">
                     <dt>{move || t!(i18n, admin.approval_target)}</dt>
                     <dd>
-                        <span class="ob-target-kind">{card.target_kind}</span>
-                        <code class="ob-target-id">{card.target_id}</code>
+                        <span class="wrokbot-target-kind">{card.target_kind}</span>
+                        <code class="wrokbot-target-id">{card.target_id}</code>
                     </dd>
                 </div>
-                <div class="ob-approval-fact">
+                <div class="wrokbot-approval-fact">
                     <dt>{move || t!(i18n, admin.approval_reuse)}</dt>
                     <dd>{move || approval_class_label(i18n, approval_class)}</dd>
                 </div>
-                <div class="ob-approval-fact">
+                <div class="wrokbot-approval-fact">
                     <dt>
                         <IconView icon=Icon::Clock size=IconSize::Inline />
-                        <span class="ob-visually-hidden">{move || t!(i18n, admin.approval_expiry)}</span>
+                        <span class="wrokbot-visually-hidden">{move || t!(i18n, admin.approval_expiry)}</span>
                     </dt>
                     <dd>
                         <time datetime=expires_datetime>
@@ -288,20 +288,20 @@ fn ApprovalCard(
                 </div>
             </dl>
 
-            <section class="ob-approval-payload" aria-labelledby=payload_heading_id>
+            <section class="wrokbot-approval-payload" aria-labelledby=payload_heading_id>
                 <h3 id=arguments_id>
                     {move || t!(i18n, admin.approval_arguments)}
                 </h3>
                 <pre><code>{card.arguments}</code></pre>
             </section>
             {change.map(|change| view! {
-                <section class="ob-approval-payload">
+                <section class="wrokbot-approval-payload">
                     <h3>{move || t!(i18n, admin.approval_change)}</h3>
                     <pre><code>{change}</code></pre>
                 </section>
             })}
 
-            <footer class="ob-approval-actions">
+            <footer class="wrokbot-approval-actions">
                 <Button
                     variant=ButtonVariant::DangerText
                     size=ButtonSize::Medium
@@ -451,7 +451,7 @@ fn install_approval_socket(refresh: ApprovalRefresh) {
     leptos::task::spawn_local_scoped_with_cancellation(async move {
         use futures_util::StreamExt as _;
         use gloo_net::websocket::{Message, futures::WebSocket};
-        use openbot_contracts::tool::ToolApprovalActivityEvent;
+        use wrokbot_contracts::tool::ToolApprovalActivityEvent;
 
         let mut retry = FIRST_RETRY_MS;
         loop {

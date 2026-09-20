@@ -82,14 +82,14 @@ fn admin_shell_view(
     let computers_location = location.clone();
     let playground_location = location;
     view! {
-        <div class="ob-settings-shell">
-            <aside class="ob-settings-subnav">
+        <div class="wrokbot-settings-shell">
+            <aside class="wrokbot-settings-subnav">
                 <nav aria-label=move || t_string!(i18n, admin.title).to_owned()>
-                    <a class="ob-settings-back" href="/">
+                    <a class="wrokbot-settings-back" href="/">
                         <IconView icon=Icon::ArrowLeft size=IconSize::Inline />
                         <span>{move || t!(i18n, admin.back_to_app)}</span>
                     </a>
-                    <ul class="ob-settings-subnav-list">
+                    <ul class="wrokbot-settings-subnav-list">
                         <AdminNavItem href="/admin/computers" current=Signal::derive(move || is_exact(&computers_location.pathname.get(), "/admin/computers")) icon=Icon::LayoutGrid label=move || t_string!(i18n, computer.admin_title).to_owned()/>
 
                         <AdminNavItem
@@ -174,7 +174,7 @@ fn admin_shell_view(
                     </ul>
                 </nav>
             </aside>
-            <div class="ob-settings-shell-content">{children()}</div>
+            <div class="wrokbot-settings-shell-content">{children()}</div>
         </div>
     }
 }
@@ -189,7 +189,7 @@ fn AdminNavItem(
     view! {
         <li>
             <a
-                class="ob-settings-subnav-link"
+                class="wrokbot-settings-subnav-link"
                 href=href
                 data-state=move || current.get().then_some("current")
                 aria-current=move || current.get().then_some("page")
@@ -207,7 +207,7 @@ fn admin_gate_fallback(
 ) -> AnyView {
     match state {
         AdminGateState::Loading => view! {
-            <div class="ob-loading" role="status">
+            <div class="wrokbot-loading" role="status">
                 <IconView icon=Icon::LoaderCircle size=IconSize::Navigation />
                 <span>{move || t!(i18n, common.loading)}</span>
             </div>
@@ -215,14 +215,14 @@ fn admin_gate_fallback(
         .into_any(),
         #[cfg(any(target_arch = "wasm32", test))]
         AdminGateState::NotFound => view! {
-            <section class="ob-page">
-                <h1 class="ob-page-title">{move || t!(i18n, errors.not_found_title)}</h1>
-                <p class="ob-page-intro">{move || t!(i18n, errors.not_found_body)}</p>
+            <section class="wrokbot-page">
+                <h1 class="wrokbot-page-title">{move || t!(i18n, errors.not_found_title)}</h1>
+                <p class="wrokbot-page-intro">{move || t!(i18n, errors.not_found_body)}</p>
             </section>
         }
         .into_any(),
         AdminGateState::Failed | AdminGateState::Authorized => view! {
-            <div class="ob-alert" role="alert">
+            <div class="wrokbot-alert" role="alert">
                 <IconView icon=Icon::TriangleAlert size=IconSize::Inline />
                 <span>{move || t!(i18n, admin.gate_error)}</span>
             </div>

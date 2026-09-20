@@ -24,17 +24,17 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
     let models_location = location.clone();
     let memory_location = location;
     view! {
-        <div class="ob-settings-shell">
-            <aside class="ob-settings-subnav">
+        <div class="wrokbot-settings-shell">
+            <aside class="wrokbot-settings-subnav">
                 <nav aria-label=move || t_string!(i18n, settings.title).to_owned()>
-                    <a class="ob-settings-back" href="/">
+                    <a class="wrokbot-settings-back" href="/">
                         <IconView icon=Icon::ArrowLeft size=IconSize::Inline />
                         <span>{move || t!(i18n, settings.back_to_app)}</span>
                     </a>
-                    <ul class="ob-settings-subnav-list">
+                    <ul class="wrokbot-settings-subnav-list">
                         <li>
                             <a
-                                class="ob-settings-subnav-link"
+                                class="wrokbot-settings-subnav-link"
                                 href=GENERAL_PATH
                                 data-state=move || {
                                     is_current(&general_location.pathname.get(), GENERAL_PATH)
@@ -51,7 +51,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                         </li>
                         <li>
                             <a
-                                class="ob-settings-subnav-link"
+                                class="wrokbot-settings-subnav-link"
                                 href=CONNECTED_ACCOUNTS_PATH
                                 data-state=move || {
                                     is_section_current(
@@ -74,7 +74,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                         </li>
                         <li>
                             <a
-                                class="ob-settings-subnav-link"
+                                class="wrokbot-settings-subnav-link"
                                 href=COMPONENTS_GALLERY_PATH
                                 data-state=move || {
                                     is_section_current(
@@ -97,7 +97,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                         </li>
                         <li>
                             <a
-                                class="ob-settings-subnav-link"
+                                class="wrokbot-settings-subnav-link"
                                 href=MEMORY_PATH
                                 data-state=move || {
                                     is_current(&memory_location.pathname.get(), MEMORY_PATH)
@@ -113,7 +113,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                             </a>
                         </li>
                         <li>
-                            <a class="ob-settings-subnav-link" href=MODELS_PATH
+                            <a class="wrokbot-settings-subnav-link" href=MODELS_PATH
                                 data-state=move || is_current(&models_location.pathname.get(), MODELS_PATH).then_some("current")
                                 aria-current=move || is_current(&models_location.pathname.get(), MODELS_PATH).then_some("page")>
                                 <IconView icon=Icon::Plug size=IconSize::Inline />
@@ -123,7 +123,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                     </ul>
                 </nav>
             </aside>
-            <div class="ob-settings-shell-content">
+            <div class="wrokbot-settings-shell-content">
                 {children()}
             </div>
         </div>

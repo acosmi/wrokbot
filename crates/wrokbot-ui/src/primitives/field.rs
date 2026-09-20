@@ -93,21 +93,21 @@ pub fn Field(
     view! {
         <Provider value=context>
             <div
-                class="ob-field"
+                class="wrokbot-field"
                 data-state=move || field_state_tokens(invalid_signal.get(), disabled_signal.get())
             >
                 <Label for_id=control_id>{move || label.get()}</Label>
                 {children()}
                 <p
                     id=description_id
-                    class="ob-field-description"
+                    class="wrokbot-field-description"
                     hidden=move || description_visible.get().is_empty()
                 >
                     {move || description_text.get()}
                 </p>
                 <p
                     id=error_id
-                    class="ob-field-error"
+                    class="wrokbot-field-error"
                     role="alert"
                     hidden=move || !invalid_signal.get() || error_visible.get().is_empty()
                 >

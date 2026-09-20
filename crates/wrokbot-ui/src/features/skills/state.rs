@@ -1,7 +1,7 @@
 //! Scope-separated skill reads; mutations use app-owned PluginActions and refetch after completion.
 
 use leptos::prelude::*;
-use openbot_contracts::{agent::AgentProfile, mcp::McpAdminSkill};
+use wrokbot_contracts::{agent::AgentProfile, mcp::McpAdminSkill};
 
 #[cfg(target_arch = "wasm32")]
 use crate::api::ApiError;
@@ -109,7 +109,7 @@ async fn load(deployment: bool) -> Result<SkillData, ApiError> {
     Ok(SkillData {
         all,
         actor_id: actor.id.as_str().to_owned(),
-        actor_is_admin: actor.role == openbot_contracts::auth::Role::Admin,
+        actor_is_admin: actor.role == wrokbot_contracts::auth::Role::Admin,
         agents: agents_result.unwrap_or_default(),
         agents_available,
     })

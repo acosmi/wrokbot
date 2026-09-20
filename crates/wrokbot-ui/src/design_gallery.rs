@@ -84,23 +84,23 @@ pub fn DesignGallery() -> impl IntoView {
     let scroller_expanded_id = RwSignal::new(None::<i32>);
 
     view! {
-        <section class="ob-page ob-design-gallery" aria-labelledby="design-gallery-title">
-            <header class="ob-page-header">
+        <section class="wrokbot-page wrokbot-design-gallery" aria-labelledby="design-gallery-title">
+            <header class="wrokbot-page-header">
                 <div>
-                    <p class="ob-eyebrow">{move || t!(i18n, design_gallery.eyebrow)}</p>
-                    <h1 id="design-gallery-title" class="ob-page-title">
+                    <p class="wrokbot-eyebrow">{move || t!(i18n, design_gallery.eyebrow)}</p>
+                    <h1 id="design-gallery-title" class="wrokbot-page-title">
                         {move || t!(i18n, design_gallery.title)}
                     </h1>
-                    <p class="ob-page-intro">{move || t!(i18n, design_gallery.intro)}</p>
+                    <p class="wrokbot-page-intro">{move || t!(i18n, design_gallery.intro)}</p>
                 </div>
             </header>
 
             <crate::features::computer::viewer::ScreenFixturePreview/>
             <crate::features::channels::markdown::MarkdownPreview/>
-            <div class="ob-design-grid">
-                <section class="ob-design-section" aria-labelledby="design-buttons-title">
+            <div class="wrokbot-design-grid">
+                <section class="wrokbot-design-section" aria-labelledby="design-buttons-title">
                     <h2 id="design-buttons-title">{move || t!(i18n, design_gallery.buttons)}</h2>
-                    <div class="ob-design-row" id="design-buttons">
+                    <div class="wrokbot-design-row" id="design-buttons">
                         <Button
                             variant=ButtonVariant::Chip
                             size=ButtonSize::Small
@@ -151,9 +151,9 @@ pub fn DesignGallery() -> impl IntoView {
                     <output id="design-button-count" aria-live="polite">{button_count}</output>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-fields-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-fields-title">
                     <h2 id="design-fields-title">{move || t!(i18n, design_gallery.fields)}</h2>
-                    <div class="ob-design-stack" id="design-fields">
+                    <div class="wrokbot-design-stack" id="design-fields">
                         <Field
                             control_id="design-name"
                             label=move || t_string!(i18n, design_gallery.name_label).to_owned()
@@ -197,9 +197,9 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-listboxes-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-listboxes-title">
                     <h2 id="design-listboxes-title">{move || t!(i18n, design_gallery.listboxes)}</h2>
-                    <div class="ob-design-stack" id="design-listboxes">
+                    <div class="wrokbot-design-stack" id="design-listboxes">
                         <Combobox
                             id="design-combobox"
                             open=combobox_open
@@ -242,7 +242,7 @@ pub fn DesignGallery() -> impl IntoView {
                                 </ComboboxList>
                             </ComboboxContent>
                         </Combobox>
-                        <div class="ob-design-row">
+                        <div class="wrokbot-design-row">
                             <output id="design-combobox-value" aria-live="polite">
                                 {move || combobox_value.get().unwrap_or_else(|| "—".to_owned())}
                             </output>
@@ -318,7 +318,7 @@ pub fn DesignGallery() -> impl IntoView {
                                 </SelectGroup>
                             </SelectContent>
                         </Select>
-                        <div class="ob-design-row">
+                        <div class="wrokbot-design-row">
                             <output id="design-select-value" aria-live="polite">
                                 {move || select_value.get().unwrap_or_else(|| "—".to_owned())}
                             </output>
@@ -354,7 +354,7 @@ pub fn DesignGallery() -> impl IntoView {
                         <button
                             id="design-listbox-after"
                             type="button"
-                            class="ob-button"
+                            class="wrokbot-button"
                             data-variant="chip"
                             data-size="md"
                         >
@@ -363,7 +363,7 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-sidebar-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-sidebar-title">
                     <h2 id="design-sidebar-title">{move || t!(i18n, design_gallery.sidebar)}</h2>
                     <SidebarProvider
                         id="design-sidebar"
@@ -375,11 +375,11 @@ pub fn DesignGallery() -> impl IntoView {
                             sidebar_change_count.update(|count| *count += 1);
                         })
                     >
-                        <div class="ob-design-sidebar-shell" id="design-sidebar-shell">
+                        <div class="wrokbot-design-sidebar-shell" id="design-sidebar-shell">
                             <Sidebar>
                                 <SidebarHeader>
                                     <IconView icon=Icon::Bot size=IconSize::Navigation />
-                                    <span class="ob-sidebar-link-label">{move || t!(i18n, common.app_name)}</span>
+                                    <span class="wrokbot-sidebar-link-label">{move || t!(i18n, common.app_name)}</span>
                                 </SidebarHeader>
                                 <SidebarContent>
                                     <SidebarGroup>
@@ -408,12 +408,12 @@ pub fn DesignGallery() -> impl IntoView {
                                 </SidebarContent>
                                 <SidebarFooter>
                                     <IconView icon=Icon::User size=IconSize::Navigation />
-                                    <span class="ob-sidebar-link-label">
+                                    <span class="wrokbot-sidebar-link-label">
                                         {move || t!(i18n, design_gallery.sidebar_user)}
                                     </span>
                                 </SidebarFooter>
                             </Sidebar>
-                            <div class="ob-design-sidebar-main">
+                            <div class="wrokbot-design-sidebar-main">
                                 <SidebarTrigger
                                     id="design-sidebar-trigger"
                                     aria_label=move || t_string!(i18n, design_gallery.sidebar_toggle).to_owned()
@@ -427,9 +427,9 @@ pub fn DesignGallery() -> impl IntoView {
                     </SidebarProvider>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-items-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-items-title">
                     <h2 id="design-items-title">{move || t!(i18n, design_gallery.items)}</h2>
-                    <div class="ob-design-stack" id="design-items">
+                    <div class="wrokbot-design-stack" id="design-items">
                         <Item
                             action=ItemAction::Link("/approvals".to_owned())
                             selected=true
@@ -458,9 +458,9 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-feedback-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-feedback-title">
                     <h2 id="design-feedback-title">{move || t!(i18n, design_gallery.feedback)}</h2>
-                    <div class="ob-design-stack" id="design-feedback">
+                    <div class="wrokbot-design-stack" id="design-feedback">
                         <Field
                             control_id="design-switch"
                             label=move || t_string!(i18n, design_gallery.switch_label).to_owned()
@@ -473,7 +473,7 @@ pub fn DesignGallery() -> impl IntoView {
                             disabled=true
                         />
                         <Separator decorative=true />
-                        <div class="ob-design-row">
+                        <div class="wrokbot-design-row">
                             <Skeleton shape=SkeletonShape::Circle />
                             <Skeleton shape=SkeletonShape::Line />
                         </div>
@@ -483,9 +483,9 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-messages-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-messages-title">
                     <h2 id="design-messages-title">{move || t!(i18n, design_gallery.messages)}</h2>
-                    <div class="ob-design-stack" id="design-messages">
+                    <div class="wrokbot-design-stack" id="design-messages">
                         <MessageGroup>
                             <Message
                                 align=MessageAlign::Start
@@ -528,7 +528,7 @@ pub fn DesignGallery() -> impl IntoView {
                                 </MessageContent>
                             </Message>
                         </MessageGroup>
-                        <div class="ob-design-row" id="design-avatar-repeat">
+                        <div class="wrokbot-design-row" id="design-avatar-repeat">
                             <Avatar
                                 principal_id="principal-ada"
                                 name=move || t_string!(i18n, design_gallery.avatar_ada).to_owned()
@@ -540,12 +540,12 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-message-scroller-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-message-scroller-title">
                     <h2 id="design-message-scroller-title">
                         {move || t!(i18n, design_gallery.message_scroller)}
                     </h2>
-                    <div class="ob-design-stack">
-                        <div class="ob-design-message-scroller" id="design-message-scroller-example">
+                    <div class="wrokbot-design-stack">
+                        <div class="wrokbot-design-message-scroller" id="design-message-scroller-example">
                             <MessageScroller
                                 id="design-message-scroller"
                                 aria_label=move || t_string!(i18n, design_gallery.message_scroller_label).to_owned()
@@ -564,7 +564,7 @@ pub fn DesignGallery() -> impl IntoView {
                                                         scroll_anchor=anchor
                                                     >
                                                         <div
-                                                            class="ob-design-scroller-row"
+                                                            class="wrokbot-design-scroller-row"
                                                             data-anchor=if anchor { "true" } else { "false" }
                                                         >
                                                             <strong>
@@ -597,7 +597,7 @@ pub fn DesignGallery() -> impl IntoView {
                                 />
                             </MessageScroller>
                         </div>
-                        <div class="ob-design-row" id="design-message-scroller-controls">
+                        <div class="wrokbot-design-row" id="design-message-scroller-controls">
                             <Button
                                 id="design-scroller-append"
                                 on_activate=move |_| {
@@ -676,11 +676,11 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-feedback-primitives-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-feedback-primitives-title">
                     <h2 id="design-feedback-primitives-title">
                         {move || t!(i18n, design_gallery.feedback_primitives)}
                     </h2>
-                    <div class="ob-design-stack" id="design-feedback-primitives">
+                    <div class="wrokbot-design-stack" id="design-feedback-primitives">
                         <Toast
                             id="design-toast-preview"
                             visible=toast_preview_visible
@@ -702,7 +702,7 @@ pub fn DesignGallery() -> impl IntoView {
                         <output id="design-toast-dismiss-count" aria-live="polite">
                             {toast_dismiss_count}
                         </output>
-                        <div class="ob-design-row">
+                        <div class="wrokbot-design-row">
                             <Tooltip
                                 id="design-tooltip-preview"
                                 content=move || t_string!(i18n, design_gallery.tooltip_preview).to_owned()
@@ -733,9 +733,9 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-modals-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-modals-title">
                     <h2 id="design-modals-title">{move || t!(i18n, design_gallery.modals)}</h2>
-                    <div class="ob-design-row" id="design-modals">
+                    <div class="wrokbot-design-row" id="design-modals">
                         <Dialog
                             id="design-dialog"
                             open=dialog_open
@@ -794,9 +794,9 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-menu-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-menu-title">
                     <h2 id="design-menu-title">{move || t!(i18n, design_gallery.menu)}</h2>
-                    <div class="ob-design-row" id="design-menu-example">
+                    <div class="wrokbot-design-row" id="design-menu-example">
                         <Menu
                             id="design-menu"
                             open=menu_open
@@ -845,7 +845,7 @@ pub fn DesignGallery() -> impl IntoView {
                                 </MenuItem>
                             </MenuContent>
                         </Menu>
-                        <button id="design-menu-after" type="button" class="ob-button" data-variant="chip" data-size="md">
+                        <button id="design-menu-after" type="button" class="wrokbot-button" data-variant="chip" data-size="md">
                             {move || t!(i18n, design_gallery.menu_after)}
                         </button>
                         <output id="design-menu-select-count" aria-live="polite">{menu_select_count}</output>
@@ -853,15 +853,15 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-layout-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-layout-title">
                     <h2 id="design-layout-title">{move || t!(i18n, design_gallery.layout)}</h2>
-                    <div class="ob-design-layout-preview" id="design-layout-example">
+                    <div class="wrokbot-design-layout-preview" id="design-layout-example">
                         <DetailPanelLayout>
                             <DetailPanelMain>
                                 <PageShell width=PageWidth::Content>
                                     <PageTopbar>
                                         <span>{move || t!(i18n, design_gallery.layout_topbar)}</span>
-                                        <div class="ob-design-row">
+                                        <div class="wrokbot-design-row">
                                             <Button
                                                 id="design-detail-open"
                                                 open=detail_open
@@ -918,47 +918,47 @@ pub fn DesignGallery() -> impl IntoView {
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-agent-presence-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-agent-presence-title">
                     <h2 id="design-agent-presence-title">
                         {move || t!(i18n, design_gallery.agent_presence)}
                     </h2>
-                    <div class="ob-design-row" id="design-agent-presence">
-                        <div class="ob-design-presence-state">
+                    <div class="wrokbot-design-row" id="design-agent-presence">
+                        <div class="wrokbot-design-presence-state">
                             <AgentPresence state=AgentPresenceState::Idle />
                             <span>{move || t!(i18n, agents.presence_idle)}</span>
                         </div>
-                        <div class="ob-design-presence-state">
+                        <div class="wrokbot-design-presence-state">
                             <AgentPresence state=AgentPresenceState::Thinking />
                             <span>{move || t!(i18n, agents.presence_thinking)}</span>
                         </div>
-                        <div class="ob-design-presence-state">
+                        <div class="wrokbot-design-presence-state">
                             <AgentPresence state=AgentPresenceState::Speaking />
                             <span>{move || t!(i18n, agents.presence_speaking)}</span>
                         </div>
-                        <div class="ob-design-presence-state">
+                        <div class="wrokbot-design-presence-state">
                             <AgentPresence state=AgentPresenceState::Error />
                             <span>{move || t!(i18n, agents.presence_error)}</span>
                         </div>
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-computer-art-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-computer-art-title">
                     <h2 id="design-computer-art-title">
                         {move || t!(i18n, design_gallery.computer_placeholder_art)}
                     </h2>
-                    <div class="ob-design-computer-examples" id="design-computer-art">
-                        <div class="ob-design-computer-art">
+                    <div class="wrokbot-design-computer-examples" id="design-computer-art">
+                        <div class="wrokbot-design-computer-art">
                             <ComputerPlaceholderArt />
                         </div>
                         <ComputerPlaceholder />
                     </div>
                 </section>
 
-                <section class="ob-design-section" aria-labelledby="design-compiled-gallery-title">
+                <section class="wrokbot-design-section" aria-labelledby="design-compiled-gallery-title">
                     <h2 id="design-compiled-gallery-title">
                         {move || t!(i18n, gallery.frame)}
                     </h2>
-                    <div class="ob-design-stack" id="design-compiled-gallery">
+                    <div class="wrokbot-design-stack" id="design-compiled-gallery">
                         <GalleryFrame
                             title=move || t_string!(i18n, gallery.cards).to_owned()
                             caption=move || t_string!(i18n, gallery.preview).to_owned()
@@ -968,7 +968,7 @@ pub fn DesignGallery() -> impl IntoView {
                                 </GalleryBadge>
                             }.into_any()
                         >
-                            <div class="ob-design-row">
+                            <div class="wrokbot-design-row">
                                 <GalleryBadge tone=GalleryTone::Neutral>"Neutral"</GalleryBadge>
                                 <GalleryBadge tone=GalleryTone::Caution>"Caution"</GalleryBadge>
                                 <GalleryBadge tone=GalleryTone::Negative>"Negative"</GalleryBadge>

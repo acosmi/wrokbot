@@ -4579,303 +4579,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "openbot-agent"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "getrandom 0.4.3",
- "metrics",
- "openbot-application",
- "openbot-contracts",
- "openbot-domain",
- "serde_json",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "openbot-application"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "futures-core",
- "openbot-contracts",
- "openbot-domain",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "openbot-computer"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "getrandom 0.4.3",
- "openbot-application",
- "openbot-contracts",
- "openbot-domain",
- "openbot-windows-sandbox",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.20",
- "time",
- "tokio",
-]
-
-[[package]]
-name = "openbot-contracts"
-version = "0.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.20",
- "time",
- "zeroize",
-]
-
-[[package]]
-name = "openbot-desktop"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "futures-core",
- "getrandom 0.4.3",
- "http",
- "openbot-agent",
- "openbot-application",
- "openbot-contracts",
- "openbot-domain",
- "openbot-infra",
- "openbot-windows-sandbox",
- "security-framework",
- "security-framework-sys",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sys-locale",
- "tauri",
- "tauri-build",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tokio-postgres",
- "tracing",
- "url",
- "uuid",
- "wrok-bot-macos-local-auth",
- "wrok-bot-macos-process",
-]
-
-[[package]]
-name = "openbot-domain"
-version = "0.0.0"
-dependencies = [
- "aes-gcm",
- "base64 0.22.1",
- "cel",
- "hmac 0.12.1",
- "openbot-contracts",
- "regex",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.20",
- "time",
- "zeroize",
-]
-
-[[package]]
-name = "openbot-infra"
-version = "0.0.0"
-dependencies = [
- "acosmi-sdk",
- "aes-gcm",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "bytes",
- "chrono",
- "deadpool-postgres",
- "ed25519-dalek",
- "futures-core",
- "futures-util",
- "getrandom 0.4.3",
- "hkdf",
- "hmac 0.12.1",
- "http",
- "http-body-util",
- "httpdate",
- "hyper",
- "hyper-util",
- "ipnet",
- "jsonschema",
- "openbot-agent",
- "openbot-application",
- "openbot-contracts",
- "openbot-domain",
- "openidconnect",
- "openssl",
- "postgres-types",
- "quick-xml",
- "ring",
- "rmcp",
- "rustix",
- "rustls",
- "samael",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sse-stream",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tokio-postgres",
- "tokio-rustls",
- "tokio-util",
- "tracing",
- "url",
- "uuid",
- "webpki-roots",
- "zeroize",
-]
-
-[[package]]
-name = "openbot-server"
-version = "0.0.0"
-dependencies = [
- "aes-gcm",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "deadpool-postgres",
- "ed25519-dalek",
- "futures-core",
- "futures-util",
- "hkdf",
- "http",
- "metrics",
- "metrics-exporter-prometheus",
- "openbot-agent",
- "openbot-application",
- "openbot-computer",
- "openbot-contracts",
- "openbot-domain",
- "openbot-infra",
- "ring",
- "rmcp",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "time",
- "tokio",
- "tokio-postgres",
- "tokio-tungstenite",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "openbot-testkit"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "deadpool-postgres",
- "flate2",
- "image",
- "openbot-agent",
- "openbot-application",
- "openbot-contracts",
- "openbot-desktop",
- "openbot-domain",
- "openbot-infra",
- "openbot-server",
- "openbot-windows-sandbox",
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_parser",
- "oxc_span",
- "plist",
- "regex",
- "rustix",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "tar",
- "time",
- "tokio",
- "toml 0.9.8",
- "tower",
- "url",
- "uuid",
- "walkdir",
- "zip",
-]
-
-[[package]]
-name = "openbot-ui"
-version = "0.0.0"
-dependencies = [
- "base64 0.22.1",
- "futures-util",
- "gloo-net",
- "js-sys",
- "leptos",
- "leptos_i18n",
- "leptos_i18n_build",
- "leptos_meta",
- "leptos_router",
- "openbot-contracts",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "syntect",
- "time",
- "toml 0.9.8",
- "url",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "zeroize",
-]
-
-[[package]]
-name = "openbot-windows-sandbox"
-version = "0.0.0"
-dependencies = [
- "thiserror 2.0.20",
- "tokio",
- "windows-sys 0.61.2",
- "zeroize",
-]
-
-[[package]]
 name = "openidconnect"
 version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9120,7 +8823,184 @@ dependencies = [
 ]
 
 [[package]]
-name = "wrok-bot-macos-local-auth"
+name = "wrokbot-agent"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "getrandom 0.4.3",
+ "metrics",
+ "serde_json",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wrokbot-application",
+ "wrokbot-contracts",
+ "wrokbot-domain",
+]
+
+[[package]]
+name = "wrokbot-application"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "futures-core",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "wrokbot-contracts",
+ "wrokbot-domain",
+]
+
+[[package]]
+name = "wrokbot-computer"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "wrokbot-application",
+ "wrokbot-contracts",
+ "wrokbot-domain",
+ "wrokbot-windows-sandbox",
+]
+
+[[package]]
+name = "wrokbot-contracts"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.20",
+ "time",
+ "zeroize",
+]
+
+[[package]]
+name = "wrokbot-desktop"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "futures-core",
+ "getrandom 0.4.3",
+ "http",
+ "security-framework",
+ "security-framework-sys",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sys-locale",
+ "tauri",
+ "tauri-build",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "url",
+ "uuid",
+ "wrokbot-agent",
+ "wrokbot-application",
+ "wrokbot-contracts",
+ "wrokbot-domain",
+ "wrokbot-infra",
+ "wrokbot-macos-local-auth",
+ "wrokbot-macos-process",
+ "wrokbot-windows-sandbox",
+]
+
+[[package]]
+name = "wrokbot-domain"
+version = "0.0.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "cel",
+ "hmac 0.12.1",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.20",
+ "time",
+ "wrokbot-contracts",
+ "zeroize",
+]
+
+[[package]]
+name = "wrokbot-infra"
+version = "0.0.0"
+dependencies = [
+ "acosmi-sdk",
+ "aes-gcm",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "deadpool-postgres",
+ "ed25519-dalek",
+ "futures-core",
+ "futures-util",
+ "getrandom 0.4.3",
+ "hkdf",
+ "hmac 0.12.1",
+ "http",
+ "http-body-util",
+ "httpdate",
+ "hyper",
+ "hyper-util",
+ "ipnet",
+ "jsonschema",
+ "openidconnect",
+ "openssl",
+ "postgres-types",
+ "quick-xml",
+ "ring",
+ "rmcp",
+ "rustix",
+ "rustls",
+ "samael",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sse-stream",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tokio-postgres",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "webpki-roots",
+ "wrokbot-agent",
+ "wrokbot-application",
+ "wrokbot-contracts",
+ "wrokbot-domain",
+ "zeroize",
+]
+
+[[package]]
+name = "wrokbot-macos-local-auth"
 version = "0.0.0"
 dependencies = [
  "block2",
@@ -9131,11 +9011,131 @@ dependencies = [
 ]
 
 [[package]]
-name = "wrok-bot-macos-process"
+name = "wrokbot-macos-process"
 version = "0.0.0"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "wrokbot-server"
+version = "0.0.0"
+dependencies = [
+ "aes-gcm",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "deadpool-postgres",
+ "ed25519-dalek",
+ "futures-core",
+ "futures-util",
+ "hkdf",
+ "http",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "ring",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tokio-postgres",
+ "tokio-tungstenite",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wrokbot-agent",
+ "wrokbot-application",
+ "wrokbot-computer",
+ "wrokbot-contracts",
+ "wrokbot-domain",
+ "wrokbot-infra",
+ "zeroize",
+]
+
+[[package]]
+name = "wrokbot-testkit"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "deadpool-postgres",
+ "flate2",
+ "image",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_parser",
+ "oxc_span",
+ "plist",
+ "regex",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tar",
+ "time",
+ "tokio",
+ "toml 0.9.8",
+ "tower",
+ "url",
+ "uuid",
+ "walkdir",
+ "wrokbot-agent",
+ "wrokbot-application",
+ "wrokbot-contracts",
+ "wrokbot-desktop",
+ "wrokbot-domain",
+ "wrokbot-infra",
+ "wrokbot-server",
+ "wrokbot-windows-sandbox",
+ "zip",
+]
+
+[[package]]
+name = "wrokbot-ui"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "gloo-net",
+ "js-sys",
+ "leptos",
+ "leptos_i18n",
+ "leptos_i18n_build",
+ "leptos_meta",
+ "leptos_router",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "syntect",
+ "time",
+ "toml 0.9.8",
+ "url",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wrokbot-contracts",
+ "zeroize",
+]
+
+[[package]]
+name = "wrokbot-windows-sandbox"
+version = "0.0.0"
+dependencies = [
+ "thiserror 2.0.20",
+ "tokio",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use leptos::{ev::KeyboardEvent, html};
-use openbot_contracts::ui::UiLocale;
+use wrokbot_contracts::ui::UiLocale;
 
 use crate::i18n::{Locale, t, use_i18n};
 use crate::icons::Icon;
@@ -32,13 +32,13 @@ pub fn LocaleSwitch(#[prop(into)] id: String) -> impl IntoView {
         }
     };
     view! {
-        <div id=id class="ob-locale-switch">
-            <span id=label_id class="ob-visually-hidden">
+        <div id=id class="wrokbot-locale-switch">
+            <span id=label_id class="wrokbot-visually-hidden">
                 {move || t!(i18n, shell.language_label)}
             </span>
             <button
                 type="button"
-                class="ob-locale-trigger"
+                class="wrokbot-locale-trigger"
                 node_ref=trigger_ref
                 aria-haspopup="menu"
                 aria-expanded=move || if open.get() { "true" } else { "false" }
@@ -62,10 +62,10 @@ pub fn LocaleSwitch(#[prop(into)] id: String) -> impl IntoView {
                 <IconView icon=Icon::ChevronDown size=IconSize::Inline />
             </button>
             <Show when=move || open.get()>
-                <div class="ob-locale-menu" role="menu" aria-labelledby=menu_label_id.clone()>
+                <div class="wrokbot-locale-menu" role="menu" aria-labelledby=menu_label_id.clone()>
                     <button
                         type="button"
-                        class="ob-locale-option"
+                        class="wrokbot-locale-option"
                         node_ref=en_ref
                         role="menuitemradio"
                         aria-checked=move || if i18n.get_locale() == Locale::en { "true" } else { "false" }
@@ -91,7 +91,7 @@ pub fn LocaleSwitch(#[prop(into)] id: String) -> impl IntoView {
                     </button>
                     <button
                         type="button"
-                        class="ob-locale-option"
+                        class="wrokbot-locale-option"
                         node_ref=zh_ref
                         role="menuitemradio"
                         aria-checked=move || if i18n.get_locale() == Locale::zh_CN { "true" } else { "false" }

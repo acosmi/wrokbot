@@ -46,17 +46,17 @@ pub fn Avatar(
     let palette = palette_index(&principal_id).to_string();
     let fallback_name = name.clone();
     let image = image_src
-        .map(|source| view! { <img class="ob-avatar-image" src=source alt="" /> }.into_any());
+        .map(|source| view! { <img class="wrokbot-avatar-image" src=source alt="" /> }.into_any());
     view! {
         <span
-            class="ob-avatar"
+            class="wrokbot-avatar"
             role="img"
             aria-label=move || name.get()
             data-size=size.as_str()
             data-palette=palette
         >
             {image.unwrap_or_else(|| view! {
-                <span class="ob-avatar-initials" aria-hidden="true">
+                <span class="wrokbot-avatar-initials" aria-hidden="true">
                     {move || initials(&fallback_name.get())}
                 </span>
             }.into_any())}
@@ -122,7 +122,7 @@ mod tests {
     fn initials_palette_and_image_boundary_are_deterministic() {
         assert_eq!(initials("Ada Lovelace"), "AL");
         assert_eq!(initials("  张 三  "), "张");
-        assert_eq!(initials("OpenBot"), "O");
+        assert_eq!(initials("WrokBot"), "W");
         assert_eq!(palette_index("principal-1"), palette_index("principal-1"));
         assert!(palette_index("principal-1") < 8);
         assert_same_origin_image("/attachments/avatar.png");

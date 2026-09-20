@@ -1,9 +1,9 @@
 //! Administrator audit keyset page backed by the existing typed production API.
 
 use leptos::prelude::*;
-use openbot_contracts::audit::AuditEventView;
+use wrokbot_contracts::audit::AuditEventView;
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::audit::AuditPage;
+use wrokbot_contracts::audit::AuditPage;
 use time::format_description::well_known::Rfc3339;
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -52,22 +52,22 @@ pub fn AdminAuditPage() -> impl IntoView {
                 description=move || t_string!(i18n, admin.audit_intro).to_owned()
             />
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <IconView icon=Icon::TriangleAlert size=IconSize::Inline />
                     <span>{move || t!(i18n, admin.audit_load_error)}</span>
                 </div>
             </Show>
             <Show when=move || loading.get() && events.with(Vec::is_empty)>
-                <div class="ob-loading" role="status">
+                <div class="wrokbot-loading" role="status">
                     <IconView icon=Icon::LoaderCircle size=IconSize::Navigation />
                     <span>{move || t!(i18n, common.loading)}</span>
                 </div>
             </Show>
             <Show when=move || !loading.get() && !load_error.get() && events.with(Vec::is_empty)>
-                <p class="ob-page-empty">{move || t!(i18n, admin.audit_empty)}</p>
+                <p class="wrokbot-page-empty">{move || t!(i18n, admin.audit_empty)}</p>
             </Show>
             <Show when=move || !events.with(Vec::is_empty)>
-                <ol class="ob-audit-list">
+                <ol class="wrokbot-audit-list">
                     <For
                         each=move || events.get()
                         key=|event| event.id.clone()
@@ -148,12 +148,12 @@ fn AuditRow(event: AuditEventView) -> impl IntoView {
     let datetime = timestamp.clone();
     let payload = serde_json::to_string_pretty(&event.payload).unwrap_or_else(|_| "{}".to_owned());
     view! {
-        <li class="ob-audit-row">
-            <div class="ob-audit-row-header">
+        <li class="wrokbot-audit-row">
+            <div class="wrokbot-audit-row-header">
                 <strong>{event.event_type}</strong>
                 <time datetime=datetime>{timestamp}</time>
             </div>
-            <dl class="ob-audit-facts">
+            <dl class="wrokbot-audit-facts">
                 <div><dt>{move || t!(i18n, admin.audit_actor)}</dt><dd>{actor}</dd></div>
                 <div><dt>{move || t!(i18n, admin.audit_target)}</dt><dd>{target}</dd></div>
             </dl>
@@ -168,7 +168,7 @@ fn AuditRow(event: AuditEventView) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openbot_contracts::ids::AuditEventId;
+    use wrokbot_contracts::ids::AuditEventId;
 
     fn event(id: &str) -> AuditEventView {
         AuditEventView {

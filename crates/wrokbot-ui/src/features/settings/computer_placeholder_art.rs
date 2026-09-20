@@ -10,7 +10,7 @@ const ART_PRESERVE_ASPECT_RATIO: &str = "xMidYMid meet";
 pub fn ComputerPlaceholderArt() -> impl IntoView {
     view! {
         <svg
-            class="ob-computer-placeholder-art"
+            class="wrokbot-computer-placeholder-art"
             viewBox=ART_VIEW_BOX
             preserveAspectRatio=ART_PRESERVE_ASPECT_RATIO
             fill="none"
@@ -22,7 +22,7 @@ pub fn ComputerPlaceholderArt() -> impl IntoView {
             focusable="false"
             data-art="computer-placeholder"
         >
-            <rect class="ob-computer-art-frame" x="140" y="110" width="920" height="580" rx="32"></rect>
+            <rect class="wrokbot-computer-art-frame" x="140" y="110" width="920" height="580" rx="32"></rect>
             <path d="M140 210H1060"></path>
             <circle cx="200" cy="160" r="12"></circle>
             <circle cx="248" cy="160" r="12"></circle>

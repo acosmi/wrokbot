@@ -4,7 +4,7 @@
 
 use std::borrow::Cow;
 
-use openbot_contracts::text::trim_ecmascript;
+use wrokbot_contracts::text::trim_ecmascript;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChipTrigger {

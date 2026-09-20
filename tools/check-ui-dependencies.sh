@@ -47,16 +47,16 @@ grep -qxF 'gloo-net = { version = "=0.6.0", default-features = false, features =
   || fail 'gloo-net pin/WebSocket feature boundary drifted'
 grep -qxF 'image = { version = "=0.25.10", default-features = false, features = ["png"] }' Cargo.toml \
   || fail 'golden image pin/PNG-only feature boundary drifted'
-grep -qxF 'image = { workspace = true, optional = true }' crates/openbot-testkit/Cargo.toml \
+grep -qxF 'image = { workspace = true, optional = true }' crates/wrokbot-testkit/Cargo.toml \
   || fail 'golden image edge is not optional and testkit-owned'
-[[ "$(grep -cF '"dep:image"' crates/openbot-testkit/Cargo.toml)" == 1 ]] \
+[[ "$(grep -cF '"dep:image"' crates/wrokbot-testkit/Cargo.toml)" == 1 ]] \
   || fail 'golden image must be enabled exactly once by the xtask feature'
-for product_manifest in crates/openbot-{contracts,domain,application,infra,agent,computer,server,desktop}/Cargo.toml crates/wrokbot-ui/Cargo.toml; do
+for product_manifest in crates/wrokbot-{contracts,domain,application,infra,agent,computer,server,desktop}/Cargo.toml crates/wrokbot-ui/Cargo.toml; do
   ! grep -qE '^image[[:space:]]*=' "$product_manifest" \
     || fail "golden image escaped into product manifest $product_manifest"
 done
-golden_image_tree="$(cargo tree -p openbot-testkit --features xtask -i image --locked --offline)"
-[[ "$golden_image_tree" == $'image v0.25.10\n└── openbot-testkit v0.0.0 ('* ]] \
+golden_image_tree="$(cargo tree -p wrokbot-testkit --features xtask -i image --locked --offline)"
+[[ "$golden_image_tree" == $'image v0.25.10\n└── wrokbot-testkit v0.0.0 ('* ]] \
   || fail "golden image dependency path drifted: $golden_image_tree"
 for package_spec in image-0.25.10 moxcms-0.8.1 pxfm-0.1.30 byteorder-lite-0.1.0; do
   package_root="$(crate_root "$package_spec")"

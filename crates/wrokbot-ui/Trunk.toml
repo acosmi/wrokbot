@@ -17,7 +17,8 @@
 target = "index.html"
 offline = true
 locked = true
-pattern_script = '<script type="module" src="{base}openbot-bootstrap.mjs"></script>'
+minify = "on_release"
+pattern_script = '<script type="module" src="{base}wrokbot-bootstrap.mjs"></script>'
 
 [tools]
 # 版本与 sha256 的真源是仓根 tools/pins.toml；`xtask tools verify` 校验 sha256 与 --version，
@@ -32,7 +33,7 @@ wasm_opt = "version_132"
 [[hooks]]
 stage = "pre_build"
 command = "cargo"
-command_arguments = ["run", "--manifest-path", "../../Cargo.toml", "--locked", "--offline", "--package", "openbot-testkit", "--features", "xtask", "--target-dir", "../../target-xtask", "--bin", "xtask", "--", "ui-assets"]
+command_arguments = ["run", "--manifest-path", "../../Cargo.toml", "--locked", "--offline", "--package", "wrokbot-testkit", "--features", "xtask", "--target-dir", "../../target-xtask", "--bin", "xtask", "--", "ui-assets"]
 
 # Trunk's default initializer is inline. The GUI first source requires zero inline scripts, so the
 # Rust xtask writes an external, relative-path-only bootstrap into the staging dist after the
@@ -40,7 +41,7 @@ command_arguments = ["run", "--manifest-path", "../../Cargo.toml", "--locked", "
 [[hooks]]
 stage = "post_build"
 command = "cargo"
-command_arguments = ["run", "--manifest-path", "../../Cargo.toml", "--locked", "--offline", "--package", "openbot-testkit", "--features", "xtask", "--target-dir", "../../target-xtask", "--bin", "xtask", "--", "ui-finalize"]
+command_arguments = ["run", "--manifest-path", "../../Cargo.toml", "--locked", "--offline", "--package", "wrokbot-testkit", "--features", "xtask", "--target-dir", "../../target-xtask", "--bin", "xtask", "--", "ui-finalize"]
 
 # trunk 调 Tailwind 的参数是 --input/--output/--minify（读自其 tailwind_css pipeline），
 # 与 Tailwind v4 CLI 兼容，不传 --config —— v4 的配置在 design/app.css 的 @theme inline 里。

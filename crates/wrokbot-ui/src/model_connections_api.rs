@@ -2,7 +2,7 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
 use super::ApiError;
-use openbot_contracts::model_connections::*;
+use wrokbot_contracts::model_connections::*;
 
 const ROOT: &str = "/api/me/model-connections";
 const MAX_DIRECTORY_ROWS: usize = 1_000;

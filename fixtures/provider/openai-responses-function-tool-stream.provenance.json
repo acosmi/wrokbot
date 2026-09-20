@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-provider-recorded-trace-v1",
+  "schema": "wrokbot-provider-recorded-trace-v1",
   "provider": "openai",
   "protocol": {
     "api": "Responses",

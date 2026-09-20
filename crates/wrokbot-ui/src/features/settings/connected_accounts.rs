@@ -5,8 +5,8 @@
 use leptos::prelude::*;
 use leptos_router::hooks::{use_params_map, use_query_map};
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::mcp::McpVendorRevocationStatus;
-use openbot_contracts::mcp::{McpConnection, McpConnections};
+use wrokbot_contracts::mcp::McpVendorRevocationStatus;
+use wrokbot_contracts::mcp::{McpConnection, McpConnections};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -89,12 +89,12 @@ pub fn ConnectedAccountsPage() -> impl IntoView {
                 description=move || t_string!(i18n, settings.connected_accounts_description).to_owned()
             />
             <Show when=move || callback_notice.get() == Some(CallbackNotice::Failed)>
-                <p class="ob-alert" role="alert">
+                <p class="wrokbot-alert" role="alert">
                     {move || t!(i18n, settings.connect_failed)}
                 </p>
             </Show>
             <Show when=move || callback_notice.get() == Some(CallbackNotice::Connected)>
-                <p class="ob-status" role="status">
+                <p class="wrokbot-status" role="status">
                     {move || t_string!(
                         i18n,
                         settings.connect_success,
@@ -103,10 +103,10 @@ pub fn ConnectedAccountsPage() -> impl IntoView {
                 </p>
             </Show>
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, settings.connected_accounts_load_error)}</span>
                     <Button
                         variant=ButtonVariant::Ghost
@@ -238,10 +238,10 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                 />
             </PageTopbar>
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, settings.connected_accounts_load_error)}</span>
                     <Button
                         variant=ButtonVariant::Ghost
@@ -266,12 +266,12 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                     description=move || t_string!(i18n, settings.google_drive_description).to_owned()
                 />
                 <Show when=move || action_error.get()>
-                    <p class="ob-alert" role="alert">
+                    <p class="wrokbot-alert" role="alert">
                         {move || t!(i18n, settings.connection_action_error)}
                     </p>
                 </Show>
                 <Show when=move || disconnect_notice.get().is_some()>
-                    <p class="ob-status" role="status">
+                    <p class="wrokbot-status" role="status">
                         {move || match disconnect_notice.get() {
                             Some(DisconnectNotice::Revoked) => {
                                 t_string!(i18n, settings.disconnect_revoked).to_owned()
@@ -287,11 +287,11 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                     heading_id="connected-account-access"
                     title=move || t_string!(i18n, settings.account_access).to_owned()
                 >
-                    <div class="ob-connected-account-card">
+                    <div class="wrokbot-connected-account-card">
                         <Show
                             when=move || account.get().and_then(|account| account.connection).is_some()
                             fallback=move || view! {
-                                <div class="ob-connected-account-disconnected">
+                                <div class="wrokbot-connected-account-disconnected">
                                     <div>
                                         <Badge tone=BadgeTone::Neutral>
                                             {move || t!(i18n, settings.not_connected)}
@@ -311,7 +311,7 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                                         {move || t!(i18n, settings.connect)}
                                     </Button>
                                     <Show when=move || !oauth_available.get()>
-                                        <p class="ob-connected-account-unavailable">
+                                        <p class="wrokbot-connected-account-unavailable">
                                             {move || t!(i18n, settings.connect_unavailable)}
                                         </p>
                                     </Show>
@@ -323,15 +323,15 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                                 let connected_at_label = connected_at.clone();
                                 let scope = connection.scope;
                                 view! {
-                                    <div class="ob-connected-account-card-header">
+                                    <div class="wrokbot-connected-account-card-header">
                                         <Badge tone=BadgeTone::Success>
                                             {move || t!(i18n, settings.connected)}
                                         </Badge>
-                                        <div class="ob-connected-account-menu">
+                                        <div class="wrokbot-connected-account-menu">
                                             <Menu id="connected-account-actions" open=menu_open>
                                                 <MenuTrigger disabled=action_pending>
                                                     <IconView icon=Icon::Ellipsis size=IconSize::Inline />
-                                                    <span class="ob-visually-hidden">
+                                                    <span class="wrokbot-visually-hidden">
                                                         {move || t!(i18n, common.more_actions)}
                                                     </span>
                                                 </MenuTrigger>
@@ -347,7 +347,7 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                                             </Menu>
                                         </div>
                                     </div>
-                                    <dl class="ob-connected-account-facts">
+                                    <dl class="wrokbot-connected-account-facts">
                                         <div>
                                             <dt>{move || t!(i18n, settings.scope)}</dt>
                                             <dd><code>{scope}</code></dd>

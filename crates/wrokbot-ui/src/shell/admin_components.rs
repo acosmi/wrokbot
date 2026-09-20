@@ -7,8 +7,8 @@
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
-use openbot_contracts::agent::AgentProfile;
-use openbot_contracts::components::{
+use wrokbot_contracts::agent::AgentProfile;
+use wrokbot_contracts::components::{
     CompiledComponentKind, ComponentDataFunctionSummary, ComponentRecord, ComponentRecords,
 };
 
@@ -94,10 +94,10 @@ pub fn AdminComponentsPage() -> impl IntoView {
                 description=move || t_string!(i18n, admin.components_intro).to_owned()
             />
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, admin.components_load_error)}</span>
                     <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry>
                         {move || t!(i18n, common.retry)}
@@ -112,7 +112,7 @@ pub fn AdminComponentsPage() -> impl IntoView {
                 <PageEmpty>{move || t!(i18n, admin.components_empty)}</PageEmpty>
             </Show>
             <Show when=move || records.get().is_some_and(|records| !records.components.is_empty())>
-                <div class="ob-admin-components-grid">
+                <div class="wrokbot-admin-components-grid">
                     <For
                         each=move || records.get().map_or_else(Vec::new, |records| records.components)
                         key=|component| component.name.clone()
@@ -123,10 +123,10 @@ pub fn AdminComponentsPage() -> impl IntoView {
                             let status = component.published;
                             let changed = component.has_unpublished_changes;
                             view! {
-                                <article class="ob-admin-component-card">
-                                    <a class="ob-admin-component-copy" href=href>
-                                        <span class="ob-admin-component-heading">
-                                            <span class="ob-admin-component-status" data-state=if status { "published" } else { "draft" }></span>
+                                <article class="wrokbot-admin-component-card">
+                                    <a class="wrokbot-admin-component-copy" href=href>
+                                        <span class="wrokbot-admin-component-heading">
+                                            <span class="wrokbot-admin-component-status" data-state=if status { "published" } else { "draft" }></span>
                                             <strong>{component.title}</strong>
                                         </span>
                                         <span>{component.draft_description}</span>
@@ -139,7 +139,7 @@ pub fn AdminComponentsPage() -> impl IntoView {
                                             <small>{move || t!(i18n, admin.component_draft_changes)}</small>
                                         </Show>
                                     </a>
-                                    <div class="ob-admin-component-preview" aria-hidden="true" inert=true>
+                                    <div class="wrokbot-admin-component-preview" aria-hidden="true" inert=true>
                                         <ComponentPreview name=preview_name />
                                     </div>
                                 </article>
@@ -183,10 +183,10 @@ pub fn AdminComponentDetailPage() -> impl IntoView {
                 />
             </PageTopbar>
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || load_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, admin.components_load_error)}</span>
                     <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry>
                         {move || t!(i18n, common.retry)}
@@ -201,7 +201,7 @@ pub fn AdminComponentDetailPage() -> impl IntoView {
                 />
             </Show>
             <Show when=move || mutation_error.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, admin.component_mutation_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, admin.component_mutation_error)}</p>
             </Show>
             <For
                 each=move || data.get().into_iter()
@@ -304,7 +304,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
             title
             description=published_description
         />
-        <div class="ob-admin-component-detail-preview">
+        <div class="wrokbot-admin-component-detail-preview">
             <ComponentPreview name=preview_name />
         </div>
         <PageSection
@@ -313,7 +313,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
             description=move || t_string!(i18n, admin.component_configuration_intro).to_owned()
         >
             <PageRows>
-                <div class="ob-component-governance-row">
+                <div class="wrokbot-component-governance-row">
                     <span>
                         <strong>{move || t!(i18n, admin.component_publication)}</strong>
                         <small>{move || if sandboxed {
@@ -332,7 +332,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                         on_change=publication_change
                     />
                 </div>
-                <div class="ob-component-governance-row">
+                <div class="wrokbot-component-governance-row">
                     <span>
                         <strong>{move || t!(i18n, admin.component_description)}</strong>
                         <small>{initial_draft.get_value()}</small>
@@ -345,7 +345,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                     >{move || t!(i18n, common.edit)}</Button>
                 </div>
                 <Show when=move || sandboxed>
-                    <div class="ob-component-governance-row">
+                    <div class="wrokbot-component-governance-row">
                         <span>{move || t!(i18n, admin.component_sandboxed_atomic)}</span>
                         <a href="/admin/playground">{move || t!(i18n, admin.component_manage_playground)}</a>
                     </div>
@@ -384,7 +384,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                             );
                         });
                         view! {
-                            <div class="ob-component-governance-row">
+                            <div class="wrokbot-component-governance-row">
                                 <span><strong>{agent.name}</strong><small>{agent.role_description}</small></span>
                                 <Switch
                                     aria_label=aria_name
@@ -434,7 +434,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                             );
                         });
                         view! {
-                            <div class="ob-component-governance-row">
+                            <div class="wrokbot-component-governance-row">
                                 <span><strong>{function_name}</strong><small>{function.description}</small></span>
                                 <Switch
                                     aria_label=aria_name
@@ -452,7 +452,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
             heading_id="admin-component-details"
             title=move || t_string!(i18n, admin.component_details).to_owned()
         >
-            <dl class="ob-gallery-facts">
+            <dl class="wrokbot-gallery-facts">
                 <div><dt>{move || t!(i18n, admin.component_kind)}</dt><dd>{move || component_kind_text(i18n, kind)}</dd></div>
                 <div><dt>{move || t!(i18n, admin.component_called_as)}</dt><dd><code>{called_as}</code></dd></div>
                 <div><dt>{move || t!(i18n, admin.component_last_changed)}</dt><dd>{last_changed}</dd></div>

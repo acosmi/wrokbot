@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 use leptos_router::location::Location;
-use openbot_contracts::auth::{
+use wrokbot_contracts::auth::{
     AuthProviderId, AuthenticationCapabilities, MAX_SSO_ROUTING_EMAIL_BYTES,
 };
 
@@ -186,8 +186,8 @@ fn auth_gate_fallback(
 
 fn auth_loading_view(i18n: leptos_i18n::I18nContext<crate::i18n::Locale>) -> AnyView {
     view! {
-        <main class="ob-auth-state" id="main-content" tabindex="-1">
-            <div class="ob-loading" role="status">
+        <main class="wrokbot-auth-state" id="main-content" tabindex="-1">
+            <div class="wrokbot-loading" role="status">
                 {move || t!(i18n, auth.checking_session)}
             </div>
         </main>
@@ -212,17 +212,17 @@ fn SignInPage() -> impl IntoView {
             when=move || state.get() == CapabilityState::Ready
             fallback=move || capabilities_fallback(i18n, state.get(), retry_generation)
         >
-            <main class="ob-auth-state" id="main-content" tabindex="-1">
-                <section class="ob-sign-card" aria-labelledby="sign-in-title">
-                    <header class="ob-sign-header">
+            <main class="wrokbot-auth-state" id="main-content" tabindex="-1">
+                <section class="wrokbot-sign-card" aria-labelledby="sign-in-title">
+                    <header class="wrokbot-sign-header">
                 <crate::primitives::BrandMark sign_in=true/>
-                        <h1 class="ob-page-title" id="sign-in-title">
+                        <h1 class="wrokbot-page-title" id="sign-in-title">
                             {move || t!(i18n, auth.sign_in_title)}
                         </h1>
-                        <p class="ob-page-intro">{move || t!(i18n, auth.sign_in_subtitle)}</p>
+                        <p class="wrokbot-page-intro">{move || t!(i18n, auth.sign_in_subtitle)}</p>
                     </header>
 
-                    <div class="ob-sign-actions">
+                    <div class="wrokbot-sign-actions">
                         <For
                             each=move || {
                                 capabilities
@@ -253,13 +253,13 @@ fn SignInPage() -> impl IntoView {
                                 .get()
                                 .is_some_and(|value| !value.auth_providers.is_empty())
                         }>
-                            <div class="ob-sign-divider" aria-hidden="true">
+                            <div class="wrokbot-sign-divider" aria-hidden="true">
                                 <span></span>
                                 <span>{move || t!(i18n, auth.or_separator)}</span>
                                 <span></span>
                             </div>
                         </Show>
-                        <div class="ob-sign-enterprise">
+                        <div class="wrokbot-sign-enterprise">
                             <Field
                                 control_id="enterprise-email"
                                 label=move || t_string!(i18n, auth.enterprise_email_label).to_owned()
@@ -301,14 +301,14 @@ fn SignInPage() -> impl IntoView {
                             value.auth_providers.is_empty() && !value.sso_configured
                         })
                     }>
-                        <div class="ob-sign-empty" role="status">
+                        <div class="wrokbot-sign-empty" role="status">
                             <h2>{move || t!(i18n, auth.no_providers_title)}</h2>
                             <p>{move || t!(i18n, auth.no_providers_body)}</p>
                         </div>
                     </Show>
 
                     <Show when=move || start_error.get().is_some()>
-                        <p class="ob-sign-error" role="alert">
+                        <p class="wrokbot-sign-error" role="alert">
                             {move || sign_in_error(i18n, start_error.get())}
                         </p>
                     </Show>
@@ -356,8 +356,8 @@ fn capabilities_fallback(
 ) -> AnyView {
     match state {
         CapabilityState::Loading | CapabilityState::Ready => view! {
-            <main class="ob-auth-state" id="main-content" tabindex="-1">
-                <div class="ob-loading" role="status">
+            <main class="wrokbot-auth-state" id="main-content" tabindex="-1">
+                <div class="wrokbot-loading" role="status">
                     {move || t!(i18n, common.loading)}
                 </div>
             </main>
@@ -395,7 +395,7 @@ fn ProviderSignInButton(
     let i18n = use_i18n();
     let activate = move |_| begin_provider_sign_in(provider, opening, start_error);
     view! {
-        <div class="ob-sign-provider" data-auth-provider=provider.as_str()>
+        <div class="wrokbot-sign-provider" data-auth-provider=provider.as_str()>
             <Button
                 variant=ButtonVariant::Chip
                 size=ButtonSize::Large
@@ -516,14 +516,14 @@ fn AuthStateCard(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <main class="ob-auth-state" id="main-content" tabindex="-1">
-            <section class="ob-sign-card" aria-labelledby="auth-state-title">
-                <header class="ob-sign-header">
+        <main class="wrokbot-auth-state" id="main-content" tabindex="-1">
+            <section class="wrokbot-sign-card" aria-labelledby="auth-state-title">
+                <header class="wrokbot-sign-header">
                 <crate::primitives::BrandMark sign_in=true/>
-                    <h1 class="ob-page-title" id="auth-state-title">{move || title.get()}</h1>
-                    <p class="ob-page-intro">{move || body.get()}</p>
+                    <h1 class="wrokbot-page-title" id="auth-state-title">{move || title.get()}</h1>
+                    <p class="wrokbot-page-intro">{move || body.get()}</p>
                 </header>
-                <div class="ob-sign-actions">{children()}</div>
+                <div class="wrokbot-sign-actions">{children()}</div>
             </section>
         </main>
     }

@@ -102,7 +102,7 @@ pub(crate) fn modal_trigger(
         <button
             id=id
             type="button"
-            class="ob-modal-trigger"
+            class="wrokbot-modal-trigger"
             node_ref=trigger_ref
             aria-haspopup="dialog"
             aria-expanded=move || if open.get() { "true" } else { "false" }
@@ -150,18 +150,18 @@ pub(crate) fn modal_content(
     let description_text = description;
     view! {
         <div
-                class="ob-modal-layer"
+                class="wrokbot-modal-layer"
                 hidden=move || !open.get()
                 data-presentation=presentation.kind()
                 data-side=presentation.side()
             >
                 <div
-                    class="ob-modal-backdrop"
+                    class="wrokbot-modal-backdrop"
                     on:click=move |_| close(layer_close.clone())
                 ></div>
                 <div
                     id=panel_id
-                    class="ob-modal-panel"
+                    class="wrokbot-modal-panel"
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby=title_aria_id
@@ -174,7 +174,7 @@ pub(crate) fn modal_content(
                     data-side=presentation.side()
                     on:keydown=move |event| handle_panel_key(event, key_context.clone())
                 >
-                    <header class="ob-modal-header">
+                    <header class="wrokbot-modal-header">
                         <h2 id=title_id>{move || title.get()}</h2>
                         <p
                             id=description_id
@@ -200,7 +200,7 @@ fn ModalCloseButton(id: String) -> impl IntoView {
         <button
             id=id
             type="button"
-            class="ob-modal-close"
+            class="wrokbot-modal-close"
             aria-label=move || t_string!(i18n, common.close).to_owned()
             on:click=move |_| close(context.clone())
         >
@@ -220,7 +220,7 @@ pub(crate) fn modal_close(id: Option<String>, children: Children) -> impl IntoVi
         <button
             id=id
             type="button"
-            class="ob-button"
+            class="wrokbot-button"
             data-variant="chip"
             data-size="md"
             on:click=move |_| close(click_context.clone())
@@ -235,11 +235,11 @@ pub(crate) fn modal_close(id: Option<String>, children: Children) -> impl IntoVi
 }
 
 pub(crate) fn modal_body(children: Children) -> impl IntoView {
-    view! { <div class="ob-modal-body">{children()}</div> }
+    view! { <div class="wrokbot-modal-body">{children()}</div> }
 }
 
 pub(crate) fn modal_footer(children: Children) -> impl IntoView {
-    view! { <footer class="ob-modal-footer">{children()}</footer> }
+    view! { <footer class="wrokbot-modal-footer">{children()}</footer> }
 }
 
 fn modal_context() -> ModalContext {
@@ -437,13 +437,13 @@ fn set_background_inert(modal_id: &str, inert: bool) {
                     {
                         _ = child.set_attribute("inert", "");
                         _ = child.set_attribute("aria-hidden", "true");
-                        _ = child.set_attribute("data-openbot-modal-inert", modal_id);
+                        _ = child.set_attribute("data-wrokbot-modal-inert", modal_id);
                     }
                 }
                 current = parent;
             }
         } else {
-            let selector = format!("[data-openbot-modal-inert='{modal_id}']");
+            let selector = format!("[data-wrokbot-modal-inert='{modal_id}']");
             if let Ok(nodes) = document.query_selector_all(&selector) {
                 for index in 0..nodes.length() {
                     if let Some(node) = nodes.item(index) {
@@ -451,7 +451,7 @@ fn set_background_inert(modal_id: &str, inert: bool) {
                         if let Ok(element) = node.dyn_into::<web_sys::Element>() {
                             _ = element.remove_attribute("inert");
                             _ = element.remove_attribute("aria-hidden");
-                            _ = element.remove_attribute("data-openbot-modal-inert");
+                            _ = element.remove_attribute("data-wrokbot-modal-inert");
                         }
                     }
                 }

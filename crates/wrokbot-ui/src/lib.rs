@@ -1,4 +1,4 @@
-//! `openbot-ui` —— GUI：Leptos CSR/WASM 的唯一实现。
+//! `wrokbot-ui` —— GUI：Leptos CSR/WASM 的唯一实现。
 //!
 //! # 所有权边界（v3 §5.1 / §13.1 + 设计系统文档 §13）
 //!
@@ -15,7 +15,7 @@
 //!
 //! 明确**不**负责（设计系统文档 §13 逐字）：
 //!
-//! - **不持业务规则、不拼 SQL、不调模型**。依赖面只有 `openbot-contracts`（v3 §5.2）。
+//! - **不持业务规则、不拼 SQL、不调模型**。依赖面只有 `wrokbot-contracts`（v3 §5.2）。
 //! - 不自行做多窗口 / 多线程的可见性过滤 —— 过滤在 Rust 侧按 window label、actor、thread
 //!   subscription 和 auth generation 完成，前端做不算数（v3 §13.3）。
 //! - 不自报角色、不自报 `principal=admin`（v3 §5.2）。

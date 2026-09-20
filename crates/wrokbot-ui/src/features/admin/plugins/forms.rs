@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use openbot_contracts::mcp::{
+use wrokbot_contracts::mcp::{
     McpCustomServerRegistration, McpOAuthClientAuthMethod, McpOAuthClientRegistration,
 };
 
@@ -158,8 +158,8 @@ pub fn PluginDialogs(dialog: RwSignal<Option<PluginDialog>>) -> impl IntoView {
                 _ => t_string!(i18n, plugins.remove).to_owned(),
             }>
                 <DialogBody>
-                    <Show when=move || invalid.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.invalid)}</p></Show>
-                    <Show when=move || attempted.get() && actions.failed.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.write_error)}</p></Show>
+                    <Show when=move || invalid.get()><p class="wrokbot-alert" role="alert">{move || t!(i18n, plugins.invalid)}</p></Show>
+                    <Show when=move || attempted.get() && actions.failed.get()><p class="wrokbot-alert" role="alert">{move || t!(i18n, plugins.write_error)}</p></Show>
                     <Show when=move || matches!(dialog.get(), Some(PluginDialog::Custom))>
                         <Field control_id="plugin-id" label=move || t_string!(i18n, plugins.id).to_owned() disabled=actions.busy><Input value=id /></Field>
                         <Field control_id="plugin-title" label=move || t_string!(i18n, plugins.name).to_owned() disabled=actions.busy><Input value=title /></Field>

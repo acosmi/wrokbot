@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-screencast-backpressure-v3",
+  "schema": "wrokbot-screencast-backpressure-v3",
   "protocol": {
     "version": 3,
     "releaseEpoch": 3,

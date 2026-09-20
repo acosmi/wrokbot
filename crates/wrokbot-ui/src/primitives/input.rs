@@ -98,7 +98,7 @@ pub fn Input(
     view! {
         <input
             id=control_id
-            class="ob-input"
+            class="wrokbot-input"
             type=input_type.as_str()
             name=name
             autocomplete=(input_type == InputType::Email).then_some("email")
