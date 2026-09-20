@@ -86,7 +86,7 @@ async fn post_0028_is_exact_expand_only_remote_interrupt_schema() {
             if ledger != 16 {
                 return Err(format!("native ledger expected 16, got {ledger}"));
             }
-            if native::apply(&mut client)
+            if native::apply_through(&mut client, native::NATIVE_0028_VERSION)
                 .await
                 .map_err(|error| error.to_string())?
                 != ApplyOutcome::AlreadyApplied
