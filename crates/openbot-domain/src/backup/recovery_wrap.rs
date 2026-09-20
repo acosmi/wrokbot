@@ -18,9 +18,8 @@ const ENVELOPE_SCHEMA_VERSION: u64 = 1;
 const METADATA_MAX_BYTES: usize = 4096;
 /// Canonical JSON bytes with empty nonce and ciphertext, including field names and punctuation.
 const ENVELOPE_FIXED_WIRE_BYTES: usize = 86;
-const ENVELOPE_MAX_BYTES: usize = ENVELOPE_FIXED_WIRE_BYTES
-    + NONCE_BYTES * 2
-    + (METADATA_MAX_BYTES + TAG_BYTES) * 2;
+const ENVELOPE_MAX_BYTES: usize =
+    ENVELOPE_FIXED_WIRE_BYTES + NONCE_BYTES * 2 + (METADATA_MAX_BYTES + TAG_BYTES) * 2;
 
 /// Closed identity used only to form recovery-wrap AAD.
 #[derive(Clone)]

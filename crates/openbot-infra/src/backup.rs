@@ -77,13 +77,13 @@ pub enum StagingFault {
     ConcurrentChunk,
 }
 
+pub use archive_bundle::{
+    ArchiveBundleBounds, ArchiveBundleContents, ArchiveBundleFault, UnpackedArchiveBundle,
+    read_archive_bundle, unpack_archive_bundle, write_archive_bundle,
+};
 pub use staging::{
     CancelFlag, Chunk, CleanupReport, EntryStream, FaultInjectingFs, FileTreeSource, FsPort,
     MaterialSource, OwnedDir, OwnedFile, ScriptedSource, SinkWriteError, StagingBounds,
     StagingCompleted, StagingFailure, StagingInput, StagingOutcome, StagingRequest, StdFs,
     run_staging,
-};
-pub use archive_bundle::{
-    ArchiveBundleBounds, ArchiveBundleContents, ArchiveBundleFault, UnpackedArchiveBundle,
-    read_archive_bundle, unpack_archive_bundle, write_archive_bundle,
 };
