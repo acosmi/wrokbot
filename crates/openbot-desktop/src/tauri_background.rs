@@ -243,7 +243,7 @@ fn report_preparation_result<T>(
 /// Reviewed release resources that remain independent from the current user's app-data path.
 pub(crate) enum DesktopUiResource {
     Path(PathBuf),
-    #[cfg(any(all(feature = "desktop-launcher", target_os = "macos"), test))]
+    #[cfg(all(feature = "desktop-launcher", target_os = "macos"))]
     Verified(crate::tauri_host::VerifiedUiAssets),
 }
 
@@ -1229,7 +1229,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
     let transport = Arc::new(InProcessTransport::new(Arc::clone(&assembly.application)));
     let opened_protocol = match ui {
         DesktopUiResource::Path(dist) => DesktopTauriProtocol::open(dist, Arc::clone(&transport)),
-        #[cfg(any(all(feature = "desktop-launcher", target_os = "macos"), test))]
+        #[cfg(all(feature = "desktop-launcher", target_os = "macos"))]
         DesktopUiResource::Verified(assets) => Ok(DesktopTauriProtocol::from_verified_assets(
             assets,
             Arc::clone(&transport),

@@ -195,6 +195,10 @@ fn publish_new(
     }
 }
 
+// Every parameter is an independently meaningful identity/path component this exclusive-lock
+// transition must check together; a parameter struct would relocate the same fields without
+// reducing this security-critical function's real complexity.
+#[allow(clippy::too_many_arguments)]
 fn replace_exact(
     owner: &KernelStartLock,
     root: &Path,
