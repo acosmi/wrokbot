@@ -60,7 +60,7 @@
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 仅规划，本批未启动实施 | 待创建 | 尚未实施 |
-| V6-PR-052 | Desktop screen-session 端口收敛到真实 ScreenHub/ScreenSessionService | 已推送，待审 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 以 PR 合并记录为准 |
+| V6-PR-052 | Desktop screen-session 端口收敛到真实 ScreenHub/ScreenSessionService | Copilot完成，待主控验收 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 以 PR 合并记录为准 |
 
 ## macOS 首发进度
 
