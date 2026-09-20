@@ -59,7 +59,7 @@
 | V6-PR-045 | 固定网关账户身份读取与有界宿主传输 | 已合入 | [#52](https://github.com/acosmi/wrokbot/pull/52) | [38c7259a18](https://github.com/acosmi/wrokbot/commit/38c7259a187e719831b007202c5c4a3f5061f702) |
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
-| V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 已提交，待独立验收 | 待登记 | 尚未合入 |
+| V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 已提交，待独立验收 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 尚未合入 |
 
 ## macOS 首发进度
 
