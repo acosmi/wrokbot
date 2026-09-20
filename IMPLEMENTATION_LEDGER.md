@@ -60,6 +60,7 @@
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 仅规划，本批未启动实施 | 待创建 | 尚未实施 |
+| V6-PR-052 | Desktop screen-session 端口收敛到真实 ScreenHub/ScreenSessionService | 已推送，待审 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 以 PR 合并记录为准 |
 
 ## macOS 首发进度
 
@@ -97,6 +98,8 @@
 046 主控亲读目录迁移及全部内容变化，最终候选 216 项 UI 单测、9 项发布守卫、严格 Clippy、生产 WASM/release 构建、中英文 1068 键、样式与资源预算检查通过。模型四入口、FIFO、有序技能、键盘、明确冲突和 Unknown 共 13 项浏览器请求场景在队列修复候选通过；其后错误提示修复重验 5 项受影响场景，最后收件人恢复修复在最终构建重验。不同构建的证据分别保留，未冒充全部场景在最终构建重跑。创建响应丢失时不再次创建，运行结果不明时仅显式原请求重试；目录版本冲突要求重新选择。首次读回操作漏选模型的失败记录保留并按原预期重做。浏览器使用合成 HTTP/SSE 后端；实际厂商、PG组合、Wry、完整可访问性与首发 A 门仍待。CSS 为 130505/131072 字节，已超过预警线，未放宽预算。UI 依赖守卫使用 locked/offline 元数据选中的实际来源通过；默认全局缓存因重复 registry 源首次拒绝，失败保留，未修改全局缓存或依赖。
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
+
+052 主控亲读 Desktop/Server 双侧装配代码及第一真源 §8.1、§28.1 历史修订条目，确认 Server 已用 `ScreenHub`+`ScreenSessionService` 装配 `screen_sessions` 端口，Desktop 仍是 fail-closed 的 `NoScreenSessionAdministration` 占位；将 Desktop 对齐到 Server 已验证的同一模式，范围严格限定于生产装配收敛，不改动端口 trait 或 Computer 侧实现。`cargo check`/`cargo clippy --no-deps -D warnings` 在 `desktop-local-runtime` 与更完整的 `desktop-launcher` 两个 feature 集下均与未改动的 `origin/main` 逐行 diff 为空；针对本机真实 PostgreSQL 17 的 `--ignored` 集成测试新增 `IssueScreenSession` 断言，证明端口现在对目标可见性做真实判定（返回 `AppError::NotVisible`）而非旧 stub 恒定的 `DependencyUnavailable`；该测试与全量非 ignored 套件（341 通过）均通过。验证中发现的两处既有问题（`openbot-desktop` 自身第三波 Clippy 红、4 个 PostgreSQL sidecar 失败路径测试在本沙箱确定性失败）已通过 `git stash` A/B 确认与本次改动无关，归档为 #65、#66，未在本 PR 修复。本次改动不启动任何 engine 进程、不构造 `HostLocalBrowserRuntime`，也不涉及 Tool/Policy/Agent 层对 `BrowserOperation` 的执行管线；C05 的完整 Browser 产品链仍待后续多个 PR 完成。
 
 ## 仍未完成
 
