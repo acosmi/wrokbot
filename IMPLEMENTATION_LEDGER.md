@@ -60,6 +60,7 @@
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已验收，集成状态见 PR | [#54](https://github.com/acosmi/wrokbot/pull/54) | 以 PR 合并记录为准 |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 仅规划，本批未启动实施 | 待创建 | 尚未实施 |
+| V6-PR-050 | 修复既有缺陷：native_0027/native_0028幂等重检漂移到LATEST | 已实施，待审 | [#62](https://github.com/acosmi/wrokbot/pull/62) | [ca0fb30f94](https://github.com/acosmi/wrokbot/commit/ca0fb30f94820a3d5dc850535e5a2a09be3fce75) |
 
 ## macOS 首发进度
 
@@ -97,6 +98,8 @@
 046 主控亲读目录迁移及全部内容变化，最终候选 216 项 UI 单测、9 项发布守卫、严格 Clippy、生产 WASM/release 构建、中英文 1068 键、样式与资源预算检查通过。模型四入口、FIFO、有序技能、键盘、明确冲突和 Unknown 共 13 项浏览器请求场景在队列修复候选通过；其后错误提示修复重验 5 项受影响场景，最后收件人恢复修复在最终构建重验。不同构建的证据分别保留，未冒充全部场景在最终构建重跑。创建响应丢失时不再次创建，运行结果不明时仅显式原请求重试；目录版本冲突要求重新选择。首次读回操作漏选模型的失败记录保留并按原预期重做。浏览器使用合成 HTTP/SSE 后端；实际厂商、PG组合、Wry、完整可访问性与首发 A 门仍待。CSS 为 130505/131072 字节，已超过预警线，未放宽预算。UI 依赖守卫使用 locked/offline 元数据选中的实际来源通过；默认全局缓存因重复 registry 源首次拒绝，失败保留，未修改全局缓存或依赖。
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
+
+050 修复 issue #57 记录的既有失败：native_0027.rs / native_0028.rs 各自的幂等重检误用裸 native::apply()（目标随 NATIVE_LATEST_VERSION 漂移），改为 native_0029/native_0033 已确立的 apply_through(client, 自身版本) 写法，未改动任何产品代码。真实 PostgreSQL 17.11 验证：`cargo test -p openbot-infra --test native_0027 --test native_0028 --offline --locked -- --include-ignored` 两项转绿；全 crate `--no-fail-fast -- --include-ignored` 除一项既有、自诊断、与本次无关的环境性失败（schema_baseline_parity.rs 因本机 pg_hba 为 trust 认证无法验证口令是否泄漏，需 scram/md5 实例）外全部通过；两个改动文件的 clippy 干净。
 
 ## 仍未完成
 
