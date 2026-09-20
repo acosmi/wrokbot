@@ -44,7 +44,7 @@ enum PreviousJournal {
     Retired {
         file: File,
         bytes: Vec<u8>,
-        record: StartupJournalRecord,
+        record: Box<StartupJournalRecord>,
     },
 }
 
@@ -143,7 +143,7 @@ impl StartupJournalPreparation {
                 PreviousJournal::Retired {
                     file,
                     bytes,
-                    record,
+                    record: Box::new(record),
                 }
             }
             Err(_) => return Err(StartupJournalError::ReconciliationRequired),
@@ -685,6 +685,10 @@ fn open_data_directory(
     Ok(binding)
 }
 
+// Every parameter is an independently meaningful identity/path component this exclusive-lock
+// validation must check together; a parameter struct would relocate the same fields without
+// reducing this security-critical function's real complexity.
+#[allow(clippy::too_many_arguments)]
 fn validate_owner_and_directory(
     owner: &PostgresStartLock,
     root: &Path,
@@ -893,7 +897,7 @@ fn decode_observation_hex(value: &str) -> Option<DecodedObservation> {
         return None;
     }
     let mut bytes = [0_u8; OBSERVATION_BYTES];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = (lower_hex_nibble(pair[0])? << 4) | lower_hex_nibble(pair[1])?;
     }
     decode_observation(&bytes)
@@ -1179,7 +1183,7 @@ pub(super) fn recover_mid_phase(
             if !owner.is_current() {
                 return Err(StartupJournalError::Invalid);
             }
-            return Ok(());
+            Ok(())
         }
         Ok(metadata) => {
             if !valid_journal_metadata(&metadata, root_uid, None) {
@@ -1251,7 +1255,7 @@ fn decode_evidence_hex(value: &str) -> Option<[u8; OBSERVATION_BYTES]> {
         return None;
     }
     let mut bytes = [0_u8; OBSERVATION_BYTES];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = (lower_hex_nibble(pair[0])? << 4) | lower_hex_nibble(pair[1])?;
     }
     // Reject obviously invalid evidence shapes before asking the process crate.
@@ -1277,6 +1281,10 @@ fn delete_exact_journal(
     Ok(())
 }
 
+// Every parameter is an independently meaningful identity/path component this exclusive-lock
+// transition must check together; a parameter struct would relocate the same fields without
+// reducing this security-critical function's real complexity.
+#[allow(clippy::too_many_arguments)]
 fn replace_exact_mid_phase(
     owner: &super::kernel_start_lock::KernelStartLock,
     root: &Path,

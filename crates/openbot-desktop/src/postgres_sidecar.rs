@@ -549,10 +549,10 @@ impl PostgresStartLock {
             return false;
         }
         #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
-        if let Some(epoch) = &self.recovery_epoch {
-            if !epoch.is_current() {
-                return false;
-            }
+        if let Some(epoch) = &self.recovery_epoch
+            && !epoch.is_current()
+        {
+            return false;
         }
         true
     }
@@ -4949,6 +4949,10 @@ mod tests {
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
+    // Mirrors `PostgresSidecarSupervisor::start`'s own parameter shape plus the 3 extra values
+    // needed to build its `bundle` argument; a struct here would only wrap this test helper's
+    // one-shot forwarding call, not reduce real complexity.
+    #[allow(clippy::too_many_arguments)]
     async fn assert_second_start_held(
         bundle_root: &Path,
         digest: PostgresBundleDigest,
