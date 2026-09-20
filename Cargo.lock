@@ -4658,6 +4658,7 @@ dependencies = [
  "http",
  "openbot-agent",
  "openbot-application",
+ "openbot-computer",
  "openbot-contracts",
  "openbot-domain",
  "openbot-infra",

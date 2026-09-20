@@ -61,6 +61,7 @@ desktop-local-runtime = [
     "desktop-vault",
     "tauri-host",
     "dep:openbot-agent",
+    "dep:openbot-computer",
     "dep:url",
     "openbot-infra/server-runtime",
 ]
@@ -73,6 +74,10 @@ openbot-application.workspace = true
 # Full Desktop Local runtime owns a built-in Agent host from the same reviewed Agent/Infra
 # primitives as Server, behind the explicit feature so the default typed graph stays minimal.
 openbot-agent = { workspace = true, optional = true }
+# Shared `ScreenSessionAdministration` port implementation (`ScreenHub` / `ScreenSessionService`),
+# the same real Computer adapter Server already wires. Optional: the default typed graph and the
+# lighter host features above must not pull in the Computer/Electron surface.
+openbot-computer = { workspace = true, optional = true }
 # AuthContext / AppCommand / AppReply / AppEvent / AppError / ID newtype / Transport label。
 openbot-contracts.workspace = true
 # SecretBytes is enabled only for the explicit PostgreSQL OS-key-store feature.
