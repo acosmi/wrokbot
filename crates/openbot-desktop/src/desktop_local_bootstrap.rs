@@ -256,10 +256,9 @@ impl PreparedDesktopLocalDataPlane {
                 if !already_applied {
                     if let Err(error) = tokio::time::timeout(
                         STARTUP_DB_STEP_TIMEOUT,
-                        self.installation.authority().advance_auth_generation(
-                            self.database.pool(),
-                            audit_checkpoint_key,
-                        ),
+                        self.installation
+                            .authority()
+                            .advance_auth_generation(self.database.pool(), audit_checkpoint_key),
                     )
                     .await
                     .map_err(|_| {

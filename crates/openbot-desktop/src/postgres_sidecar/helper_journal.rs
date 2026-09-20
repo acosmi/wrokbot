@@ -7,7 +7,7 @@ mod record;
 
 pub(crate) use self::record::HelperKind;
 use self::record::{HelperJournalPhase, HelperJournalRecord};
-use super::{encode_hex, PostgresStartLock};
+use super::{PostgresStartLock, encode_hex};
 use sha2::{Digest as _, Sha256};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};

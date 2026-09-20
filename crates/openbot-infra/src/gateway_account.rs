@@ -139,10 +139,7 @@ pub struct GatewayAccountClient {
 
 impl GatewayAccountClient {
     /// Bind one HTTPS origin (or its exact `/api/v4[/]` spelling) to an injected transport.
-    pub fn new(
-        base: &str,
-        transport: Arc<dyn HttpTransport>,
-    ) -> Result<Self, GatewayAccountError> {
+    pub fn new(base: &str, transport: Arc<dyn HttpTransport>) -> Result<Self, GatewayAccountError> {
         let origin = normalize_origin(base)?;
         let discovery_url = fixed_url(&origin, DISCOVERY_PATH)?;
         let profile_url = fixed_url(&origin, PROFILE_PATH)?;
@@ -520,42 +517,29 @@ impl<'de> Deserialize<'de> for RawMetadata {
                 let mut value = RawMetadata::default();
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
-                        "issuer" => {
-                            set_once::<_, M::Error>(&mut value.issuer, map.next_value()?)?
-                        }
-                        "authorization_endpoint" => {
-                            set_once::<_, M::Error>(
-                                &mut value.authorization_endpoint,
-                                map.next_value()?,
-                            )?
-                        }
+                        "issuer" => set_once::<_, M::Error>(&mut value.issuer, map.next_value()?)?,
+                        "authorization_endpoint" => set_once::<_, M::Error>(
+                            &mut value.authorization_endpoint,
+                            map.next_value()?,
+                        )?,
                         "token_endpoint" => {
                             set_once::<_, M::Error>(&mut value.token_endpoint, map.next_value()?)?
                         }
-                        "revocation_endpoint" => {
-                            set_once::<_, M::Error>(
-                                &mut value.revocation_endpoint,
-                                map.next_value()?,
-                            )?
-                        }
-                        "registration_endpoint" => {
-                            set_once::<_, M::Error>(
-                                &mut value.registration_endpoint,
-                                map.next_value()?,
-                            )?
-                        }
+                        "revocation_endpoint" => set_once::<_, M::Error>(
+                            &mut value.revocation_endpoint,
+                            map.next_value()?,
+                        )?,
+                        "registration_endpoint" => set_once::<_, M::Error>(
+                            &mut value.registration_endpoint,
+                            map.next_value()?,
+                        )?,
                         "scopes_supported" => {
-                            set_once::<_, M::Error>(
-                                &mut value.scopes_supported,
-                                map.next_value()?,
-                            )?
+                            set_once::<_, M::Error>(&mut value.scopes_supported, map.next_value()?)?
                         }
-                        "response_types_supported" => {
-                            set_once::<_, M::Error>(
-                                &mut value.response_types_supported,
-                                map.next_value()?,
-                            )?
-                        }
+                        "response_types_supported" => set_once::<_, M::Error>(
+                            &mut value.response_types_supported,
+                            map.next_value()?,
+                        )?,
                         "code_challenge_methods_supported" => set_once::<_, M::Error>(
                             &mut value.code_challenge_methods_supported,
                             map.next_value()?,
@@ -564,12 +548,10 @@ impl<'de> Deserialize<'de> for RawMetadata {
                             &mut value.token_endpoint_auth_methods_supported,
                             map.next_value()?,
                         )?,
-                        "grant_types_supported" => {
-                            set_once::<_, M::Error>(
-                                &mut value.grant_types_supported,
-                                map.next_value()?,
-                            )?
-                        }
+                        "grant_types_supported" => set_once::<_, M::Error>(
+                            &mut value.grant_types_supported,
+                            map.next_value()?,
+                        )?,
                         "crabcode_auth_contract_version" => set_once::<_, M::Error>(
                             &mut value.crabcode_auth_contract_version,
                             map.next_value()?,

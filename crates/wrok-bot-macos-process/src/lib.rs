@@ -399,7 +399,10 @@ mod tests {
             Err(super::ProcessObservationError::ObservationChanged),
             "detecting PID reuse must not treat the still-matching identity as absent"
         );
-        assert_eq!(std::process::id(), u32::from_be_bytes(original[0..4].try_into().unwrap()));
+        assert_eq!(
+            std::process::id(),
+            u32::from_be_bytes(original[0..4].try_into().unwrap())
+        );
     }
 
     #[test]
