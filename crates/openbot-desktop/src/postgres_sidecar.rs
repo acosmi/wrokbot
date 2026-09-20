@@ -2355,7 +2355,13 @@ mod tests {
     #[cfg(all(feature = "desktop-local-runtime", unix))]
     use openbot_contracts::command::{AppCommand, AppReply, BeginThreadRun, ThreadRunAnchor};
     #[cfg(all(feature = "desktop-local-runtime", unix))]
-    use openbot_contracts::ids::{BotId, RunId};
+    use openbot_contracts::error::AppError;
+    #[cfg(all(feature = "desktop-local-runtime", unix))]
+    use openbot_contracts::ids::{BotId, ComputerGeneration, ComputerId, RunId, TabId};
+    #[cfg(all(feature = "desktop-local-runtime", unix))]
+    use openbot_contracts::screen::{
+        ScreenSessionRequest, ScreenSessionTarget, ScreenViewerBindingRequest,
+    };
     #[cfg(all(feature = "desktop-local-runtime", unix))]
     use openbot_contracts::ui::{UiTheme, UpdateUiPreferences};
     #[cfg(all(feature = "desktop-vault", unix))]
@@ -3603,6 +3609,30 @@ mod tests {
         );
         assert_eq!(store.writes.load(Ordering::Relaxed), 2);
         assert_eq!(prepared.active_window_count(), 0);
+        // The Computer screen-session port is now the real `ScreenSessionService`/`ScreenHub`
+        // (V6-PR-052), not the fail-closed `NoScreenSessionAdministration` stub. No engine stream
+        // is attached in this test, so ticket issuance must resolve target visibility for real and
+        // fail with `NotVisible`; the old stub always failed with `DependencyUnavailable` instead,
+        // regardless of the requested target.
+        let screen_session = prepared
+            .application()
+            .execute(
+                prepared.auth_context().clone(),
+                AppCommand::IssueScreenSession(ScreenSessionRequest {
+                    target: ScreenSessionTarget {
+                        computer_id: ComputerId::new("desktop-background-computer"),
+                        computer_generation: ComputerGeneration::new(1),
+                        tab_id: TabId::new("desktop-background-tab"),
+                    },
+                    binding: ScreenViewerBindingRequest::Desktop {
+                        origin: "tauri://localhost".to_owned(),
+                        window_label: "main".to_owned(),
+                        window_binding: 1,
+                    },
+                }),
+            )
+            .await;
+        assert!(matches!(screen_session, Err(AppError::NotVisible)));
         prepared.shutdown().await.unwrap();
         assert!(
             !fs::read_dir(&app_root)
