@@ -31,7 +31,7 @@ pub fn AppLayout(children: Children) -> impl IntoView {
     provide_ui_preferences(i18n);
     let collapsed = RwSignal::new(false);
     view! {
-        <a class="ob-skip-link" href="#main-content">
+        <a class="ob-skip-link" href="#main-content" on:click=move |_| focus_main_content()>
             {move || t!(i18n, shell.skip_to_content)}
         </a>
         <SidebarProvider
@@ -72,4 +72,27 @@ pub fn AppLayout(children: Children) -> impl IntoView {
             </div>
         </SidebarProvider>
     }
+}
+
+/// Explicitly move focus to `#main-content` after the skip-link's native hash navigation.
+///
+/// A `href="#main-content"` anchor jump does not reliably move keyboard focus to a
+/// `tabindex="-1"` target in every browser (notably WebKit); without this, a keyboard user who
+/// activates the skip link gets the scroll jump but keeps tabbing from the link's own DOM
+/// position, defeating the link's purpose. Mirrors the established `restore_focus` idiom used
+/// elsewhere in this crate (e.g. `features/settings/connected_accounts.rs`).
+fn focus_main_content() {
+    #[cfg(target_arch = "wasm32")]
+    leptos::task::spawn_local_scoped_with_cancellation(async move {
+        use wasm_bindgen::JsCast as _;
+
+        leptos::task::tick().await;
+        if let Some(element) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id("main-content"))
+            .and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            _ = element.focus();
+        }
+    });
 }
