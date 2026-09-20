@@ -24,7 +24,7 @@ impl MessageAlign {
 /// Stack consecutive messages from one participant.
 #[component]
 pub fn MessageGroup(children: Children) -> impl IntoView {
-    view! { <div class="ob-message-group">{children()}</div> }
+    view! { <div class="wrokbot-message-group">{children()}</div> }
 }
 
 /// One named transcript article.
@@ -40,7 +40,7 @@ pub fn Message(
     );
     view! {
         <article
-            class="ob-message"
+            class="wrokbot-message"
             data-align=align.as_str()
             aria-label=move || aria_label.get()
         >
@@ -52,25 +52,25 @@ pub fn Message(
 /// Avatar slot aligned with the message body.
 #[component]
 pub fn MessageAvatar(children: Children) -> impl IntoView {
-    view! { <div class="ob-message-avatar">{children()}</div> }
+    view! { <div class="wrokbot-message-avatar">{children()}</div> }
 }
 
 /// Main body/bubble column.
 #[component]
 pub fn MessageContent(children: Children) -> impl IntoView {
-    view! { <div class="ob-message-content">{children()}</div> }
+    view! { <div class="wrokbot-message-content">{children()}</div> }
 }
 
 /// Author/time metadata before content.
 #[component]
 pub fn MessageHeader(children: Children) -> impl IntoView {
-    view! { <header class="ob-message-header">{children()}</header> }
+    view! { <header class="wrokbot-message-header">{children()}</header> }
 }
 
 /// Status/action metadata after content.
 #[component]
 pub fn MessageFooter(children: Children) -> impl IntoView {
-    view! { <footer class="ob-message-footer">{children()}</footer> }
+    view! { <footer class="wrokbot-message-footer">{children()}</footer> }
 }
 
 #[cfg(test)]

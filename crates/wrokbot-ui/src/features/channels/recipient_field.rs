@@ -3,7 +3,7 @@
 use core::fmt::Write as _;
 
 use leptos::prelude::*;
-use openbot_contracts::agent::AgentProfile;
+use wrokbot_contracts::agent::AgentProfile;
 use sha2::{Digest, Sha256};
 
 use crate::primitives::{
@@ -35,7 +35,7 @@ pub fn RecipientField(
 ) -> impl IntoView {
     let open = RwSignal::new(false);
     view! {
-        <div class="ob-recipient-field">
+        <div class="wrokbot-recipient-field">
             <Combobox
                 id="channel-new-recipient".to_owned()
                 open
@@ -60,14 +60,14 @@ pub fn RecipientField(
                                 let role = agent.role_description;
                                 view! {
                                     <ComboboxItem id=option_id value label=label.clone()>
-                                        <span class="ob-recipient-option-avatar" aria-hidden="true">
+                                        <span class="wrokbot-recipient-option-avatar" aria-hidden="true">
                                             <Avatar
                                                 principal_id=avatar_seed
                                                 name=avatar_name
                                                 size=AvatarSize::Small
                                             />
                                         </span>
-                                        <span class="ob-recipient-option-copy">
+                                        <span class="wrokbot-recipient-option-copy">
                                             <span>{name}</span>
                                             <small>{role}</small>
                                         </span>

@@ -2,11 +2,11 @@
 
 use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_query_map};
-use openbot_contracts::agent::AgentProfile;
-use openbot_contracts::command::ChannelDetail;
-use openbot_contracts::ids::{BotId, RunId};
-use openbot_contracts::model_connections::RunModelSelection;
-use openbot_contracts::text::trim_ecmascript;
+use wrokbot_contracts::agent::AgentProfile;
+use wrokbot_contracts::command::ChannelDetail;
+use wrokbot_contracts::ids::{BotId, RunId};
+use wrokbot_contracts::model_connections::RunModelSelection;
+use wrokbot_contracts::text::trim_ecmascript;
 
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::api::ApiError;
@@ -147,7 +147,7 @@ pub(crate) async fn execute_start_attempt(
             error: None,
         });
     };
-    let anchor = openbot_contracts::command::ThreadRunAnchor::Channel {
+    let anchor = wrokbot_contracts::command::ThreadRunAnchor::Channel {
         channel_id: channel.id.clone(),
     };
     let intent = RunIntent {
@@ -465,19 +465,19 @@ pub fn ChannelNewPage() -> impl IntoView {
             <PageTopbar>
                 <PageBackLink href="/agents".to_owned() label=move || t_string!(i18n, common.back).to_owned() />
             </PageTopbar>
-            <div class="ob-channel-new">
+            <div class="wrokbot-channel-new">
                 <PageHeader
                     heading_id="channel-new-title"
                     title=move || t_string!(i18n, channels.new_channel).to_owned()
                     description=move || t_string!(i18n, channels.new_intro).to_owned()
                 />
                 <Show when=move || loading.get()>
-                    <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                    <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
                 </Show>
                 <Show when=move || load_error.get() || recipient_restore_missing.get()>
-                    <p class="ob-alert" role="alert">{move || t!(i18n, channels.recipient_load_error)}</p>
+                    <p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.recipient_load_error)}</p>
                 </Show>
-                <div class="ob-channel-new-recipient">
+                <div class="wrokbot-channel-new-recipient">
                     <label for="channel-new-recipient">{move || t!(i18n, channels.recipient_label)}</label>
                     <RecipientField
                         agents=Signal::derive(move || {
@@ -496,7 +496,7 @@ pub fn ChannelNewPage() -> impl IntoView {
                         on_select=select
                     />
                     <Show when=move || resumable.get().is_some() || uncertain_create.get()>
-                        <p class="ob-page-empty" role="note">
+                        <p class="wrokbot-page-empty" role="note">
                             <strong>{move || t!(i18n, channels.recipient_label)}</strong>
                             {move || {
                                 if loading.get() {
@@ -508,7 +508,7 @@ pub fn ChannelNewPage() -> impl IntoView {
                         </p>
                     </Show>
                 </div>
-                <div class="ob-first-message-composer">
+                <div class="wrokbot-first-message-composer">
                     <ModelPicker state=model_composer disabled=inputs_locked/>
                     <SkillPicker state=skill_composer disabled=inputs_locked/>
                     <Textarea
@@ -522,7 +522,7 @@ pub fn ChannelNewPage() -> impl IntoView {
                         active_descendant=skill_composer.active_descendant
                         on_keydown=UnsyncCallback::new(move |event| skill_composer.keyboard(event))
                     />
-                    <div class="ob-first-message-actions">
+                    <div class="wrokbot-first-message-actions">
                         <Button
                             variant=ButtonVariant::Primary
                             size=ButtonSize::Medium
@@ -539,22 +539,22 @@ pub fn ChannelNewPage() -> impl IntoView {
                         </Button>
                     </div>
                 </div>
-                <Show when=move || notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::Conflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::Rejected)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
-                <Show when=move || notice.get()==Some(SubmissionNotice::NavigationFailed)><p class="ob-alert" role="alert">{move || t!(i18n, channels.navigation_failed)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::Conflict)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::Rejected)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::NavigationFailed)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.navigation_failed)}</p></Show>
                 <Show when=move || uncertain_create.get()>
-                    <div class="ob-alert" role="alert">
+                    <div class="wrokbot-alert" role="alert">
                         <p>{move || t!(i18n, channels.create_uncertain)}</p>
                         <a href="/">{move || t!(i18n, home.title)}</a>
                     </div>
                 </Show>
                 <Show when=move || begin_unknown.get()>
-                    <p class="ob-alert" role="alert">{move || t!(i18n, channels.begin_unknown)}</p>
+                    <p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.begin_unknown)}</p>
                 </Show>
                 <Show when=move || submission_blocked.get()>
-                    <a class="ob-alert" role="alert" href=move || submissions.barrier().and_then(|barrier| barrier.href()).unwrap_or_else(|| "/".to_owned())>
+                    <a class="wrokbot-alert" role="alert" href=move || submissions.barrier().and_then(|barrier| barrier.href()).unwrap_or_else(|| "/".to_owned())>
                         {move || t!(i18n, channels.submission_blocked)}
                     </a>
                 </Show>
@@ -623,7 +623,7 @@ fn install_recipient_loader(
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::ids::{ChannelId, ThreadId};
+    use wrokbot_contracts::ids::{ChannelId, ThreadId};
 
     use super::*;
 

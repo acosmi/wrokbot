@@ -1,8 +1,8 @@
 //! 解码 transcript 里的 tool 结果，并把 vendor JSON envelope 变成可读文本。
 
-use openbot_contracts::error::ErrorCode;
-use openbot_contracts::text::trim_ecmascript;
-use openbot_contracts::tool::ToolResult;
+use wrokbot_contracts::error::ErrorCode;
+use wrokbot_contracts::text::trim_ecmascript;
+use wrokbot_contracts::tool::ToolResult;
 use serde_json::{Map, Value};
 
 /// 旧 transcript 跨网络传递的拒绝标记。
@@ -77,8 +77,8 @@ fn longest_markdown(entries: &Map<String, Value>) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::ids::ToolCallId;
-    use openbot_contracts::tool::ToolCommitState;
+    use wrokbot_contracts::ids::ToolCallId;
+    use wrokbot_contracts::tool::ToolCommitState;
 
     use super::*;
 

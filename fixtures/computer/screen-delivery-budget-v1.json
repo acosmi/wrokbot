@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-screen-delivery-budget-v1",
+  "schema": "wrokbot-screen-delivery-budget-v1",
   "label": "新增",
   "firstSource": "v4 section 12.4, 12.6, R189",
   "serverDefaults": {

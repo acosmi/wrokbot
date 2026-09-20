@@ -6,11 +6,11 @@ use std::collections::HashSet;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::command::ChannelPage;
-use openbot_contracts::command::ChannelSummary;
+use wrokbot_contracts::command::ChannelPage;
+use wrokbot_contracts::command::ChannelSummary;
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::command::{AppEvent, SubscriptionRequest};
-use openbot_contracts::people::CurrentUser;
+use wrokbot_contracts::command::{AppEvent, SubscriptionRequest};
+use wrokbot_contracts::people::CurrentUser;
 
 use crate::api::channel_route_href;
 #[cfg(target_arch = "wasm32")]
@@ -145,10 +145,10 @@ pub fn AppSidebar() -> impl IntoView {
     view! {
         <span hidden aria-hidden="true" data-roster-generation=move || reload_generation.get().to_string()></span>
         <SidebarHeader>
-            <a class="ob-sidebar-brand" href="/" aria-label=move || t_string!(i18n, common.app_name).to_owned()>
+            <a class="wrokbot-sidebar-brand" href="/" aria-label=move || t_string!(i18n, common.app_name).to_owned()>
                 <crate::primitives::BrandMark/>
             </a>
-            <button class="ob-sidebar-search-toggle" type="button"
+            <button class="wrokbot-sidebar-search-toggle" type="button"
                 aria-label=move || t_string!(i18n, shell.search_toggle).to_owned()
                 aria-expanded=move || search_open.get().to_string()
                 aria-controls="sidebar-search-panel"
@@ -173,7 +173,7 @@ pub fn AppSidebar() -> impl IntoView {
                         label=move || t_string!(i18n, admin.nav_approvals).to_owned()
                         current=Signal::derive(move || approvals_location.pathname.get() == "/approvals") />
                 </SidebarNavList>
-                <div class="ob-sidebar-chats-heading">
+                <div class="wrokbot-sidebar-chats-heading">
                     <SidebarGroupLabel>{move || t!(i18n, shell.chats)}</SidebarGroupLabel>
                     <a href="/channel/new" aria-label=move || t_string!(i18n, shell.new_channel).to_owned()>
                         <IconView icon=Icon::Plus size=IconSize::Inline />
@@ -185,16 +185,16 @@ pub fn AppSidebar() -> impl IntoView {
                         placeholder=move || t_string!(i18n, channels.search_placeholder) />
                 </div>
                 <Show when=move || loading.get()>
-                    <div class="ob-sidebar-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                    <div class="wrokbot-sidebar-loading" role="status">{move || t!(i18n, common.loading)}</div>
                 </Show>
                 <Show when=move || load_error.get()>
-                    <div class="ob-sidebar-alert" role="alert">
+                    <div class="wrokbot-sidebar-alert" role="alert">
                         <span>{move || t!(i18n, channels.load_error)}</span>
                         <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry>{move || t!(i18n, common.retry)}</Button>
                     </div>
                 </Show>
                 <Show when=move || !search.get().trim().is_empty() && !loading.get() && visible_channels.get().is_empty()>
-                    <p class="ob-sidebar-search-empty" role="status">{move || t!(i18n, channels.no_match_title)}</p>
+                    <p class="wrokbot-sidebar-search-empty" role="status">{move || t!(i18n, channels.no_match_title)}</p>
                 </Show>
                 <SidebarNavList>
                     <For each=move || visible_channels.get() key=|channel| channel.id.clone()
@@ -230,28 +230,28 @@ pub fn AppSidebar() -> impl IntoView {
                     label=move || t_string!(i18n, shell.nav_tool_connections).to_owned()
                     current=Signal::derive(move || plugins_location.pathname.get().starts_with("/settings/connected-accounts")) />
             </SidebarNavList>
-            <details class="ob-account-disclosure" on:keydown=crate::primitives::dismiss_disclosure on:click=crate::primitives::dismiss_disclosure_link>
+            <details class="wrokbot-account-disclosure" on:keydown=crate::primitives::dismiss_disclosure on:click=crate::primitives::dismiss_disclosure_link>
                 <summary aria-label=move || t_string!(i18n, shell.account_menu).to_owned()>
                     <Show when=move || current_user.get().is_some()
-                        fallback=move || view! { <IconView icon=Icon::User size=IconSize::Navigation /><span class="ob-sidebar-link-label">{move || t!(i18n, shell.account)}</span> }>
+                        fallback=move || view! { <IconView icon=Icon::User size=IconSize::Navigation /><span class="wrokbot-sidebar-link-label">{move || t!(i18n, shell.account)}</span> }>
                         {move || current_user.get().map(|user| {
                             let display = user.name.clone().unwrap_or_else(|| user.email.clone());
                             view! {
                                 <Avatar principal_id=user.id.as_str().to_owned() name=display.clone() size=AvatarSize::Medium />
-                                <span class="ob-sidebar-link-label">{display}</span>
+                                <span class="wrokbot-sidebar-link-label">{display}</span>
                             }
                         })}
                     </Show>
-                    <span class="ob-account-chevron"><IconView icon=Icon::ChevronsUpDown size=IconSize::Inline /></span>
+                    <span class="wrokbot-account-chevron"><IconView icon=Icon::ChevronsUpDown size=IconSize::Inline /></span>
                 </summary>
-                <div class="ob-account-panel">
-                    <a class="ob-sidebar-secondary-link" href="/settings"><IconView icon=Icon::Settings size=IconSize::Inline />{move || t!(i18n, shell.nav_settings)}</a>
+                <div class="wrokbot-account-panel">
+                    <a class="wrokbot-sidebar-secondary-link" href="/settings"><IconView icon=Icon::Settings size=IconSize::Inline />{move || t!(i18n, shell.nav_settings)}</a>
                     <Show when=move || admin_visible.get()>
-                        <a class="ob-sidebar-secondary-link" href="/admin" aria-current=move || is_admin_path(&admin_location.pathname.get()).then_some("page")>
+                        <a class="wrokbot-sidebar-secondary-link" href="/admin" aria-current=move || is_admin_path(&admin_location.pathname.get()).then_some("page")>
                             <IconView icon=Icon::ShieldLock size=IconSize::Inline />{move || t!(i18n, shell.nav_admin)}
                         </a>
                     </Show>
-                    <div class="ob-sidebar-preferences"><ThemeToggle /><LocaleSwitch id="sidebar-locale-switch" /><PreferenceSaveStatus /></div>
+                    <div class="wrokbot-sidebar-preferences"><ThemeToggle /><LocaleSwitch id="sidebar-locale-switch" /><PreferenceSaveStatus /></div>
                     <Show when=move || revocable.get()>
                         <Button variant=ButtonVariant::DangerText size=ButtonSize::Medium loading=sign_out_pending on_activate=sign_out>
                             <IconView icon=Icon::LogOut size=IconSize::Inline /><span>{move || t!(i18n, auth.sign_out)}</span>
@@ -259,8 +259,8 @@ pub fn AppSidebar() -> impl IntoView {
                     </Show>
                 </div>
             </details>
-            <Show when=move || sign_out_error.get()><p class="ob-sidebar-alert" role="alert">{move || t!(i18n, auth.sign_out_error)}</p></Show>
-            <Show when=move || account_error.get()><p class="ob-sidebar-alert" role="alert">{move || t!(i18n, account.load_failed)}</p></Show>
+            <Show when=move || sign_out_error.get()><p class="wrokbot-sidebar-alert" role="alert">{move || t!(i18n, auth.sign_out_error)}</p></Show>
+            <Show when=move || account_error.get()><p class="wrokbot-sidebar-alert" role="alert">{move || t!(i18n, account.load_failed)}</p></Show>
         </SidebarFooter>
     }
 }
@@ -389,7 +389,7 @@ fn install_channel_socket(reload_generation: RwSignal<u64>) {
     leptos::task::spawn_local_scoped_with_cancellation(async move {
         use futures_util::StreamExt as _;
         use gloo_net::websocket::{Message, futures::WebSocket};
-        use openbot_contracts::command::ChannelActivityEvent;
+        use wrokbot_contracts::command::ChannelActivityEvent;
 
         let mut retry = FIRST_RETRY_MS;
         loop {
@@ -512,7 +512,7 @@ fn next_retry(current: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openbot_contracts::ids::ChannelId;
+    use wrokbot_contracts::ids::ChannelId;
     use time::macros::datetime;
 
     fn channel(id: &str, name: &str, message: Option<&str>) -> ChannelSummary {

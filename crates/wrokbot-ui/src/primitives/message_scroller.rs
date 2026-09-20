@@ -135,7 +135,7 @@ pub fn MessageScroller(
     install_resize_observer(context.clone());
     view! {
         <Provider value=context>
-            <div class="ob-message-scroller">{children()}</div>
+            <div class="wrokbot-message-scroller">{children()}</div>
         </Provider>
     }
 }
@@ -152,7 +152,7 @@ pub fn MessageScrollerViewport(children: Children) -> impl IntoView {
     view! {
         <div
             id=viewport_id
-            class="ob-message-scroller-viewport"
+            class="wrokbot-message-scroller-viewport"
             role="region"
             aria-label=move || context.aria_label.get()
             tabindex="0"
@@ -182,7 +182,7 @@ pub fn MessageScrollerContent(
     view! {
         <div
             id=content_id
-            class="ob-message-scroller-content"
+            class="wrokbot-message-scroller-content"
             role="log"
             aria-label=move || context.aria_label.get()
             aria-live="polite"
@@ -193,7 +193,7 @@ pub fn MessageScrollerContent(
         >
             {children()}
             <div
-                class="ob-message-scroller-spacer"
+                class="wrokbot-message-scroller-spacer"
                 aria-hidden="true"
                 hidden
                 node_ref=context.spacer_ref
@@ -212,7 +212,7 @@ pub fn MessageScrollerItem(
     assert_message_id(&message_id);
     view! {
         <div
-            class="ob-message-scroller-item"
+            class="wrokbot-message-scroller-item"
             data-message-scroller-item=""
             data-message-id=message_id
             data-scroll-anchor=explicit_bool(scroll_anchor)
@@ -235,7 +235,7 @@ pub fn MessageScrollerButton(#[prop(into)] aria_label: TextProp) -> impl IntoVie
     view! {
         <button
             type="button"
-            class="ob-message-scroller-button"
+            class="wrokbot-message-scroller-button"
             data-active=move || explicit_bool(context.can_scroll_end.get())
             aria-controls=viewport_id
             hidden=move || !context.can_scroll_end.get()
@@ -244,7 +244,7 @@ pub fn MessageScrollerButton(#[prop(into)] aria_label: TextProp) -> impl IntoVie
             }
         >
             <IconView icon=Icon::ArrowDown size=IconSize::Inline />
-            <span class="ob-visually-hidden">{move || aria_label.get()}</span>
+            <span class="wrokbot-visually-hidden">{move || aria_label.get()}</span>
         </button>
     }
 }

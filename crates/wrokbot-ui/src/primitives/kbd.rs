@@ -37,7 +37,7 @@ pub fn Kbd(#[prop(optional)] modifier: Option<KbdModifier>, key: KbdKey) -> impl
     let apple = is_apple_platform();
     let (visible, accessible) = chord_labels(i18n, apple, modifier, key);
     view! {
-        <kbd class="ob-kbd" aria-label=accessible>
+        <kbd class="wrokbot-kbd" aria-label=accessible>
             {visible}
         </kbd>
     }

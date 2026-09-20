@@ -6,7 +6,7 @@
 # 消费者：
 #   `cargo xtask tools fetch`   按 [tools.<id>.artifacts] 下载到 `target/tools/bin`
 #   `cargo xtask tools verify`  校验 sha256 与 [tools.<id>.verify]，任一不符即红
-# 两个子命令由 `crates/openbot-testkit/src/xtask/tools.rs` 实现；下载件先校本平台
+# 两个子命令由 `crates/wrokbot-testkit/src/xtask/tools.rs` 实现；下载件先校本平台
 # sha256 再安装，cargo-install 件按本表/lock 精确版本安装，`verify` 再核版本输出。
 #
 # 这些工具**不进发行物**（GUI §12.1 末段）：v3 §0.1 的"第一方非 Rust 源码只有 Electron

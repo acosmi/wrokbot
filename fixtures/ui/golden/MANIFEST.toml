@@ -1,4 +1,4 @@
-# OpenBot GUI golden 基线清单
+# WrokBot GUI golden 基线清单
 #
 # 真源：repository contract §10.1 / §10.2 / §10.4 / §10.5，
 #       并入 repository contract §19.3 的 Phase 0 产物。
@@ -17,9 +17,9 @@ generated_by = "manual"
 # ---------------------------------------------------------------------------
 [determinism]
 seed = "fixtures/ui/seed.json"
-seed_loader = "openbot-testkit 的 fake ApplicationService；无 PostgreSQL、无模型调用、无网络"
+seed_loader = "wrokbot-testkit 的 fake ApplicationService；无 PostgreSQL、无模型调用、无网络"
 clock_pinned_at = "2026-01-01T00:00:00Z"
-clock_injected_via = "openbot_testkit::Clock"
+clock_injected_via = "wrokbot_testkit::Clock"
 golden_feature = "golden"
 golden_feature_note = "cargo feature `golden`。生产 bundle 不编译该特性；闸门见 §10.3 的路由表测试与 xtask design-lint。"
 design_gallery_feature = "design-gallery"
@@ -186,7 +186,7 @@ grand_total_formula = "110 + 27 + 54 × 2 = 245"
 # 5. 比对规则（§10.4）
 # ---------------------------------------------------------------------------
 [compare]
-implementation = "openbot-testkit::golden + cargo xtask golden，crate `image` 0.25.10（PNG-only）"
+implementation = "wrokbot-testkit::golden + cargo xtask golden，crate `image` 0.25.10（PNG-only）"
 pixel_differs_when = "任一通道差 > 16/255"
 channel_threshold = 16
 channel_threshold_denominator = 255

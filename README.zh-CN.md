@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/wrok-bot-banner.png" alt="Wrok Bot">
+  <img src=".github/assets/wrokbot-banner.png" alt="Wrok Bot">
 </p>
 
 <h1 align="center">Wrok Bot</h1>
@@ -36,7 +36,7 @@ Wrok Bot 是使用 Rust 构建的 AI 工作台，包含桌面宿主、服务端�
 ## 源码目录
 
 - `crates/`：领域、应用、基础设施、桌面、服务端、UI 和测试工具。
-- `apps/wrok-bot-mobile/`：移动客户端源码。
+- `apps/wrokbot-mobile/`：移动客户端源码。
 - `examples/`：示例应用配置。
 - `fixtures/`：确定性测试数据和资源契约。
 - `tools/`：依赖检查与构建工具版本配置。
@@ -47,7 +47,7 @@ Rust 工具链由 `rust-toolchain.toml` 固定，Rust 依赖由 `Cargo.lock` 锁
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p openbot-testkit --features xtask --bin xtask
+cargo test -p wrokbot-testkit --features xtask --bin xtask
 cargo xtask i18n-check
 cargo xtask design-lint
 ```

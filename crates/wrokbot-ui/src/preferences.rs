@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use leptos_i18n::I18nContext;
-use openbot_contracts::ui::{UiLocale, UiTheme, UpdateUiPreferences};
+use wrokbot_contracts::ui::{UiLocale, UiTheme, UpdateUiPreferences};
 
 #[cfg(target_arch = "wasm32")]
 use crate::api::{load_ui_preferences, save_ui_preferences};
@@ -131,12 +131,12 @@ pub fn PreferenceSaveStatus() -> impl IntoView {
     let preferences = use_ui_preferences();
     view! {
         <Show when=move || preferences.is_saving()>
-            <p class="ob-preference-saving" role="status">
+            <p class="wrokbot-preference-saving" role="status">
                 {move || t!(i18n, shell.preference_saving)}
             </p>
         </Show>
         <Show when=move || preferences.save_error.get()>
-            <p class="ob-preference-error" role="alert">
+            <p class="wrokbot-preference-error" role="alert">
                 {move || t!(i18n, shell.preference_save_error)}
             </p>
         </Show>

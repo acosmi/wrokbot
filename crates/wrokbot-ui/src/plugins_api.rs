@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use openbot_contracts::mcp::{
+use wrokbot_contracts::mcp::{
     McpAdminPage, McpCustomServerRegistration, McpOAuthClientRegistration, McpServerMutation,
     PluginGrantKind, PluginGrantMutation,
 };
@@ -206,7 +206,7 @@ pub(crate) async fn begin_connection(id: &str) -> Result<String, ApiError> {
         None,
     )
     .await?;
-    let authorization: openbot_contracts::mcp::McpOAuthAuthorization =
+    let authorization: wrokbot_contracts::mcp::McpOAuthAuthorization =
         serde_json::from_value(value).map_err(|_| ApiError::InvalidResponse)?;
     #[cfg(any(target_arch = "wasm32", test))]
     super::validate_authorization_target(&authorization.authorization_url)?;

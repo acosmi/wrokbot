@@ -1,7 +1,7 @@
 //! Shared create/edit Agent form backed only by typed lifecycle APIs.
 
 use leptos::prelude::*;
-use openbot_contracts::agent::{
+use wrokbot_contracts::agent::{
     AgentAuthInput, AgentConnectionFailure, AgentConnectionTestRequest, AgentMutationRequest,
     AgentProfile, AgentVisibility, MAX_AGENT_AUTH_BYTES, MAX_AGENT_NAME_BYTES,
     MAX_AGENT_ROLE_DESCRIPTION_BYTES, MAX_AGENT_TITLE_BYTES,
@@ -137,7 +137,7 @@ pub fn AgentEditor(
             return;
         };
         let endpoint_raw = endpoint.get_untracked();
-        let endpoint_value = openbot_contracts::text::trim_ecmascript(&endpoint_raw);
+        let endpoint_value = wrokbot_contracts::text::trim_ecmascript(&endpoint_raw);
         if endpoint_value.is_empty() {
             connection.set(Some(ConnectionState::Rejected(
                 AgentConnectionFailure::DestinationRejected,
@@ -145,7 +145,7 @@ pub fn AgentEditor(
             return;
         }
         let auth_raw = auth.copy_for_request();
-        let auth_value = openbot_contracts::text::trim_ecmascript(&auth_raw);
+        let auth_value = wrokbot_contracts::text::trim_ecmascript(&auth_raw);
         let request = AgentConnectionTestRequest {
             endpoint: endpoint_value.to_owned(),
             auth: if auth_value.is_empty() {
@@ -204,7 +204,7 @@ pub fn AgentEditor(
     });
     let invalid_role = Signal::derive(move || {
         let raw = role.get();
-        let value = openbot_contracts::text::trim_ecmascript(&raw);
+        let value = wrokbot_contracts::text::trim_ecmascript(&raw);
         attempted.get()
             && (value.is_empty()
                 || value.len() > MAX_AGENT_ROLE_DESCRIPTION_BYTES
@@ -223,7 +223,7 @@ pub fn AgentEditor(
     let _ = (agent_id, on_saved);
 
     view! {
-        <section class="ob-agent-editor" aria-labelledby="agent-editor-title">
+        <section class="wrokbot-agent-editor" aria-labelledby="agent-editor-title">
             <h3 id="agent-editor-title">
                 {move || if editing {
                     t_string!(i18n, agents.edit_title).to_owned()
@@ -231,10 +231,10 @@ pub fn AgentEditor(
                     t_string!(i18n, agents.create_title).to_owned()
                 }}
             </h3>
-            <p class="ob-agent-editor-intro">
+            <p class="wrokbot-agent-editor-intro">
                 {move || t!(i18n, agents.form_intro)}
             </p>
-            <div class="ob-agent-editor-fields">
+            <div class="wrokbot-agent-editor-fields">
                 <Field
                     control_id="agent-name"
                     label=move || t_string!(i18n, agents.name_label).to_owned()
@@ -327,14 +327,14 @@ pub fn AgentEditor(
                         placeholder="Bearer …"
                     />
                 </Field>
-                <div class="ob-agent-connection-row">
+                <div class="wrokbot-agent-connection-row">
                     <Button
                         variant=ButtonVariant::Chip
                         size=ButtonSize::Small
                         disabled=Signal::derive(move || {
                             pending.get()
                                 || connection_pending.get()
-                                || openbot_contracts::text::trim_ecmascript(&endpoint.get()).is_empty()
+                                || wrokbot_contracts::text::trim_ecmascript(&endpoint.get()).is_empty()
                         })
                         on_activate=test
                     >
@@ -346,7 +346,7 @@ pub fn AgentEditor(
                     </Button>
                     {move || connection.get().map(|state| view! {
                         <p
-                            class="ob-agent-connection-status"
+                            class="wrokbot-agent-connection-status"
                             data-state=state.token()
                             role="status"
                         >{connection_text(i18n, &state)}</p>
@@ -354,12 +354,12 @@ pub fn AgentEditor(
                 </div>
             </div>
             <Show when=move || form_invalid.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, agents.form_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, agents.form_error)}</p>
             </Show>
             <Show when=move || save_error.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, agents.save_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, agents.save_error)}</p>
             </Show>
-            <div class="ob-agent-editor-actions">
+            <div class="wrokbot-agent-editor-actions">
                 <Button
                     variant=ButtonVariant::Primary
                     disabled=pending
@@ -433,11 +433,11 @@ fn build_agent_request(
     endpoint: &str,
     auth: &str,
 ) -> Result<AgentMutationRequest, ()> {
-    let name = openbot_contracts::text::trim_ecmascript(name);
-    let title = openbot_contracts::text::trim_ecmascript(title);
-    let role = openbot_contracts::text::trim_ecmascript(role);
-    let endpoint = openbot_contracts::text::trim_ecmascript(endpoint);
-    let auth = openbot_contracts::text::trim_ecmascript(auth);
+    let name = wrokbot_contracts::text::trim_ecmascript(name);
+    let title = wrokbot_contracts::text::trim_ecmascript(title);
+    let role = wrokbot_contracts::text::trim_ecmascript(role);
+    let endpoint = wrokbot_contracts::text::trim_ecmascript(endpoint);
+    let auth = wrokbot_contracts::text::trim_ecmascript(auth);
     if !bounded_line(name, MAX_AGENT_NAME_BYTES)
         || !bounded_line(title, MAX_AGENT_TITLE_BYTES)
         || role.is_empty()
@@ -471,7 +471,7 @@ fn build_agent_request(
 }
 
 fn bounded_line(value: &str, maximum: usize) -> bool {
-    let value = openbot_contracts::text::trim_ecmascript(value);
+    let value = wrokbot_contracts::text::trim_ecmascript(value);
     !value.is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
 }
 
@@ -494,7 +494,7 @@ fn agent_form_invalid_signal(
                                 let auth_state = auth.get();
                                 auth_state == SecretInputStatus::Invalid
                                     || (auth_state == SecretInputStatus::Valid
-                                        && openbot_contracts::text::trim_ecmascript(endpoint)
+                                        && wrokbot_contracts::text::trim_ecmascript(endpoint)
                                             .is_empty())
                                     || build_agent_request(
                                         name,

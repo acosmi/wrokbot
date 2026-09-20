@@ -28,7 +28,7 @@ impl SkeletonShape {
 #[component]
 pub fn Skeleton(#[prop(optional)] shape: SkeletonShape) -> impl IntoView {
     view! {
-        <span class="ob-skeleton" data-shape=shape.as_str() aria-hidden="true"></span>
+        <span class="wrokbot-skeleton" data-shape=shape.as_str() aria-hidden="true"></span>
     }
 }
 

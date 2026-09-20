@@ -71,7 +71,7 @@ pub fn Textarea(
     view! {
         <textarea
             id=control_id
-            class="ob-textarea"
+            class="wrokbot-textarea"
             node_ref=node_ref
             name=name
             placeholder=move || placeholder.get()

@@ -11,7 +11,7 @@ if [[ ${RING_PREGENERATE_ASM+x} ]]; then
   fail 'RING_PREGENERATE_ASM 不得由构建环境注入；正常 crates.io build 必须消费锁定 pregenerated 产物'
 fi
 
-normal_tree=$(cargo tree -p openbot-infra -e normal --prefix none --locked)
+normal_tree=$(cargo tree -p wrokbot-infra -e normal --prefix none --locked)
 for exact in \
   'ipnet v2.12.1' \
   'ring v0.17.14' \
@@ -24,16 +24,16 @@ for exact in \
 done
 
 if grep -Eq '^(reqwest|native-tls|aws-lc-rs|aws-lc-sys) v' <<< "$normal_tree"; then
-  fail 'openbot-infra 图出现第二 HTTP/TLS 路径（reqwest/native-tls/aws-lc）'
+  fail 'wrokbot-infra 图出现第二 HTTP/TLS 路径（reqwest/native-tls/aws-lc）'
 fi
 
 # W-7b 按 R29 另立审计后为 SAML XMLDSig 引入 OpenSSL；它不是 safe dialer TLS 后端。
 # 源码调用面必须仍然只在 saml.rs，若扩到 HTTP/client 代码则本 guard 先红。
 openssl_callers=$(rg -l 'openssl::' crates/*/src --glob '*.rs' | sort)
-[[ "$openssl_callers" == 'crates/openbot-infra/src/auth/sso/saml.rs' ]] \
+[[ "$openssl_callers" == 'crates/wrokbot-infra/src/auth/sso/saml.rs' ]] \
   || fail "OpenSSL 调用面越出 SAML XML/cert 校验：[$openssl_callers]"
 
-feature_tree=$(cargo tree -p openbot-infra -e features --prefix none --locked)
+feature_tree=$(cargo tree -p wrokbot-infra -e features --prefix none --locked)
 grep -qxF 'rustls feature "ring"' <<< "$feature_tree" || fail 'rustls ring feature 未启用'
 for forbidden in \
   'rustls feature "aws_lc_rs"' \
@@ -51,14 +51,14 @@ grep -qF 'openidconnect = { version = "4.0.1", default-features = false }' Cargo
   || fail 'openidconnect 必须继续关闭自带 reqwest/rustls'
 
 network_callers=$(rg -l 'TcpStream::connect|lookup_host\(|TlsConnector|http1::handshake|reqwest::|hyper::client|tokio_rustls' crates/*/src --glob '*.rs' | sort)
-expected_callers=$'crates/openbot-computer/src/engine/process.rs\ncrates/openbot-desktop/src/postgres_sidecar.rs\ncrates/openbot-infra/src/net/safe_http.rs\ncrates/openbot-server/src/http/approvals.rs\ncrates/openbot-server/src/http/channels.rs\ncrates/openbot-server/src/http/screen.rs\ncrates/openbot-server/src/http/threads.rs'
+expected_callers=$'crates/wrokbot-computer/src/engine/process.rs\ncrates/wrokbot-desktop/src/postgres_sidecar.rs\ncrates/wrokbot-infra/src/net/safe_http.rs\ncrates/wrokbot-server/src/http/approvals.rs\ncrates/wrokbot-server/src/http/channels.rs\ncrates/wrokbot-server/src/http/screen.rs\ncrates/wrokbot-server/src/http/threads.rs'
 [[ "$network_callers" == "$expected_callers" ]] \
   || fail "socket/DNS/TLS/HTTP client 调用面不再唯一：[$network_callers]"
 
 # The per-scope proxy owns only its loopback listener and authenticated framing. Its sole outgoing
 # capability is the private ProxyHop returned by SafeDialer; DNS/connect/HTTP handshakes stay above.
 proxy_hop_callers=$(rg -l 'connect_proxy_hop\(|\.into_tunnel\(' crates/*/src --glob '*.rs' | sort)
-expected_proxy_hop_callers=$'crates/openbot-infra/src/net/safe_http.rs\ncrates/openbot-infra/src/net/scope_gateway.rs'
+expected_proxy_hop_callers=$'crates/wrokbot-infra/src/net/safe_http.rs\ncrates/wrokbot-infra/src/net/scope_gateway.rs'
 [[ "$proxy_hop_callers" == "$expected_proxy_hop_callers" ]] \
   || fail "scope proxy hop escaped its two owning modules: [$proxy_hop_callers]"
 
@@ -66,12 +66,12 @@ expected_proxy_hop_callers=$'crates/openbot-infra/src/net/safe_http.rs\ncrates/o
 # 逐文件锁唯一cfg(test) tests模块与唯一caller，并要求caller严格位于该模块标记之后；
 # Screen另有test-only fixture常量，不能把它的cfg误当作测试模块起点。实际六个tests模块均在文件末尾。
 test_only_network_files=(
-  crates/openbot-computer/src/engine/process.rs
-  crates/openbot-desktop/src/postgres_sidecar.rs
-  crates/openbot-server/src/http/approvals.rs
-  crates/openbot-server/src/http/channels.rs
-  crates/openbot-server/src/http/screen.rs
-  crates/openbot-server/src/http/threads.rs
+  crates/wrokbot-computer/src/engine/process.rs
+  crates/wrokbot-desktop/src/postgres_sidecar.rs
+  crates/wrokbot-server/src/http/approvals.rs
+  crates/wrokbot-server/src/http/channels.rs
+  crates/wrokbot-server/src/http/screen.rs
+  crates/wrokbot-server/src/http/threads.rs
 )
 for file in "${test_only_network_files[@]}"; do
   test_module_line=$(awk 'previous == "#[cfg(test)]" && $0 == "mod tests {" { print NR - 1 } { previous = $0 }' "$file")

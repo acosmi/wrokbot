@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-screen-hub-ticket-core-v1",
+  "schema": "wrokbot-screen-hub-ticket-core-v1",
   "engineSource": {
     "protocolVersion": 3,
     "frameMagic": "OBFRAME2",

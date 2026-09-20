@@ -6,7 +6,7 @@ use crate::{
     primitives::{Button, ButtonSize, ButtonVariant},
 };
 use leptos::prelude::*;
-use openbot_contracts::screen::ScreenSessionTarget;
+use wrokbot_contracts::screen::ScreenSessionTarget;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScreenStatus {
@@ -69,8 +69,8 @@ pub(crate) fn ScreenViewer(
     });
     view! {
         <Show when=move || state.src.get().is_some() fallback=move || view! { <ComputerPlaceholder/> }>
-            <div class="ob-computer-placeholder" data-frame-generation=move || state.generation.get() data-frame-sequence=move || state.sequence.get()>
-                <img class="ob-computer-placeholder-art object-contain" src=move || state.src.get() alt=move || t_string!(i18n, computer.screen).to_owned()
+            <div class="wrokbot-computer-placeholder" data-frame-generation=move || state.generation.get() data-frame-sequence=move || state.sequence.get()>
+                <img class="wrokbot-computer-placeholder-art object-contain" src=move || state.src.get() alt=move || t_string!(i18n, computer.screen).to_owned()
                     on:load=move |event| {
                         #[cfg(target_arch = "wasm32")]
                         if current_image_event(&event, state) { state.sequence.set(state.pending_sequence.get_untracked()); state.decoding.set(false); state.status.set(ScreenStatus::Live); }
@@ -83,7 +83,7 @@ pub(crate) fn ScreenViewer(
                     }/>
             </div>
         </Show>
-        <p class="ob-page-intro" role="status">{move || match state.status.get() {
+        <p class="wrokbot-page-intro" role="status">{move || match state.status.get() {
             ScreenStatus::Waiting => t_string!(i18n, computer.no_target_body).to_owned(),
             ScreenStatus::Connecting => t_string!(i18n, computer.screen_connecting).to_owned(),
             ScreenStatus::Live => t_string!(i18n, computer.screen_live).to_owned(),
@@ -314,7 +314,7 @@ async fn connect_screen(
         });
     }
     let ticket = response
-        .json::<openbot_contracts::screen::ScreenSessionTicket>()
+        .json::<wrokbot_contracts::screen::ScreenSessionTicket>()
         .await
         .map_err(|_| ScreenStatus::Failed)?;
     let Some(token) = ticket.ticket_protocol().strip_prefix("obot_screen_") else {
@@ -355,7 +355,7 @@ async fn connect_screen(
             reject();
             return;
         };
-        if buffer.byte_length() as usize > openbot_contracts::engine::MAX_ENGINE_IMAGE_BYTES + 68 {
+        if buffer.byte_length() as usize > wrokbot_contracts::engine::MAX_ENGINE_IMAGE_BYTES + 68 {
             reject();
             return;
         }
@@ -464,7 +464,7 @@ mod tests {
 #[cfg(feature = "design-gallery")]
 #[component]
 pub(crate) fn ScreenFixturePreview() -> impl IntoView {
-    use openbot_contracts::ids::{ComputerGeneration, ComputerId, TabId};
+    use wrokbot_contracts::ids::{ComputerGeneration, ComputerId, TabId};
     let mode = RwSignal::new("valid".to_owned());
     let enabled = RwSignal::new(false);
     let target = Signal::derive(move || {
@@ -474,9 +474,9 @@ pub(crate) fn ScreenFixturePreview() -> impl IntoView {
             tab_id: TabId::new(mode.get()),
         })
     });
-    view! { <section class="ob-page" id="screen-fixture-preview"><h2>"Screen transport fixture"</h2><p>"Development fixture only. No production computer is connected."</p>
+    view! { <section class="wrokbot-page" id="screen-fixture-preview"><h2>"Screen transport fixture"</h2><p>"Development fixture only. No production computer is connected."</p>
         <Button on_activate=move |_| enabled.update(|v| *v = !*v)>{move || if enabled.get() {"Pause viewer"}else{"Start viewer"}}</Button>
-        <div class="ob-skill-chips">{["valid","oversize","stale-generation","stall"].into_iter().map(|name|view! {<Button variant=ButtonVariant::Ghost on_activate=move |_| {mode.set(name.to_owned());enabled.set(true);}>{name}</Button>}).collect_view()}</div>
+        <div class="wrokbot-skill-chips">{["valid","oversize","stale-generation","stall"].into_iter().map(|name|view! {<Button variant=ButtonVariant::Ghost on_activate=move |_| {mode.set(name.to_owned());enabled.set(true);}>{name}</Button>}).collect_view()}</div>
         <ScreenViewer target active=Signal::derive(move || enabled.get())/>
     </section> }
 }

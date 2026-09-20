@@ -33,7 +33,7 @@ pub fn PageShell(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class="ob-page-shell" data-width=width.as_str()>
+        <div class="wrokbot-page-shell" data-width=width.as_str()>
             {children()}
         </div>
     }
@@ -42,7 +42,7 @@ pub fn PageShell(
 /// Fixed-height page topbar for breadcrumbs, back navigation and the page-level action.
 #[component]
 pub fn PageTopbar(children: Children) -> impl IntoView {
-    view! { <div class="ob-page-topbar">{children()}</div> }
+    view! { <div class="wrokbot-page-topbar">{children()}</div> }
 }
 
 /// Same-origin back navigation used inside a PageTopbar.
@@ -61,7 +61,7 @@ pub fn PageBackLink(
         "back label must be nonempty"
     );
     view! {
-        <a class="ob-page-back" href=href>
+        <a class="wrokbot-page-back" href=href>
             <span aria-hidden="true">"‹"</span>
             <span>{move || label.get()}</span>
         </a>
@@ -88,10 +88,10 @@ pub fn PageHeader(
     );
     let visible_description = description.clone();
     view! {
-        <header class="ob-page-header">
-            <h1 id=heading_id class="ob-page-title">{move || title.get()}</h1>
+        <header class="wrokbot-page-header">
+            <h1 id=heading_id class="wrokbot-page-title">{move || title.get()}</h1>
             <p
-                class="ob-page-intro"
+                class="wrokbot-page-intro"
                 hidden=move || visible_description.get().trim().is_empty()
             >
                 {move || description.get()}
@@ -122,10 +122,10 @@ pub fn PageSection(
     let labelled_by = heading_id.clone();
     let visible_description = description.clone();
     view! {
-        <section class="ob-page-section" aria-labelledby=labelled_by>
+        <section class="wrokbot-page-section" aria-labelledby=labelled_by>
             <h2 id=heading_id>{move || title.get()}</h2>
             <p
-                class="ob-page-section-description"
+                class="wrokbot-page-section-description"
                 hidden=move || visible_description.get().trim().is_empty()
             >
                 {move || description.get()}
@@ -138,13 +138,13 @@ pub fn PageSection(
 /// Bordered row group; callers omit this component when the collection is empty.
 #[component]
 pub fn PageRows(children: Children) -> impl IntoView {
-    view! { <div class="ob-page-rows">{children()}</div> }
+    view! { <div class="wrokbot-page-rows">{children()}</div> }
 }
 
 /// Sentence-level empty fact for an already named configuration section.
 #[component]
 pub fn PageEmpty(children: Children) -> impl IntoView {
-    view! { <p class="ob-page-empty">{children()}</p> }
+    view! { <p class="wrokbot-page-empty">{children()}</p> }
 }
 
 fn assert_dom_id(id: &str) {

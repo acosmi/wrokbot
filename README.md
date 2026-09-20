@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/wrok-bot-banner.png" alt="Wrok Bot">
+  <img src=".github/assets/wrokbot-banner.png" alt="Wrok Bot">
 </p>
 
 <h1 align="center">Wrok Bot</h1>
@@ -36,7 +36,7 @@ The first release is not yet complete. Release validation still requires a signe
 ## Source layout
 
 - `crates/`: domain, application, infrastructure, desktop, server, UI, and test tools.
-- `apps/wrok-bot-mobile/`: mobile client source.
+- `apps/wrokbot-mobile/`: mobile client source.
 - `examples/`: sample application configuration.
 - `fixtures/`: deterministic test data and asset contracts.
 - `tools/`: dependency checks and build tool version configuration.
@@ -47,7 +47,7 @@ The Rust toolchain is pinned in `rust-toolchain.toml`, and Rust dependencies are
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p openbot-testkit --features xtask --bin xtask
+cargo test -p wrokbot-testkit --features xtask --bin xtask
 cargo xtask i18n-check
 cargo xtask design-lint
 ```

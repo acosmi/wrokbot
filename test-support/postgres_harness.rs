@@ -6,9 +6,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use openbot_infra::db::pool::{self, DatabaseConfig};
+use wrokbot_infra::db::pool::{self, DatabaseConfig};
 
-pub(crate) const ENV_KEY: &str = "OPENBOT_TEST_DATABASE_URL";
+pub(crate) const ENV_KEY: &str = "WROK_BOT_TEST_DATABASE_URL";
 
 pub(crate) static SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
@@ -18,13 +18,13 @@ pub(crate) fn admin_config(test_name: &str) -> DatabaseConfig {
             "{test_name} 需要真实 PostgreSQL，但环境变量 {ENV_KEY} 未设置。\
              默认 `cargo test` 会按 #[ignore] 跳过本用例并打印理由；\
              调用方显式传了 --include-ignored，所以这里不静默放行。\
-             设法：OPENBOT_TEST_DATABASE_URL=\"host=… port=… user=… password=… dbname=postgres\""
+             设法：WROK_BOT_TEST_DATABASE_URL=\"host=… port=… user=… password=… dbname=postgres\""
         );
     };
     url
         .parse::<DatabaseConfig>()
         .unwrap_or_else(|error| panic!("{ENV_KEY} 无法解析：{error}"))
-        .with_application_name("openbot-postgres-integration-test")
+        .with_application_name("wrokbot-postgres-integration-test")
         .with_max_pool_size(2)
 }
 
@@ -34,7 +34,7 @@ pub(crate) fn unique_database_name(tag: &str) -> String {
         .expect("系统时钟应当晚于 UNIX 纪元")
         .as_nanos();
     let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("openbot_it_{tag}_{}_{nanos}_{seq}", std::process::id())
+    format!("wrokbot_it_{tag}_{}_{nanos}_{seq}", std::process::id())
 }
 
 pub(crate) async fn run_utility(admin: &DatabaseConfig, sql: &str) -> Result<(), String> {

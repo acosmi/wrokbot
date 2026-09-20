@@ -98,9 +98,9 @@ fn queued(intent: &RunIntent) -> QueuedMessage {
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::command::ThreadRunAnchor;
-    use openbot_contracts::ids::{BotId, RunId, ThreadId};
-    use openbot_contracts::model_connections::RunModelSelection;
+    use wrokbot_contracts::command::ThreadRunAnchor;
+    use wrokbot_contracts::ids::{BotId, RunId, ThreadId};
+    use wrokbot_contracts::model_connections::RunModelSelection;
 
     use super::*;
 

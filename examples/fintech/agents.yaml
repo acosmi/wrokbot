@@ -25,4 +25,4 @@ agents:
     role_description: Investigate policies, transaction monitoring, and control evidence.
     avatar_seed: risk-analyst
     type: remote-ag-ui
-    endpoint: ${MANAGED_AGENT_AG_UI_URL:-openbot-internal://managed-agent}
+    endpoint: ${MANAGED_AGENT_AG_UI_URL:-wrokbot-internal://managed-agent}

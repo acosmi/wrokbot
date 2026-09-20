@@ -45,10 +45,10 @@ pub fn GalleryFrame(
     let visible_title = title.clone();
     let visible_caption = caption.clone();
     view! {
-        <figure class="ob-gallery-frame">
+        <figure class="wrokbot-gallery-frame">
             {show_header.then(|| view! {
-                <figcaption class="ob-gallery-frame-caption">
-                    <div class="ob-gallery-frame-copy">
+                <figcaption class="wrokbot-gallery-frame-caption">
+                    <div class="wrokbot-gallery-frame-copy">
                         <p hidden=move || visible_title.get().trim().is_empty()>
                             {move || title.get()}
                         </p>
@@ -59,7 +59,7 @@ pub fn GalleryFrame(
                     {action}
                 </figcaption>
             })}
-            <div class="ob-gallery-frame-body">{children()}</div>
+            <div class="wrokbot-gallery-frame-body">{children()}</div>
         </figure>
     }
 }
@@ -68,7 +68,7 @@ pub fn GalleryFrame(
 #[component]
 pub fn GalleryBadge(#[prop(optional)] tone: GalleryTone, children: Children) -> impl IntoView {
     view! {
-        <span class="ob-gallery-badge" data-tone=tone.as_str()>
+        <span class="wrokbot-gallery-badge" data-tone=tone.as_str()>
             <span aria-hidden="true"></span>
             {children()}
         </span>

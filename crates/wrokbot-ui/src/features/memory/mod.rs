@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::memory::CorrectMemory;
-use openbot_contracts::memory::{
+use wrokbot_contracts::memory::CorrectMemory;
+use wrokbot_contracts::memory::{
     MemoryKind, MemoryMutation, MemoryOrigin, MemoryPage, MemoryRecord, MemoryScope,
     MemorySensitivity, MemoryStatus,
 };
@@ -267,17 +267,17 @@ pub fn MemoryPage() -> impl IntoView {
 
     view! {
         <PageShell width=PageWidth::Content>
-            <div class="ob-memory-page">
+            <div class="wrokbot-memory-page">
                 <PageHeader
                     heading_id="memory-page-title"
                     title=move || t_string!(i18n, memory.title).to_owned()
                     description=move || t_string!(i18n, memory.description).to_owned()
                 />
                 <Show when=move || loading.get()>
-                    <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                    <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
                 </Show>
                 <Show when=move || load_error.get() != MemoryReadIssue::None>
-                    <div class="ob-alert" role="alert">
+                    <div class="wrokbot-alert" role="alert">
                         <span>{move || if load_error.get() == MemoryReadIssue::ReconciliationRequired { t_string!(i18n, memory.reconciliation_required).to_owned() } else { t_string!(i18n, memory.load_error).to_owned() }}</span>
                         <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry>
                             {move || t!(i18n, models.refresh)}
@@ -289,7 +289,7 @@ pub fn MemoryPage() -> impl IntoView {
                         heading_id="memory-control-title"
                         title=move || t_string!(i18n, memory.control_title).to_owned()
                     >
-                        <div class="ob-memory-control">
+                        <div class="wrokbot-memory-control">
                             <Field
                                 control_id="memory-writes-enabled"
                                 label=move || t_string!(i18n, memory.control_label).to_owned()
@@ -303,7 +303,7 @@ pub fn MemoryPage() -> impl IntoView {
                             </Field>
                         </div>
                         <Show when=move || control_error.get()>
-                            <p class="ob-alert" role="alert">{move || t!(i18n, memory.control_error)}</p>
+                            <p class="wrokbot-alert" role="alert">{move || t!(i18n, memory.control_error)}</p>
                         </Show>
                     </PageSection>
                     <PageSection
@@ -344,7 +344,7 @@ pub fn MemoryPage() -> impl IntoView {
                         </Show>
                     </PageSection>
                     <Show when=move || action_error.get()>
-                        <p class="ob-alert" role="alert">{move || t!(i18n, memory.action_error)}</p>
+                        <p class="wrokbot-alert" role="alert">{move || t!(i18n, memory.action_error)}</p>
                     </Show>
                 </Show>
             </div>
@@ -428,16 +428,16 @@ fn MemoryRow(
     let dom_id = memory_dom_id(&memory_id);
     let correct_id = correct_trigger_id(&memory_id);
     view! {
-        <article id=dom_id class="ob-memory-row" data-memory-status=status_name(status) tabindex="-1">
-            <div class="ob-memory-row-header">
+        <article id=dom_id class="wrokbot-memory-row" data-memory-status=status_name(status) tabindex="-1">
+            <div class="wrokbot-memory-row-header">
                 <Badge tone=status_tone(status)>{move || status_label(i18n, status)}</Badge>
                 <span>{move || kind_label(i18n, kind)}</span>
                 <span>{move || sensitivity_label(i18n, sensitivity)}</span>
             </div>
-            <p class="ob-memory-content">
+            <p class="wrokbot-memory-content">
                 {move || content.clone().unwrap_or_else(|| t_string!(i18n, memory.content_erased).to_owned())}
             </p>
-            <p class="ob-memory-scope">{move || scope_label(i18n, &scope)}</p>
+            <p class="wrokbot-memory-scope">{move || scope_label(i18n, &scope)}</p>
             <div class="ob-memory-provenance">
                 <span>{move || t_string!(i18n, memory.created_at, when = created_at.as_str()).to_owned()}</span>
                 <span>{move || t_string!(i18n, memory.origin, value = origin_label(i18n, origin)).to_owned()}</span>
@@ -451,7 +451,7 @@ fn MemoryRow(
                 </Show>
             </div>
             <Show when=move || !tags.get_value().is_empty()>
-                <ul class="ob-memory-tags" aria-label=move || t_string!(i18n, common.optional).to_owned()>
+                <ul class="wrokbot-memory-tags" aria-label=move || t_string!(i18n, common.optional).to_owned()>
                     <For
                         each=move || tags.get_value()
                         key=|tag| tag.clone()
@@ -459,7 +459,7 @@ fn MemoryRow(
                     />
                 </ul>
             </Show>
-            <div class="ob-memory-actions">
+            <div class="wrokbot-memory-actions">
                 <Show when=move || show_correct>
                     <Button
                         id=correct_id.clone()
@@ -698,7 +698,7 @@ fn scope_label(i18n: leptos_i18n::I18nContext<crate::i18n::Locale>, scope: &Memo
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::memory::MemorySensitivity;
+    use wrokbot_contracts::memory::MemorySensitivity;
     use time::OffsetDateTime;
 
     use super::*;

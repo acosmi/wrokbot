@@ -1,6 +1,6 @@
 use leptos::prelude::*;
-use openbot_contracts::agent::AgentProfile;
-use openbot_contracts::mcp::{McpAdminPage, McpConnections};
+use wrokbot_contracts::agent::AgentProfile;
+use wrokbot_contracts::mcp::{McpAdminPage, McpConnections};
 
 use crate::api::ApiError;
 

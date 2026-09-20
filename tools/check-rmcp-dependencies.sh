@@ -11,7 +11,7 @@ grep -qF 'rmcp = { version = "=3.1.4", default-features = false, features = ["cl
 grep -qF 'sse-stream = "=0.2.4"' Cargo.toml || fail 'sse-stream exact pin drifted'
 grep -qF 'jsonschema = { version = "=0.51.0", default-features = false }' Cargo.toml || fail 'jsonschema must remain exact and disable HTTP/file resolver defaults'
 
-normal_tree=$(cargo tree -p openbot-infra -e normal --prefix none --locked)
+normal_tree=$(cargo tree -p wrokbot-infra -e normal --prefix none --locked)
 for exact in 'rmcp v3.1.4' 'sse-stream v0.2.4' 'jsonschema v0.51.0' 'jsonschema-regex v0.51.0' 'jsonschema-value v0.51.0' 'referencing v0.51.0'; do
   grep -qxF "$exact" <<< "$normal_tree" || fail "production dependency graph lacks $exact"
 done
@@ -19,7 +19,7 @@ if grep -Eq '^(reqwest|native-tls|aws-lc-rs|aws-lc-sys) v' <<< "$normal_tree"; t
   fail 'RMCP/schema graph introduced a second HTTP/TLS implementation'
 fi
 
-feature_tree=$(cargo tree -p openbot-infra -e features,no-dev --prefix none --locked)
+feature_tree=$(cargo tree -p wrokbot-infra -e features,no-dev --prefix none --locked)
 for required in 'rmcp feature "client"' 'rmcp feature "transport-streamable-http-client"'; do
   grep -qxF "$required" <<< "$feature_tree" || fail "missing required feature $required"
 done
@@ -30,24 +30,24 @@ for forbidden in 'rmcp feature "server"' 'rmcp feature "transport-streamable-htt
 done
 
 rmcp_callers=$(rg -l 'rmcp::' crates/*/src --glob '*.rs' | sort)
-[[ "$rmcp_callers" == 'crates/openbot-infra/src/mcp.rs' ]] || fail "rmcp types escaped the single infra boundary: [$rmcp_callers]"
+[[ "$rmcp_callers" == 'crates/wrokbot-infra/src/mcp.rs' ]] || fail "rmcp types escaped the single infra boundary: [$rmcp_callers]"
 for anchor in \
   'send_cancellable_request(request, options)' \
   'notify_cancelled(CancelledNotificationParam::new(' \
   '.reset_timeout_on_progress()' \
   '.with_max_total_timeout(MCP_CALL_TIMEOUT)'; do
-  grep -qF "$anchor" crates/openbot-infra/src/mcp.rs \
+  grep -qF "$anchor" crates/wrokbot-infra/src/mcp.rs \
     || fail "RMCP request cancellation/progress boundary drifted: $anchor"
 done
 grep -qF '.with_tool_cancellations(tool_cancellations.clone())' \
-  crates/openbot-infra/src/application_assembly.rs \
+  crates/wrokbot-infra/src/application_assembly.rs \
   || fail 'shared ApplicationService assembly no longer binds exact-call cancellation'
-for host in crates/openbot-server/src/main.rs crates/openbot-desktop/src/desktop_agent_runtime.rs; do
+for host in crates/wrokbot-server/src/main.rs crates/wrokbot-desktop/src/desktop_agent_runtime.rs; do
   grep -qF 'AuthorizedAgentToolGateway::with_sequence_and_cancellations(' "$host" \
     || fail "$host bypasses the shared tool cancellation registry"
 done
-grep -qF 'jsonschema::PatternOptions::regex()' crates/openbot-infra/src/mcp_catalog.rs || fail 'untrusted JSON Schema patterns must use the linear regex engine'
-if rg -q 'jsonschema::validator_for|jsonschema::draft[0-9]+::validator_for' crates/openbot-infra/src; then
+grep -qF 'jsonschema::PatternOptions::regex()' crates/wrokbot-infra/src/mcp_catalog.rs || fail 'untrusted JSON Schema patterns must use the linear regex engine'
+if rg -q 'jsonschema::validator_for|jsonschema::draft[0-9]+::validator_for' crates/wrokbot-infra/src; then
   fail 'a JSON Schema compile path bypasses the bounded compile_schema configuration'
 fi
 

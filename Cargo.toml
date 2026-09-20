@@ -1,34 +1,34 @@
-# OpenBot Rust workspace —— Phase 0 骨架（v3 §19.3 / §24 G0）。
+# WrokBot Rust workspace —— Phase 0 骨架（v3 §19.3 / §24 G0）。
 #
 # 成员集合由 v3 §5.1〈精简 workspace〉的十个核心 crate，加 R127 Windows、R228 macOS
 # LocalAuthentication 与 R282 macOS 进程观察三个窄 OS 安全边界组成。新增 crate 的四个允许理由（v4 §5.1）：
 #   1) 独立安全边界  2) 独立发布单元  3) 明显不同的 feature graph  4) 可单独复用的纯协议
 # 其余一律以 module 组织 —— 细粒度 crate 会放大编译时间、循环依赖与跨 crate 重构成本。
 #
-# `openbot-windows-sandbox` 命中第 1/3 条：它是唯一允许 Win32 unsafe FFI 的独立安全
+# `wrokbot-windows-sandbox` 命中第 1/3 条：它是唯一允许 Win32 unsafe FFI 的独立安全
 # 边界（Engine confinement + Credential Manager）且只进入 Windows feature graph。xtask 仍不是额外 crate：它一条都不满足，只是
 # 仓库闸门的驱动器。
-# 落点 = `openbot-testkit` 的 bin target（`crates/openbot-testkit/src/bin/xtask.rs`，
+# 落点 = `wrokbot-testkit` 的 bin target（`crates/wrokbot-testkit/src/bin/xtask.rs`，
 # `required-features = ["xtask"]`），由 `.cargo/config.toml` 的 alias `cargo xtask` 调用。
-# v3 §5.1 的 crate 表里 `openbot-testkit` 的职责原文就写着 "golden trace、fault injection、
+# v3 §5.1 的 crate 表里 `wrokbot-testkit` 的职责原文就写着 "golden trace、fault injection、
 # fake provider、xtask"，所以 xtask 归属它是方案内既定归属，不是本轮新增。
 
 [workspace]
 resolver = "3"
 members = [
-    "crates/openbot-contracts",
-    "crates/openbot-domain",
-    "crates/openbot-application",
-    "crates/openbot-infra",
-    "crates/openbot-agent",
-    "crates/openbot-computer",
-    "crates/openbot-server",
+    "crates/wrokbot-contracts",
+    "crates/wrokbot-domain",
+    "crates/wrokbot-application",
+    "crates/wrokbot-infra",
+    "crates/wrokbot-agent",
+    "crates/wrokbot-computer",
+    "crates/wrokbot-server",
     "crates/wrokbot-ui",
-    "crates/openbot-desktop",
-    "crates/openbot-testkit",
-    "crates/openbot-windows-sandbox",
-    "crates/wrok-bot-macos-local-auth",
-    "crates/wrok-bot-macos-process",
+    "crates/wrokbot-desktop",
+    "crates/wrokbot-testkit",
+    "crates/wrokbot-windows-sandbox",
+    "crates/wrokbot-macos-local-auth",
+    "crates/wrokbot-macos-process",
 ]
 
 [workspace.package]
@@ -58,12 +58,12 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = ["
 block2 = { version = "=0.6.2", default-features = false, features = ["std"] }
 objc2-local-authentication = { version = "=0.3.2", default-features = false, features = ["std", "LAContext", "LAError", "block2"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWorkspace"] }
-wrok-bot-macos-local-auth = { path = "crates/wrok-bot-macos-local-auth" }
+wrokbot-macos-local-auth = { path = "crates/wrokbot-macos-local-auth" }
 # R282: isolated macOS process-birth/boot observation boundary. Both registry packages are already
 # locked; only the Desktop PostgreSQL supervisor's macOS feature graph consumes this member.
 libc = "=0.2.189"
 core-foundation-sys = "=0.8.7"
-wrok-bot-macos-process = { path = "crates/wrok-bot-macos-process" }
+wrokbot-macos-process = { path = "crates/wrokbot-macos-process" }
 # R230: one Infra-owned SDK transport; existing SafeDialer remains the only network stack.
 acosmi-sdk = { version = "=5.0.0", default-features = false, features = ["custom-transport", "sanitize"] }
 # SDK HttpTransport names this existing dependency's token in its public trait signature.
@@ -72,21 +72,21 @@ tokio-util = { version = "=0.7.19", default-features = false }
 # 内部 crate 也走 workspace 声明。deny.toml 的 [bans.workspace-dependencies] 开了
 # `include-path-dependencies = true`，成员各写各的 path 会被判 workspace-duplicate ——
 # 那条判据要的是"同一依赖只有一个真源"，内部 crate 同样适用（改路径时只改一处）。
-openbot-contracts = { path = "crates/openbot-contracts" }
-openbot-domain = { path = "crates/openbot-domain" }
-openbot-application = { path = "crates/openbot-application" }
-openbot-infra = { path = "crates/openbot-infra", default-features = false }
-openbot-agent = { path = "crates/openbot-agent" }
-openbot-computer = { path = "crates/openbot-computer" }
-openbot-server = { path = "crates/openbot-server" }
-openbot-ui = { path = "crates/wrokbot-ui" }
-openbot-desktop = { path = "crates/openbot-desktop" }
-openbot-testkit = { path = "crates/openbot-testkit" }
-openbot-windows-sandbox = { path = "crates/openbot-windows-sandbox" }
+wrokbot-contracts = { path = "crates/wrokbot-contracts" }
+wrokbot-domain = { path = "crates/wrokbot-domain" }
+wrokbot-application = { path = "crates/wrokbot-application" }
+wrokbot-infra = { path = "crates/wrokbot-infra", default-features = false }
+wrokbot-agent = { path = "crates/wrokbot-agent" }
+wrokbot-computer = { path = "crates/wrokbot-computer" }
+wrokbot-server = { path = "crates/wrokbot-server" }
+wrokbot-ui = { path = "crates/wrokbot-ui" }
+wrokbot-desktop = { path = "crates/wrokbot-desktop" }
+wrokbot-testkit = { path = "crates/wrokbot-testkit" }
+wrokbot-windows-sandbox = { path = "crates/wrokbot-windows-sandbox" }
 
 # xtask（仓库闸门驱动器）的依赖。版本由本机 `cargo search` / `cargo add` 在 2026-08-22 实测
 # 解析出的真实最新版，不手写猜测；精确 lock 见提交入库的 `Cargo.lock`（v3 §16.3）。
-# 只有 `openbot-testkit` 在 `xtask` feature 下消费它们；十个业务 crate 在 Phase 0 零依赖。
+# 只有 `wrokbot-testkit` 在 `xtask` feature 下消费它们；十个业务 crate 在 Phase 0 零依赖。
 anyhow = "1.0.104"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -158,11 +158,11 @@ windows-sys = { version = "=0.61.2", features = [
 ] }
 
 # Desktop macOS Keychain adapter for PostgreSQL SCRAM secret. Exact versions are target-scoped by
-# openbot-desktop; Windows uses the existing sole unsafe Win32 boundary instead.
+# wrokbot-desktop; Windows uses the existing sole unsafe Win32 boundary instead.
 security-framework = "=3.7.0"
 security-framework-sys = "=2.17.0"
 
-# 可观测性（v3 §16.4）：tracing 是全链真源，Server 侧再由 openbot-server 暴露 Prometheus。
+# 可观测性（v3 §16.4）：tracing 是全链真源，Server 侧再由 wrokbot-server 暴露 Prometheus。
 # **刻意不在 G1 引入 opentelemetry SDK**：§16.4 要求 exporter「只在管理员显式配置 collector
 # 地址时才建连」，而 G1 还没有配置面（那是 §15.4 env 的 G2 工作）。此刻拉进 exporter 只会得到
 # 一个零调用点的依赖 —— repository contract 记着 `StartModelsUpdater` 那个教训：自引入即零调用点的
@@ -253,7 +253,7 @@ openssl = { version = "=0.10.81", default-features = false }
 # 不知道 exporter 是谁；**没装 exporter 就没有任何网络行为**，§16.4 的「零 phone-home」
 # 由构造保证而不是靠纪律。exporter 渲染成文本后由本仓自己的 Axum 路由吐出，
 # 不另开监听端口（那会是一块没经过评审的网络面）。
-# 高基数字段禁入 label 由 openbot_contracts::telemetry::METRICS_LABEL_ALLOWLIST 白名单承担。
+# 高基数字段禁入 label 由 wrokbot_contracts::telemetry::METRICS_LABEL_ALLOWLIST 白名单承担。
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 
@@ -264,7 +264,7 @@ metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # read checksum 的两条腿至今仍然都在数据库侧渲染。
 uuid = { version = "1.25.0", features = ["serde", "v7"] }
 
-# 这两条上收自 openbot-application（它原本直接写版本号）。**没有新增任何 crate**：
+# 这两条上收自 wrokbot-application（它原本直接写版本号）。**没有新增任何 crate**：
 # 两者在加进来之前就已经在 Cargo.lock 里，`futures-core` 经 tokio-util <- tokio-postgres，
 # `base64` 经 postgres-protocol <- tokio-postgres，版本号逐字等于当时已解析的值。
 # 上收的理由是 deny.toml 的 [bans.workspace-dependencies] 把 workspace 根当唯一钉版点，
@@ -322,7 +322,7 @@ getrandom = "0.4.3"
 # （`type Future`、`fn call(&self, HttpRequest) -> Self::Future`），协议实现与传输实现本来
 # 就是分开的。v3 §6.2 要求 OIDC discovery / JWKS「使用和 remote Agent/MCP 相同的 safe dialer、
 # redirect/IP 校验、大小/时间上限」—— 那个 dialer 是本项目自己的东西（SSRF 面在
-# `openbot-infra` 收口，§10.5），不是 `reqwest` 的默认行为。把 `reqwest` 拉进来只会得到
+# `wrokbot-infra` 收口，§10.5），不是 `reqwest` 的默认行为。把 `reqwest` 拉进来只会得到
 # 第二条**绕过 safe dialer 的出网路径**，而它默认就带 TLS 栈（`rustls` 需要 `aws-lc-rs` 或
 # `ring`，两者都带 C / 汇编构建脚本 —— 与 §16.3 的可复现构建面是一次独立的、需要 delta audit
 # 的决定，不能作为加一个 OIDC 库的副作用悄悄发生）。

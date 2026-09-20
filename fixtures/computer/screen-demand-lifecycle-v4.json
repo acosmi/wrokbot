@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-screen-demand-lifecycle-v4",
+  "schema": "wrokbot-screen-demand-lifecycle-v4",
   "protocol": {
     "version": 4,
     "releaseEpoch": 4,

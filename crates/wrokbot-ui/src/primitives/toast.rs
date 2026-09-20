@@ -19,7 +19,7 @@ pub enum ToastPreviewState {
 /// Fixed polite-status viewport. Toast itself stays layout-agnostic for design/gallery embedding.
 #[component]
 pub fn ToastViewport(children: Children) -> impl IntoView {
-    view! { <div class="ob-toast-viewport">{children()}</div> }
+    view! { <div class="wrokbot-toast-viewport">{children()}</div> }
 }
 
 /// Visible, polite feedback. Business code owns the `visible` signal.
@@ -58,7 +58,7 @@ pub fn Toast(
     view! {
         <div
             id=id
-            class="ob-toast"
+            class="wrokbot-toast"
             role="status"
             aria-live="polite"
             hidden=move || !is_open.get()
@@ -67,7 +67,7 @@ pub fn Toast(
             <span>{move || message.get()}</span>
             <button
                 type="button"
-                class="ob-toast-dismiss"
+                class="wrokbot-toast-dismiss"
                 aria-label=move || t_string!(i18n, common.dismiss).to_owned()
                 on:click=move |_| dismiss(visible, on_dismiss)
             >

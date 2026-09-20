@@ -39,7 +39,7 @@ pub fn Item(
             assert_internal_href(&href);
             view! {
             <a
-                class="ob-item"
+                class="wrokbot-item"
                 href=href
                 data-state=state
                 aria-disabled=move || if disabled.get().unwrap_or(false) { "true" } else { "false" }
@@ -59,7 +59,7 @@ pub fn Item(
         ItemAction::Button(on_activate) => view! {
             <button
                 type="button"
-                class="ob-item"
+                class="wrokbot-item"
                 data-state=state
                 disabled=move || disabled.get().unwrap_or(false)
                 on:click=move |event| {
@@ -89,7 +89,7 @@ pub fn Item(
 fn ItemSelection(#[prop(into)] selected: MaybeProp<bool>) -> impl IntoView {
     view! {
         <Show when=move || selected.get().unwrap_or(false)>
-            <span class="ob-item-selection" aria-hidden="true">
+            <span class="wrokbot-item-selection" aria-hidden="true">
                 <IconView icon=Icon::Check size=IconSize::Inline />
             </span>
         </Show>
@@ -98,22 +98,22 @@ fn ItemSelection(#[prop(into)] selected: MaybeProp<bool>) -> impl IntoView {
 
 #[component]
 pub fn ItemMedia(children: Children) -> impl IntoView {
-    view! { <span class="ob-item-media">{children()}</span> }
+    view! { <span class="wrokbot-item-media">{children()}</span> }
 }
 
 #[component]
 pub fn ItemTitle(children: Children) -> impl IntoView {
-    view! { <span class="ob-item-title">{children()}</span> }
+    view! { <span class="wrokbot-item-title">{children()}</span> }
 }
 
 #[component]
 pub fn ItemDescription(children: Children) -> impl IntoView {
-    view! { <span class="ob-item-description">{children()}</span> }
+    view! { <span class="wrokbot-item-description">{children()}</span> }
 }
 
 #[component]
 pub fn ItemActions(children: Children) -> impl IntoView {
-    view! { <span class="ob-item-actions">{children()}</span> }
+    view! { <span class="wrokbot-item-actions">{children()}</span> }
 }
 
 fn assert_internal_href(href: &str) {

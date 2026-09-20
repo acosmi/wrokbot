@@ -12,7 +12,7 @@ pub fn StaggerItem(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class="ob-stagger-item" data-stagger=stagger_slot(index)>
+        <div class="wrokbot-stagger-item" data-stagger=stagger_slot(index)>
             {children()}
         </div>
     }

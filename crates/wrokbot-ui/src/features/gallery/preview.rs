@@ -2,8 +2,8 @@
 
 use leptos::prelude::*;
 #[cfg(test)]
-use openbot_contracts::components::compiled_component_manifest;
-use openbot_contracts::components::{
+use wrokbot_contracts::components::compiled_component_manifest;
+use wrokbot_contracts::components::{
     ASK_APPROVAL_COMPONENT_NAME, ASK_CHOICE_COMPONENT_NAME, ComponentApprovalAnswer,
     ComponentApprovalDecision, ComponentChoiceAnswer, ComponentHumanDecisionAnswer,
     SHOW_ACTIVITY_REPORT_COMPONENT_NAME, SHOW_AREA_CHART_COMPONENT_NAME,
@@ -97,7 +97,7 @@ pub fn ComponentPreview(name: String) -> AnyView {
             />
         }.into_any(),
         SHOW_ACTIVITY_REPORT_COMPONENT_NAME => view! {
-            <p class="ob-gallery-preview-unavailable">
+            <p class="wrokbot-gallery-preview-unavailable">
                 {move || t!(i18n, gallery.preview_unavailable)}
             </p>
         }
@@ -206,14 +206,14 @@ pub fn ComponentPreview(name: String) -> AnyView {
         }
         .into_any(),
         _ => view! {
-            <p class="ob-gallery-preview-unavailable">
+            <p class="wrokbot-gallery-preview-unavailable">
                 {move || t!(i18n, gallery.renderer_unavailable)}
             </p>
         }
         .into_any(),
     };
     view! {
-        <div class="ob-gallery-preview" aria-hidden="true">
+        <div class="wrokbot-gallery-preview" aria-hidden="true">
             {content}
         </div>
     }

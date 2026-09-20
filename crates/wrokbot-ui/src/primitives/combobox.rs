@@ -68,10 +68,10 @@ pub fn ComboboxInput(
     let described_context = context.clone();
     let input_node = input_ref(&context);
     view! {
-        <div class="ob-combobox-control">
+        <div class="wrokbot-combobox-control">
             <input
                 id=input_id
-                class="ob-combobox-input"
+                class="wrokbot-combobox-input"
                 type="text"
                 role="combobox"
                 autocomplete="off"
@@ -106,7 +106,7 @@ pub fn ComboboxInput(
                     }
                 }
             />
-            <span class="ob-combobox-icon" aria-hidden="true">
+            <span class="wrokbot-combobox-icon" aria-hidden="true">
                 <IconView icon=Icon::ChevronDown size=IconSize::Inline />
             </span>
         </div>
@@ -122,7 +122,7 @@ pub fn ComboboxContent(children: Children) -> impl IntoView {
 /// Scrollable options collection.
 #[component]
 pub fn ComboboxList(children: Children) -> impl IntoView {
-    view! { <div class="ob-combobox-list" role="presentation">{children()}</div> }
+    view! { <div class="wrokbot-combobox-list" role="presentation">{children()}</div> }
 }
 
 /// One rich suggestion. `label` is the filter/typeahead/accessible text source.
@@ -143,7 +143,7 @@ pub fn ComboboxEmpty(children: Children) -> impl IntoView {
     let context = use_listbox_context();
     view! {
         <div
-            class="ob-listbox-empty"
+            class="wrokbot-listbox-empty"
             role="status"
             hidden=move || !context.empty.get()
         >
@@ -155,7 +155,7 @@ pub fn ComboboxEmpty(children: Children) -> impl IntoView {
 /// Decorative separator between suggestion groups.
 #[component]
 pub fn ComboboxSeparator() -> impl IntoView {
-    view! { <div class="ob-listbox-separator" role="separator"></div> }
+    view! { <div class="wrokbot-listbox-separator" role="separator"></div> }
 }
 
 const fn explicit_bool(value: bool) -> &'static str {

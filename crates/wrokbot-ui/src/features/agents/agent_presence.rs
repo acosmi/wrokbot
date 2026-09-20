@@ -39,19 +39,19 @@ pub fn AgentPresence(
     let i18n = use_i18n();
     view! {
         <span
-            class="ob-agent-presence"
+            class="wrokbot-agent-presence"
             role="img"
             data-state=move || state.get().as_str()
             aria-label=move || state_label(i18n, state.get())
         >
-            <span class="ob-agent-presence-track" aria-hidden="true"></span>
+            <span class="wrokbot-agent-presence-track" aria-hidden="true"></span>
             <span
-                class="ob-agent-presence-arc"
+                class="wrokbot-agent-presence-arc"
                 data-arc="primary"
                 aria-hidden="true"
             ></span>
             <span
-                class="ob-agent-presence-arc"
+                class="wrokbot-agent-presence-arc"
                 data-arc="secondary"
                 aria-hidden="true"
             ></span>

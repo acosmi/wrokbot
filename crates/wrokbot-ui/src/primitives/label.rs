@@ -12,7 +12,7 @@ pub fn Label(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <label class="ob-label" for=for_id>
+        <label class="wrokbot-label" for=for_id>
             {children()}
         </label>
     }

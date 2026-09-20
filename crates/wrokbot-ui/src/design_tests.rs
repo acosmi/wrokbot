@@ -68,7 +68,7 @@ fn app_css_handwritten_theme_values_match_tokens_toml() {
 fn root_and_app_layout_css_keep_one_viewport_with_inner_scroll_ownership() {
     let css = include_str!("../design/app.css");
     let root = css
-        .split_once(".ob-root-layout {")
+        .split_once(".wrokbot-root-layout {")
         .expect("root layout CSS")
         .1
         .split_once('}')
@@ -78,7 +78,7 @@ fn root_and_app_layout_css_keep_one_viewport_with_inner_scroll_ownership() {
     assert!(root.contains("min-height: 100dvh"));
 
     let app = css
-        .split_once(".ob-app-shell {")
+        .split_once(".wrokbot-app-shell {")
         .expect("app shell CSS")
         .1
         .split_once('}')
@@ -87,7 +87,7 @@ fn root_and_app_layout_css_keep_one_viewport_with_inner_scroll_ownership() {
     assert!(app.contains("height: 100dvh"));
     assert!(app.contains("overflow: hidden"));
     let main = css
-        .split_once(".ob-main {")
+        .split_once(".wrokbot-main {")
         .expect("main pane CSS")
         .1
         .split_once('}')
@@ -115,10 +115,10 @@ fn generated_icons_and_array_table_tokens_are_complete() {
 #[test]
 fn reduced_motion_constructively_stops_every_declared_css_animation() {
     let css = include_str!("../design/app.css");
-    assert!(css.contains("animation: ob-skeleton-pulse"));
-    assert!(css.contains("animation: ob-agent-presence-spin"));
-    assert!(css.contains("animation: ob-agent-presence-speak"));
-    assert!(css.contains("animation: ob-agent-presence-error"));
+    assert!(css.contains("animation: wrokbot-skeleton-pulse"));
+    assert!(css.contains("animation: wrokbot-agent-presence-spin"));
+    assert!(css.contains("animation: wrokbot-agent-presence-speak"));
+    assert!(css.contains("animation: wrokbot-agent-presence-error"));
     assert!(css.contains("var(--motion-agent-presence-cycle)"));
     assert!(css.contains("var(--motion-agent-presence-error)"));
     let reduced = css

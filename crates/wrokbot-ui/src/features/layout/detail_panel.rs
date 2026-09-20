@@ -52,13 +52,13 @@ impl AnimationPath {
 /// Flex row that owns a primary pane and an optional DetailPanel.
 #[component]
 pub fn DetailPanelLayout(children: Children) -> impl IntoView {
-    view! { <div class="ob-detail-layout">{children()}</div> }
+    view! { <div class="wrokbot-detail-layout">{children()}</div> }
 }
 
 /// Flexible primary pane beside a DetailPanel.
 #[component]
 pub fn DetailPanelMain(children: Children) -> impl IntoView {
-    view! { <div class="ob-detail-main">{children()}</div> }
+    view! { <div class="wrokbot-detail-main">{children()}</div> }
 }
 
 /// Fixed 360px inline detail pane. The caller owns URL/search state through `open`.
@@ -116,7 +116,7 @@ pub fn DetailPanel(
     let key_close = on_close;
     view! {
         <div
-            class="ob-detail-slot"
+            class="wrokbot-detail-slot"
             data-state=move || phase.get().as_str()
             data-animation-path=move || animation_path.get().as_str()
             data-animation-duration-ms=move || animation_duration_ms.get().to_string()
@@ -125,15 +125,15 @@ pub fn DetailPanel(
         >
             <aside
                 id=id
-                class="ob-detail-panel"
+                class="wrokbot-detail-panel"
                 data-state=move || phase.get().as_str()
                 aria-labelledby=labelled_by
             >
-                <header class="ob-detail-header">
+                <header class="wrokbot-detail-header">
                     <h2 id=heading_id>{move || title_text.get()}</h2>
                     <button
                         type="button"
-                        class="ob-detail-close"
+                        class="wrokbot-detail-close"
                         aria-label=move || t_string!(i18n, common.close).to_owned()
                         on:click=move |_| {
                             request_close(click_close, click_focus_id.clone());
@@ -151,7 +151,7 @@ pub fn DetailPanel(
                 {move || {
                     if present.get() {
                         let children = detail_children.clone();
-                        view! { <div class="ob-detail-body">{children()}</div> }.into_any()
+                        view! { <div class="wrokbot-detail-body">{children()}</div> }.into_any()
                     } else {
                         ().into_any()
                     }

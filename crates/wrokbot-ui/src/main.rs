@@ -2,7 +2,7 @@
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    openbot_ui::mount();
+    wrokbot_ui::mount();
 }
 
 #[cfg(not(target_arch = "wasm32"))]

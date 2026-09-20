@@ -129,7 +129,7 @@ pub(crate) fn listbox_root(options: ListboxRootOptions, children: Children) -> i
     install_lifecycle(context.clone());
     view! {
         <Provider value=context>
-            <div class="ob-listbox-root" data-kind=kind_token>{children()}</div>
+            <div class="wrokbot-listbox-root" data-kind=kind_token>{children()}</div>
         </Provider>
     }
 }
@@ -140,13 +140,13 @@ pub(crate) fn listbox_popup(children: Children) -> impl IntoView {
     let dismiss_context = context.clone();
     view! {
         <div
-            class="ob-listbox-dismiss"
+            class="wrokbot-listbox-dismiss"
             hidden=move || !context.open.get()
             on:click=move |_| close_cancel(dismiss_context.clone(), true)
         ></div>
         <div
             id=listbox_id
-            class="ob-listbox-popup"
+            class="wrokbot-listbox-popup"
             role="listbox"
             aria-label=move || context.owner_label.get()
             data-state=move || if context.open.get() { "open" } else { "closed" }
@@ -207,7 +207,7 @@ pub(crate) fn listbox_option(
         <button
             id=id
             type="button"
-            class="ob-listbox-option"
+            class="wrokbot-listbox-option"
             role="option"
             tabindex="-1"
             data-value=value
@@ -245,9 +245,9 @@ pub(crate) fn listbox_option(
                 }
             }
         >
-            <span class="ob-listbox-option-content">{children()}</span>
+            <span class="wrokbot-listbox-option-content">{children()}</span>
             <Show when=move || indicator_context.value.get().as_ref() == Some(&indicator_value)>
-                <span class="ob-listbox-indicator" aria-hidden="true">
+                <span class="wrokbot-listbox-indicator" aria-hidden="true">
                     <IconView icon=Icon::Check size=IconSize::Inline />
                 </span>
             </Show>

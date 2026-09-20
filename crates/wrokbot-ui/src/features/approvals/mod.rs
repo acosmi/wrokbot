@@ -6,7 +6,7 @@
 
 use core::fmt;
 
-use openbot_contracts::tool::{PendingToolApproval, ToolApprovalClass, ToolApprovalEffect};
+use wrokbot_contracts::tool::{PendingToolApproval, ToolApprovalClass, ToolApprovalEffect};
 
 use crate::features::threads::tool_name::read_tool_name;
 
@@ -83,8 +83,8 @@ fn pretty(value: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::ids::{BotId, RunId, ToolCallId};
-    use openbot_contracts::tool::PendingToolApproval;
+    use wrokbot_contracts::ids::{BotId, RunId, ToolCallId};
+    use wrokbot_contracts::tool::PendingToolApproval;
     use time::{Duration, OffsetDateTime};
 
     use super::*;

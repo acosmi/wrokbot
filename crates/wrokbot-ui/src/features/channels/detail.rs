@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
-use openbot_contracts::command::ChannelDetail;
+use wrokbot_contracts::command::ChannelDetail;
 
 #[cfg(target_arch = "wasm32")]
 use crate::api::load_channel;
@@ -27,10 +27,10 @@ pub fn ChannelDetailPage() -> impl IntoView {
                 <PageBackLink href="/".to_owned() label=move || t_string!(i18n, common.back).to_owned() />
             </PageTopbar>
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || failed.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, channels.load_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.load_error)}</p>
             </Show>
             <Show when=move || channel.get().is_some()>
                 {move || channel.get().map(|detail| view! {

@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-engine-child-environment-v1",
+  "schema": "wrokbot-engine-child-environment-v1",
   "protocol_version": 4,
   "release_epoch": 4,
   "unix": {

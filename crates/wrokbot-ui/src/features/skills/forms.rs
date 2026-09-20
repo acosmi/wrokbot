@@ -8,7 +8,7 @@ use crate::primitives::{
     Button, ButtonVariant, Dialog, DialogBody, DialogContent, DialogFooter, Field, Input, Textarea,
 };
 use leptos::prelude::*;
-use openbot_contracts::mcp::PluginSkillMutation;
+use wrokbot_contracts::mcp::PluginSkillMutation;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkillDialog {
@@ -153,9 +153,9 @@ pub fn SkillDialogs(
         <Dialog id="skills-dialog" open on_close=close>
             <DialogContent title=move || match dialog.get(){Some(SkillDialog::Create)=>t_string!(i18n,skills.create).to_owned(),Some(SkillDialog::Edit(_))=>t_string!(i18n,skills.edit).to_owned(),Some(SkillDialog::Delete(_))=>t_string!(i18n,skills.delete).to_owned(),Some(SkillDialog::Grants(_))=>t_string!(i18n,skills.grants).to_owned(),None=>String::new()}>
                 <DialogBody>
-                    <Show when=move || invalid.get()><p class="ob-alert" role="alert">{move ||t!(i18n,skills.invalid)}</p></Show>
-                    <Show when=move || collision.get()><p class="ob-alert" role="alert">{move ||t!(i18n,skills.collision)}</p></Show>
-                    <Show when=move || attempted.get() && actions.failed.get()><p class="ob-alert" role="alert">{move ||t!(i18n,skills.write_error)}</p></Show>
+                    <Show when=move || invalid.get()><p class="wrokbot-alert" role="alert">{move ||t!(i18n,skills.invalid)}</p></Show>
+                    <Show when=move || collision.get()><p class="wrokbot-alert" role="alert">{move ||t!(i18n,skills.collision)}</p></Show>
+                    <Show when=move || attempted.get() && actions.failed.get()><p class="wrokbot-alert" role="alert">{move ||t!(i18n,skills.write_error)}</p></Show>
                     <Show when=move || matches!(dialog.get(),Some(SkillDialog::Create|SkillDialog::Edit(_)))>
                         <Field control_id="skill-slug" label=move ||t_string!(i18n,skills.slug).to_owned() description=move ||t_string!(i18n,skills.slug_help).to_owned()>
                             <Input value=slug disabled=Signal::derive(move ||actions.busy.get()||!matches!(dialog.get(),Some(SkillDialog::Create))) />
@@ -172,18 +172,18 @@ pub fn SkillDialogs(
                         <p>{move ||t!(i18n,skills.grants_intro)}</p>
                         {move || {
                             let Some(d)=data.get() else{return view!{<p role="status">{move ||t!(i18n,common.loading)}</p>}.into_any();};
-                            if !d.agents_available{return view!{<p class="ob-alert" role="alert">{move ||t!(i18n,skills.agents_error)}</p>}.into_any();}
+                            if !d.agents_available{return view!{<p class="wrokbot-alert" role="alert">{move ||t!(i18n,skills.agents_error)}</p>}.into_any();}
                             let Some(skill)=d.selected(&slug.get(),deployment) else{return view!{<p role="status">{move ||t!(i18n,skills.no_longer_available)}</p>}.into_any();};
                             let grant_set=skill.granted_to.into_iter().collect::<std::collections::BTreeSet<_>>();
                             let unavailable_count=grant_set.iter().filter(|id|!d.agents.iter().any(|a|a.id.as_str()==id.as_str())).count();
                             view!{
-                                <div class="ob-page-rows">
+                                <div class="wrokbot-page-rows">
                                     {d.agents.into_iter().map(|agent|{
                                         let allowed = super::state::may_grant_to_agent(d.actor_is_admin, agent.mine);
                                         let granted=grant_set.contains(agent.id.as_str());
                                         let current_slug=skill.slug.clone();let agent_id=agent.id.as_str().to_owned();
 
-                                        view!{<div class="ob-plugin-grant"><div class="ob-plugin-copy"><strong>{agent.name}</strong><Show when=move ||!allowed><span class="text-fg-secondary">{move ||t!(i18n,skills.agent_read_only)}</span></Show></div>
+                                        view!{<div class="wrokbot-plugin-grant"><div class="wrokbot-plugin-copy"><strong>{agent.name}</strong><Show when=move ||!allowed><span class="text-fg-secondary">{move ||t!(i18n,skills.agent_read_only)}</span></Show></div>
                                             <Button selected=granted disabled=Signal::derive(move || actions.busy.get() || !allowed) on_activate=move |_|{
                                                 let target=current_slug.clone();let id=agent_id.clone();attempted.set(true);
                                                 actions.launch(format!("skill-grant:{target}:{id}"),async move{api::set_grant(&target,&id,!granted).await},move |_|{});

@@ -9,23 +9,23 @@ use core::fmt::Write as _;
 use std::collections::{BTreeMap, BTreeSet};
 
 use leptos::prelude::*;
-use openbot_contracts::agent::AgentProfile;
+use wrokbot_contracts::agent::AgentProfile;
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::command::{AppEvent, SubscriptionRequest, ThreadRunCancellationState};
-use openbot_contracts::command::{
+use wrokbot_contracts::command::{AppEvent, SubscriptionRequest, ThreadRunCancellationState};
+use wrokbot_contracts::command::{
     ChannelDetail, ThreadConversationSnapshot, ThreadForegroundRunState, ThreadHistoryMessage,
     ThreadHistoryRole, ThreadRunAnchor, ThreadRunEvent, ThreadRunEventKind,
 };
-use openbot_contracts::components::{
+use wrokbot_contracts::components::{
     ComponentHumanDecisionAnswer, PendingComponentHumanDecision,
     compiled_component_parameter_schema,
 };
-use openbot_contracts::ids::{BotId, RunId, ThreadId};
-use openbot_contracts::remote_interrupt::{
+use wrokbot_contracts::ids::{BotId, RunId, ThreadId};
+use wrokbot_contracts::remote_interrupt::{
     PendingRemoteInterrupt, RemoteInterruptAnswer, RemoteInterruptAnswerStatus,
 };
-use openbot_contracts::sandboxed::is_sandboxed_component_name;
-use openbot_contracts::text::trim_ecmascript;
+use wrokbot_contracts::sandboxed::is_sandboxed_component_name;
+use wrokbot_contracts::text::trim_ecmascript;
 use sha2::{Digest, Sha256};
 
 #[cfg(target_arch = "wasm32")]
@@ -677,7 +677,7 @@ fn ConversationSurface(
     let queued = RwSignal::new(Vec::<QueuedMessage>::new());
     let queue_skills_invalid = Signal::derive(move || {
         queued.get().iter().any(|item| {
-            !openbot_contracts::command::valid_selected_skill_slugs(
+            !wrokbot_contracts::command::valid_selected_skill_slugs(
                 &item.intent.selected_skill_slugs,
             )
         })
@@ -1175,12 +1175,12 @@ fn ConversationSurface(
     });
 
     view! {
-        <div class="ob-channel-conversation">
+        <div class="wrokbot-channel-conversation">
             <Show when=move || loading.get()>
-                <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+                <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
             <Show when=move || snapshot_error.get()>
-                <div class="ob-alert" role="alert">
+                <div class="wrokbot-alert" role="alert">
                     <span>{move || t!(i18n, channels.conversation_load_error)}</span>
                     <Button
                         variant=ButtonVariant::Ghost
@@ -1190,13 +1190,13 @@ fn ConversationSurface(
                 </div>
             </Show>
             <Show when=move || stream_error.get() && !snapshot_error.get()>
-                <p class="ob-alert" role="status">{move || t!(i18n, channels.conversation_stream_error)}</p>
+                <p class="wrokbot-alert" role="status">{move || t!(i18n, channels.conversation_stream_error)}</p>
             </Show>
             <Show when=move || human_decision_load_error.get() && state.get().active_run_id.is_some()>
-                <p class="ob-alert" role="status">{move || t!(i18n, gallery.decision_load_error)}</p>
+                <p class="wrokbot-alert" role="status">{move || t!(i18n, gallery.decision_load_error)}</p>
             </Show>
             <Show when=move || remote_interrupt_load_error.get() && state.get().active_run_id.is_some()>
-                <p class="ob-alert" role="status">{move || t!(i18n, channels.remote_interrupt_load_error)}</p>
+                <p class="wrokbot-alert" role="status">{move || t!(i18n, channels.remote_interrupt_load_error)}</p>
             </Show>
             <MessageScroller
                 id="channel-transcript"
@@ -1211,7 +1211,7 @@ fn ConversationSurface(
                                 && visible_human_decisions.get().is_empty()
                                 && visible_remote_interrupts.get().is_empty()
                         }>
-                            <p class="ob-page-empty">{move || t!(i18n, channels.conversation_empty)}</p>
+                            <p class="wrokbot-page-empty">{move || t!(i18n, channels.conversation_empty)}</p>
                         </Show>
                         <For
                             each=move || state.get().messages
@@ -1307,7 +1307,7 @@ fn ConversationSurface(
                                     )
                                 )
                         }>
-                            <div class="ob-conversation-thinking" role="status">
+                            <div class="wrokbot-conversation-thinking" role="status">
                                 <AgentPresence state=Signal::derive(move || AgentPresenceState::Thinking) />
                                 <span>{move || t!(i18n, channels.tool_running)}</span>
                             </div>
@@ -1319,12 +1319,12 @@ fn ConversationSurface(
                                     Some(ThreadForegroundRunState::Cancelling)
                                 )
                         }>
-                            <p class="ob-conversation-cancelling" role="status">
+                            <p class="wrokbot-conversation-cancelling" role="status">
                                 {move || t!(i18n, channels.cancelling)}
                             </p>
                         </Show>
                         <Show when=move || state.get().terminal_notice.is_some()>
-                            <p class="ob-alert" role="status">{move || terminal_text(i18n, state.get().terminal_notice)}</p>
+                            <p class="wrokbot-alert" role="status">{move || terminal_text(i18n, state.get().terminal_notice)}</p>
                         </Show>
                         <For
                             each=move || queued.get()
@@ -1343,15 +1343,15 @@ fn ConversationSurface(
                                     <MessageScrollerItem
                                         message_id=transcript_dom_id(&format!("queue:{queue_id}"))
                                     >
-                                        <div class="ob-queued-message" data-queued-message="">
+                                        <div class="wrokbot-queued-message" data-queued-message="">
                                             <Message
                                                 align=MessageAlign::End
                                                 aria_label=move || t_string!(i18n, channels.queued_message_label).to_owned()
                                             >
                                                 <MessageContent>
                                                     <Bubble kind=BubbleKind::User>
-                                                        <div class="ob-skill-chips">{message.intent.selected_skill_slugs.into_iter().map(|slug| view! { <code>{format!("/{slug}")}</code> }).collect_view()}</div>
-                                                        <p class="ob-transcript-text">{visible_text}</p>
+                                                        <div class="wrokbot-skill-chips">{message.intent.selected_skill_slugs.into_iter().map(|slug| view! { <code>{format!("/{slug}")}</code> }).collect_view()}</div>
+                                                        <p class="wrokbot-transcript-text">{visible_text}</p>
                                                     </Bubble>
                                                     <MessageFooter>
                                                         <span role="status">{move || t!(i18n, channels.queued_status)}</span>
@@ -1390,8 +1390,8 @@ fn ConversationSurface(
                 }).collect()
             }) running=Signal::derive(move || state.get().active_run_id.is_some())/>
             <RememberDialog review=remember_review/>
-            <div class="ob-channel-composer">
-                <div class="ob-skill-editor">
+            <div class="wrokbot-channel-composer">
+                <div class="wrokbot-skill-editor">
                 <ModelPicker state=model_composer disabled=textarea_disabled/>
                 <SkillPicker state=skill_composer disabled=textarea_disabled/>
                 <Textarea
@@ -1407,9 +1407,9 @@ fn ConversationSurface(
                     on_keydown=UnsyncCallback::new(move |event| skill_composer.keyboard(event))
                 />
                 <Show when=move || !skill_composer.selected.get().is_empty() && trim_ecmascript(&draft.get()).is_empty()>
-                    <p class="ob-page-empty">{move || t!(i18n, skills.task_required)}</p>
+                    <p class="wrokbot-page-empty">{move || t!(i18n, skills.task_required)}</p>
                 </Show>
-                <Show when=move || queue_skills_invalid.get()><p class="ob-alert" role="alert">{move || t!(i18n, skills.selection_limit)}</p></Show>
+                <Show when=move || queue_skills_invalid.get()><p class="wrokbot-alert" role="alert">{move || t!(i18n, skills.selection_limit)}</p></Show>
                 </div>
                 <Show
                     when=move || show_stop.get()
@@ -1453,23 +1453,23 @@ fn ConversationSurface(
                     </Button>
                 </Show>
             </div>
-            <Show when=move || send_notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
-            <Show when=move || send_notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
-            <Show when=move || send_notice.get()==Some(SubmissionNotice::Conflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
-            <Show when=move || send_notice.get()==Some(SubmissionNotice::Rejected)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
+            <Show when=move || send_notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
+            <Show when=move || send_notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
+            <Show when=move || send_notice.get()==Some(SubmissionNotice::Conflict)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
+            <Show when=move || send_notice.get()==Some(SubmissionNotice::Rejected)><p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
             <Show when=move || begin_unknown.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, channels.begin_unknown)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.begin_unknown)}</p>
             </Show>
             <Show when=move || submission_blocked.get()>
-                <a class="ob-alert" role="alert" href=move || submissions.barrier().and_then(|barrier| barrier.href()).unwrap_or_else(|| "/".to_owned())>
+                <a class="wrokbot-alert" role="alert" href=move || submissions.barrier().and_then(|barrier| barrier.href()).unwrap_or_else(|| "/".to_owned())>
                     {move || t!(i18n, channels.submission_blocked)}
                 </a>
             </Show>
             <Show when=move || cancel_error.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, channels.cancel_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, channels.cancel_error)}</p>
             </Show>
             <Show when=move || !channel_active>
-                <p class="ob-page-empty">{move || t!(i18n, channels.detail_inactive)}</p>
+                <p class="wrokbot-page-empty">{move || t!(i18n, channels.detail_inactive)}</p>
             </Show>
         </div>
     }
@@ -1521,9 +1521,9 @@ fn PendingRemoteInterruptMessage(
                             caption=move || t_string!(i18n, channels.remote_interrupt_caption).to_owned()
                         >
                             <Show when=move || has_message>
-                                <p class="ob-gallery-decision-summary">{message.get_value()}</p>
+                                <p class="wrokbot-gallery-decision-summary">{message.get_value()}</p>
                             </Show>
-                            <div class="ob-gallery-decision-controls">
+                            <div class="wrokbot-gallery-decision-controls">
                                 <Textarea
                                     value=payload
                                     aria_label=move || t_string!(i18n, channels.remote_interrupt_payload_label).to_owned()
@@ -1531,16 +1531,16 @@ fn PendingRemoteInterruptMessage(
                                     invalid=invalid_payload
                                 />
                                 <Show when=move || invalid_payload.get()>
-                                    <p class="ob-gallery-decision-error" role="alert">
+                                    <p class="wrokbot-gallery-decision-error" role="alert">
                                         {move || t!(i18n, channels.remote_interrupt_payload_invalid)}
                                     </p>
                                 </Show>
                                 <Show when=move || failed.get()>
-                                    <p class="ob-gallery-decision-error" role="alert">
+                                    <p class="wrokbot-gallery-decision-error" role="alert">
                                         {move || t!(i18n, channels.remote_interrupt_answer_error)}
                                     </p>
                                 </Show>
-                                <div class="ob-gallery-decision-actions">
+                                <div class="wrokbot-gallery-decision-actions">
                                     <Button
                                         variant=ButtonVariant::Primary
                                         size=ButtonSize::Small
@@ -1681,8 +1681,8 @@ fn TranscriptMessage(
         .into_any(),
         None => view! {
             <Bubble kind=if user { BubbleKind::User } else { BubbleKind::Assistant }>
-                <div class="ob-skill-chips">{message.selected_skill_slugs.into_iter().map(|slug| view! { <code>{format!("/{slug}")}</code> }).collect_view()}</div>
-                {if kind == TranscriptKind::Assistant { view! { <MarkdownBody content/> }.into_any() } else { view! { <p class="ob-transcript-text">{content}</p> }.into_any() }}
+                <div class="wrokbot-skill-chips">{message.selected_skill_slugs.into_iter().map(|slug| view! { <code>{format!("/{slug}")}</code> }).collect_view()}</div>
+                {if kind == TranscriptKind::Assistant { view! { <MarkdownBody content/> }.into_any() } else { view! { <p class="wrokbot-transcript-text">{content}</p> }.into_any() }}
             </Bubble>
         }
         .into_any(),
@@ -2082,7 +2082,7 @@ fn open_event_source(
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::command::ThreadRunEvent;
+    use wrokbot_contracts::command::ThreadRunEvent;
     use time::OffsetDateTime;
 
     use super::*;
@@ -2366,8 +2366,8 @@ mod tests {
         let answers = BTreeMap::from([(
             pending.decision_id.clone(),
             ComponentHumanDecisionAnswer::Approval(
-                openbot_contracts::components::ComponentApprovalAnswer {
-                    decision: openbot_contracts::components::ComponentApprovalDecision::Approved,
+                wrokbot_contracts::components::ComponentApprovalAnswer {
+                    decision: wrokbot_contracts::components::ComponentApprovalDecision::Approved,
                     note: None,
                 },
             ),

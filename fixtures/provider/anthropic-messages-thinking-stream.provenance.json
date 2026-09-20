@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-provider-recorded-trace-v1",
+  "schema": "wrokbot-provider-recorded-trace-v1",
   "provider": "anthropic",
   "protocol": {
     "api": "Messages",
@@ -66,7 +66,7 @@
       },
       "signature_delta": {
         "value": "abc123sig==",
-        "non_secret_basis": "Published example protocol data in Anthropic's public shared SDK fixture; it is not a credential, is ignored by OpenBot, and grants no authority."
+        "non_secret_basis": "Published example protocol data in Anthropic's public shared SDK fixture; it is not a credential, is ignored by WrokBot, and grants no authority."
       }
     },
     "data_classification": "Public Anthropic SDK captured-and-replayed HTTP/SSE fixture for a synthetic arithmetic case, not a customer or user session."

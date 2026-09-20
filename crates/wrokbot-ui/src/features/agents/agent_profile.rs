@@ -1,7 +1,7 @@
 //! Agent profile panel with real lifecycle controls and authoritative reloads.
 
 use leptos::prelude::*;
-use openbot_contracts::agent::{AgentProfile as AgentProfileDto, AgentVisibility};
+use wrokbot_contracts::agent::{AgentProfile as AgentProfileDto, AgentVisibility};
 
 use crate::api::channel_new_href;
 #[cfg(target_arch = "wasm32")]
@@ -87,10 +87,10 @@ pub fn AgentProfilePanel(
 
     view! {
         <Show when=move || loading.get()>
-            <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
+            <div class="wrokbot-loading" role="status">{move || t!(i18n, common.loading)}</div>
         </Show>
         <Show when=move || load_error.get()>
-            <p class="ob-agent-profile-error" role="alert">
+            <p class="wrokbot-agent-profile-error" role="alert">
                 {move || t!(i18n, agents.detail_load_error)}
             </p>
         </Show>
@@ -126,20 +126,20 @@ pub fn AgentProfilePanel(
                 .expect("server Agent id must be route-safe");
             let delete_name = StoredValue::new(name.clone());
             view! {
-                <article class="ob-agent-profile">
-                    <header class="ob-agent-profile-header">
-                        <span class="ob-agent-profile-avatar" aria-hidden="true">
+                <article class="wrokbot-agent-profile">
+                    <header class="wrokbot-agent-profile-header">
+                        <span class="wrokbot-agent-profile-avatar" aria-hidden="true">
                             <Avatar
                                 principal_id=avatar_seed
                                 name=avatar_name
                                 size=AvatarSize::Large
                             />
                         </span>
-                        <div class="ob-agent-profile-identity">
+                        <div class="wrokbot-agent-profile-identity">
                             <h3>{name.clone()}</h3>
                             <p>{title}</p>
                         </div>
-                        <div class="ob-agent-profile-badges">
+                        <div class="wrokbot-agent-profile-badges">
                             <Badge>
                                 {move || match visibility {
                                     AgentVisibility::Public => {
@@ -158,7 +158,7 @@ pub fn AgentProfilePanel(
                             </Show>
                         </div>
                     </header>
-                    <section class="ob-agent-profile-role" aria-labelledby="agent-profile-role-title">
+                    <section class="wrokbot-agent-profile-role" aria-labelledby="agent-profile-role-title">
                         <h4 id="agent-profile-role-title">
                             {move || t!(i18n, agents.role_label)}
                         </h4>
@@ -171,11 +171,11 @@ pub fn AgentProfilePanel(
                         />
                     </Show>
                     <Show when=move || action_error.get()>
-                        <p class="ob-alert" role="alert">{move || t!(i18n, agents.action_error)}</p>
+                        <p class="wrokbot-alert" role="alert">{move || t!(i18n, agents.action_error)}</p>
                     </Show>
-                    <div class="ob-agent-profile-actions">
+                    <div class="wrokbot-agent-profile-actions">
                         <a
-                            class="ob-button"
+                            class="wrokbot-button"
                             data-variant="primary"
                             data-size="md"
                             href=start_href
@@ -264,7 +264,7 @@ pub fn AgentProfilePanel(
                                     >{move || t!(i18n, common.delete)}</Button>
                                 }
                             >
-                                <div class="ob-agent-delete-confirm" role="group" aria-label=move || {
+                                <div class="wrokbot-agent-delete-confirm" role="group" aria-label=move || {
                                     t_string!(i18n, agents.delete_confirm_label, name = delete_name.get_value()).to_owned()
                                 }>
                                     <p>{move || t!(i18n, agents.delete_confirm, name = delete_name.get_value())}</p>

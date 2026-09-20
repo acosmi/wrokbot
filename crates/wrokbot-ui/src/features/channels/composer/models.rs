@@ -1,8 +1,8 @@
 //! Shared custom-model inventory and explicit per-composer selection.
 
 use leptos::prelude::*;
-use openbot_contracts::ids::BotId;
-use openbot_contracts::model_connections::{ModelConnection, RunModelSelection};
+use wrokbot_contracts::ids::BotId;
+use wrokbot_contracts::model_connections::{ModelConnection, RunModelSelection};
 
 use crate::api::ApiError;
 #[cfg(target_arch = "wasm32")]
@@ -324,7 +324,7 @@ pub(crate) fn ModelPicker(state: ModelComposer, disabled: Signal<bool>) -> impl 
         }
     });
     view! {
-        <div class="ob-skill-picker">
+        <div class="wrokbot-skill-picker">
             <Select
                 id="run-model-picker"
                 open=state.open
@@ -380,24 +380,24 @@ pub(crate) fn ModelPicker(state: ModelComposer, disabled: Signal<bool>) -> impl 
                         }
                     }/>
                     <Show when=move || state.directory.status.get()==DirectoryStatus::Loading><p role="status">{move || t!(i18n, common.loading)}</p></Show>
-                    <Show when=move || state.directory.status.get()==DirectoryStatus::Failed><p class="ob-alert" role="alert">{move || t!(i18n, models.load_failed)}</p></Show>
+                    <Show when=move || state.directory.status.get()==DirectoryStatus::Failed><p class="wrokbot-alert" role="alert">{move || t!(i18n, models.load_failed)}</p></Show>
                     <Show when=move || state.directory.status.get()==DirectoryStatus::Ready && rows.get().is_empty()><p>{move || t!(i18n, models.none_available)}</p></Show>
                 </SelectContent>
             </Select>
             <Show when=move || selection_status.get()==ModelSelectionStatus::Loading>
-                <span class="ob-page-empty" role="status">{move || t!(i18n, common.loading)}</span>
+                <span class="wrokbot-page-empty" role="status">{move || t!(i18n, common.loading)}</span>
             </Show>
             <Show when=move || selection_status.get()==ModelSelectionStatus::DirectoryFailed>
-                <span class="ob-alert" role="alert">{move || t!(i18n, models.load_failed)}</span>
+                <span class="wrokbot-alert" role="alert">{move || t!(i18n, models.load_failed)}</span>
             </Show>
             <Show when=move || selection_status.get()==ModelSelectionStatus::Unavailable>
-                <span class="ob-alert" role="alert">{move || if disabled.get() {t_string!(i18n, models.selection_unavailable_locked).to_owned()} else {t_string!(i18n, models.selection_unavailable).to_owned()}}</span>
+                <span class="wrokbot-alert" role="alert">{move || if disabled.get() {t_string!(i18n, models.selection_unavailable_locked).to_owned()} else {t_string!(i18n, models.selection_unavailable).to_owned()}}</span>
             </Show>
             <Show when=move || selection_status.get()==ModelSelectionStatus::AgentConflict>
-                <span class="ob-alert" role="alert">{move || if disabled.get() {t_string!(i18n, models.selection_unavailable_locked).to_owned()} else {t_string!(i18n, models.selection_agent_conflict).to_owned()}}</span>
+                <span class="wrokbot-alert" role="alert">{move || if disabled.get() {t_string!(i18n, models.selection_unavailable_locked).to_owned()} else {t_string!(i18n, models.selection_agent_conflict).to_owned()}}</span>
             </Show>
             <Show when=move || !state.supports_explicit.get() && selection_status.get()==ModelSelectionStatus::AgentDefault>
-                <span class="ob-page-empty">{move || t!(i18n, models.managed_by_agent)}</span>
+                <span class="wrokbot-page-empty">{move || t!(i18n, models.managed_by_agent)}</span>
             </Show>
         </div>
     }
@@ -419,7 +419,7 @@ fn displayed_selection_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openbot_contracts::model_connections::{CustomModelProtocol, ModelConnectionSource};
+    use wrokbot_contracts::model_connections::{CustomModelProtocol, ModelConnectionSource};
 
     fn row() -> ModelConnection {
         ModelConnection {

@@ -1,13 +1,13 @@
 //! Native human-in-the-loop Approval and Choice renderers.
 
 use leptos::prelude::*;
-use openbot_contracts::components::{
+use wrokbot_contracts::components::{
     ASK_APPROVAL_COMPONENT_NAME, ASK_CHOICE_COMPONENT_NAME,
     COMPONENT_HUMAN_DECISION_NOTE_MAX_BYTES, ComponentApprovalAnswer, ComponentApprovalDecision,
     ComponentChoiceAnswer, ComponentHumanDecisionAnswer, validate_component_human_decision_answer,
     validate_component_human_decision_arguments,
 };
-use openbot_contracts::text::trim_ecmascript;
+use wrokbot_contracts::text::trim_ecmascript;
 use serde_json::{Map, Value};
 
 use crate::i18n::{t, t_string, use_i18n};
@@ -138,14 +138,14 @@ fn approval_card(
     let decline = on_answer;
     view! {
         <GalleryFrame title=title action=action>
-            <p class="ob-gallery-decision-summary">{summary}</p>
+            <p class="wrokbot-gallery-decision-summary">{summary}</p>
             <Show when=move || !details.get_value().is_empty()>
-                <dl class="ob-gallery-decision-details">
+                <dl class="wrokbot-gallery-decision-details">
                     <For
                         each=move || details.get_value()
                         key=|detail| detail.key
                         children=move |detail| view! {
-                            <div class="ob-gallery-decision-detail">
+                            <div class="wrokbot-gallery-decision-detail">
                                 <dt>{detail.label}</dt>
                                 <dd>{detail.value}</dd>
                             </div>
@@ -154,7 +154,7 @@ fn approval_card(
                 </dl>
             </Show>
             <Show when=move || answer.get().is_none()>
-                <div class="ob-gallery-decision-controls">
+                <div class="wrokbot-gallery-decision-controls">
                     <Input
                         value=note
                         aria_label=move || t_string!(i18n, gallery.decision_note_label).to_owned()
@@ -163,16 +163,16 @@ fn approval_card(
                         invalid=note_too_long
                     />
                     <Show when=move || note_too_long.get()>
-                        <p class="ob-gallery-decision-error" role="alert">
+                        <p class="wrokbot-gallery-decision-error" role="alert">
                             {move || t!(i18n, gallery.decision_note_too_long)}
                         </p>
                     </Show>
                     <Show when=move || error.get()>
-                        <p class="ob-gallery-decision-error" role="alert">
+                        <p class="wrokbot-gallery-decision-error" role="alert">
                             {move || t!(i18n, gallery.decision_answer_error)}
                         </p>
                     </Show>
-                    <div class="ob-gallery-decision-actions">
+                    <div class="wrokbot-gallery-decision-actions">
                         <Button
                             variant=ButtonVariant::Primary
                             size=ButtonSize::Small
@@ -282,7 +282,7 @@ fn choice_card(
     .into_any();
     view! {
         <GalleryFrame title=title caption=summary action=action>
-            <ul class="ob-gallery-choice-list">
+            <ul class="wrokbot-gallery-choice-list">
                 <For
                     each=move || options.clone()
                     key=|option| option.id.clone()
@@ -299,7 +299,7 @@ fn choice_card(
                             <li>
                                 <button
                                     type="button"
-                                    class="ob-gallery-choice-option"
+                                    class="wrokbot-gallery-choice-option"
                                     data-selected=move || {
                                         let recorded = match answer_value.get() {
                                             Some(ComponentHumanDecisionAnswer::Choice(choice)) => {
@@ -340,10 +340,10 @@ fn choice_card(
                                         ));
                                     }
                                 >
-                                    <span class="ob-gallery-choice-mark" aria-hidden="true">
+                                    <span class="wrokbot-gallery-choice-mark" aria-hidden="true">
                                         <IconView icon=Icon::Check size=IconSize::Inline />
                                     </span>
-                                    <span class="ob-gallery-choice-copy">
+                                    <span class="wrokbot-gallery-choice-copy">
                                         <strong>{option.label}</strong>
                                         {option.description.map(|description| view! {
                                             <span>{description}</span>
@@ -356,7 +356,7 @@ fn choice_card(
                 />
             </ul>
             <Show when=move || error.get()>
-                <p class="ob-gallery-decision-error" role="alert">
+                <p class="wrokbot-gallery-decision-error" role="alert">
                     {move || t!(i18n, gallery.decision_answer_error)}
                 </p>
             </Show>

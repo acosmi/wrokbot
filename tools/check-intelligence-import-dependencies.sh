@@ -7,7 +7,7 @@ fail() {
   exit 1
 }
 
-tree=$(cargo tree -p openbot-server -e all --prefix none --locked)
+tree=$(cargo tree -p wrokbot-server -e all --prefix none --locked)
 for exact in \
   'aes-gcm v0.10.3' \
   'base64 v0.22.1' \
@@ -19,19 +19,19 @@ done
 
 callers=$(rg -l 'IntelligenceBundleDecryptionKey|verify_intelligence_bundle|PostgresIntelligenceImportStore' \
   crates/*/src --glob '*.rs' | sort)
-expected=$'crates/openbot-infra/src/intelligence_bundle.rs\ncrates/openbot-infra/src/intelligence_import.rs\ncrates/openbot-server/src/bin/openbot-migrate.rs'
+expected=$'crates/wrokbot-infra/src/intelligence_bundle.rs\ncrates/wrokbot-infra/src/intelligence_import.rs\ncrates/wrokbot-server/src/bin/wrokbot-migrate.rs'
 [[ "$callers" == "$expected" ]] || fail "importer 调用面越出 one-shot migration path：[$callers]"
-if rg -n 'intelligence_(bundle|import)|IntelligenceImport' crates/openbot-server/src/main.rs; then
+if rg -n 'intelligence_(bundle|import)|IntelligenceImport' crates/wrokbot-server/src/main.rs; then
   fail '最终 Server runtime main 不得持有 Intelligence importer/client'
 fi
 grep -qF 'pub const MAX_INTELLIGENCE_BUNDLE_BYTES: usize = 512 * 1024 * 1024;' \
-  crates/openbot-infra/src/intelligence_bundle.rs || fail 'bundle size cap 漂移'
+  crates/wrokbot-infra/src/intelligence_bundle.rs || fail 'bundle size cap 漂移'
 grep -qF 'Hkdf::<Sha256>::new(Some(payload_hash), master)' \
-  crates/openbot-infra/src/intelligence_bundle.rs || fail 'per-payload HKDF key derivation 缺失'
+  crates/wrokbot-infra/src/intelligence_bundle.rs || fail 'per-payload HKDF key derivation 缺失'
 grep -qF '.verify_strict(&signed, &signature)' \
-  crates/openbot-infra/src/intelligence_bundle.rs || fail 'Ed25519 strict verification 缺失'
+  crates/wrokbot-infra/src/intelligence_bundle.rs || fail 'Ed25519 strict verification 缺失'
 grep -qF 'metadata.mode() & 0o077 != 0' \
-  crates/openbot-server/src/bin/openbot-migrate.rs || fail 'Unix secret key file private-mode guard 缺失'
+  crates/wrokbot-server/src/bin/wrokbot-migrate.rs || fail 'Unix secret key file private-mode guard 缺失'
 
 python3 -c '
 import tomllib

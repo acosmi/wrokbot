@@ -34,7 +34,7 @@ pub fn IconView(
 ) -> impl IntoView {
     view! {
         <span
-            class="ob-icon"
+            class="wrokbot-icon"
             data-size=size.as_str()
             aria-hidden="true"
             inner_html=icon.svg()

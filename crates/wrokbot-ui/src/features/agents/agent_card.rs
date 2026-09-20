@@ -3,7 +3,7 @@
 use core::fmt::Write as _;
 
 use leptos::prelude::*;
-use openbot_contracts::agent::AgentProfile;
+use wrokbot_contracts::agent::AgentProfile;
 use sha2::{Digest, Sha256};
 
 use crate::api::agent_profile_href;
@@ -28,17 +28,17 @@ pub fn AgentCard(
     let name = agent.name;
     let role_description = agent.role_description;
     view! {
-        <a id=dom_id class="ob-agent-card" href=href>
-            <span class="ob-agent-card-avatar" aria-hidden="true">
+        <a id=dom_id class="wrokbot-agent-card" href=href>
+            <span class="wrokbot-agent-card-avatar" aria-hidden="true">
                 <Avatar
                     principal_id=avatar_seed
                     name=avatar_name
                     size=AvatarSize::Large
                 />
             </span>
-            <span class="ob-agent-card-copy">
-                <span class="ob-agent-card-name">{name}</span>
-                <span class="ob-agent-card-role">{role_description}</span>
+            <span class="wrokbot-agent-card-copy">
+                <span class="wrokbot-agent-card-name">{name}</span>
+                <span class="wrokbot-agent-card-role">{role_description}</span>
             </span>
         </a>
     }

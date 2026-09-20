@@ -134,7 +134,7 @@ pub fn SidebarProvider(
     view! {
         <Provider value=context>
             <div
-                class="ob-sidebar-provider"
+                class="wrokbot-sidebar-provider"
                 data-viewport=move || state_context.viewport.get().as_str()
                 data-state=move || effective_state(&state_context).as_str()
             >
@@ -175,10 +175,10 @@ fn desktop_sidebar_view(context: SidebarContext, children: ChildrenFn) -> impl I
     view! {
         <aside
             id=aside_id
-            class="ob-sidebar"
+            class="wrokbot-sidebar"
             data-state=move || effective_state(&state_context).as_str()
         >
-            <nav class="ob-sidebar-nav" aria-label=move || aria_label.get()>
+            <nav class="wrokbot-sidebar-nav" aria-label=move || aria_label.get()>
                 {children()}
             </nav>
         </aside>
@@ -204,7 +204,7 @@ fn mobile_sidebar_view(context: SidebarContext, children: ChildrenFn) -> impl In
                 description=move || description.get()
             >
                 <nav
-                    class="ob-sidebar-nav ob-sidebar-mobile-nav"
+                    class="wrokbot-sidebar-nav wrokbot-sidebar-mobile-nav"
                     data-mobile="true"
                     on:click=move |event| close_mobile_on_navigation(event, mobile_open)
                     aria-label=move || aria_label.get()
@@ -265,7 +265,7 @@ pub fn SidebarTrigger(
         <button
             id=id
             type="button"
-            class="ob-sidebar-trigger"
+            class="wrokbot-sidebar-trigger"
             data-state=move || effective_state(&context).as_str()
             aria-label=move || aria_label.get()
             aria-controls=move || controls_id(&controls_context)
@@ -283,37 +283,37 @@ pub fn SidebarTrigger(
 /// Brand/top controls slot.
 #[component]
 pub fn SidebarHeader(children: Children) -> impl IntoView {
-    view! { <header class="ob-sidebar-header" on:mousedown=crate::api::desktop_chrome::start_drag>{children()}</header> }
+    view! { <header class="wrokbot-sidebar-header" on:mousedown=crate::api::desktop_chrome::start_drag>{children()}</header> }
 }
 
 /// Scrollable primary groups slot.
 #[component]
 pub fn SidebarContent(children: Children) -> impl IntoView {
-    view! { <div class="ob-sidebar-content">{children()}</div> }
+    view! { <div class="wrokbot-sidebar-content">{children()}</div> }
 }
 
 /// Bottom-pinned user/settings slot.
 #[component]
 pub fn SidebarFooter(children: Children) -> impl IntoView {
-    view! { <footer class="ob-sidebar-footer">{children()}</footer> }
+    view! { <footer class="wrokbot-sidebar-footer">{children()}</footer> }
 }
 
 /// Navigation group.
 #[component]
 pub fn SidebarGroup(children: Children) -> impl IntoView {
-    view! { <div class="ob-sidebar-group">{children()}</div> }
+    view! { <div class="wrokbot-sidebar-group">{children()}</div> }
 }
 
 /// Group heading hidden visually in rail state.
 #[component]
 pub fn SidebarGroupLabel(children: Children) -> impl IntoView {
-    view! { <div class="ob-sidebar-group-label">{children()}</div> }
+    view! { <div class="wrokbot-sidebar-group-label">{children()}</div> }
 }
 
 /// Semantic navigation list.
 #[component]
 pub fn SidebarNavList(children: Children) -> impl IntoView {
-    view! { <ul class="ob-sidebar-list">{children()}</ul> }
+    view! { <ul class="wrokbot-sidebar-list">{children()}</ul> }
 }
 
 /// Same-origin navigation item with explicit current-page semantics.
@@ -335,9 +335,9 @@ pub fn SidebarNavLink(
     let aria_label = label.clone();
     let title_label = label;
     view! {
-        <li class="ob-sidebar-list-item">
+        <li class="wrokbot-sidebar-list-item">
             <a
-                class="ob-sidebar-link"
+                class="wrokbot-sidebar-link"
                 href=href
                 aria-label=move || aria_label.get()
                 aria-current=move || current.get().unwrap_or(false).then_some("page")
@@ -350,9 +350,9 @@ pub fn SidebarNavLink(
                 }
             >
                 <IconView icon size=IconSize::Navigation />
-                <span class="ob-sidebar-link-label">{move || visible_label.get()}</span>
+                <span class="wrokbot-sidebar-link-label">{move || visible_label.get()}</span>
                 <Show when=move || current.get().unwrap_or(false)>
-                    <span class="ob-sidebar-current" aria-hidden="true">
+                    <span class="wrokbot-sidebar-current" aria-hidden="true">
                         <IconView icon=Icon::Check size=IconSize::Inline />
                     </span>
                 </Show>

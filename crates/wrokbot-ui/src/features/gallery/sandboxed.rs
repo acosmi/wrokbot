@@ -4,7 +4,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use leptos::html;
 use leptos::prelude::*;
-use openbot_contracts::sandboxed::{
+use wrokbot_contracts::sandboxed::{
     PublishedSandboxedComponent, SANDBOXED_COMPONENT_CONFIRMATION, is_sandboxed_component_name,
 };
 use serde_json::Value;
@@ -20,7 +20,7 @@ pub const SANDBOX_IFRAME_POLICY: &str = "allow-scripts";
 const SANDBOX_RUNNER_PATH: &str = "/sandbox/runner";
 const MAX_SANDBOX_FRAGMENT_BYTES: usize = 2 * 1024 * 1024;
 #[cfg(target_arch = "wasm32")]
-const CHANNEL_INIT_KIND: &str = "openbot_sandbox_init";
+const CHANNEL_INIT_KIND: &str = "wrokbot_sandbox_init";
 #[cfg(target_arch = "wasm32")]
 const CHANNEL_READY_KIND: &str = "ready";
 #[cfg(target_arch = "wasm32")]
@@ -47,9 +47,9 @@ pub fn SandboxedComponentFrame(
         return view! {
             <div>
                 <RefusedCard title reason=t_string!(i18n, gallery.sandbox_desktop_unavailable).to_owned()/>
-                <details class="ob-workspace-event">
+                <details class="wrokbot-workspace-event">
                     <summary>{move || t!(i18n, gallery.sandbox_readonly_arguments)}</summary>
-                    <pre class="ob-transcript-text">{preview}</pre>
+                    <pre class="wrokbot-transcript-text">{preview}</pre>
                 </details>
             </div>
         }.into_any();
@@ -122,17 +122,17 @@ pub fn SandboxedComponentFrame(
     let failure_title = title.clone();
 
     view! {
-        <div class="ob-sandbox-frame" data-state=move || match state.get() {
+        <div class="wrokbot-sandbox-frame" data-state=move || match state.get() {
             SandboxRenderState::Pending => "pending",
             SandboxRenderState::Ready => "ready",
             SandboxRenderState::Failed => "failed",
         }>
             <Show when=move || state.get() == SandboxRenderState::Pending>
-                <p class="ob-loading" role="status">{move || t!(i18n, gallery.sandbox_starting)}</p>
+                <p class="wrokbot-loading" role="status">{move || t!(i18n, gallery.sandbox_starting)}</p>
             </Show>
             <iframe
                 node_ref=frame_ref
-                class="ob-sandbox-iframe"
+                class="wrokbot-sandbox-iframe"
                 sandbox=SANDBOX_IFRAME_POLICY
                 src="about:blank"
                 title=title.clone()
@@ -208,7 +208,7 @@ pub fn SandboxedConversationComponent(
     let failure_name = name;
     view! {
         <Show when=move || loading.get()>
-            <p class="ob-loading" role="status">{move || t!(i18n, gallery.sandbox_starting)}</p>
+            <p class="wrokbot-loading" role="status">{move || t!(i18n, gallery.sandbox_starting)}</p>
         </Show>
         <Show when=move || !loading.get() && !failed.get() && source.get().is_some()>
             {move || source.get().map(|component| view! {
@@ -447,7 +447,7 @@ mod tests {
         assert_ne!(first, second);
         assert!(host_protocol_allows_web_sandbox("http:"));
         assert!(host_protocol_allows_web_sandbox("https:"));
-        for protocol in ["openbot:", "tauri:", "file:", "data:", ""] {
+        for protocol in ["wrokbot:", "tauri:", "file:", "data:", ""] {
             assert!(!host_protocol_allows_web_sandbox(protocol), "{protocol}");
         }
         assert_eq!(SANDBOX_IFRAME_POLICY.split_whitespace().count(), 1);

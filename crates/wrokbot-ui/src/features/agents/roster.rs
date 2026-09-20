@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_query_map};
-use openbot_contracts::agent::{AgentProfile, AgentVisibility};
+use wrokbot_contracts::agent::{AgentProfile, AgentVisibility};
 
 #[cfg(target_arch = "wasm32")]
 use crate::api::list_agents;
@@ -89,10 +89,10 @@ pub fn AgentsPage() -> impl IntoView {
     view! {
         <DetailPanelLayout>
             <DetailPanelMain>
-                <div id="agents-roster-focus" class="ob-agent-roster-focus" tabindex="-1">
+                <div id="agents-roster-focus" class="wrokbot-agent-roster-focus" tabindex="-1">
                     <PageShell width=PageWidth::Content>
-                        <div class="ob-agent-roster-content">
-                            <div class="ob-agent-roster-toolbar">
+                        <div class="wrokbot-agent-roster-content">
+                            <div class="wrokbot-agent-roster-toolbar">
                                 <PageHeader
                                     heading_id="agents-page-title"
                                     title=move || t_string!(i18n, agents.title).to_owned()
@@ -104,12 +104,12 @@ pub fn AgentsPage() -> impl IntoView {
                                 >{move || t!(i18n, agents.new_coworker)}</Button>
                             </div>
                             <Show when=move || loading.get()>
-                                <div class="ob-loading" role="status">
+                                <div class="wrokbot-loading" role="status">
                                     {move || t!(i18n, common.loading)}
                                 </div>
                             </Show>
                             <Show when=move || load_error.get()>
-                                <div class="ob-alert" role="alert">
+                                <div class="wrokbot-alert" role="alert">
                                     <span>{move || t!(i18n, agents.load_error)}</span>
                                     <Button
                                         variant=ButtonVariant::Ghost
@@ -131,7 +131,7 @@ pub fn AgentsPage() -> impl IntoView {
                                             <PageEmpty>{move || t!(i18n, agents.mine_empty)}</PageEmpty>
                                         }
                                     >
-                                        <div class="ob-agent-grid">
+                                        <div class="wrokbot-agent-grid">
                                             <For
                                                 each=move || mine.get()
                                                 key=|(_, agent)| agent.id.clone()
@@ -152,7 +152,7 @@ pub fn AgentsPage() -> impl IntoView {
                                         title=move || t_string!(i18n, agents.hidden_agents).to_owned()
                                         description=move || t_string!(i18n, agents.hidden_help).to_owned()
                                     >
-                                        <div class="ob-agent-grid">
+                                        <div class="wrokbot-agent-grid">
                                             <For
                                                 each=move || hidden.get()
                                                 key=|(_, agent)| agent.id.clone()
@@ -175,7 +175,7 @@ pub fn AgentsPage() -> impl IntoView {
                                             <PageEmpty>{move || t!(i18n, agents.explore_empty)}</PageEmpty>
                                         }
                                     >
-                                        <div class="ob-agent-grid">
+                                        <div class="wrokbot-agent-grid">
                                             <For
                                                 each=move || explore.get()
                                                 key=|(_, agent)| agent.id.clone()
@@ -281,7 +281,7 @@ fn install_agent_loader(
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::ids::BotId;
+    use wrokbot_contracts::ids::BotId;
 
     use super::*;
 

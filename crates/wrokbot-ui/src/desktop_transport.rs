@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 #[cfg(any(test, target_arch = "wasm32"))]
-use openbot_contracts::desktop::DesktopStructuredEventFrame;
+use wrokbot_contracts::desktop::DesktopStructuredEventFrame;
 
 #[cfg(any(test, target_arch = "wasm32"))]
 const MAX_REORDERED_CHANNEL_FRAMES: usize = 257;
@@ -160,8 +160,8 @@ mod wasm {
     use std::rc::Rc;
 
     use js_sys::{Function, JSON, Promise, Reflect};
-    use openbot_contracts::command::{AppEvent, SubscriptionRequest};
-    use openbot_contracts::desktop::{
+    use wrokbot_contracts::command::{AppEvent, SubscriptionRequest};
+    use wrokbot_contracts::desktop::{
         DESKTOP_STRUCTURED_CLOSE_COMMAND, DESKTOP_STRUCTURED_OPEN_COMMAND,
         DESKTOP_STRUCTURED_SUBSCRIPTION_ID_EXCLUSIVE_LIMIT, DesktopStructuredEventFrame,
         DesktopStructuredStreamKind, DesktopStructuredSubscriptionCloseRequest,
@@ -685,8 +685,8 @@ pub(crate) use wasm::{
 
 #[cfg(test)]
 mod tests {
-    use openbot_contracts::command::{AppEvent, SubscriptionRequest};
-    use openbot_contracts::desktop::{
+    use wrokbot_contracts::command::{AppEvent, SubscriptionRequest};
+    use wrokbot_contracts::desktop::{
         DesktopStructuredEventFrame, DesktopStructuredGapCause, DesktopStructuredSequenceGap,
         DesktopStructuredStreamKind, DesktopStructuredTerminalReason,
     };

@@ -3,7 +3,7 @@
 mod pack;
 fn main() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("design/markdown");
-    let set = pack::build_openbot_syntax_set(&root.join("syntaxes"))
+    let set = pack::build_wrokbot_syntax_set(&root.join("syntaxes"))
         .expect("reviewed syntax definitions");
     for (_, token) in pack::TARGET_LANGUAGES {
         assert!(
@@ -13,9 +13,9 @@ fn main() {
             "missing token {token}"
         );
     }
-    pack::dump_openbot_syntax_pack(
+    pack::dump_wrokbot_syntax_pack(
         &root.join("syntaxes"),
-        &root.join("openbot_syntaxes.packdump"),
+        &root.join("wrokbot_syntaxes.packdump"),
     )
     .expect("syntax pack");
 }

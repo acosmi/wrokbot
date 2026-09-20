@@ -4,14 +4,14 @@
   "reduced_motion": "picture source selects matching static PNG",
   "assets": [
     {
-      "source": "artifacts/wrok-bot-3d/output/gui-logo/wrok-bot-logo-256-gui.gif",
-      "file": "wrok-bot-motion.gif",
+      "source": "artifacts/wrokbot-3d/output/gui-logo/wrokbot-logo-256-gui.gif",
+      "file": "wrokbot-motion.gif",
       "bytes": 1778610,
       "sha256": "f46144a1d90f176785620a6c7945365760bccf00bdf712a7bc614b341f454d7e"
     },
     {
-      "source": "artifacts/wrok-bot-3d/output/gui-logo/wrok-bot-logo-static.png",
-      "file": "wrok-bot-motion-still.png",
+      "source": "artifacts/wrokbot-3d/output/gui-logo/wrokbot-logo-static.png",
+      "file": "wrokbot-motion-still.png",
       "bytes": 121384,
       "sha256": "6fabb3c4c8428b0abb101ecab061dddc5b10ece04366bf35385df88da9353e79"
     }

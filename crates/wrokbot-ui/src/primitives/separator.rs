@@ -29,7 +29,7 @@ pub fn Separator(
 ) -> impl IntoView {
     view! {
         <div
-            class="ob-separator"
+            class="wrokbot-separator"
             data-orientation=orientation.as_str()
             role=(!decorative).then_some("separator")
             aria-hidden=decorative.then_some("true")

@@ -17,7 +17,7 @@ pub fn QuoteCard(
     if quote.is_empty() {
         return view! {
             <GalleryFrame title=move || t_string!(i18n, gallery.quotation).to_owned()>
-                <p class="ob-gallery-empty-copy">{move || t!(i18n, gallery.nothing_to_quote)}</p>
+                <p class="wrokbot-gallery-empty-copy">{move || t!(i18n, gallery.nothing_to_quote)}</p>
             </GalleryFrame>
         }
         .into_any();
@@ -30,7 +30,7 @@ pub fn QuoteCard(
             title=move || t_string!(i18n, gallery.quotation).to_owned()
             caption=context.unwrap_or_default()
         >
-            <blockquote class="ob-gallery-quote">
+            <blockquote class="wrokbot-gallery-quote">
                 <p>{move || quote.get_value()}</p>
                 <Show when=move || show_attribution>
                     <footer>{move || attribution.get_value()}</footer>

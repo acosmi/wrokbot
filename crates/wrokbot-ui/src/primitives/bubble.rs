@@ -24,7 +24,7 @@ impl BubbleKind {
 /// Stack multiple bubbles on one message side.
 #[component]
 pub fn BubbleGroup(children: Children) -> impl IntoView {
-    view! { <div class="ob-bubble-group">{children()}</div> }
+    view! { <div class="wrokbot-bubble-group">{children()}</div> }
 }
 
 /// Purely visual bubble with no independent accessibility role.
@@ -38,7 +38,7 @@ pub fn Bubble(
 ) -> impl IntoView {
     view! {
         <div
-            class="ob-bubble"
+            class="wrokbot-bubble"
             data-kind=kind.as_str()
             data-state=preview_hover.then_some("hover")
         >

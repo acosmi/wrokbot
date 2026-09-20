@@ -1,8 +1,8 @@
 //! One-time remote Agent callback credential presentation.
 
 use leptos::prelude::*;
-use openbot_contracts::agent::CallbackTokenIssued;
-use openbot_contracts::ids::BotId;
+use wrokbot_contracts::agent::CallbackTokenIssued;
+use wrokbot_contracts::ids::BotId;
 
 #[cfg(target_arch = "wasm32")]
 use crate::api::{issue_agent_callback_token, revoke_agent_callback_token};
@@ -77,9 +77,9 @@ pub fn CallbackTokenPanel(
     };
 
     view! {
-        <section class="ob-agent-callback" aria-labelledby="agent-callback-title">
+        <section class="wrokbot-agent-callback" aria-labelledby="agent-callback-title">
             <h4 id="agent-callback-title">{move || t!(i18n, agents.callback_title)}</h4>
-            <p class="ob-agent-callback-description">
+            <p class="wrokbot-agent-callback-description">
                 {move || if current_has_token.get() {
                     t_string!(i18n, agents.callback_present).to_owned()
                 } else {
@@ -89,7 +89,7 @@ pub fn CallbackTokenPanel(
             <Show
                 when=move || token_visible.get()
                 fallback=move || view! {
-                    <div class="ob-agent-callback-actions">
+                    <div class="wrokbot-agent-callback-actions">
                         <Button
                             variant=ButtonVariant::Chip
                             size=ButtonSize::Small
@@ -115,12 +115,12 @@ pub fn CallbackTokenPanel(
                     </div>
                 }
             >
-                <div class="ob-agent-callback-once">
-                    <p class="ob-agent-callback-warning">
+                <div class="wrokbot-agent-callback-once">
+                    <p class="wrokbot-agent-callback-warning">
                         {move || t!(i18n, agents.callback_once)}
                     </p>
                     <code
-                        class="ob-agent-callback-token"
+                        class="wrokbot-agent-callback-token"
                         tabindex="0"
                         aria-label=move || t_string!(i18n, agents.callback_token_label).to_owned()
                     >
@@ -130,7 +130,7 @@ pub fn CallbackTokenPanel(
                                 .unwrap_or_default()
                         })}
                     </code>
-                    <p class="ob-agent-callback-help">
+                    <p class="wrokbot-agent-callback-help">
                         {move || t!(i18n, agents.callback_once_help)}
                     </p>
                     <Button
@@ -141,7 +141,7 @@ pub fn CallbackTokenPanel(
                 </div>
             </Show>
             <Show when=move || operation_error.get()>
-                <p class="ob-alert" role="alert">{move || t!(i18n, agents.callback_error)}</p>
+                <p class="wrokbot-alert" role="alert">{move || t!(i18n, agents.callback_error)}</p>
             </Show>
         </section>
     }

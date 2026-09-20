@@ -13,7 +13,7 @@ use crate::{
     },
 };
 use leptos::prelude::*;
-use openbot_contracts::model_connections::*;
+use wrokbot_contracts::model_connections::*;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum EditTarget {
@@ -43,7 +43,7 @@ pub(super) fn ModelDialog(target: EditTarget, close: UnsyncCallback<()>) -> impl
                 <Suspense fallback=move || view! {<DialogBody><p role="status">{move ||t!(i18n, common.loading)}</p></DialogBody>}>
                     {move || current.get().map(|result| match result {
                         Ok(base) => view! { <ModelForm base deleting close/> }.into_any(),
-                        Err(_) => view! { <DialogBody><p class="ob-alert" role="alert">{move ||t!(i18n, models.load_failed)}</p><Button on_activate=move |_| current.refetch()>{move ||t!(i18n, models.refresh)}</Button><Button on_activate=move |_|close.run(())>{move ||t!(i18n, common.close)}</Button></DialogBody> }.into_any()
+                        Err(_) => view! { <DialogBody><p class="wrokbot-alert" role="alert">{move ||t!(i18n, models.load_failed)}</p><Button on_activate=move |_| current.refetch()>{move ||t!(i18n, models.refresh)}</Button><Button on_activate=move |_|close.run(())>{move ||t!(i18n, common.close)}</Button></DialogBody> }.into_any()
                     })}
                 </Suspense>
             </DialogContent>
@@ -175,13 +175,13 @@ fn ModelForm(
     };
     view! {
         <DialogBody>
-            <Show when=move || invalid.get() || matches!(actions.status.get(), Status::Failed(WriteError::InvalidInput))><p class="ob-alert" role="alert">{move ||t!(i18n, models.invalid)}</p></Show>
-            <Show when=move || matches!(actions.status.get(), Status::Failed(WriteError::Rejected(ApiError::Conflict|ApiError::NotFound)))><p class="ob-alert" role="alert">{move ||t!(i18n, models.conflict)}</p></Show>
-            <Show when=move || matches!(actions.status.get(), Status::Failed(WriteError::Rejected(ApiError::Unauthorized|ApiError::Forbidden)))><p class="ob-alert" role="alert">{move ||t!(i18n, models.authentication)}</p></Show>
-            <Show when=move || matches!(actions.status.get(), Status::Failed(WriteError::Unknown))><p class="ob-alert" role="alert">{move ||t!(i18n, models.unknown)}</p></Show>
+            <Show when=move || invalid.get() || matches!(actions.status.get(), Status::Failed(WriteError::InvalidInput))><p class="wrokbot-alert" role="alert">{move ||t!(i18n, models.invalid)}</p></Show>
+            <Show when=move || matches!(actions.status.get(), Status::Failed(WriteError::Rejected(ApiError::Conflict|ApiError::NotFound)))><p class="wrokbot-alert" role="alert">{move ||t!(i18n, models.conflict)}</p></Show>
+            <Show when=move || matches!(actions.status.get(), Status::Failed(WriteError::Rejected(ApiError::Unauthorized|ApiError::Forbidden)))><p class="wrokbot-alert" role="alert">{move ||t!(i18n, models.authentication)}</p></Show>
+            <Show when=move || matches!(actions.status.get(), Status::Failed(WriteError::Unknown))><p class="wrokbot-alert" role="alert">{move ||t!(i18n, models.unknown)}</p></Show>
             <Show when=move || deleting fallback=move || view! {
                 <Field control_id="model-name" label=move ||t_string!(i18n, models.name).to_owned() disabled=blocked><Input value=name/></Field>
-                <div class="ob-field ob-model-protocol"><Label for_id="model-protocol">{move ||t!(i18n, models.protocol)}</Label>
+                <div class="wrokbot-field wrokbot-model-protocol"><Label for_id="model-protocol">{move ||t!(i18n, models.protocol)}</Label>
                 <Select id="model-protocol" value=protocol open=select_open disabled=blocked>
                     <SelectTrigger aria_label=move ||t_string!(i18n, models.protocol).to_owned() placeholder=move ||t_string!(i18n, models.protocol).to_owned()/>
                     <SelectContent>
@@ -194,9 +194,9 @@ fn ModelForm(
                 <Field control_id="model-identifier" label=move ||t_string!(i18n, models.identifier).to_owned() disabled=blocked><Input value=model/></Field>
                 <Field control_id="model-api-key" label=move ||t_string!(i18n, models.key).to_owned() description=move ||if key_required.get() {t_string!(i18n, models.key_required).to_owned()} else {t_string!(i18n, models.key_keep).to_owned()} disabled=blocked><SecretInput controller=key/></Field>
                 <Field control_id="model-enabled" label=move ||t_string!(i18n, models.enable_connection).to_owned() disabled=blocked><Switch checked=enabled/></Field>
-                <p class="ob-page-intro">{move ||t!(i18n, models.saved_boundary)}</p>
+                <p class="wrokbot-page-intro">{move ||t!(i18n, models.saved_boundary)}</p>
             }>
-                <p>{move || name.get()}</p><p class="ob-page-intro">{move ||t!(i18n, models.remove_help)}</p>
+                <p>{move || name.get()}</p><p class="wrokbot-page-intro">{move ||t!(i18n, models.remove_help)}</p>
             </Show>
         </DialogBody>
         <DialogFooter>

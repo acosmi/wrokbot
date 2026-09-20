@@ -50,11 +50,11 @@ pub fn Tooltip(
     let popup_state = context.clone();
     view! {
         <Provider value=context>
-            <span class="ob-tooltip-root">
+            <span class="wrokbot-tooltip-root">
                 {children()}
                 <span
                     id=id
-                    class="ob-tooltip"
+                    class="wrokbot-tooltip"
                     role="tooltip"
                     hidden=move || !is_open(&popup_hidden)
                     data-state=move || if is_open(&popup_state) { "open" } else { "closed" }
@@ -91,7 +91,7 @@ pub fn TooltipTrigger(
             view! {
                 <a
                     id=id
-                    class="ob-tooltip-trigger"
+                    class="wrokbot-tooltip-trigger"
                     href=href
                     aria-describedby=move || is_open(&described).then(|| described.tooltip_id.clone())
                     on:mouseenter=move |_| pointer_enter(enter.clone())
@@ -119,7 +119,7 @@ pub fn TooltipTrigger(
                 <button
                     id=id
                     type="button"
-                    class="ob-tooltip-trigger"
+                    class="wrokbot-tooltip-trigger"
                     aria-describedby=move || is_open(&described).then(|| described.tooltip_id.clone())
                     on:mouseenter=move |_| pointer_enter(enter.clone())
                     on:focus=move |_| focus_enter(focus.clone())

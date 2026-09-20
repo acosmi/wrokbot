@@ -60,7 +60,7 @@ pub fn RecordCard(
     .into_any();
     view! {
         <GalleryFrame title=title caption=subtitle.unwrap_or_default() action=action>
-            <dl class="ob-gallery-record-fields">
+            <dl class="wrokbot-gallery-record-fields">
                 <For
                     each=move || fields.get().into_iter().enumerate()
                     key=|(index, _)| *index
@@ -86,7 +86,7 @@ pub fn MetricsCard(
     let metrics = RwSignal::new(metrics.into_iter().take(6).collect::<Vec<_>>());
     view! {
         <GalleryFrame title=title caption=caption.unwrap_or_default()>
-            <div class="ob-gallery-metrics">
+            <div class="wrokbot-gallery-metrics">
                 <For
                     each=move || metrics.get().into_iter().enumerate()
                     key=|(index, _)| *index
@@ -131,7 +131,7 @@ pub fn ChecklistCard(
     .into_any();
     view! {
         <GalleryFrame title=title caption=caption.unwrap_or_default() action=action>
-            <ul class="ob-gallery-checklist">
+            <ul class="wrokbot-gallery-checklist">
                 <For
                     each=move || items.get().into_iter().enumerate()
                     key=|(index, _)| *index
@@ -140,7 +140,7 @@ pub fn ChecklistCard(
                         let note = StoredValue::new(item.note.unwrap_or_default());
                         view! {
                             <li data-done=if item.done { "true" } else { "false" }>
-                                <span class="ob-gallery-check" aria-hidden="true">
+                                <span class="wrokbot-gallery-check" aria-hidden="true">
                                     {if item.done { "✓" } else { "○" }}
                                 </span>
                                 <span>
@@ -178,9 +178,9 @@ pub fn NoticeCard(
     .into_any();
     view! {
         <GalleryFrame title action=action>
-            <p class="ob-gallery-notice-body">{body}</p>
+            <p class="wrokbot-gallery-notice-body">{body}</p>
             <Show when=move || !points.get().is_empty()>
-                <ul class="ob-gallery-notice-points">
+                <ul class="wrokbot-gallery-notice-points">
                     <For
                         each=move || points.get().into_iter().enumerate()
                         key=|(index, _)| *index

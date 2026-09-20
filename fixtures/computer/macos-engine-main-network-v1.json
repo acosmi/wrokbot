@@ -1,5 +1,5 @@
 {
-  "schema": "openbot-macos-engine-main-network-v1",
+  "schema": "wrokbot-macos-engine-main-network-v1",
   "scope": "Engine main outbound only",
   "protocol_epoch": 4,
   "allowed_uds": [

@@ -7,7 +7,7 @@ pub(crate) fn start_drag(event: MouseEvent) {
     #[cfg(target_arch = "wasm32")]
     {
         use js_sys::{Function, Object, Promise, Reflect};
-        use openbot_contracts::desktop::DESKTOP_WINDOW_CHROME_COMMAND;
+        use wrokbot_contracts::desktop::DESKTOP_WINDOW_CHROME_COMMAND;
         use wasm_bindgen::{JsCast, JsValue};
         if !plain_primary_down(
             event.is_trusted(),
@@ -39,7 +39,7 @@ pub(crate) fn start_drag(event: MouseEvent) {
             return;
         };
         // This is a UI affordance check, never evidence of authenticated hardware input.
-        if !target.matches(".ob-shell-topbar,.ob-sidebar-header,.ob-shell-identity").unwrap_or(false)
+        if !target.matches(".wrokbot-shell-topbar,.wrokbot-sidebar-header,.wrokbot-shell-identity").unwrap_or(false)
             || target.closest("a,button,input,textarea,select,summary,[contenteditable],[role=button],[role=combobox]").ok().flatten().is_some()
             || event.client_x() < 88
         { return; }

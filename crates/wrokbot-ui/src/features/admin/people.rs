@@ -1,11 +1,11 @@
 //! Administrator people journey backed by the existing typed production API.
 
 use leptos::prelude::*;
-use openbot_contracts::auth::Role;
-use openbot_contracts::ids::ActorId;
+use wrokbot_contracts::auth::Role;
+use wrokbot_contracts::ids::ActorId;
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::people::PeoplePage;
-use openbot_contracts::people::Person;
+use wrokbot_contracts::people::PeoplePage;
+use wrokbot_contracts::people::Person;
 
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::api::ApiError;
@@ -115,11 +115,11 @@ pub fn AdminPeoplePage() -> impl IntoView {
                 description=move || t_string!(i18n, admin.people_section_intro).to_owned()
             >
                 <Show when=move || mutation_error.get()>
-                    <p class="ob-alert" role="alert">
+                    <p class="wrokbot-alert" role="alert">
                         {move || t!(i18n, admin.people_mutation_error)}
                     </p>
                 </Show>
-                <div class="ob-people-search">
+                <div class="wrokbot-people-search">
                     <Input
                         value=search
                         input_type=InputType::Search
@@ -128,12 +128,12 @@ pub fn AdminPeoplePage() -> impl IntoView {
                     />
                 </div>
                 <Show when=move || load_error.get()>
-                    <p class="ob-alert" role="alert">
+                    <p class="wrokbot-alert" role="alert">
                         {move || t!(i18n, admin.people_load_error)}
                     </p>
                 </Show>
                 <Show when=move || loading.get() && people.with(Vec::is_empty)>
-                    <div class="ob-loading" role="status">
+                    <div class="wrokbot-loading" role="status">
                         <IconView icon=Icon::LoaderCircle size=IconSize::Navigation />
                         <span>{move || t!(i18n, common.loading)}</span>
                     </div>
@@ -141,7 +141,7 @@ pub fn AdminPeoplePage() -> impl IntoView {
                 <Show when=move || {
                     !loading.get() && !load_error.get() && people.with(Vec::is_empty)
                 }>
-                    <p class="ob-page-empty">
+                    <p class="wrokbot-page-empty">
                         {move || {
                             let active = query.get();
                             if active.is_empty() {
@@ -153,7 +153,7 @@ pub fn AdminPeoplePage() -> impl IntoView {
                     </p>
                 </Show>
                 <Show when=move || !people.with(Vec::is_empty)>
-                    <div class="ob-page-rows ob-people-list" role="list">
+                    <div class="wrokbot-page-rows wrokbot-people-list" role="list">
                         <For
                             each=move || people.get()
                             key=|person| person.with(|person| person.id.clone())
@@ -169,7 +169,7 @@ pub fn AdminPeoplePage() -> impl IntoView {
                     </div>
                 </Show>
                 <Show when=move || next_cursor.get().is_some()>
-                    <div class="ob-people-load-more">
+                    <div class="wrokbot-people-load-more">
                         <Button
                             variant=ButtonVariant::Chip
                             size=ButtonSize::Small
@@ -218,7 +218,7 @@ fn PersonRow(
 
     view! {
         <div
-            class="ob-person-row"
+            class="wrokbot-person-row"
             role="listitem"
             data-person-id=move || person.with(|person| person.id.as_str().to_owned())
             data-revoked=move || person.with(|person| person.revoked.then_some("true"))
@@ -226,17 +226,17 @@ fn PersonRow(
                 person.with(|person| person.configured_admin.then_some("true"))
             }
         >
-            <span class="ob-person-media">
+            <span class="wrokbot-person-media">
                 {move || {
                     let icon = person.with(person_icon);
                     view! { <IconView icon size=IconSize::Navigation /> }
                 }}
             </span>
-            <span class="ob-person-content">
+            <span class="wrokbot-person-content">
                 <strong>{move || person.with(person_title)}</strong>
                 <span>{move || person.with(|person| person_description(i18n, person))}</span>
             </span>
-            <span class="ob-person-actions">
+            <span class="wrokbot-person-actions">
                 <Show
                     when=move || person.with(|person| person.revoked)
                     fallback=move || view! {

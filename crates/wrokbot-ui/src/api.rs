@@ -38,46 +38,46 @@ fn secret_json<T: serde::Serialize>(
         .map_err(|_| ApiError::InvalidResponse)
 }
 
-use openbot_contracts::agent::{
+use wrokbot_contracts::agent::{
     AgentConnectionTestRequest, AgentConnectionVerdict, AgentMutationRequest, AgentProfile,
     CallbackTokenIssued,
 };
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::agent::{AgentProfileResponse, AgentProfilesResponse};
+use wrokbot_contracts::agent::{AgentProfileResponse, AgentProfilesResponse};
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::audit::AuditEventView;
-use openbot_contracts::audit::AuditPage;
-use openbot_contracts::auth::{AuthProviderId, AuthenticationCapabilities};
+use wrokbot_contracts::audit::AuditEventView;
+use wrokbot_contracts::audit::AuditPage;
+use wrokbot_contracts::auth::{AuthProviderId, AuthenticationCapabilities};
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::auth::{
+use wrokbot_contracts::auth::{
     AuthenticationStartResponse, EnterpriseSsoRoutingAccepted, EnterpriseSsoStartRequest,
     MAX_SSO_ROUTING_EMAIL_BYTES,
 };
-use openbot_contracts::budget::{RunCostBudgetPreference, RunCostCapInput};
+use wrokbot_contracts::budget::{RunCostBudgetPreference, RunCostCapInput};
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::command::MAX_CHANNEL_ROUTING_REASON_CODE_POINTS;
+use wrokbot_contracts::command::MAX_CHANNEL_ROUTING_REASON_CODE_POINTS;
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::command::ThreadRunCancellationState;
+use wrokbot_contracts::command::ThreadRunCancellationState;
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::command::{
+use wrokbot_contracts::command::{
     BeginThreadRunBody, CreateChannelRequest, RouteChannelRequest, ThreadMinted, ThreadStatus,
 };
-use openbot_contracts::command::{
+use wrokbot_contracts::command::{
     ChannelDetail, ChannelPage, ChannelRoutingDecision, MAX_THREAD_MESSAGE_BYTES,
     ThreadConversationSnapshot, ThreadRunAnchor, ThreadRunCancellation, ThreadRunStarted,
 };
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::components::{
+use wrokbot_contracts::components::{
     BOT_ACTIVITY_FUNCTION_NAME, ComponentDecisionRefusal, ComponentFunctionData,
     RECENT_REFUSALS_FUNCTION_NAME, is_component_human_decision_name,
     validate_component_human_decision_arguments,
 };
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::components::{
+use wrokbot_contracts::components::{
     ComponentAgentGrantRequest, ComponentDraftRequest, ComponentFunctionGrantRequest,
     ComponentGovernanceReceipt, ComponentPublicationRequest,
 };
-use openbot_contracts::components::{
+use wrokbot_contracts::components::{
     ComponentCatalogueAdded, ComponentCatalogueRequest, ComponentDataFunctions, ComponentDecision,
     ComponentDecisionRequest, ComponentFunctionCall, ComponentFunctionCallRequest,
     ComponentHumanDecisionAnswer, ComponentHumanDecisionResolved, ComponentRecord,
@@ -85,47 +85,47 @@ use openbot_contracts::components::{
     PendingComponentHumanDecisions, compiled_component_manifest, component_data_function_manifest,
 };
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::identity_provider::{IdentityProviderRemoved, IdentityProvidersResponse};
-use openbot_contracts::identity_provider::{
+use wrokbot_contracts::identity_provider::{IdentityProviderRemoved, IdentityProvidersResponse};
+use wrokbot_contracts::identity_provider::{
     MAX_IDENTITY_PROVIDER_DOMAINS, MAX_IDENTITY_PROVIDER_ID_BYTES, RegisterIdentityProviderRequest,
     RegisteredIdentityProvider,
 };
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::identity_provider::{
+use wrokbot_contracts::identity_provider::{
     MAX_IDENTITY_PROVIDER_URL_BYTES, MAX_IDENTITY_PROVIDERS,
 };
-use openbot_contracts::ids::{BotId, ChannelId, RunId, ThreadId};
-use openbot_contracts::mcp::{McpConnectionDisconnected, McpConnections, McpOAuthAuthorization};
+use wrokbot_contracts::ids::{BotId, ChannelId, RunId, ThreadId};
+use wrokbot_contracts::mcp::{McpConnectionDisconnected, McpConnections, McpOAuthAuthorization};
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::memory::UpdateMemoryControl;
-use openbot_contracts::memory::{
+use wrokbot_contracts::memory::UpdateMemoryControl;
+use wrokbot_contracts::memory::{
     CorrectMemory, MemoryControl, MemoryMutation, MemoryPage, MemoryRecord,
 };
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::memory::{MemoryScope, MemoryStatus};
+use wrokbot_contracts::memory::{MemoryScope, MemoryStatus};
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::people::{
+use wrokbot_contracts::people::{
     AdminState, AdminStatus, ChangePersonAccess, ChangePersonRole, CurrentUserResponse,
     PersonResponse,
 };
-use openbot_contracts::people::{CurrentUser, PeoplePage, Person};
-use openbot_contracts::policy::ActionPolicyDocument;
+use wrokbot_contracts::people::{CurrentUser, PeoplePage, Person};
+use wrokbot_contracts::policy::ActionPolicyDocument;
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::policy::ActionPolicyResponse;
-use openbot_contracts::remote_interrupt::{
+use wrokbot_contracts::policy::ActionPolicyResponse;
+use wrokbot_contracts::remote_interrupt::{
     PendingRemoteInterrupts, RemoteInterruptAnswer, RemoteInterruptResolved,
     is_remote_interrupt_request_id,
 };
 #[cfg(target_arch = "wasm32")]
-use openbot_contracts::sandboxed::SandboxedComponentDeleted;
+use wrokbot_contracts::sandboxed::SandboxedComponentDeleted;
 #[cfg(any(target_arch = "wasm32", test))]
-use openbot_contracts::sandboxed::{PublishedSandboxedComponent, SandboxedComponentRecord};
-use openbot_contracts::sandboxed::{
+use wrokbot_contracts::sandboxed::{PublishedSandboxedComponent, SandboxedComponentRecord};
+use wrokbot_contracts::sandboxed::{
     PublishedSandboxedComponents, SandboxedComponentResponse, SandboxedComponents,
     SaveSandboxedComponentRequest, is_sandboxed_component_name,
 };
-use openbot_contracts::tool::{PendingToolApprovals, ToolApprovalDecision, ToolApprovalResolved};
-use openbot_contracts::ui::{SessionStatus, UiPreferences, UpdateUiPreferences};
+use wrokbot_contracts::tool::{PendingToolApprovals, ToolApprovalDecision, ToolApprovalResolved};
+use wrokbot_contracts::ui::{SessionStatus, UiPreferences, UpdateUiPreferences};
 
 /// Stable, payload-free failure categories suitable for localized presentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -361,7 +361,7 @@ pub async fn save_component_draft(
     description: &str,
 ) -> Result<ComponentRecord, ApiError> {
     validate_component_name(name)?;
-    let description = openbot_contracts::text::trim_ecmascript(description);
+    let description = wrokbot_contracts::text::trim_ecmascript(description);
     if description.is_empty()
         || description.len() > MAX_COMPONENT_DESCRIPTION_BYTES
         || description.as_bytes().contains(&0)
@@ -1014,7 +1014,7 @@ pub async fn create_channel(agent_id: &BotId) -> Result<ChannelDetail, ApiError>
             return Err(status_error(response.status()));
         }
         let channel = response
-            .json::<openbot_contracts::command::ChannelDetailResponse>()
+            .json::<wrokbot_contracts::command::ChannelDetailResponse>()
             .await
             .map(|response| response.channel)
             .map_err(|_| ApiError::InvalidResponse)?;
@@ -1038,7 +1038,7 @@ pub async fn route_channel_message(
     text: &str,
     agent_id: Option<&BotId>,
 ) -> Result<ChannelRoutingDecision, ApiError> {
-    let text = openbot_contracts::text::trim_ecmascript(text);
+    let text = wrokbot_contracts::text::trim_ecmascript(text);
     if text.is_empty() || text.len() > MAX_THREAD_MESSAGE_BYTES || text.as_bytes().contains(&0) {
         return Err(ApiError::InvalidResponse);
     }
@@ -1143,9 +1143,9 @@ pub async fn begin_thread_run_with_skills_and_model(
     anchor: ThreadRunAnchor,
     message: &str,
     selected_skill_slugs: &[String],
-    model_selection: Option<&openbot_contracts::model_connections::RunModelSelection>,
+    model_selection: Option<&wrokbot_contracts::model_connections::RunModelSelection>,
 ) -> Result<ThreadRunStarted, ApiError> {
-    if !openbot_contracts::command::valid_selected_skill_slugs(selected_skill_slugs) {
+    if !wrokbot_contracts::command::valid_selected_skill_slugs(selected_skill_slugs) {
         return Err(ApiError::InvalidResponse);
     }
     if model_selection.is_some_and(|selection| !selection.is_valid()) {
@@ -1367,7 +1367,7 @@ pub async fn load_thread_conversation(
         let cancellable_matches = !snapshot.active_run_cancellable
             || matches!(
                 snapshot.active_run_state,
-                Some(openbot_contracts::command::ThreadForegroundRunState::Running)
+                Some(wrokbot_contracts::command::ThreadForegroundRunState::Running)
             );
         if !active_shape_matches
             || !cancellable_matches
@@ -1703,7 +1703,7 @@ pub async fn load_channel(channel_id: &str) -> Result<ChannelDetail, ApiError> {
             return Err(status_error(response.status()));
         }
         response
-            .json::<openbot_contracts::command::ChannelDetailResponse>()
+            .json::<wrokbot_contracts::command::ChannelDetailResponse>()
             .await
             .map(|response| response.channel)
             .map_err(|_| ApiError::InvalidResponse)
@@ -1810,7 +1810,7 @@ pub async fn list_memories(cursor: Option<&str>) -> Result<MemoryPage, ApiError>
 
 /// Persist an explicitly reviewed message memory. No owner or origin is accepted from the renderer.
 pub async fn remember_memory_record(
-    input: openbot_contracts::memory::RememberMemory,
+    input: wrokbot_contracts::memory::RememberMemory,
 ) -> Result<MemoryRecord, ApiError> {
     if input.content.trim().is_empty()
         || input.content.len() > 64 * 1024
@@ -1840,7 +1840,7 @@ pub async fn remember_memory_record(
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_memory_record(&record)?;
         if record.status != MemoryStatus::Active
-            || record.origin != openbot_contracts::memory::MemoryOrigin::UserAction
+            || record.origin != wrokbot_contracts::memory::MemoryOrigin::UserAction
             || record.content.as_deref() != Some(input.content.as_str())
             || record.scope != input.scope
             || record.memory_kind != input.memory_kind
@@ -2342,7 +2342,7 @@ pub async fn load_people_page(search: &str, cursor: Option<&str>) -> Result<Peop
 /// Commit one role mutation for a Server-selected person row.
 pub async fn change_person_role(
     user_id: &str,
-    role: openbot_contracts::auth::Role,
+    role: wrokbot_contracts::auth::Role,
 ) -> Result<Person, ApiError> {
     let path = person_mutation_path(user_id, "role")?;
     #[cfg(target_arch = "wasm32")]
@@ -2909,7 +2909,7 @@ fn validate_published_sandboxed_component(
 #[cfg(any(target_arch = "wasm32", test))]
 fn validate_component_record(record: &ComponentRecord) -> Result<(), ApiError> {
     validate_component_name(&record.name)?;
-    if record.kind == openbot_contracts::components::CompiledComponentKind::Sandboxed
+    if record.kind == wrokbot_contracts::components::CompiledComponentKind::Sandboxed
         && (!is_sandboxed_component_name(&record.name) || !record.functions.is_empty())
     {
         return Err(ApiError::InvalidResponse);
@@ -3834,11 +3834,11 @@ fn status_error(status: u16) -> ApiError {
 mod tests {
     use std::collections::BTreeMap;
 
-    use openbot_contracts::components::{
+    use wrokbot_contracts::components::{
         ASK_APPROVAL_COMPONENT_NAME, CompiledComponentKind, PendingComponentHumanDecision,
         SHOW_QUOTE_COMPONENT_NAME,
     };
-    use openbot_contracts::memory::{MemoryKind, MemoryOrigin, MemorySensitivity};
+    use wrokbot_contracts::memory::{MemoryKind, MemoryOrigin, MemorySensitivity};
     use time::OffsetDateTime;
 
     use super::*;
@@ -3884,7 +3884,7 @@ mod tests {
             "/api/me/remote-interrupts/018f6f8a-5f4b-7c2d-8a31-111111111111"
         );
         assert!(remote_interrupt_answer_path("").is_err());
-        let interrupt = openbot_contracts::remote_interrupt::PendingRemoteInterrupt {
+        let interrupt = wrokbot_contracts::remote_interrupt::PendingRemoteInterrupt {
             request_id: "018f6f8a-5f4b-7c2d-8a31-111111111111".to_owned(),
             run_id: "run-1".to_owned(),
             agent_id: "bot-1".to_owned(),
@@ -3958,7 +3958,7 @@ mod tests {
     fn mcp_page() -> McpConnections {
         McpConnections {
             available_server_ids: vec!["google-drive".to_owned()],
-            connections: vec![openbot_contracts::mcp::McpConnection {
+            connections: vec![wrokbot_contracts::mcp::McpConnection {
                 server_id: "google-drive".to_owned(),
                 scope: "https://www.googleapis.com/auth/drive.readonly".to_owned(),
                 connected_at: OffsetDateTime::UNIX_EPOCH,
@@ -4040,7 +4040,7 @@ mod tests {
         );
 
         let grants = GrantedCompiledComponents {
-            components: vec![openbot_contracts::components::GrantedCompiledComponent {
+            components: vec![wrokbot_contracts::components::GrantedCompiledComponent {
                 name: SHOW_QUOTE_COMPONENT_NAME.to_owned(),
                 description: "published quote".to_owned(),
             }],
@@ -4091,9 +4091,9 @@ mod tests {
         };
         assert!(validate_component_data_functions(&functions).is_ok());
         let valid_call = ComponentFunctionCall::succeeded(ComponentFunctionData::BotActivity(
-            openbot_contracts::components::BotActivityReport {
+            wrokbot_contracts::components::BotActivityReport {
                 days: 7,
-                rows: vec![openbot_contracts::components::BotActivityRow {
+                rows: vec![wrokbot_contracts::components::BotActivityRow {
                     bot: "agent-one".to_owned(),
                     actions: 3,
                 }],
@@ -4110,7 +4110,7 @@ mod tests {
         assert_eq!(
             validate_component_function_call(
                 &ComponentFunctionCall::failed(
-                    openbot_contracts::components::ComponentFunctionError::ReadFailed,
+                    wrokbot_contracts::components::ComponentFunctionError::ReadFailed,
                 ),
                 BOT_ACTIVITY_FUNCTION_NAME,
                 200,
@@ -4416,8 +4416,8 @@ mod tests {
             ApiError::InvalidResponse
         );
         let event = AuditEventView {
-            id: openbot_contracts::ids::AuditEventId::new("event-1"),
-            actor_user_id: Some(openbot_contracts::ids::ActorId::new("actor-1")),
+            id: wrokbot_contracts::ids::AuditEventId::new("event-1"),
+            actor_user_id: Some(wrokbot_contracts::ids::ActorId::new("actor-1")),
             event_type: "tool.approval_granted".to_owned(),
             target_type: "tool_approval".to_owned(),
             target_id: Some("approval-1".to_owned()),
@@ -4459,11 +4459,11 @@ mod tests {
         );
 
         let person = Person {
-            id: openbot_contracts::ids::ActorId::new("person-1"),
+            id: wrokbot_contracts::ids::ActorId::new("person-1"),
             email: "person-1@example.test".to_owned(),
             name: Some("Person One".to_owned()),
             image: None,
-            role: openbot_contracts::auth::Role::User,
+            role: wrokbot_contracts::auth::Role::User,
             providers: vec!["google".to_owned(), "okta".to_owned()],
             last_signed_in_at: Some(OffsetDateTime::UNIX_EPOCH),
             revoked: false,
@@ -4507,7 +4507,7 @@ mod tests {
             provider_id: "acme-saml".to_owned(),
             issuer: "urn:acme:idp".to_owned(),
             domain: "acme.example,second.example".to_owned(),
-            protocol: openbot_contracts::identity_provider::SsoProtocol::Saml,
+            protocol: wrokbot_contracts::identity_provider::SsoProtocol::Saml,
             registered_by: Some("actor".to_owned()),
         };
         assert!(validate_identity_providers(core::slice::from_ref(&provider)).is_ok());
@@ -4520,14 +4520,14 @@ mod tests {
             provider_id: "other-saml".to_owned(),
             issuer: "urn:other:idp".to_owned(),
             domain: "second.example".to_owned(),
-            protocol: openbot_contracts::identity_provider::SsoProtocol::Saml,
+            protocol: wrokbot_contracts::identity_provider::SsoProtocol::Saml,
             registered_by: None,
         };
         let first = RegisteredIdentityProvider {
             provider_id: "acme-saml".to_owned(),
             issuer: "urn:acme:idp".to_owned(),
             domain: "acme.example,second.example".to_owned(),
-            protocol: openbot_contracts::identity_provider::SsoProtocol::Saml,
+            protocol: wrokbot_contracts::identity_provider::SsoProtocol::Saml,
             registered_by: None,
         };
         assert_eq!(
@@ -4539,7 +4539,7 @@ mod tests {
     #[test]
     fn action_policy_receipt_must_be_present_and_exact() {
         let requested = ActionPolicyDocument {
-            mode: openbot_contracts::policy::ActionPolicyMode::DryRun,
+            mode: wrokbot_contracts::policy::ActionPolicyMode::DryRun,
             deny: vec!["intent == \"activate\"".to_owned()],
             allow: vec!["true".to_owned()],
         };

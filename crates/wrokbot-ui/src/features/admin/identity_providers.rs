@@ -1,7 +1,7 @@
 //! Administrator-managed deployment-owned SAML/OIDC providers.
 
 use leptos::prelude::*;
-use openbot_contracts::identity_provider::{
+use wrokbot_contracts::identity_provider::{
     MAX_IDENTITY_PROVIDER_CLIENT_ID_BYTES, MAX_IDENTITY_PROVIDER_CLIENT_SECRET_BYTES,
     MAX_IDENTITY_PROVIDER_METADATA_BYTES, MAX_IDENTITY_PROVIDER_URL_BYTES,
     MAX_SAML_ENTITY_ID_BYTES, RegisterIdentityProviderRequest, RegisteredIdentityProvider,
@@ -161,7 +161,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                 title=move || t_string!(i18n, admin.identity_providers_title).to_owned()
                 description=move || t_string!(i18n, admin.identity_providers_intro).to_owned()
             />
-            <div class="ob-page-primary-action">
+            <div class="wrokbot-page-primary-action">
                 <Button
                     id="identity-provider-add"
                     variant=ButtonVariant::Primary
@@ -177,18 +177,18 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                 description=move || t_string!(i18n, admin.identity_providers_environment_note).to_owned()
             >
                 <Show when=move || removal_error.get()>
-                    <p class="ob-alert" role="alert">
+                    <p class="wrokbot-alert" role="alert">
                         {move || t!(i18n, admin.identity_providers_remove_error)}
                     </p>
                 </Show>
                 <Show when=move || loading.get()>
-                    <div class="ob-loading" role="status">
+                    <div class="wrokbot-loading" role="status">
                         <IconView icon=Icon::LoaderCircle size=IconSize::Navigation />
                         <span>{move || t!(i18n, common.loading)}</span>
                     </div>
                 </Show>
                 <Show when=move || load_error.get()>
-                    <div class="ob-alert" role="alert">
+                    <div class="wrokbot-alert" role="alert">
                         <span>{move || t!(i18n, admin.identity_providers_load_error)}</span>
                         <Button
                             variant=ButtonVariant::Ghost
@@ -225,11 +225,11 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                     );
                                 };
                                 view! {
-                                    <div class="ob-identity-provider-row">
-                                        <span class="ob-item-media">
+                                    <div class="wrokbot-identity-provider-row">
+                                        <span class="wrokbot-item-media">
                                             <IconView icon=Icon::Landmark size=IconSize::Navigation />
                                         </span>
-                                        <span class="ob-identity-provider-copy">
+                                        <span class="wrokbot-identity-provider-copy">
                                             <strong>{provider_id}</strong>
                                             <span>{description}</span>
                                         </span>
@@ -265,7 +265,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                 description=move || t_string!(i18n, admin.identity_providers_dialog_intro).to_owned()
             >
                 <DialogBody>
-                    <div class="ob-identity-provider-protocols" role="group" aria-label=move || {
+                    <div class="wrokbot-identity-provider-protocols" role="group" aria-label=move || {
                         t_string!(i18n, admin.identity_providers_protocol).to_owned()
                     }>
                         <Button
@@ -294,7 +294,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                         >"OIDC"</Button>
                     </div>
 
-                    <div class="ob-identity-provider-fields">
+                    <div class="wrokbot-identity-provider-fields">
                         <Field
                             control_id="identity-provider-id"
                             label=move || t_string!(i18n, admin.identity_providers_name).to_owned()
@@ -406,12 +406,12 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                     <Show when=move || {
                         submit_attempted.get() && !draft_valid(draft)
                     }>
-                        <p class="ob-alert" role="alert">
+                        <p class="wrokbot-alert" role="alert">
                             {move || t!(i18n, admin.identity_providers_form_error)}
                         </p>
                     </Show>
                     <Show when=move || registration_error.get()>
-                        <p class="ob-alert" role="alert">
+                        <p class="wrokbot-alert" role="alert">
                             {move || t!(i18n, admin.identity_providers_register_error)}
                         </p>
                     </Show>

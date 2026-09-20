@@ -48,48 +48,48 @@ grep -qxF 'sys-locale = "=0.3.2"' Cargo.toml || fail 'sys-locale exact pin drift
 grep -qxF 'tauri-build = { version = "=2.6.3", default-features = false, features = ["config-json"] }' Cargo.toml \
   || fail 'macOS launcher context generator exact pin drifted'
 grep -qxF 'desktop-launcher = ["desktop-local-runtime", "dep:tauri-build"]' \
-  crates/openbot-desktop/Cargo.toml || fail 'macOS launcher feature boundary drifted'
+  crates/wrokbot-desktop/Cargo.toml || fail 'macOS launcher feature boundary drifted'
 grep -qxF 'tauri-build = { workspace = true, optional = true }' \
-  crates/openbot-desktop/Cargo.toml || fail 'macOS context generator must be optional and inherited'
+  crates/wrokbot-desktop/Cargo.toml || fail 'macOS context generator must be optional and inherited'
 grep -qxF '[target.'"'"'cfg(target_os = "macos")'"'"'.build-dependencies]' \
-  crates/openbot-desktop/Cargo.toml || fail 'launcher build dependency lost its macOS host boundary'
+  crates/wrokbot-desktop/Cargo.toml || fail 'launcher build dependency lost its macOS host boundary'
 grep -qxF 'tauri-host = ["dep:http", "dep:serde", "dep:serde_json", "dep:sys-locale", "dep:tauri"]' \
-  crates/openbot-desktop/Cargo.toml || fail 'tauri-host feature boundary drifted'
+  crates/wrokbot-desktop/Cargo.toml || fail 'tauri-host feature boundary drifted'
 grep -qxF '[target.'"'"'cfg(any(target_os = "macos", target_os = "windows"))'"'"'.dependencies]' \
-  crates/openbot-desktop/Cargo.toml || fail 'Desktop host dependencies are not target-scoped'
+  crates/wrokbot-desktop/Cargo.toml || fail 'Desktop host dependencies are not target-scoped'
 for exact in \
   'http = { workspace = true, optional = true }' \
   'serde = { workspace = true, optional = true }' \
   'serde_json = { workspace = true, optional = true }' \
   'sys-locale = { workspace = true, optional = true }' \
   'tauri = { workspace = true, optional = true }'; do
-  [[ "$(grep -cF "$exact" crates/openbot-desktop/Cargo.toml)" -eq 1 ]] \
+  [[ "$(grep -cF "$exact" crates/wrokbot-desktop/Cargo.toml)" -eq 1 ]] \
     || fail "Desktop host dependency declaration drifted: $exact"
 done
 grep -qxF 'TEST_SWIFT_RS = { value = "false", force = true }' .cargo/config.toml \
   || fail 'TEST_SWIFT_RS must be force-disabled'
 
-linux_tree="$(cargo tree -p openbot-desktop --features tauri-host \
+linux_tree="$(cargo tree -p wrokbot-desktop --features tauri-host \
   --target x86_64-unknown-linux-gnu -e normal --prefix none --locked --offline | sort -u)"
-linux_arm_tree="$(cargo tree -p openbot-desktop --features tauri-host \
+linux_arm_tree="$(cargo tree -p wrokbot-desktop --features tauri-host \
   --target aarch64-unknown-linux-gnu -e normal --prefix none --locked --offline | sort -u)"
-mac_tree="$(cargo tree -p openbot-desktop --features tauri-host \
+mac_tree="$(cargo tree -p wrokbot-desktop --features tauri-host \
   --target aarch64-apple-darwin -e normal --prefix none --locked --offline | sort -u)"
-windows_tree="$(cargo tree -p openbot-desktop --features tauri-host \
+windows_tree="$(cargo tree -p wrokbot-desktop --features tauri-host \
   --target x86_64-pc-windows-msvc -e normal --prefix none --locked --offline | sort -u)"
-wasm_tree="$(cargo tree -p openbot-desktop --features tauri-host \
+wasm_tree="$(cargo tree -p wrokbot-desktop --features tauri-host \
   --target wasm32-unknown-unknown -e normal --prefix none --locked --offline | sort -u)"
-all_build_tree="$(cargo tree -p openbot-desktop --features tauri-host \
+all_build_tree="$(cargo tree -p wrokbot-desktop --features tauri-host \
   --target all -e normal,build --prefix none --locked --offline | sort -u)"
 
 # The new product feature must not turn its build-time Tauri generator into a runtime dependency,
 # or introduce a native WebView/Server SSO graph on unsupported targets. Build dependencies are
 # selected for the host: build.rs separately checks CARGO_CFG_TARGET_OS before generating context.
-launcher_mac_normal="$(cargo tree -p openbot-desktop --features desktop-launcher \
+launcher_mac_normal="$(cargo tree -p wrokbot-desktop --features desktop-launcher \
   --target aarch64-apple-darwin -e normal --prefix none --locked --offline | sort -u)"
-launcher_mac_build="$(cargo tree -p openbot-desktop --features desktop-launcher \
+launcher_mac_build="$(cargo tree -p wrokbot-desktop --features desktop-launcher \
   --target aarch64-apple-darwin -e normal,build --prefix none --locked --offline | sort -u)"
-launcher_linux_normal="$(cargo tree -p openbot-desktop --features desktop-launcher \
+launcher_linux_normal="$(cargo tree -p wrokbot-desktop --features desktop-launcher \
   --target x86_64-unknown-linux-gnu -e normal --prefix none --locked --offline | sort -u)"
 require_tree_package "$launcher_mac_build" 'tauri-build v2.6.3'
 if grep -Eq '^tauri-build v' <<< "$launcher_mac_normal"; then

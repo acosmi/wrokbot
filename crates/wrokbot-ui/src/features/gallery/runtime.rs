@@ -1,9 +1,9 @@
 //! Safe durable-conversation projection for compiled components.
 
 use leptos::prelude::*;
-use openbot_contracts::components::*;
-use openbot_contracts::ids::BotId;
-use openbot_contracts::sandboxed::is_sandboxed_component_name;
+use wrokbot_contracts::components::*;
+use wrokbot_contracts::ids::BotId;
+use wrokbot_contracts::sandboxed::is_sandboxed_component_name;
 use serde_json::{Map, Value};
 
 use crate::i18n::{t_string, use_i18n};

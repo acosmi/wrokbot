@@ -10,7 +10,7 @@ use crate::primitives::{
     SelectContent, SelectItem, SelectTrigger,
 };
 use leptos::prelude::*;
-use openbot_contracts::credential_admin::{
+use wrokbot_contracts::credential_admin::{
     CredentialExternalRevocation, CredentialModelReference, CredentialPage, CredentialRecordKind,
     CredentialStatus, CredentialWrite, MAX_CREDENTIAL_SECRET_BYTES, ManualCredentialKind,
 };
@@ -111,17 +111,17 @@ pub fn AdminCredentialsPage() -> impl IntoView {
     view! {
         <PageShell>
             <PageHeader heading_id="credentials-title" title=move||t_string!(i18n,credentials.title).to_owned() description=move||t_string!(i18n,credentials.intro).to_owned()/>
-            <div class="ob-page-primary-action"><Button id="credentials-add" variant=ButtonVariant::Primary disabled=actions.busy
+            <div class="wrokbot-page-primary-action"><Button id="credentials-add" variant=ButtonVariant::Primary disabled=actions.busy
                 on_activate=move|_|dialog.set(Some(CredentialDialog::Create(state.page.get_untracked().and_then(|p|p.model_reference))))>{move||t!(i18n,credentials.add)}</Button></div>
-            <Show when=move||actions.busy.get()><p role="status" class="ob-loading">{move||t!(i18n,plugins.saving)}</p></Show>
-            <Show when=move||actions.failed.get()&&actions.target.get().is_some_and(|id|id.starts_with("credential:"))><p class="ob-alert" role="alert">{move||t!(i18n,plugins.write_error)}</p></Show>
-            {move||saved.get().map(|id|view!{<p class="ob-plugin-value" role="status"><span>{move||t!(i18n,credentials.saved)}</span><code>{id}</code></p>})}
-            <Show when=move||state.loading.get()><p class="ob-loading" role="status">{move||t!(i18n,common.loading)}</p></Show>
-            <Show when=move||state.failed.get()><div class="ob-alert" role="alert"><span>{move||t!(i18n,credentials.load_error)}</span><Button on_activate=move|_|state.load()>{move||t!(i18n,common.retry)}</Button></div></Show>
+            <Show when=move||actions.busy.get()><p role="status" class="wrokbot-loading">{move||t!(i18n,plugins.saving)}</p></Show>
+            <Show when=move||actions.failed.get()&&actions.target.get().is_some_and(|id|id.starts_with("credential:"))><p class="wrokbot-alert" role="alert">{move||t!(i18n,plugins.write_error)}</p></Show>
+            {move||saved.get().map(|id|view!{<p class="wrokbot-plugin-value" role="status"><span>{move||t!(i18n,credentials.saved)}</span><code>{id}</code></p>})}
+            <Show when=move||state.loading.get()><p class="wrokbot-loading" role="status">{move||t!(i18n,common.loading)}</p></Show>
+            <Show when=move||state.failed.get()><div class="wrokbot-alert" role="alert"><span>{move||t!(i18n,credentials.load_error)}</span><Button on_activate=move|_|state.load()>{move||t!(i18n,common.retry)}</Button></div></Show>
             <PageSection heading_id="credentials-configured" title=move||t_string!(i18n,credentials.configured).to_owned()>
                 {move||state.page.get().map(|page|if page.credentials.is_empty(){view!{<PageEmpty>{move||t!(i18n,credentials.empty)}</PageEmpty>}.into_any()}else{view!{<PageRows>{page.credentials.into_iter().map(|row|view!{<CredentialRow row dialog/>}).collect_view()}</PageRows>}.into_any()})}
             </PageSection>
-            <div class="ob-plugin-controls">
+            <div class="wrokbot-plugin-controls">
                 <Button disabled=Signal::derive(move||actions.busy.get()||state.loading.get()||state.cursor.get().is_none()) on_activate=move|_|{state.cursor.set(None);state.history.set(Vec::new());state.load();}>{move||t!(i18n,credentials.first_page)}</Button>
                 <Button disabled=Signal::derive(move||actions.busy.get()||state.loading.get()||state.history.read().is_empty()) on_activate=previous>{move||t!(i18n,credentials.previous_page)}</Button>
                 <Button disabled=Signal::derive(move||actions.busy.get()||state.loading.get()||state.page.get().and_then(|p|p.next_cursor).is_none()) on_activate=next>{move||t!(i18n,credentials.next_page)}</Button>
@@ -145,18 +145,18 @@ fn CredentialRow(
     let metadata =
         row.with_value(|row| serde_json::to_string_pretty(&row.metadata).unwrap_or_default());
     view! {
-        <div class="ob-plugin-value">
+        <div class="wrokbot-plugin-value">
             <strong>{row.with_value(|row|row.provider.clone())}</strong>
             <span>{move||kind_label(i18n,row.get_value().kind)}" · "{row.with_value(|row|row.key_id.clone())}" · "{move||if active{t_string!(i18n,credentials.active).to_owned()}else{t_string!(i18n,credentials.local_revoked).to_owned()}}</span>
             <code>{row.with_value(|row|row.id.clone())}</code>
             <span>{row.with_value(|row|format!("{} UTC",row.created_at.date()))}</span>
             <Show when=move||!active><p>{move||external_label(i18n,row.get_value().external_revocation)}</p></Show>
-            <div class="ob-plugin-controls">
+            <div class="wrokbot-plugin-controls">
                 <Show when=move||manual><Button id=row.with_value(|r|format!("credential-rotate-{}",r.id)) disabled=Signal::derive(move||actions.busy.get()||!active) on_activate=move|_|dialog.set(Some(CredentialDialog::Rotate(row.get_value())))>{move||t!(i18n,credentials.rotate)}</Button></Show>
                 <Button id=row.with_value(|r|format!("credential-revoke-{}",r.id)) variant=ButtonVariant::DangerText disabled=Signal::derive(move||actions.busy.get()||!active) on_activate=move|_|dialog.set(Some(CredentialDialog::Revoke(row.get_value())))>{move||t!(i18n,credentials.revoke)}</Button>
                 <Button open=details variant=ButtonVariant::Ghost on_activate=move|_|details.update(|value| *value = !*value)>{move||t!(i18n,credentials.metadata)}</Button>
             </div>
-            <Show when=move||details.get()><pre class="ob-plugin-copy">{metadata.clone()}</pre></Show>
+            <Show when=move||details.get()><pre class="wrokbot-plugin-copy">{metadata.clone()}</pre></Show>
         </div>
     }
 }
@@ -310,9 +310,9 @@ fn CredentialForm(
         <Dialog id="credential-dialog" open on_close=close>
             <DialogContent title=move||match dialog.get(){Some(CredentialDialog::Rotate(_))=>t_string!(i18n,credentials.rotate).to_owned(),Some(CredentialDialog::Revoke(_))=>t_string!(i18n,credentials.revoke).to_owned(),_=>t_string!(i18n,credentials.add).to_owned()}>
                 <DialogBody>
-                    <Show when=move||invalid.get()><p class="ob-alert" role="alert">{move||t!(i18n,credentials.invalid)}</p></Show>
-                    <Show when=move||attempted.get()&&actions.failed.get()><p class="ob-alert" role="alert">{move||t!(i18n,plugins.write_error)}</p></Show>
-                    <Show when=move||authentication_needed.get()><p class="ob-alert" role="alert">{move||t!(i18n,credentials.authentication_needed)}</p></Show>
+                    <Show when=move||invalid.get()><p class="wrokbot-alert" role="alert">{move||t!(i18n,credentials.invalid)}</p></Show>
+                    <Show when=move||attempted.get()&&actions.failed.get()><p class="wrokbot-alert" role="alert">{move||t!(i18n,plugins.write_error)}</p></Show>
+                    <Show when=move||authentication_needed.get()><p class="wrokbot-alert" role="alert">{move||t!(i18n,credentials.authentication_needed)}</p></Show>
                     <Show when=move||matches!(dialog.get(),Some(CredentialDialog::Revoke(_))) fallback=move||view!{
                         <Select id="credential-kind" open=kind_open value=kind disabled=Signal::derive(move||actions.busy.get()||matches!(dialog.get(),Some(CredentialDialog::Rotate(_))))>
                             <SelectTrigger aria_label=move||t_string!(i18n,credentials.kind).to_owned() placeholder=move||t_string!(i18n,credentials.kind).to_owned()/>
