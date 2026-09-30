@@ -61,8 +61,8 @@
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已合入；本轮核实祖先，历史测试未重跑 | [#54](https://github.com/acosmi/wrokbot/pull/54) | [f93ffcbe7c](https://github.com/acosmi/wrokbot/commit/f93ffcbe7c66338f4014e30366942262f777387b) |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 精确命名合同未冻结，候选保留待验 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 未合入 |
 | V6-PR-049 | archive_bundle Clippy 修复 | 主控已验且已合 | [#60](https://github.com/acosmi/wrokbot/pull/60) | [45a0c4a7ac](https://github.com/acosmi/wrokbot/commit/45a0c4a7ac826b47884cd313f6313b461cf41379) |
-| V6-PR-050 | native_0027/0028 历史幂等重检 | 主控已验，集成状态见 PR | [#62](https://github.com/acosmi/wrokbot/pull/62) | 未合入 |
-| V6-PR-051 | Infra 测试 Clippy 修复 | 开放候选，待独立验收 | [#64](https://github.com/acosmi/wrokbot/pull/64) | 未合入 |
+| V6-PR-050 | native_0027/0028 历史幂等重检 | 主控已验且已合 | [#62](https://github.com/acosmi/wrokbot/pull/62) | [1f8e24b674](https://github.com/acosmi/wrokbot/commit/1f8e24b674dcd26c2478f6c0b7e40ed80eb32e97) |
+| V6-PR-051 | Infra 测试 Clippy 修复 | 主控已验，集成状态见 PR | [#64](https://github.com/acosmi/wrokbot/pull/64) | 未合入 |
 | V6-PR-052 | Desktop ScreenSessionService 局部装配 | 开放候选，待独立验收 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 未合入 |
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 开放候选，待独立验收 | [#68](https://github.com/acosmi/wrokbot/pull/68) | 未合入 |
 | V6-PR-054 | skip-link 键盘焦点修复 | 开放候选，待独立验收 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
@@ -74,7 +74,6 @@
 | V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选未取回；需核冻结合同后最小重建 | 未找到对应 PR | 未重建 |
 | V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选未取回；源码仍为收集后检查 | 未找到对应 PR | 未重建 |
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
-
 ## macOS 首发进度
 
 当前尚无 A0–A7 中任何一项取得完整同候选通过证据；局部 PR 数量不代表首发完成比例。持续实施到首发验收完成。
@@ -112,12 +111,14 @@
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
 
+051 历史候选 bfb79b542b02ed470cafa3bbecceccb855cf5859 的作者记录（原始 QA 本轮未取回；新增 allow 已进入返修）：
+
+051 主控亲读 gateway_authority 三个测试文件与 gateway_sdk_transport/tls.rs，修复 issue #61 记录的第二波既有 clippy 问题（此前被 #58 的库编译失败长期遮蔽）：10 处（原报告 9 处，复核时另发现 1 处未覆盖的同构代码）`.err().expect(msg)`，其中 9 处机械改为等价的 `.expect_err(msg)`；第 10 处（`pending_failures.rs` 的 `assert_pending_without_second_post`）因 `Ok` 类型 `acosmi::Client` 有意不实现 `Debug`（避免意外泄漏存活 token）导致该改法无法编译，保留原写法并加定点 `#[allow(clippy::err_expect)]` 及理由注释。`gateway_sdk_transport/tls.rs` 的 3 处 `dead_code`（`Capture::headers`、`TlsFixture::tls_failures`、`chat_text`）根因是该文件被 `gateway_authority.rs` 与 `gateway_sdk_transport.rs` 两个测试二进制通过 `include!` 共享，字段/函数在后者的编译单元里有真实读取、在前者里没有；加 `#[allow(dead_code)]` 及理由注释，未做删除（删除会破坏真正用到它们的二进制）。验证：`cargo clippy -p openbot-infra --all-targets -- -D warnings` 干净；`gateway_authority`（12 项）与 `gateway_sdk_transport`（24 项）在真实 PostgreSQL 17 下 `--include-ignored` 全通过；lib 370 项不受影响。核实全工作区 `cargo clippy --workspace --all-targets` 目前仍会在 `openbot-testkit` 的 `transport_parity.rs` 处以硬编译错误（E0004，非 clippy 告警）终止，与本次改动无关，系初始快照自带的既有缺口（已用 git stash 在无关干净副本上单独复现确认），已单独归档为 issue #63，未在本 PR 修复范围内。
 050 修复 issue #57 记录的既有失败：native_0027.rs / native_0028.rs 各自的幂等重检误用裸 native::apply()（目标随 NATIVE_LATEST_VERSION 漂移），改为 native_0029/native_0033 已确立的 apply_through(client, 自身版本) 写法，未改动任何产品代码。真实 PostgreSQL 17.11 验证：`cargo test -p openbot-infra --test native_0027 --test native_0028 --offline --locked -- --include-ignored` 两项转绿；全 crate `--no-fail-fast -- --include-ignored` 除一项既有、自诊断、与本次无关的环境性失败（schema_baseline_parity.rs 因本机 pg_hba 为 trust 认证无法验证口令是否泄漏，需 scram/md5 实例）外全部通过；两个改动文件的 clippy 干净。
 
 049 修复 archive_bundle.rs::hex_decode 中 `value.len() % 2 != 0` 触发的 clippy::manual_is_multiple_of（issue #58）。该 lint 在当前 rustc/clippy 1.98.0 下会使严格门禁 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 对任何 PR 必现失败，属既有代码、与具体改动无关。改为 `!value.len().is_multiple_of(2)`，语义等价，无行为变化。`cargo clippy -p openbot-infra --lib --offline --locked -- -D warnings` 转绿；`cargo test -p openbot-infra --lib --offline --locked` 370 项通过。修复后补跑全量 `--workspace --all-targets`，发现被该 lib 编译失败长期掩盖的第二波既有红（gateway_authority 测试 9 处 err_expect、gateway_sdk_transport/tls.rs 3 处 dead_code），已登记为 issue #61，作为独立后续任务处理，未在本次改动。
 
 058 Copilot（临时实施执行方，非主控亲验）完成实现与本机验证，待主控独立验收：在完全干净的 `origin/main`（`66274f8`）上逐 crate 补跑测试时，发现 `openbot-agent` 的 `test_official_fixture_provenance_integrity` 既有失败（issue #75，与本次改动前任何工作无关）。根因是 `fixtures/agui/official-event-family.provenance.json` 对 `README.md` 记录的 `bytes`/`sha256` 是过期值（1341 字节），而该文件自本仓库当前历史根提交 `15d66ee` 起实际一直是 231 字节；`git log --oneline --all` 溯源确认 1341 字节仅存在于一个不在 `origin/main` 祖先链上的悬空分支草稿，从未对应过任何真正入库的内容。README.md 是 `vendored_schema` 里唯一标注"OpenBot-authored documentation"（非上游 vendor）的条目，故以当前实际、长期未变的文件内容为准，只更新 `bytes`/`sha256` 两个字段，未碰 `source` 字符串（属 #59/V6-PR-048 命名任务范围）、README.md 正文或其余 6 个已核对无误的 vendor 文件条目。`cargo test -p openbot-agent --all-targets`：58 项 lib 测试 + 5 项 fixture 测试全部通过（此前 4 通过/1 失败）；`cargo clippy -p openbot-agent --all-targets -- -D warnings` 干净。改动范围仅 provenance.json 的 2 行。
-
 ## 仍未完成
 
 - 归档容器容量仍是单独预算，不能将 4 MiB 理论明文上限当作外层 8 MiB 容器的可承载保证。
@@ -187,3 +188,5 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 ## 050 新机候选更新
 
 原交付 `ca0fb30f94820a3d5dc850535e5a2a09be3fce75` 的历史记录保留，本轮不继承自报测试。产品生产代码、DDL、schema fixture及断言均不改；两处历史重检仅指定本测试已施加的版本，以核对同版本幂等。已验049实际合并记录已同步，独立 PostgreSQL 17.11 / TCP SCRAM 已核实际版本，错口令确实拒绝，测试集群均正常停止且无 postmaster.pid 残留。基线 `45a0c4a7ac826b47884cd313f6313b461cf41379` 两项均真实失败于历史版本重检；候选 `41cffe0658e31ec04b2ac3068f54999cd9f3e5d6` 两项均通过，两个测试 target 的严格 Clippy 通过。台账登记后的最终 head 推送前复验同两项命令。该局部验证不证明完整产品恢复或 A 门通过。
+
+051 换机主控返修与实际验证：九处等价 expect_err 保留；Client 错误路径改显式 match，不要求存活凭据对象 Debug。共享 TLS fixture 的 HTTP framing 实际消费 Capture.headers，服务器直接消费自身持有的失败计数器；chat_text 原字节移到唯一消费的 SDK 测试入口。原候选四处新增 allow 全部移除，断言、HTTP 算法、TLS 计划及产品代码保持。固定 Rust 1.98.0、offline/locked 两个测试目标严格 Clippy 通过；独立 PG 17.11/TCP SCRAM 的 12 项 authority 显式 include-ignored 全通过，自有 TLS 24 项全通过。首次默认启动 authority 12 项 ignored 如实保留，未记作通过；最终候选重新执行完整 36 项。此结论不代表真实登录、厂商模型或 A2 完成。
