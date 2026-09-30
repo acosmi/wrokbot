@@ -442,14 +442,24 @@ impl PostgresStartLock {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
                 if let Some(data_dir) = data_dir {
+                    let evidence = quiescent::StartLockEvidence::inspect(
+                        &kernel_guard,
+                        app_data_root,
+                        instance_id,
+                    )
+                    .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
                     let reclaim = || {
                         quiescent::VerifiedQuiescentInstance::try_verify(
                             &kernel_guard,
                             app_data_root,
                             instance_id,
                             data_dir,
+                            &evidence,
                         )
                         .and_then(|verified| {
+                            if !evidence.is_current(&kernel_guard) {
+                                return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                            }
                             // V6-PR-014: durable epoch before deleting the dynamic start-lock.
                             recovery_epoch::mint_or_replace_for_reclaim(
                                 &kernel_guard,
@@ -473,16 +483,26 @@ impl PostgresStartLock {
                             }
                             Err(error) => return Err(error.into()),
                         },
-                        Err(_) => {
+                        Err(
+                            PostgresSidecarError::StartupJournalRecoveryRequired
+                            | PostgresSidecarError::HelperJournalRecoveryRequired,
+                        ) => {
                             // Mid-phase journals may block 012 minting; try controlled retirement once.
+                            if !evidence.is_current(&kernel_guard) {
+                                return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                            }
                             match quiescent::recover_mid_phase_journals(
                                 &kernel_guard,
                                 app_data_root,
                                 instance_id,
                                 data_dir,
                             )
-                            .and_then(|_| reclaim())
-                            {
+                            .and_then(|()| {
+                                if !evidence.is_current(&kernel_guard) {
+                                    return Err(PostgresSidecarError::StartLockRecoveryRequired);
+                                }
+                                reclaim()
+                            }) {
                                 Ok(()) => match options.open(&path) {
                                     Ok(file) => file,
                                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -497,6 +517,7 @@ impl PostgresStartLock {
                                 }
                             }
                         }
+                        Err(_) => return Err(PostgresSidecarError::StartLockRecoveryRequired),
                     }
                 } else {
                     return Err(PostgresSidecarError::StartLockRecoveryRequired);

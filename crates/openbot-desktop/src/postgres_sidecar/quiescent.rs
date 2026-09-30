@@ -3,38 +3,107 @@
 use super::helper_journal::{self, HelperJournalError};
 use super::kernel_start_lock::KernelStartLock;
 use super::startup_journal::{self, StartupJournalError};
-use super::{PostgresSidecarError, path_matches_open_file, sync_directory};
+use super::{PostgresSidecarError, path_matches_open_file, sync_directory, valid_instance_id};
 use std::fs::{self, File, OpenOptions};
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use wrok_bot_macos_process::{
     DataDirectoryOpenerObservation, ProcessIdentity, observe_data_directory_openers,
 };
 
 const LOCK_HEADER: &str = "openbot-postgres-start-lock-v1";
 
+/// Exact closed start-lock observed before any recovery effect; no recovery authority itself.
+pub(super) struct StartLockEvidence {
+    root: PathBuf,
+    instance_id: String,
+    path: PathBuf,
+    bytes: Vec<u8>,
+    file: File,
+}
+
+impl core::fmt::Debug for StartLockEvidence {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("StartLockEvidence(<sealed>)")
+    }
+}
+
+impl StartLockEvidence {
+    pub(super) fn inspect(
+        owner: &KernelStartLock,
+        app_data_root: &Path,
+        instance_id: &str,
+    ) -> Result<Self, PostgresSidecarError> {
+        if !owner.is_current() || owner.root() != app_data_root || !valid_instance_id(instance_id) {
+            return Err(PostgresSidecarError::StartLockGuardInvalid);
+        }
+        let path = app_data_root.join(format!(".postgresql-17-{instance_id}.start-lock-v1"));
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
+        if !metadata.is_file() {
+            return Err(PostgresSidecarError::StartLockRecoveryRequired);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if metadata.nlink() != 1 || metadata.mode() & 0o777 != 0o600 {
+                return Err(PostgresSidecarError::StartLockRecoveryRequired);
+            }
+        }
+        let mut file =
+            secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
+        if !lock_bytes_match_instance(&bytes, instance_id) {
+            return Err(PostgresSidecarError::StartLockRecoveryRequired);
+        }
+        let observed = Self {
+            root: app_data_root.to_owned(),
+            instance_id: instance_id.to_owned(),
+            path,
+            bytes,
+            file,
+        };
+        if !observed.is_current(owner) {
+            return Err(PostgresSidecarError::StartLockRecoveryRequired);
+        }
+        Ok(observed)
+    }
+
+    pub(super) fn is_current(&self, owner: &KernelStartLock) -> bool {
+        owner.is_current()
+            && owner.root() == self.root
+            && path_matches_open_file(&self.path, &self.file, &self.bytes, true)
+    }
+}
+
 /// Proof that one instance is quiescent enough to reclaim its dynamic start-lock evidence.
 ///
 /// Not serializable, not a wire type, and not recovery/epoch authority.
-pub(super) struct VerifiedQuiescentInstance {
-    instance_id: String,
+pub(super) struct VerifiedQuiescentInstance<'a> {
+    evidence: &'a StartLockEvidence,
 }
 
-impl core::fmt::Debug for VerifiedQuiescentInstance {
+impl core::fmt::Debug for VerifiedQuiescentInstance<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("VerifiedQuiescentInstance(<sealed>)")
     }
 }
 
-impl VerifiedQuiescentInstance {
+impl<'a> VerifiedQuiescentInstance<'a> {
     /// Mint only when owner, empty openers, and cleanup-eligible journals all hold.
     pub(super) fn try_verify(
         owner: &KernelStartLock,
         app_data_root: &Path,
         instance_id: &str,
         data_dir: &Path,
+        evidence: &'a StartLockEvidence,
     ) -> Result<Self, PostgresSidecarError> {
-        if !owner.is_current() || owner.root() != app_data_root {
+        if !evidence.is_current(owner)
+            || evidence.root != app_data_root
+            || evidence.instance_id != instance_id
+        {
             return Err(PostgresSidecarError::StartLockGuardInvalid);
         }
         if data_dir.parent() != Some(app_data_root)
@@ -87,12 +156,10 @@ impl VerifiedQuiescentInstance {
                 }
             },
         )?;
-        if !owner.is_current() {
+        if !evidence.is_current(owner) {
             return Err(PostgresSidecarError::StartLockGuardInvalid);
         }
-        Ok(Self {
-            instance_id: instance_id.to_owned(),
-        })
+        Ok(Self { evidence })
     }
 
     /// Delete this instance's dynamic start-lock evidence only.
@@ -101,35 +168,11 @@ impl VerifiedQuiescentInstance {
         owner: &KernelStartLock,
         app_data_root: &Path,
     ) -> Result<(), PostgresSidecarError> {
-        if !owner.is_current() || owner.root() != app_data_root {
+        if !self.evidence.is_current(owner) || self.evidence.root != app_data_root {
             return Err(PostgresSidecarError::StartLockGuardInvalid);
         }
-        let path = app_data_root.join(format!(".postgresql-17-{}.start-lock-v1", self.instance_id));
-        let metadata = fs::symlink_metadata(&path)
+        fs::remove_file(&self.evidence.path)
             .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
-        if !metadata.is_file() {
-            return Err(PostgresSidecarError::StartLockRecoveryRequired);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            if metadata.nlink() != 1 || metadata.mode() & 0o777 != 0o600 {
-                return Err(PostgresSidecarError::StartLockRecoveryRequired);
-            }
-        }
-        let mut file =
-            secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
-        if !lock_bytes_match_instance(&bytes, &self.instance_id) {
-            return Err(PostgresSidecarError::StartLockRecoveryRequired);
-        }
-        if !path_matches_open_file(&path, &file, &bytes, true) {
-            return Err(PostgresSidecarError::StartLockRecoveryRequired);
-        }
-        drop(file);
-        fs::remove_file(&path).map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
         sync_directory(app_data_root)?;
         if !owner.is_current() {
             return Err(PostgresSidecarError::StartLockGuardInvalid);
@@ -208,25 +251,37 @@ fn lock_bytes_match_instance(bytes: &[u8], instance_id: &str) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
     };
-    let mut lines = text.lines();
+    let mut lines = text.split('\n');
     if lines.next() != Some(LOCK_HEADER) {
         return false;
     }
-    let mut saw_instance = false;
-    for line in lines {
-        if let Some(value) = line.strip_prefix("instance=") {
-            if value != instance_id || saw_instance {
-                return false;
-            }
-            saw_instance = true;
-        } else if !(line.starts_with("pid=")
-            || line.starts_with("manifest=")
-            || line.starts_with("nonce="))
-        {
-            return false;
-        }
+    let Some(pid) = lines.next().and_then(|line| line.strip_prefix("pid=")) else {
+        return false;
+    };
+    if pid.starts_with('0')
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !pid.parse::<u32>().is_ok_and(|value| value != 0)
+    {
+        return false;
     }
-    saw_instance
+    let Some(instance) = lines.next().and_then(|line| line.strip_prefix("instance=")) else {
+        return false;
+    };
+    let Some(manifest) = lines.next().and_then(|line| line.strip_prefix("manifest=")) else {
+        return false;
+    };
+    let Some(nonce) = lines.next().and_then(|line| line.strip_prefix("nonce=")) else {
+        return false;
+    };
+    instance == instance_id
+        && valid_instance_id(instance)
+        && valid_instance_id(manifest)
+        && nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && lines.next() == Some("")
+        && lines.next().is_none()
 }
 
 fn secure_open_read(path: &Path) -> std::io::Result<File> {
