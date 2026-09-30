@@ -317,6 +317,195 @@ mod tests {
         root
     }
 
+    fn canonical_lock(instance: &str, pid: &str) -> String {
+        format!(
+            "{header}\npid={pid}\ninstance={instance}\nmanifest={}\nnonce={}\n",
+            "ab".repeat(32),
+            "cd".repeat(16),
+            header = super::LOCK_HEADER
+        )
+    }
+
+    fn malformed_locks(instance: &str) -> Vec<(&'static str, Vec<u8>)> {
+        let canonical = canonical_lock(instance, "1");
+        let manifest = "ab".repeat(32);
+        let nonce = "cd".repeat(16);
+        vec![
+            (
+                "only-instance",
+                format!("{}\ninstance={instance}\n", super::LOCK_HEADER).into_bytes(),
+            ),
+            ("missing-pid", canonical.replace("pid=1\n", "").into_bytes()),
+            (
+                "missing-manifest",
+                canonical
+                    .replace(&format!("manifest={manifest}\n"), "")
+                    .into_bytes(),
+            ),
+            (
+                "missing-nonce",
+                canonical
+                    .replace(&format!("nonce={nonce}\n"), "")
+                    .into_bytes(),
+            ),
+            (
+                "reversed",
+                format!(
+                    "{}\ninstance={instance}\npid=1\nmanifest={manifest}\nnonce={nonce}\n",
+                    super::LOCK_HEADER
+                )
+                .into_bytes(),
+            ),
+            ("duplicate-pid", format!("{canonical}pid=1\n").into_bytes()),
+            (
+                "duplicate-manifest",
+                format!("{canonical}manifest={manifest}\n").into_bytes(),
+            ),
+            (
+                "duplicate-nonce",
+                format!("{canonical}nonce={nonce}\n").into_bytes(),
+            ),
+            (
+                "duplicate-instance",
+                format!("{canonical}instance={instance}\n").into_bytes(),
+            ),
+            ("crlf", canonical.replace('\n', "\r\n").into_bytes()),
+            (
+                "missing-final-lf",
+                canonical.trim_end_matches('\n').as_bytes().to_vec(),
+            ),
+            ("unknown", format!("{canonical}other=value\n").into_bytes()),
+            ("empty-pid", canonical_lock(instance, "").into_bytes()),
+            ("zero-pid", canonical_lock(instance, "0").into_bytes()),
+            ("negative-pid", canonical_lock(instance, "-1").into_bytes()),
+            ("plus-pid", canonical_lock(instance, "+1").into_bytes()),
+            ("padded-pid", canonical_lock(instance, "01").into_bytes()),
+            (
+                "overflow-pid",
+                canonical_lock(instance, "4294967296").into_bytes(),
+            ),
+            (
+                "uppercase-manifest",
+                canonical
+                    .replace(&manifest, &manifest.to_uppercase())
+                    .into_bytes(),
+            ),
+            (
+                "short-manifest",
+                canonical.replace(&manifest, &manifest[..63]).into_bytes(),
+            ),
+            (
+                "nonhex-manifest",
+                canonical.replace(&manifest, &"g".repeat(64)).into_bytes(),
+            ),
+            (
+                "uppercase-nonce",
+                canonical
+                    .replace(&nonce, &nonce.to_uppercase())
+                    .into_bytes(),
+            ),
+            (
+                "short-nonce",
+                canonical.replace(&nonce, &nonce[..31]).into_bytes(),
+            ),
+            (
+                "nonhex-nonce",
+                canonical.replace(&nonce, &"g".repeat(32)).into_bytes(),
+            ),
+            (
+                "wrong-instance",
+                canonical.replace(instance, &"ef".repeat(32)).into_bytes(),
+            ),
+            (
+                "uppercase-instance",
+                canonical
+                    .replace(instance, &instance.to_uppercase())
+                    .into_bytes(),
+            ),
+            (
+                "truncated",
+                b"openbot-postgres-start-lock-v1\npid=".to_vec(),
+            ),
+            ("invalid-utf8", vec![0xff]),
+        ]
+    }
+
+    #[test]
+    fn closed_start_lock_records_accept_canonical_pid_bounds() {
+        let instance = "ab".repeat(32);
+        for pid in ["1", "4294967295"] {
+            assert!(super::lock_bytes_match_instance(
+                canonical_lock(&instance, pid).as_bytes(),
+                &instance
+            ));
+        }
+    }
+
+    #[test]
+    fn closed_start_lock_records_reject_malformed() {
+        let instance = "ab".repeat(32);
+        let mut accepted = Vec::new();
+        for (name, bytes) in malformed_locks(&instance) {
+            let valid = super::lock_bytes_match_instance(&bytes, &instance);
+            eprintln!("start-lock case={name} accepted={valid}");
+            if valid {
+                accepted.push(name);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "malformed start-lock records accepted: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_start_lock_reclaim_has_no_evidence_effect() {
+        let instance = "ab".repeat(32);
+        let mut violations = Vec::new();
+        for (name, bytes) in malformed_locks(&instance) {
+            let root = temp_root(name);
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+            write_private(&lock_path, &bytes);
+            let epoch_path = root.join(format!(".postgresql-17-{instance}.recovery-epoch-v1"));
+            let epoch_bytes = format!(
+                "openbot-postgres-recovery-epoch-v1\ninstance={instance}\nepoch={}\n",
+                "12".repeat(32)
+            );
+            write_private(&epoch_path, epoch_bytes.as_bytes());
+            let before_epoch = fs::symlink_metadata(&epoch_path).unwrap();
+            let before_lock = fs::symlink_metadata(&lock_path).unwrap();
+            let acquired = PostgresStartLock::acquire_with_data_dir(
+                &root,
+                &instance,
+                PostgresBundleDigest([0x11; 32]),
+                &data_dir,
+            );
+            let rejected = matches!(
+                acquired,
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            );
+            let epoch_unchanged = fs::read(&epoch_path).unwrap() == epoch_bytes.as_bytes()
+                && fs::symlink_metadata(&epoch_path).unwrap().ino() == before_epoch.ino();
+            let lock_unchanged = fs::read(&lock_path).unwrap() == bytes
+                && fs::symlink_metadata(&lock_path).unwrap().ino() == before_lock.ino();
+            eprintln!(
+                "start-lock-reclaim case={name} rejected={rejected} epoch_unchanged={epoch_unchanged} lock_unchanged={lock_unchanged}"
+            );
+            if !(rejected && epoch_unchanged && lock_unchanged) {
+                violations.push(name);
+            }
+            drop(acquired);
+            fs::remove_dir_all(root).unwrap();
+        }
+        assert!(
+            violations.is_empty(),
+            "start-lock rejection changed evidence or accepted: {violations:?}"
+        );
+    }
+
     #[test]
     fn cleanup_state_reclaims_stale_start_lock_then_acquire_succeeds() {
         let root = temp_root("reclaim");
