@@ -582,6 +582,177 @@ mod tests {
         );
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    struct EvidenceSnapshot {
+        path: PathBuf,
+        bytes: Vec<u8>,
+        mode: u32,
+        device: u64,
+        inode: u64,
+        links: u64,
+    }
+
+    fn evidence_snapshots(paths: &[PathBuf]) -> Vec<EvidenceSnapshot> {
+        paths
+            .iter()
+            .map(|path| {
+                let metadata = fs::symlink_metadata(path).unwrap();
+                EvidenceSnapshot {
+                    path: path.clone(),
+                    bytes: fs::read(path).unwrap(),
+                    mode: metadata.mode(),
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                    links: metadata.nlink(),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn malformed_lock_never_retires_mid_phase_journal_or_changes_other_evidence() {
+        for bad_mode in [false, true] {
+            let root = temp_root("067-preflight-journal");
+            let instance = "ef".repeat(32);
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = plant_stale_lock(&root, &instance);
+            if bad_mode {
+                fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+            } else {
+                write_private(
+                    &lock_path,
+                    format!("{}\ninstance={instance}\n", super::LOCK_HEADER).as_bytes(),
+                );
+            }
+            let (device, inode) = data_dir_ids(&data_dir);
+            let journal = root.join(format!(".postgresql-17-{instance}.startup-v1.json"));
+            let record = serde_json::json!({"schema":"openbot-postgres-startup","schemaVersion":1,"instanceId":instance,"dataDirName":format!("postgresql-17-{instance}"),"dataDirDevice":device,"dataDirInode":inode,"attemptId":"34".repeat(16),"startEvidenceSha256":"12".repeat(32),"ownerObservation":owner_observation_hex(),"childObservation":null,"phase":"spawn_entered"});
+            write_private(&journal, &serde_json::to_vec(&record).unwrap());
+            let mut paths = vec![lock_path, journal];
+            for (suffix, header) in [
+                ("recovery-epoch-v1", "openbot-postgres-recovery-epoch-v1"),
+                (
+                    "consumed-recovery-epoch-v1",
+                    "openbot-postgres-consumed-recovery-epoch-v1",
+                ),
+                (
+                    "auth-invalidation-required-v1",
+                    "openbot-postgres-auth-invalidation-required-v1",
+                ),
+                (
+                    "auth-invalidation-applied-v1",
+                    "openbot-postgres-auth-invalidation-applied-v1",
+                ),
+            ] {
+                let path = root.join(format!(".postgresql-17-{instance}.{suffix}"));
+                write_private(
+                    &path,
+                    format!("{header}\ninstance={instance}\nepoch={}\n", "12".repeat(32))
+                        .as_bytes(),
+                );
+                paths.push(path);
+            }
+            let data = data_dir.join("owned-data-sentinel");
+            let wal = data_dir.join("owned-wal-sentinel");
+            write_private(&data, b"owned data stays");
+            write_private(&wal, b"owned WAL stays");
+            paths.extend([data, wal]);
+            drop(KernelStartLock::acquire(&root, &instance).unwrap());
+            let before = evidence_snapshots(&paths);
+            let rejected = PostgresStartLock::acquire_with_data_dir(
+                &root,
+                &instance,
+                PostgresBundleDigest([0x11; 32]),
+                &data_dir,
+            );
+            assert!(
+                matches!(
+                    rejected,
+                    Err(PostgresSidecarError::StartLockRecoveryRequired)
+                ),
+                "{rejected:?}"
+            );
+            assert_eq!(evidence_snapshots(&paths), before);
+            assert_eq!(fs::metadata(&root).unwrap().mode() & 0o777, 0o700);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn observed_lock_rejects_replacement_and_same_inode_rewrite_before_mint() {
+        for replace in [false, true] {
+            let root = temp_root("067-observed-replace");
+            let instance = "ef".repeat(32);
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = plant_stale_lock(&root, &instance);
+            let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+            let evidence = super::StartLockEvidence::inspect(&owner, &root, &instance).unwrap();
+            if replace {
+                let candidate = root.join("owned-replacement");
+                write_private(&candidate, &fs::read(&lock_path).unwrap());
+                fs::rename(candidate, &lock_path).unwrap();
+            } else {
+                write_private(&lock_path, canonical_lock(&instance, "2").as_bytes());
+            }
+            let before = evidence_snapshots(std::slice::from_ref(&lock_path));
+            assert!(!evidence.is_current(&owner));
+            assert!(matches!(
+                super::VerifiedQuiescentInstance::try_verify(
+                    &owner, &root, &instance, &data_dir, &evidence
+                ),
+                Err(PostgresSidecarError::StartLockGuardInvalid)
+            ));
+            assert_eq!(evidence_snapshots(std::slice::from_ref(&lock_path)), before);
+            assert!(
+                !root
+                    .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
+                    .exists()
+            );
+            drop(owner);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn observed_lock_replacement_after_mint_cannot_be_deleted() {
+        let root = temp_root("067-after-mint-replace");
+        let instance = "ef".repeat(32);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let lock_path = plant_stale_lock(&root, &instance);
+        let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+        let evidence = super::StartLockEvidence::inspect(&owner, &root, &instance).unwrap();
+        let verified = super::VerifiedQuiescentInstance::try_verify(
+            &owner, &root, &instance, &data_dir, &evidence,
+        )
+        .unwrap();
+        let epoch = crate::postgres_sidecar::recovery_epoch::mint_or_replace_for_reclaim(
+            &owner, &root, &instance,
+        )
+        .unwrap();
+        let candidate = root.join("owned-replacement");
+        write_private(&candidate, &fs::read(&lock_path).unwrap());
+        fs::rename(candidate, &lock_path).unwrap();
+        let paths = [
+            lock_path,
+            root.join(format!(".postgresql-17-{instance}.recovery-epoch-v1")),
+        ];
+        let before = evidence_snapshots(&paths);
+        assert!(matches!(
+            verified.reclaim_start_lock_evidence(&owner, &root),
+            Err(PostgresSidecarError::StartLockGuardInvalid)
+        ));
+        assert_eq!(evidence_snapshots(&paths), before);
+        assert!(epoch.is_current());
+        drop(owner);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn cleanup_state_reclaims_stale_start_lock_then_acquire_succeeds() {
         let root = temp_root("reclaim");
