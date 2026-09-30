@@ -2905,6 +2905,93 @@ mod tests {
         (app_root, instance, data_dir)
     }
 
+    #[cfg(feature = "postgres-supervisor")]
+    struct SupervisorFailureEvidence {
+        app_root: PathBuf,
+        bundle_root: PathBuf,
+    }
+
+    #[cfg(feature = "postgres-supervisor")]
+    impl SupervisorFailureEvidence {
+        fn retain_on_failure(app_root: &Path, bundle_root: &Path) -> Self {
+            Self {
+                app_root: app_root.to_owned(),
+                bundle_root: bundle_root.to_owned(),
+            }
+        }
+    }
+
+    #[cfg(feature = "postgres-supervisor")]
+    impl Drop for SupervisorFailureEvidence {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                for path in [&self.app_root, &self.bundle_root] {
+                    if path.exists() {
+                        eprintln!(
+                            "supervisor failure test preserved evidence at {}",
+                            path.display()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    struct SupervisorFailureSnapshot {
+        app_root: PathBuf,
+        instance: String,
+        lock_path: PathBuf,
+        helper_path: PathBuf,
+        lock_bytes: Vec<u8>,
+        helper_bytes: Vec<u8>,
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
+    impl SupervisorFailureSnapshot {
+        fn capture(app_root: &Path, instance: &str) -> Self {
+            let lock_path = app_root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+            let helper_path = app_root.join(format!(".postgresql-17-{instance}.helper-v1.json"));
+            assert!(
+                !app_root
+                    .join(format!(".postgresql-17-{instance}.startup-v1.json"))
+                    .exists(),
+                "a failed helper or secret gate must not enter the main child journal"
+            );
+            Self {
+                app_root: app_root.to_owned(),
+                instance: instance.to_owned(),
+                lock_bytes: fs::read(&lock_path).unwrap(),
+                helper_bytes: fs::read(&helper_path).unwrap(),
+                lock_path,
+                helper_path,
+            }
+        }
+
+        fn helper_record(&self) -> Value {
+            serde_json::from_slice(&self.helper_bytes).unwrap()
+        }
+
+        fn assert_unchanged(&self) {
+            assert_eq!(fs::read(&self.lock_path).unwrap(), self.lock_bytes);
+            assert_eq!(fs::read(&self.helper_path).unwrap(), self.helper_bytes);
+            assert!(
+                !self
+                    .app_root
+                    .join(format!(".postgresql-17-{}.startup-v1.json", self.instance))
+                    .exists()
+            );
+        }
+
+        fn assert_plain_acquire_refused(&self, digest: PostgresBundleDigest) {
+            assert!(matches!(
+                PostgresStartLock::acquire(&self.app_root, &self.instance, digest),
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ));
+            self.assert_unchanged();
+        }
+    }
+
     #[cfg(all(feature = "postgres-supervisor", unix))]
     fn quoted_path(path: &Path) -> String {
         format!("'{}'", path.to_str().unwrap().replace('\'', "'\"'\"'"))
@@ -3090,11 +3177,13 @@ mod tests {
 
     #[cfg(feature = "postgres-supervisor")]
     #[tokio::test]
-    async fn version_failure_precedes_secret_store_and_releases_unstarted_lock() {
+    async fn version_failure_precedes_secret_store_and_retains_failure_evidence() {
         let (bundle_root, digest) = materialize_bundle("bad-version-process");
         let bundle =
             VerifiedPostgresBundle::open(&bundle_root, digest, &signing_identity()).unwrap();
         let (app_root, instance, data_dir) = supervisor_test_paths("bad-version-app");
+        let _failure_evidence =
+            SupervisorFailureEvidence::retain_on_failure(&app_root, &bundle_root);
         let store = MemorySecretStore::empty();
         let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
             "com.example.product.postgresql.bad-version",
@@ -3108,6 +3197,46 @@ mod tests {
             Err(PostgresSidecarError::VersionMismatch)
         ));
         assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+        assert!(store.value.lock().unwrap().is_none());
+        assert!(fs::read_dir(&data_dir).unwrap().next().is_none());
+        #[cfg(target_os = "macos")]
+        {
+            let evidence = SupervisorFailureSnapshot::capture(&app_root, &instance);
+            let record = evidence.helper_record();
+            assert_eq!(record["helperKind"], "version_postgres");
+            assert_eq!(record["phase"], "child_observed");
+            assert!(record["childObservation"].is_string());
+            evidence.assert_plain_acquire_refused(digest);
+
+            // The exact absent child can be confirmed, but version_postgres is not a
+            // complete helper sequence. Neither controlled attempt may reclaim the lock.
+            assert!(matches!(
+                PostgresStartLock::acquire_with_data_dir(
+                    &app_root, &instance, digest, &data_dir,
+                ),
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ));
+            assert_eq!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
+            let retired_bytes = fs::read(&evidence.helper_path).unwrap();
+            let mut expected = record;
+            expected["phase"] = Value::String("exit_confirmed".to_owned());
+            assert_eq!(serde_json::from_slice::<Value>(&retired_bytes).unwrap(), expected);
+            assert!(matches!(
+                PostgresStartLock::acquire_with_data_dir(
+                    &app_root, &instance, digest, &data_dir,
+                ),
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ));
+            assert_eq!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
+            assert_eq!(fs::read(&evidence.helper_path).unwrap(), retired_bytes);
+            assert!(!app_root
+                .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
+                .exists());
+            assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+            assert!(store.value.lock().unwrap().is_none());
+            assert!(fs::read_dir(&data_dir).unwrap().next().is_none());
+        }
+        #[cfg(not(target_os = "macos"))]
         assert!(
             !fs::read_dir(&app_root)
                 .unwrap()
@@ -3141,11 +3270,13 @@ mod tests {
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
     #[tokio::test]
-    async fn initdb_failure_keeps_persisted_secret_but_starts_no_process_and_releases_lock() {
+    async fn initdb_failure_keeps_persisted_secret_and_retains_failure_evidence() {
         let (bundle_root, digest) = materialize_failing_initdb_bundle();
         let bundle =
             VerifiedPostgresBundle::open(&bundle_root, digest, &signing_identity()).unwrap();
         let (app_root, instance, data_dir) = supervisor_test_paths("failing-initdb-app");
+        let _failure_evidence =
+            SupervisorFailureEvidence::retain_on_failure(&app_root, &bundle_root);
         let store = MemorySecretStore::empty();
         let service = ReviewedPostgresKeyStoreService::from_reviewed_release(
             "com.example.product.postgresql.failing-initdb",
@@ -3161,6 +3292,36 @@ mod tests {
         assert_eq!(store.writes.load(Ordering::Relaxed), 1);
         assert!(store.value.lock().unwrap().is_some());
         assert!(fs::read_dir(&data_dir).unwrap().next().is_none());
+        #[cfg(target_os = "macos")]
+        {
+            let evidence = SupervisorFailureSnapshot::capture(&app_root, &instance);
+            let record = evidence.helper_record();
+            assert_eq!(record["helperKind"], "initdb");
+            assert_eq!(record["phase"], "child_observed");
+            assert!(record["childObservation"].is_string());
+            evidence.assert_plain_acquire_refused(digest);
+            let persisted_secret = store.value.lock().unwrap().clone();
+
+            // A confirmed absent initdb and still-Fresh data dir allow controlled retirement.
+            // This does not retry initdb, rewrite the stored secret, or spawn the PG server.
+            let lock =
+                PostgresStartLock::acquire_with_data_dir(&app_root, &instance, digest, &data_dir)
+                    .unwrap();
+            lock.ensure_current().unwrap();
+            assert_ne!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
+            let mut complete = record;
+            complete["phase"] = Value::String("helpers_complete".to_owned());
+            assert_eq!(
+                serde_json::from_slice::<Value>(&fs::read(&evidence.helper_path).unwrap()).unwrap(),
+                complete
+            );
+            assert_eq!(store.writes.load(Ordering::Relaxed), 1);
+            assert!(*store.value.lock().unwrap() == persisted_secret);
+            assert!(fs::read_dir(&data_dir).unwrap().next().is_none());
+            drop(lock);
+            assert!(!evidence.lock_path.exists());
+        }
+        #[cfg(not(target_os = "macos"))]
         assert!(
             !fs::read_dir(&app_root)
                 .unwrap()
@@ -6545,6 +6706,8 @@ mod tests {
         let bundle =
             VerifiedPostgresBundle::open(&bundle_root, digest, &signing_identity()).unwrap();
         let (app_root, instance, data_dir) = supervisor_test_paths("existing-missing-secret-app");
+        let _failure_evidence =
+            SupervisorFailureEvidence::retain_on_failure(&app_root, &bundle_root);
         // Materialize valid existing cluster with PG_VERSION=17
         fs::write(
             data_dir.join("PG_VERSION"),
@@ -6579,7 +6742,33 @@ mod tests {
                 .trim(),
             "17"
         );
-        // Start lock must be cleanly released
+        #[cfg(target_os = "macos")]
+        {
+            let evidence = SupervisorFailureSnapshot::capture(&app_root, &instance);
+            let record = evidence.helper_record();
+            assert_eq!(record["helperKind"], "version_pg_ctl");
+            assert_eq!(record["phase"], "helpers_complete");
+            assert!(record["childObservation"].is_string());
+            evidence.assert_plain_acquire_refused(digest);
+
+            // Complete helper evidence permits quiescent reclaim, without accessing the key store.
+            let lock =
+                PostgresStartLock::acquire_with_data_dir(&app_root, &instance, digest, &data_dir)
+                    .unwrap();
+            lock.ensure_current().unwrap();
+            assert_ne!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
+            assert_eq!(
+                fs::read(&evidence.helper_path).unwrap(),
+                evidence.helper_bytes
+            );
+            assert_eq!(fs::read(data_dir.join("PG_VERSION")).unwrap(), b"17\n");
+            assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+            assert!(store.value.lock().unwrap().is_none());
+            drop(lock);
+            assert!(!evidence.lock_path.exists());
+        }
+        // Non-macOS retains its original unjournaled failure cleanup contract.
+        #[cfg(not(target_os = "macos"))]
         assert!(
             !fs::read_dir(&app_root)
                 .unwrap()
@@ -6598,6 +6787,8 @@ mod tests {
         let bundle =
             VerifiedPostgresBundle::open(&bundle_root, digest, &signing_identity()).unwrap();
         let (app_root, instance, data_dir) = supervisor_test_paths("corrupt-datadir-app");
+        let _failure_evidence =
+            SupervisorFailureEvidence::retain_on_failure(&app_root, &bundle_root);
 
         // Case 1: non-empty directory missing PG_VERSION
         fs::write(data_dir.join("some_random_file.txt"), "unknown data").unwrap();
@@ -6625,9 +6816,23 @@ mod tests {
         ));
         assert_eq!(store.writes.load(Ordering::Relaxed), 0);
         // Original file intact
-        assert!(data_dir.join("some_random_file.txt").exists());
+        assert_eq!(
+            fs::read(data_dir.join("some_random_file.txt")).unwrap(),
+            b"unknown data"
+        );
+        #[cfg(target_os = "macos")]
+        let evidence = {
+            let evidence = SupervisorFailureSnapshot::capture(&app_root, &instance);
+            let record = evidence.helper_record();
+            assert_eq!(record["helperKind"], "version_pg_ctl");
+            assert_eq!(record["phase"], "exit_confirmed");
+            assert!(record["childObservation"].is_string());
+            evidence.assert_plain_acquire_refused(digest);
+            evidence
+        };
 
-        // Case 2: corrupted PG_VERSION content
+        // Change only this test-owned data fixture. Invalid disposition cannot complete
+        // helpers or authorize recovery; changing its bytes is not a product repair flow.
         fs::remove_file(data_dir.join("some_random_file.txt")).unwrap();
         fs::write(
             data_dir.join("PG_VERSION"),
@@ -6641,6 +6846,15 @@ mod tests {
         )
         .await;
 
+        #[cfg(target_os = "macos")]
+        {
+            assert!(matches!(
+                result2,
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ));
+            evidence.assert_unchanged();
+        }
+        #[cfg(not(target_os = "macos"))]
         assert!(matches!(
             result2,
             Err(PostgresSidecarError::DataDirectoryInvalid)
