@@ -64,11 +64,11 @@
 | V6-PR-050 | native_0027/0028 历史幂等重检 | 主控已验且已合 | [#62](https://github.com/acosmi/wrokbot/pull/62) | [1f8e24b674](https://github.com/acosmi/wrokbot/commit/1f8e24b674dcd26c2478f6c0b7e40ed80eb32e97) |
 | V6-PR-051 | Infra 测试 Clippy 修复 | 主控已验且已合 | [#64](https://github.com/acosmi/wrokbot/pull/64) | [59647d1487](https://github.com/acosmi/wrokbot/commit/59647d1487930dd0504fd18f636379457104ba9f) |
 | V6-PR-052 | Desktop ScreenSessionService 局部装配 | 主控返修已验且已合，仅backend局部端口 | [#67](https://github.com/acosmi/wrokbot/pull/67) | [82db75413b](https://github.com/acosmi/wrokbot/commit/82db75413bd7ba7639abae2238a7d5ee722a0e0e) |
-| V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 主控已验，集成状态见 PR | [#68](https://github.com/acosmi/wrokbot/pull/68) | 未合入 |
+| V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 主控已验且已合 | [#68](https://github.com/acosmi/wrokbot/pull/68) | [e7098b56fa](https://github.com/acosmi/wrokbot/commit/e7098b56fa58370811057b14d4715c642c4bc13b) |
 | V6-PR-054 | skip-link 键盘焦点修复 | 开放候选，待独立验收 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
 | V6-PR-055 | UI wasm32 Clippy 修复 | 开放候选，待独立验收 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
 | V6-PR-056 | Desktop Clippy 修复 | 主控返修已验且已合 | [#72](https://github.com/acosmi/wrokbot/pull/72) | [9bae520869](https://github.com/acosmi/wrokbot/commit/9bae520869f8dc2fb9833fae4b946cd99c3aa64a) |
-| V6-PR-057 | 既有格式差异修复 | 开放候选，待独立验收 | [#74](https://github.com/acosmi/wrokbot/pull/74) | 未合入 |
+| V6-PR-057 | 既有格式差异修复 | 已保留已验组合并核机械来源，最终检查与集成见 PR | [#74](https://github.com/acosmi/wrokbot/pull/74) | 未合入 |
 | V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验且已合 | [#76](https://github.com/acosmi/wrokbot/pull/76) | [9a3b5c7234](https://github.com/acosmi/wrokbot/commit/9a3b5c7234b8362e4765726c52a6db1c73e08a36) |
 | V6-PR-059 | SDK 自有登录合同草案 | 未批准；不得据此实施 | 无生产候选 PR | 未合入 |
 | V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选缺失后重建，主控已验且已合 | [#82](https://github.com/acosmi/wrokbot/pull/82) | [c8ce151835](https://github.com/acosmi/wrokbot/commit/c8ce151835b52b05ebb583b5e8c2d1ab543fcc37) |
@@ -113,7 +113,7 @@
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
 
-057 historical author record (original QA unavailable; not independent final evidence):
+057 历史作者记录（原始 QA 本轮未取回，不作为最终候选独立证据；其中环境 flake 判断也不继承）：
 
 057（Copilot 临时实施执行方，非主控亲验）：修复 issue #73（全仓 `cargo fmt --all -- --check` 既有失败，4 个 crate 12 个文件共 49 处差异，验证 issue #65 时发现，经 A/B 确认与 issue #65 改动无关，属 origin/main 自身既有状态）。直接运行 `cargo fmt --all`，无手工编辑；输出全部为机械换行重排与 `use` 语句重排序，两者在 Rust 中均无语义影响。验证：`cargo fmt --all -- --check` 49→0；4 个受影响 crate 逐一 `cargo check --all-targets` 均干净；逐一 `cargo test --all-targets`——`openbot-desktop`（`--test-threads=1`）331 通过 4 失败，与 origin/main 同命令下失败集合一致且与 issue #66 记录的环境特有 flake 完全吻合，无新增失败；`openbot-domain` 26 通过；`openbot-infra` 370 通过（另有多个需真实 PostgreSQL 的集成测试按预期 ignored）；`wrok-bot-macos-process` 7 通过。
 
@@ -219,3 +219,5 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 060 旧本地候选及原始QA没有取回，当前是缺失后的最小重建，生成新SHA。只改四个旧测试和其自有失败证据辅助；原fixture、版本/口令/数据失败类别及零写断言保持。macOS普通acquire保持失败锁/helper bytes并拒绝；受控收口依据真实child观察与数据形态，未齐的version helper仅收口exit_confirmed仍拒绝回收，合法initdb/完整helper路径方可受控处理。corrupt第二次仍按已有失败锁拒绝并保持原证据，不自动删锁。未改生产源码、恢复规则或口令通道。主控原始四项失败及错误中间结果留存，最终干净候选重新运行严格Clippy和sidecar回归，ignored真实PG不计通过；此前056的88项实际组合是独立证据。
 
 053 换机主控独立读 channel 对拍矩阵、五条 model HTTP/typed 路由与共享业务、现有 PG 专项源码。候选只是穷举登记五个 model 变体不进入 channel 专项，没有 wildcard、lint 豁免或断言变更。固定 Rust 1.98.0/locked 严格目标 Clippy 通过；实际 channel 对拍 8/8 通过，独立 PG17.11/SCRAM 上既有 model HTTP 会话/Vault 旅程 1/1 通过，集群停止无残留。该 HTTP 旅程使用应用请求 harness；不代表 model 五操作的两宿主 PG 对拍、Wry、真实 socket、跨 scope 撤权矩阵、厂商三来源或 A2 完成。
+
+057 换机主控在已独立验收的功能组合上更新原 PR。先按 hunk 撤销原重叠格式补丁，再正常合入已验 main；格式处理前全部产品字节核同 main，未复制旧整文件覆盖功能。原12个后端文件逐一核固定 Rust1.98.0 格式器输出，其中两文件已由前项满足格式；另明确纳入061新增版本输出测试的一处链式换行。因此最终仅11个 Rust文件有机械差量。包含 use排序、换行、冗余 match arm块括号与逗号调整；字段、literal、断言、cfg条件和业务调用不变。主控已亲读最终完整差量并保存字节来源依据，最终同候选全仓 fmt 检查结果与合并事实见本 PR；未继承旧作者测试数或将此格式任务算作M0通过。

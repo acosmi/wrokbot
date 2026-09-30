@@ -121,7 +121,10 @@ fn child_evidence(record: &serde_json::Value) -> [u8; 32] {
     let hex = record["childObservation"].as_str().unwrap();
     assert_eq!(hex.len(), 64);
     let mut evidence = [0_u8; 32];
-    for (byte, pair) in evidence.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0.iter()) {
+    for (byte, pair) in evidence
+        .iter_mut()
+        .zip(hex.as_bytes().as_chunks::<2>().0.iter())
+    {
         *byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
     }
     evidence

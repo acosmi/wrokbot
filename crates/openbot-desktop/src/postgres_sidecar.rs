@@ -3217,27 +3217,28 @@ mod tests {
             // The exact absent child can be confirmed, but version_postgres is not a
             // complete helper sequence. Neither controlled attempt may reclaim the lock.
             assert!(matches!(
-                PostgresStartLock::acquire_with_data_dir(
-                    &app_root, &instance, digest, &data_dir,
-                ),
+                PostgresStartLock::acquire_with_data_dir(&app_root, &instance, digest, &data_dir,),
                 Err(PostgresSidecarError::StartLockRecoveryRequired)
             ));
             assert_eq!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
             let retired_bytes = fs::read(&evidence.helper_path).unwrap();
             let mut expected = record;
             expected["phase"] = Value::String("exit_confirmed".to_owned());
-            assert_eq!(serde_json::from_slice::<Value>(&retired_bytes).unwrap(), expected);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&retired_bytes).unwrap(),
+                expected
+            );
             assert!(matches!(
-                PostgresStartLock::acquire_with_data_dir(
-                    &app_root, &instance, digest, &data_dir,
-                ),
+                PostgresStartLock::acquire_with_data_dir(&app_root, &instance, digest, &data_dir,),
                 Err(PostgresSidecarError::StartLockRecoveryRequired)
             ));
             assert_eq!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
             assert_eq!(fs::read(&evidence.helper_path).unwrap(), retired_bytes);
-            assert!(!app_root
-                .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
-                .exists());
+            assert!(
+                !app_root
+                    .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
+                    .exists()
+            );
             assert_eq!(store.writes.load(Ordering::Relaxed), 0);
             assert!(store.value.lock().unwrap().is_none());
             assert!(fs::read_dir(&data_dir).unwrap().next().is_none());
@@ -3410,7 +3411,10 @@ mod tests {
             .stdin(Stdio::null())
             .output()
             .unwrap();
-        assert!(output.status.success(), "the matching pg_config must succeed");
+        assert!(
+            output.status.success(),
+            "the matching pg_config must succeed"
+        );
         assert!(output.stdout.len() <= 4096);
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
@@ -3541,7 +3545,12 @@ mod tests {
             "share/postgresql/information_schema.sql".to_owned(),
             format!("lib/postgresql/{plpgsql}"),
         ] {
-            assert!(fs::symlink_metadata(root.join(&relative)).unwrap().file_type().is_file());
+            assert!(
+                fs::symlink_metadata(root.join(&relative))
+                    .unwrap()
+                    .file_type()
+                    .is_file()
+            );
             assert_eq!(
                 manifest["files"][&relative].as_str().unwrap(),
                 encode_hex(&sha256_file(&root.join(relative)).unwrap())

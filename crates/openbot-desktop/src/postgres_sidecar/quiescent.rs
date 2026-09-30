@@ -3,12 +3,12 @@
 use super::helper_journal::{self, HelperJournalError};
 use super::kernel_start_lock::KernelStartLock;
 use super::startup_journal::{self, StartupJournalError};
-use super::{path_matches_open_file, sync_directory, PostgresSidecarError};
+use super::{PostgresSidecarError, path_matches_open_file, sync_directory};
 use std::fs::{self, File, OpenOptions};
 use std::io::Read as _;
 use std::path::Path;
 use wrok_bot_macos_process::{
-    observe_data_directory_openers, DataDirectoryOpenerObservation, ProcessIdentity,
+    DataDirectoryOpenerObservation, ProcessIdentity, observe_data_directory_openers,
 };
 
 const LOCK_HEADER: &str = "openbot-postgres-start-lock-v1";
