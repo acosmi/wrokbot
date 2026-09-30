@@ -37,6 +37,13 @@ mod account_tests;
 #[path = "gateway_sdk_transport/sdk5_tests.rs"]
 mod sdk5_tests;
 
+fn chat_text() -> String {
+    format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"id":"chat-owned","choices":[{"index":0,"delta":{"content":"hello custom"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}})
+    )
+}
+
 // In-memory test fixture only. The production module intentionally has no authority implementation.
 #[derive(Default)]
 struct Fence {
