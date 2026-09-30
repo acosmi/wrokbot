@@ -3182,28 +3182,37 @@ mod tests {
             let evidence = SupervisorFailureSnapshot::capture(&app_root, &instance);
             let record = evidence.helper_record();
             assert_eq!(record["helperKind"], "version_postgres");
-            assert_eq!(record["phase"], "spawn_entered");
-            assert!(record["childObservation"].is_null());
+            assert_eq!(record["phase"], "child_observed");
+            assert!(record["childObservation"].is_string());
             evidence.assert_plain_acquire_refused(digest);
 
-            // Recovery is an explicit data-dir-bound acquire, not cleanup by failed start.
-            // An unobserved spawn is retired to Absent; no child/exit evidence is invented.
-            let lock =
-                PostgresStartLock::acquire_with_data_dir(&app_root, &instance, digest, &data_dir)
-                    .unwrap();
-            lock.ensure_current().unwrap();
-            assert_ne!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
-            assert!(!evidence.helper_path.exists());
-            assert!(
-                app_root
-                    .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
-                    .is_file()
-            );
+            // The exact absent child can be confirmed, but version_postgres is not a
+            // complete helper sequence. Neither controlled attempt may reclaim the lock.
+            assert!(matches!(
+                PostgresStartLock::acquire_with_data_dir(
+                    &app_root, &instance, digest, &data_dir,
+                ),
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ));
+            assert_eq!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
+            let retired_bytes = fs::read(&evidence.helper_path).unwrap();
+            let mut expected = record;
+            expected["phase"] = Value::String("exit_confirmed".to_owned());
+            assert_eq!(serde_json::from_slice::<Value>(&retired_bytes).unwrap(), expected);
+            assert!(matches!(
+                PostgresStartLock::acquire_with_data_dir(
+                    &app_root, &instance, digest, &data_dir,
+                ),
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ));
+            assert_eq!(fs::read(&evidence.lock_path).unwrap(), evidence.lock_bytes);
+            assert_eq!(fs::read(&evidence.helper_path).unwrap(), retired_bytes);
+            assert!(!app_root
+                .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
+                .exists());
             assert_eq!(store.writes.load(Ordering::Relaxed), 0);
             assert!(store.value.lock().unwrap().is_none());
             assert!(fs::read_dir(&data_dir).unwrap().next().is_none());
-            drop(lock);
-            assert!(!evidence.lock_path.exists());
         }
         #[cfg(not(target_os = "macos"))]
         assert!(
