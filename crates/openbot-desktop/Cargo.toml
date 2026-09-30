@@ -76,7 +76,7 @@ openbot-application.workspace = true
 openbot-agent = { workspace = true, optional = true }
 # Shared `ScreenSessionAdministration` port implementation (`ScreenHub` / `ScreenSessionService`),
 # the same real Computer adapter Server already wires. Optional: the default typed graph and the
-# lighter host features above must not pull in the Computer/Electron surface.
+# lighter host features above must not pull in this Computer adapter.
 openbot-computer = { workspace = true, optional = true }
 # AuthContext / AppCommand / AppReply / AppEvent / AppError / ID newtype / Transport label。
 openbot-contracts.workspace = true
