@@ -376,6 +376,125 @@ fn invalid_pg_version_preserves_mid_phase_journal_and_all_prior_evidence() {
 }
 
 #[test]
+fn pg_version_opened_probe_rejects_large_same_inode_growth() {
+    let harness = Harness::new("069-opened-growth");
+    let version = harness.data_dir.join("PG_VERSION");
+    write_private(&version, b"17\n");
+    let observed = fs::symlink_metadata(&version).unwrap();
+    let file = secure_open_file(&version).unwrap();
+    let mut writer = OpenOptions::new().append(true).open(&version).unwrap();
+    writer.write_all(&vec![b' '; 1_048_576]).unwrap();
+    writer.sync_all().unwrap();
+    assert_eq!(
+        fs::symlink_metadata(&version).unwrap().ino(),
+        observed.ino()
+    );
+    let before = disposition_tree_snapshot(&harness.root);
+    assert_eq!(
+        read_pg_version_probe(&file),
+        Err(HelperJournalError::Invalid)
+    );
+    assert_eq!(
+        read_pg_version_bytes(&version, &file, &observed),
+        Err(HelperJournalError::Invalid)
+    );
+    assert_eq!(disposition_tree_snapshot(&harness.root), before);
+}
+
+#[test]
+fn pg_version_observed_handle_rejects_replacement_and_shortening() {
+    for mutation in ["path-replacement", "same-inode-shortening"] {
+        let harness = Harness::new(mutation);
+        let version = harness.data_dir.join("PG_VERSION");
+        write_private(&version, b"17\n");
+        let observed = fs::symlink_metadata(&version).unwrap();
+        let file = secure_open_file(&version).unwrap();
+        if mutation == "path-replacement" {
+            let replacement = harness.data_dir.join("owned-replacement");
+            write_private(&replacement, b"17\n");
+            fs::rename(replacement, &version).unwrap();
+            assert_ne!(
+                fs::symlink_metadata(&version).unwrap().ino(),
+                observed.ino()
+            );
+        } else {
+            write_private(&version, b"17");
+            assert_eq!(
+                fs::symlink_metadata(&version).unwrap().ino(),
+                observed.ino()
+            );
+        }
+        let before = disposition_tree_snapshot(&harness.root);
+        assert_eq!(
+            read_pg_version_bytes(&version, &file, &observed),
+            Err(HelperJournalError::Invalid),
+            "{mutation}"
+        );
+        // A new full observation accepts the now-current legal file; only the stale one failed.
+        assert_eq!(
+            read_data_directory_origin(&harness.data_dir),
+            Ok(DataDirOrigin::Existing)
+        );
+        assert_eq!(
+            disposition_tree_snapshot(&harness.root),
+            before,
+            "{mutation}"
+        );
+    }
+}
+
+#[test]
+fn invalid_pg_version_reclaim_keeps_public_error_and_prior_epoch() {
+    let mut harness = Harness::new("069-invalid-reclaim");
+    let child = exited_child_observation();
+    let mut record = complete_record(&harness, HelperKind::VersionPgCtl, &child);
+    record.phase = HelperJournalPhase::ExitConfirmed;
+    write_private(&harness.journal_path(), &encode_record(&record).unwrap());
+    write_private(
+        &harness.data_dir.join("PG_VERSION"),
+        format!("{}17", " ".repeat(15)).as_bytes(),
+    );
+    let epoch = harness.root.join(format!(
+        ".postgresql-17-{}.recovery-epoch-v1",
+        harness.instance
+    ));
+    write_private(
+        &epoch,
+        format!(
+            "openbot-postgres-recovery-epoch-v1\ninstance={}\nepoch={}\n",
+            harness.instance,
+            "ab".repeat(32)
+        )
+        .as_bytes(),
+    );
+    write_private(
+        &harness.data_dir.join("owned-data-sentinel"),
+        b"preserve-data",
+    );
+    let wal = harness.data_dir.join("pg_wal");
+    fs::create_dir(&wal).unwrap();
+    fs::set_permissions(&wal, fs::Permissions::from_mode(0o700)).unwrap();
+    write_private(&wal.join("owned-wal-sentinel"), b"preserve-wal");
+    harness.lock_mut().preserve_on_drop();
+    drop(harness.lock.take());
+    let before = disposition_tree_snapshot(&harness.root);
+    let acquired = PostgresStartLock::acquire_with_data_dir(
+        &harness.root,
+        &harness.instance,
+        PostgresBundleDigest([0x4a; 32]),
+        &harness.data_dir,
+    );
+    assert!(
+        matches!(
+            acquired,
+            Err(crate::postgres_sidecar::PostgresSidecarError::StartLockRecoveryRequired)
+        ),
+        "{acquired:?}"
+    );
+    assert_eq!(disposition_tree_snapshot(&harness.root), before);
+}
+
+#[test]
 fn owned_helper_child_is_observed_then_confirmed() {
     let mut child = OwnedChild::sleeping();
     let identity = child.identity();
