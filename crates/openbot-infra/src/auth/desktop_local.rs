@@ -19,13 +19,12 @@ use openbot_application::tenant::package::{
     TenantPackageSyncReport, synchronize_tenant_package,
 };
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
+use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 use openbot_domain::audit::event::{AuditEvent, AuditEventType};
 use openbot_domain::audit::payload::{AuditIdentifier, AuditLabel, AuditPayload};
-use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 
 use super::{initialize_canonical_principal, load_canonical_generation};
 use crate::db::InfraError;
-use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 use crate::db::desktop_local::{
     AttestedDesktopLocalAdmin, DesktopLocalDatabase, FreshDesktopDatabaseProof,
     UnattestedDesktopLocalAdmin,
@@ -35,6 +34,7 @@ use crate::db::initialization::{
     DatabaseInitializationError, DatabaseOrigin, initialize as initialize_database,
 };
 use crate::db::native;
+use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 use crate::tenant::PostgresTenantPackageSynchronizer;
 
 const FILE_NAME: &str = "desktop-instance-v1";
@@ -169,12 +169,9 @@ impl DesktopLocalAuthority {
             .transaction()
             .await
             .map_err(|error| InfraError::query("开始 desktop-local generation 事务", error))?;
-        let next = crate::repo::people_admin::advance_generation(
-            &transaction,
-            self.auth.actor(),
-            None,
-        )
-        .await?;
+        let next =
+            crate::repo::people_admin::advance_generation(&transaction, self.auth.actor(), None)
+                .await?;
         // V6-PR-021: same-transaction session termination for this principal only.
         transaction
             .execute(
@@ -270,11 +267,9 @@ impl DesktopLocalAuthority {
                 actor: Some(self.auth.actor().clone()),
                 event_type: AuditEventType::TOOL_APPROVAL_CANCELLED,
                 target_kind: AuditLabel::new("tool_approval"),
-                target_id: Some(
-                    AuditIdentifier::new(&approval_id).map_err(|_| {
-                        InfraError::repository_invariant("desktop_local_approval_id_invalid")
-                    })?,
-                ),
+                target_id: Some(AuditIdentifier::new(&approval_id).map_err(|_| {
+                    InfraError::repository_invariant("desktop_local_approval_id_invalid")
+                })?),
                 payload: AuditPayload::empty(),
                 created_at,
             };
@@ -430,14 +425,11 @@ impl DesktopLocalInstallation {
             {
                 return Err(DesktopLocalBootstrapError::VaultCanaryMismatch);
             }
-            let mut client = pool
-                .get()
-                .await
-                .map_err(|source| {
-                    DesktopLocalBootstrapError::Database(
-                        InfraError::connect("取 Desktop canary 后迁移连接", source).into(),
-                    )
-                })?;
+            let mut client = pool.get().await.map_err(|source| {
+                DesktopLocalBootstrapError::Database(
+                    InfraError::connect("取 Desktop canary 后迁移连接", source).into(),
+                )
+            })?;
             native::apply(&mut client)
                 .await
                 .map_err(|error| DesktopLocalBootstrapError::Database(error.into()))?;

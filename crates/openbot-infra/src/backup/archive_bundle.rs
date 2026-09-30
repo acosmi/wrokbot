@@ -253,8 +253,8 @@ pub fn read_archive_bundle(
     if wire.chunk_envelopes.len() > bounds.max_chunks {
         return Err(ArchiveBundleFault::ChunkCountExceeded);
     }
-    let digest_bytes = hex_decode(&wire.inventory_digest)
-        .map_err(|_| ArchiveBundleFault::ParseFailed)?;
+    let digest_bytes =
+        hex_decode(&wire.inventory_digest).map_err(|_| ArchiveBundleFault::ParseFailed)?;
     if digest_bytes.len() != 32 {
         return Err(ArchiveBundleFault::ParseFailed);
     }
@@ -417,13 +417,11 @@ mod tests {
         let bounds = ArchiveBundleBounds::standard();
 
         let mut buffer = Vec::new();
-        let written =
-            write_archive_bundle(digest, &wrap, &chunks, bounds, &mut buffer).unwrap();
+        let written = write_archive_bundle(digest, &wrap, &chunks, bounds, &mut buffer).unwrap();
         assert_eq!(written, buffer.len() as u64);
         assert!(written > 0);
 
-        let contents =
-            read_archive_bundle(&mut buffer.as_slice(), bounds, digest).unwrap();
+        let contents = read_archive_bundle(&mut buffer.as_slice(), bounds, digest).unwrap();
         assert_eq!(contents.inventory_digest(), digest);
         assert_eq!(contents.wrap_envelope(), wrap);
         assert_eq!(contents.chunk_envelopes(), chunks.as_slice());
@@ -436,11 +434,20 @@ mod tests {
         let bounds = ArchiveBundleBounds::standard();
 
         let mut buffer = Vec::new();
-        write_archive_bundle(digest, &sample_wrap(), &sample_chunks(), bounds, &mut buffer)
-            .unwrap();
+        write_archive_bundle(
+            digest,
+            &sample_wrap(),
+            &sample_chunks(),
+            bounds,
+            &mut buffer,
+        )
+        .unwrap();
 
         let result = read_archive_bundle(&mut buffer.as_slice(), bounds, wrong_digest);
-        assert_eq!(result.unwrap_err(), ArchiveBundleFault::InventoryDigestMismatch);
+        assert_eq!(
+            result.unwrap_err(),
+            ArchiveBundleFault::InventoryDigestMismatch
+        );
     }
 
     #[test]
@@ -464,8 +471,14 @@ mod tests {
         let bounds_small = ArchiveBundleBounds::try_new(10, 32).unwrap();
 
         let mut buffer = Vec::new();
-        write_archive_bundle(digest, &sample_wrap(), &sample_chunks(), bounds_big, &mut buffer)
-            .unwrap();
+        write_archive_bundle(
+            digest,
+            &sample_wrap(),
+            &sample_chunks(),
+            bounds_big,
+            &mut buffer,
+        )
+        .unwrap();
 
         let result = read_archive_bundle(&mut buffer.as_slice(), bounds_small, digest);
         assert_eq!(result.unwrap_err(), ArchiveBundleFault::TotalBytesExceeded);
@@ -489,11 +502,7 @@ mod tests {
     fn schema_mismatch_rejected() {
         let bad_json = r#"{"schema":"wrong-schema","schemaVersion":1,"inventoryDigest":"aa","wrapEnvelope":"w","chunkEnvelopes":["c"]}"#;
         let bounds = ArchiveBundleBounds::standard();
-        let result = read_archive_bundle(
-            &mut bad_json.as_bytes(),
-            bounds,
-            sample_digest(),
-        );
+        let result = read_archive_bundle(&mut bad_json.as_bytes(), bounds, sample_digest());
         assert_eq!(result.unwrap_err(), ArchiveBundleFault::SchemaInvalid);
     }
 
@@ -501,11 +510,7 @@ mod tests {
     fn truncated_json_rejected() {
         let truncated = r#"{"schema":"openbot-backup-archive","schemaVer"#;
         let bounds = ArchiveBundleBounds::standard();
-        let result = read_archive_bundle(
-            &mut truncated.as_bytes(),
-            bounds,
-            sample_digest(),
-        );
+        let result = read_archive_bundle(&mut truncated.as_bytes(), bounds, sample_digest());
         assert_eq!(result.unwrap_err(), ArchiveBundleFault::ParseFailed);
     }
 

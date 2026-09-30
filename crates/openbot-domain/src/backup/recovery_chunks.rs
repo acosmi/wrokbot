@@ -232,7 +232,8 @@ impl BackupRecoveryChunkStream {
         let opened = open_backup_recovery_chunk(recovery_key, &spec, envelope)?;
         let piece = opened.expose();
         let added = u64::try_from(piece.len()).map_err(|_| VaultError::EnvelopeInvalid)?;
-        let have = u64::try_from(self.accumulated.len()).map_err(|_| VaultError::EnvelopeInvalid)?;
+        let have =
+            u64::try_from(self.accumulated.len()).map_err(|_| VaultError::EnvelopeInvalid)?;
         let next_len = have.checked_add(added).ok_or(VaultError::EnvelopeInvalid)?;
         if next_len > self.total_bytes {
             return Err(VaultError::EnvelopeInvalid);
@@ -305,11 +306,11 @@ mod tests {
 
     #[test]
     fn two_chunks_round_trip_in_order() {
-        let first = seal_backup_recovery_chunk(&recovery_key(), &spec(0), nonce(1), b"abcd").unwrap();
+        let first =
+            seal_backup_recovery_chunk(&recovery_key(), &spec(0), nonce(1), b"abcd").unwrap();
         let second =
             seal_backup_recovery_chunk(&recovery_key(), &spec(1), nonce(2), b"efgh").unwrap();
-        let mut stream =
-            BackupRecoveryChunkStream::begin(binding(), 2, 8, digest()).unwrap();
+        let mut stream = BackupRecoveryChunkStream::begin(binding(), 2, 8, digest()).unwrap();
         stream.accept(&recovery_key(), &first).unwrap();
         stream.accept(&recovery_key(), &second).unwrap();
         let assembled = stream.finish().unwrap();
@@ -319,11 +320,11 @@ mod tests {
 
     #[test]
     fn reorder_does_not_assemble() {
-        let first = seal_backup_recovery_chunk(&recovery_key(), &spec(0), nonce(1), b"abcd").unwrap();
+        let first =
+            seal_backup_recovery_chunk(&recovery_key(), &spec(0), nonce(1), b"abcd").unwrap();
         let second =
             seal_backup_recovery_chunk(&recovery_key(), &spec(1), nonce(2), b"efgh").unwrap();
-        let mut stream =
-            BackupRecoveryChunkStream::begin(binding(), 2, 8, digest()).unwrap();
+        let mut stream = BackupRecoveryChunkStream::begin(binding(), 2, 8, digest()).unwrap();
         assert!(matches!(
             stream.accept(&recovery_key(), &second),
             Err(VaultError::EnvelopeInvalid | VaultError::Decrypt)
@@ -334,9 +335,9 @@ mod tests {
 
     #[test]
     fn truncated_stream_does_not_yield_plaintext() {
-        let first = seal_backup_recovery_chunk(&recovery_key(), &spec(0), nonce(1), b"abcd").unwrap();
-        let mut stream =
-            BackupRecoveryChunkStream::begin(binding(), 2, 8, digest()).unwrap();
+        let first =
+            seal_backup_recovery_chunk(&recovery_key(), &spec(0), nonce(1), b"abcd").unwrap();
+        let mut stream = BackupRecoveryChunkStream::begin(binding(), 2, 8, digest()).unwrap();
         stream.accept(&recovery_key(), &first).unwrap();
         assert!(matches!(stream.finish(), Err(VaultError::EnvelopeInvalid)));
     }
