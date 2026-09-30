@@ -82,8 +82,16 @@ impl TlsFixture {
         let (stop, mut stopped) = oneshot::channel();
         let closed = Arc::new(AtomicUsize::new(0));
         let closed_task = closed.clone();
-        let tls_failures = Arc::new(AtomicUsize::new(0));
-        let tls_failures_task = tls_failures.clone();
+        let mut fixture = Self {
+            address,
+            root,
+            captures,
+            stop: Some(stop),
+            task: None,
+            closed,
+            tls_failures: Arc::new(AtomicUsize::new(0)),
+        };
+        let tls_failures_task = fixture.tls_failures.clone();
         let task = tokio::spawn(async move {
             let mut children = JoinSet::new();
             loop {
@@ -141,15 +149,8 @@ impl TlsFixture {
             children.abort_all();
             while children.join_next().await.is_some() {}
         });
-        Self {
-            address,
-            root,
-            captures,
-            stop: Some(stop),
-            task: Some(task),
-            closed,
-            tls_failures,
-        }
+        fixture.task = Some(task);
+        fixture
     }
     fn endpoint(&self) -> String {
         self.endpoint_for_host("idp.test")
@@ -240,7 +241,14 @@ async fn read_http<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Capture> {
                 .map(|(key, value)| (key.to_ascii_lowercase(), value.trim().to_owned()))
         })
         .collect();
-    let length = headers
+    let mut capture = Capture {
+        method,
+        path,
+        headers,
+        body: Vec::new(),
+    };
+    let length = capture
+        .headers
         .get("content-length")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
@@ -251,21 +259,9 @@ async fn read_http<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Capture> {
         }
         bytes.extend_from_slice(&buffer[..n]);
     }
-    let body = bytes[split..split + length].to_vec();
-    Some(Capture {
-        method,
-        path,
-        headers,
-        body,
-    })
+    capture.body = bytes[split..split + length].to_vec();
+    Some(capture)
 }
-fn chat_text() -> String {
-    format!(
-        "data: {}\n\ndata: [DONE]\n\n",
-        json!({"id":"chat-owned","choices":[{"index":0,"delta":{"content":"hello custom"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}})
-    )
-}
-
 const TEST_CA_DER_BASE64: &str = "MIIBYTCCAROgAwIBAgIUV2Gyaxvee9eFEK3h9B3MJM3RdHMwBQYDK2VwMB0xGzAZBgNVBAMMEk9wZW5Cb3QgVzcgVGVzdCBDQTAgFw0yNjA4MjMxNzIxNTNaGA8yMTI2MDczMDE3MjE1M1owHTEbMBkGA1UEAwwST3BlbkJvdCBXNyBUZXN0IENBMCowBQYDK2VwAyEApgBzSV/LoqKcnUaH8XyHAyeVHmSdWzs/pG1QLsZtLXujYzBhMB0GA1UdDgQWBBRGuULlFEmfV4B1pDoFKLlyG87ckjAfBgNVHSMEGDAWgBRGuULlFEmfV4B1pDoFKLlyG87ckjAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAFBgMrZXADQQAhZqm1u2PwIPUkIhbQpjQhEbNUYoF2Abyx+fdXyy5b0QRLqnEK/8DY350B6fiQHd7a6BEa+qN+qhUQNauulgwB";
 const TEST_LEAF_DER_BASE64: &str = "MIIBgDCCATKgAwIBAgIUWFITT9Bap6fPTrUyiQds6m7YbW4wBQYDK2VwMB0xGzAZBgNVBAMMEk9wZW5Cb3QgVzcgVGVzdCBDQTAgFw0yNjA4MjMxNzIxNTNaGA8yMTI2MDczMDE3MjE1M1owEzERMA8GA1UEAwwIaWRwLnRlc3QwKjAFBgMrZXADIQDUfQYU3Rio5WectHhNXvjIzi67mD9xT6HD7WzyBqMdIKOBizCBiDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATATBgNVHREEDDAKgghpZHAudGVzdDAdBgNVHQ4EFgQU7WAFDj1TPql991Rys+6HvGt+f2kwHwYDVR0jBBgwFoAURrlC5RRJn1eAdaQ6BSi5chvO3JIwBQYDK2VwA0EAhqOV0ZqpgZsjy3YMiwb4D94mGVQmVikza22FtbWfcC2F4b1GV0YKYCOwdIN9ruFVxguKPy//7tlCnuSzoUzkBQ==";
 const TEST_KEY_DER_BASE64: &str =
