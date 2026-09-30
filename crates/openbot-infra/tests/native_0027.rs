@@ -212,7 +212,7 @@ async fn post_0027_keeps_schema_exact_and_redacts_only_terminal_reasoning() {
             if ledger != 15 {
                 return Err(format!("native ledger expected 15, got {ledger}"));
             }
-            if native::apply(&mut client)
+            if native::apply_through(&mut client, native::NATIVE_0027_VERSION)
                 .await
                 .map_err(|error| error.to_string())?
                 != ApplyOutcome::AlreadyApplied

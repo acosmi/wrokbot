@@ -40,15 +40,18 @@ async fn assert_pending_without_second_post(
         )
         .await
         .unwrap();
-    let error = Client::create_with_authority(
+    // Match explicitly so the failure assertion does not require token-owning Client: Debug.
+    let error = match Client::create_with_authority(
         sdk_config(&tls.endpoint()),
         operation.transport(),
         operation.authority(),
         None,
     )
     .await
-    .err()
-    .expect("a new SDK client must preserve durable pending");
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a new SDK client must preserve durable pending"),
+    };
     assert!(error.to_string().contains("rotation_pending"));
     assert_eq!(tls.count(), expected_requests);
     assert_eq!(
@@ -312,8 +315,7 @@ async fn audit_failure_rolls_back_enrollment_after_real_identity_reads() {
                 Arc::new(Outcomes::default()),
             )
             .await
-            .err()
-            .expect("audit failure cannot produce enrollment success");
+            .expect_err("audit failure cannot produce enrollment success");
         assert!(matches!(
             error,
             GatewayAuthorityError::Unavailable
