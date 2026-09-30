@@ -67,11 +67,11 @@
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 开放候选，待独立验收 | [#68](https://github.com/acosmi/wrokbot/pull/68) | 未合入 |
 | V6-PR-054 | skip-link 键盘焦点修复 | 开放候选，待独立验收 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
 | V6-PR-055 | UI wasm32 Clippy 修复 | 开放候选，待独立验收 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
-| V6-PR-056 | Desktop Clippy 修复 | 返修完成，待主控最终组合验收 | [#72](https://github.com/acosmi/wrokbot/pull/72) | 未合入 |
+| V6-PR-056 | Desktop Clippy 修复 | 主控返修已验且已合 | [#72](https://github.com/acosmi/wrokbot/pull/72) | [9bae520869](https://github.com/acosmi/wrokbot/commit/9bae520869f8dc2fb9833fae4b946cd99c3aa64a) |
 | V6-PR-057 | 既有格式差异修复 | 开放候选，待独立验收 | [#74](https://github.com/acosmi/wrokbot/pull/74) | 未合入 |
 | V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验且已合 | [#76](https://github.com/acosmi/wrokbot/pull/76) | [9a3b5c7234](https://github.com/acosmi/wrokbot/commit/9a3b5c7234b8362e4765726c52a6db1c73e08a36) |
 | V6-PR-059 | SDK 自有登录合同草案 | 未批准；不得据此实施 | 无生产候选 PR | 未合入 |
-| V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选未取回；需核冻结合同后最小重建 | 未找到对应 PR | 未重建 |
+| V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选缺失后的重建；主控独立复验 | [#82](https://github.com/acosmi/wrokbot/pull/82) | 未合入 |
 | V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选未取回；源码仍为收集后检查 | 未找到对应 PR | 未重建 |
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
 | V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验且已合 | [#80](https://github.com/acosmi/wrokbot/pull/80) | [55f34ae4f5](https://github.com/acosmi/wrokbot/commit/55f34ae4f525ede14bba891b2d0b90ce3785afb5) |
@@ -203,3 +203,5 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 064 主控实际补跑真实 PG 场景时，原 host 夹具只复制三个二进制，重定位后 initdb 找不到 postgres.bki，导致 11 个场景均失败；独立脱敏探针确证缺模板，控制 TTY 不可打开。测试辅助改从同安装 PG17.11 的 pg_config 核版本及 bin 路径，将普通 share/运行库资源有界复制进自有 bundle，全部摘要仍由原 manifest 和真实 binary 校验消费；保留全部测试断言、产品启动参数和口令通道。强制重编的同候选真实 PG 启动/重启、恢复、master journal、Application 装配及 owner 清理 11/11 全通过，最终台账候选再次完整复验。该测试夹具维护不修复生产控制 TTY 问题，不声明动态依赖发行闭包、签名产品/真实默认 Keychain 或 A0–A7 完成。
 
 056 换机主控返修：原候选新增七处 too_many_arguments allow 全部移除，改私有借用观察参数结构；现有身份、路径、dev/inode/uid、原始字节、锁及原子落盘校验逐项保留。现有 public 方法、错误/证据协议不变，Verified cfg 仅在实际消费的 macOS launcher 上启用，测试辅助避免另一次无必要开 bundle。固定 Rust1.98.0 runtime/launcher 全目标严格 Clippy 已实跑通过；77 个现有 sidecar 回归通过。四个 issue66 历史预期按独立060冻结恢复合同处理，本项显式跳过且不记通过。已验064真实PG夹具合入后，最终候选再次运行严格 feature 检查以及77回归与11真实PG场景组合；该局部 lint/等价参数整理不代表完整M0通过。
+
+060 旧本地候选及原始QA没有取回，当前是缺失后的最小重建，生成新SHA。只改四个旧测试和其自有失败证据辅助；原fixture、版本/口令/数据失败类别及零写断言保持。macOS普通acquire保持失败锁/helper bytes并拒绝；受控收口依据真实child观察与数据形态，未齐的version helper仅收口exit_confirmed仍拒绝回收，合法initdb/完整helper路径方可受控处理。corrupt第二次仍按已有失败锁拒绝并保持原证据，不自动删锁。未改生产源码、恢复规则或口令通道。主控原始四项失败及错误中间结果留存，最终干净候选重新运行严格Clippy和sidecar回归，ignored真实PG不计通过；此前056的88项实际组合是独立证据。
