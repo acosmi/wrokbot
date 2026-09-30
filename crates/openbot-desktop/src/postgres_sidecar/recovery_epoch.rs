@@ -788,6 +788,128 @@ mod tests {
             .expect("epoch line")
     }
 
+    fn record_bytes(header: &str, instance: &str, epoch: &str) -> Vec<u8> {
+        format!("{header}\ninstance={instance}\nepoch={epoch}\n").into_bytes()
+    }
+
+    fn malformed_records(
+        header: &str,
+        instance: &str,
+        epoch: &str,
+    ) -> Vec<(&'static str, Vec<u8>)> {
+        let canonical = String::from_utf8(record_bytes(header, instance, epoch)).unwrap();
+        vec![
+            (
+                "reversed",
+                format!("{header}\nepoch={epoch}\ninstance={instance}\n").into_bytes(),
+            ),
+            (
+                "blank-middle",
+                canonical.replacen("\n", "\n\n", 1).into_bytes(),
+            ),
+            ("blank-end", format!("{canonical}\n").into_bytes()),
+            ("crlf", canonical.replace('\n', "\r\n").into_bytes()),
+            (
+                "missing-final-lf",
+                canonical.trim_end_matches('\n').as_bytes().to_vec(),
+            ),
+            ("unknown", format!("{canonical}other=value\n").into_bytes()),
+            (
+                "duplicate-instance",
+                format!("{canonical}instance={instance}\n").into_bytes(),
+            ),
+            (
+                "duplicate-epoch",
+                format!("{canonical}epoch={epoch}\n").into_bytes(),
+            ),
+            (
+                "missing-instance",
+                format!("{header}\nepoch={epoch}\n").into_bytes(),
+            ),
+            (
+                "missing-epoch",
+                format!("{header}\ninstance={instance}\n").into_bytes(),
+            ),
+            (
+                "wrong-instance",
+                record_bytes(header, &"f".repeat(64), epoch),
+            ),
+            (
+                "uppercase-instance",
+                record_bytes(header, &instance.to_uppercase(), epoch),
+            ),
+            (
+                "uppercase-epoch",
+                record_bytes(header, instance, &epoch.to_uppercase()),
+            ),
+            ("short-epoch", record_bytes(header, instance, &epoch[..63])),
+            (
+                "long-epoch",
+                record_bytes(header, instance, &format!("{epoch}0")),
+            ),
+            (
+                "nonhex-epoch",
+                record_bytes(header, instance, &"g".repeat(64)),
+            ),
+            (
+                "wrong-header",
+                record_bytes("unknown-epoch-v1", instance, epoch),
+            ),
+            ("invalid-utf8", vec![0xff]),
+        ]
+    }
+
+    #[test]
+    fn canonical_epoch_records_accept_all_four_headers() {
+        let instance = "ab".repeat(32);
+        let epoch = "cd".repeat(32);
+        for header in [
+            EPOCH_HEADER,
+            CONSUMED_HEADER,
+            AUTH_INVALIDATION_HEADER,
+            AUTH_INVALIDATION_APPLIED_HEADER,
+        ] {
+            assert_eq!(
+                parse_epoch_bytes_with_header(
+                    &record_bytes(header, &instance, &epoch),
+                    &instance,
+                    header
+                )
+                .unwrap(),
+                epoch
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_epoch_records_reject_all_four_headers() {
+        let instance = "ab".repeat(32);
+        let epoch = "cd".repeat(32);
+        let mut accepted = Vec::new();
+        for header in [
+            EPOCH_HEADER,
+            CONSUMED_HEADER,
+            AUTH_INVALIDATION_HEADER,
+            AUTH_INVALIDATION_APPLIED_HEADER,
+        ] {
+            for (name, bytes) in malformed_records(header, &instance, &epoch) {
+                let result = parse_epoch_bytes_with_header(&bytes, &instance, header);
+                eprintln!(
+                    "epoch-record case={name} header={header} accepted={}",
+                    result.is_ok()
+                );
+                match result {
+                    Err(PostgresSidecarError::StartLockGuardInvalid) => {}
+                    other => accepted.push(format!("{header}/{name}: {other:?}")),
+                }
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "malformed records accepted: {accepted:?}"
+        );
+    }
+
     #[test]
     fn reclaim_path_mints_new_epoch_and_second_reclaim_rotates() {
         let root = temp_root("mint");
