@@ -141,18 +141,20 @@
 | 054 | [#70](https://github.com/acosmi/wrokbot/pull/70) | `776fdb27d2751b89649d515af9167ae6684f3a01` | wasm 构建及真实键盘/DOM 焦点行为 |
 | 055 | [#71](https://github.com/acosmi/wrokbot/pull/71) | `86d261c10c13dce9b377ea635a85d8afcb574404` | wasm 与 native Clippy、既有提交状态回归 |
 | 056 | [#72](https://github.com/acosmi/wrokbot/pull/72) | `3eeb833c7a8d8157e6879c2ea6a0ff2b79220cb5` | runtime/launcher cfg 与 journal/恢复回归 |
-| 057 | [#74](https://github.com/acosmi/wrokbot/pull/74) | `2dfff9a6efcd23b75076a6f748e0ab4d4f4e7aa0` | 固定 rustfmt 复现及受影响组合回归 |
-| 058 | [#76](https://github.com/acosmi/wrokbot/pull/76) | `bf635128e80f2d7831612bfbfbb86d5356466756` | README 历史来源/字节摘要和 Rust fixture 测试 |
+| 057 | [#74](https://github.com/acosmi/wrokbot/pull/74) | `2dfff9a6efcd23b75076a6f748e0ab4d4f4e7aa0` | 固定 rustfmt 已通过；原件及受影响组合回归 |
+| 058 | [#76](https://github.com/acosmi/wrokbot/pull/76) | `bf635128e80f2d7831612bfbfbb86d5356466756` | 来源/摘要及 Rust fixture 5/5 已通过；原件与最终候选验收 |
 
 上述 PR 的评论、review、review thread、commit status 及 PR 触发 workflow run 查询均为空。空记录不等于检查通过；本轮没有派发 Actions。#57、#61 虽已关闭，对应 PR #62、#64 仍开放，不能以 issue 关闭推断代码已集成。#56 已按不实施关闭；本轮源码核对确认连接串实际包含口令插值，原先把脱敏展示误诊为字面量的结论不成立。
 
 048 的选定敏感路径字节检查发现 `baseline_0012.sql` 与 `schema_facts.sql` 的说明注释随命名变化；DDL 行为或历史迁移 checksum 是否受影响不得据此臆断，须按精确冻结清单裁定并复验。该候选还涉及 27 个移动端路径，范围许可尚待原件核对。
 
-058 的独立来源核对已完成：候选七份 schema 文件的长度和 SHA-256 均与记录吻合，其中六份上游文件与固定 AG-UI commit 的 Git blob 和原始字节一致；自有 README 为 231 字节，自仓库根提交起字节未变。此核对支持来源修复，Rust fixture 测试与最终候选验收仍待。
+058 的独立来源核对已完成：候选七份 schema 文件的长度和 SHA-256 均与记录吻合，其中六份上游文件与固定 AG-UI commit 的 Git blob 和原始字节一致；自有 README 为 231 字节，自仓库根提交起字节未变。固定 Rust 1.98.0 上，精确 head `bf635128e80f2d7831612bfbfbb86d5356466756` 的 `cargo test -p openbot-agent --locked --test agui_official_fixture` 实际 5 项通过。main 产品基线 `7edfe6c9849bc6d4e92a18aab12ea90441f1fbba` 的同一测试为 4 项通过、1 项失败，失败是 README 字节记录 1341 与实际 231 不符。源码和独立上游字节支持修复原因；原件合同及最终候选验收仍待，未合入产品候选。
 
 本轮实际运行 `python3 -m unittest tools.test_repository_guard tools.test_tauri_background_assembly_guard`：25 项通过。新机发布 hooks 已启用，Gitleaks 8.30.1 已安装。以上环境与守卫结果不作为 048–058 的 Rust/PG/GUI 验收证据。
-固定 Rust 1.98.0 已安装；057 的完整 head 上实际运行 `cargo fmt --all -- --check` 通过。Rust 测试首次尝试因新机 offline 缓存缺少 `subtle` 在依赖解析阶段退出，未执行测试；其后正在补齐锁定依赖。上述局部结果不关闭 057 的源码组合复验或其它任务的验收。
+固定 Rust 1.98.0 已安装；057 的完整 head 上实际运行 `cargo fmt --all -- --check` 通过。Rust 测试首次尝试因新机 offline 缓存缺少 `subtle` 在依赖解析阶段退出，未执行测试；其后批量 fetch 下载 613 项后中止，转做定向测试；PR #76 首次离线尝试因缺 `ctr` 缓存退出，补齐该专项锁定依赖后实测通过，失败记录保留。上述局部结果不关闭 057 的源码组合复验或其它任务的验收。
 
 060 的四个历史失败用例仍需按冻结的 helper/quiescent/recovery 合同复核，不得为了通过自动删除锁。061 的 macOS helper 当前仍使用 `wait_with_output()`，4096 字节限制发生在收集完成之后；4096/4097、超时/取消、exact Child 清理与失败 journal 尚未在新候选验证。062 的 `--pwprompt` 与 piped stdin 路径仍在；改变测试是否继承 TTY 不构成生产修复。
 
 A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与账户桥、Browser/Engine/画面/GUI、原生产品链、完整 PG/WAL 恢复、签名/真实 OS 和 24 小时验证仍需继续；本轮没有重新取得这些实际结果。下一执行入口为先恢复并核验规范原件与合同，再从最小独立候选开始验收；059/062 继续等待合同裁决。私有规范、合同、交接与原始 QA 不随本台账上传。
+
+任务编号：REBUILD-20260930-02（新机实际验证结果登记）。只更新公开台账，产品代码不变。新机实查为 arm64 / macOS 27.0，固定 Rust 1.98.0 原生工具链、rustfmt、Clippy 已装；仅原生 target 已装。代码签名查询为 0 个有效身份，PATH 和 Homebrew PG17 候选位置未找到 PostgreSQL 二进制。048–058 与前次台账合入后的 main 的合并树冲突都仅在本台账，后续各任务需逐段保留事实解决；此事实不替代验收，也不扩大产品合同。
