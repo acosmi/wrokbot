@@ -2,7 +2,7 @@
 
 更新时间：2026-09-30。独立验收主控核对远端与新机状态；2026-09-19 的实施、实测记录保留为历史记录。
 
-001–047 已合入；048–058 已有开放候选，均待独立验收。候选清点与代码审查正在进行，规范原件和旧机原始 QA 尚未恢复，不能把历史自报转记为新机验收通过。
+001–047 已合入；048–058 已有开放候选，逐项独立验收中。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。
 
 本台账记录实施与验证事实，不定义产品能力或架构。每个任务对应一个独立 PR，按编号顺序集成。PR 链接中的合并状态与提交是远端集成事实；局部测试通过不表示产品阶段或发布验收完成。
 
@@ -59,7 +59,7 @@
 | V6-PR-045 | 固定网关账户身份读取与有界宿主传输 | 已合入 | [#52](https://github.com/acosmi/wrokbot/pull/52) | [38c7259a18](https://github.com/acosmi/wrokbot/commit/38c7259a187e719831b007202c5c4a3f5061f702) |
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已合入；本轮核实祖先，历史测试未重跑 | [#54](https://github.com/acosmi/wrokbot/pull/54) | [f93ffcbe7c](https://github.com/acosmi/wrokbot/commit/f93ffcbe7c66338f4014e30366942262f777387b) |
-| V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 开放候选，待独立验收 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 未合入 |
+| V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 精确命名合同未冻结，候选保留待验 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 未合入 |
 | V6-PR-049 | archive_bundle Clippy 修复 | 开放候选，待独立验收 | [#60](https://github.com/acosmi/wrokbot/pull/60) | 未合入 |
 | V6-PR-050 | native_0027/0028 历史幂等重检 | 开放候选，待独立验收 | [#62](https://github.com/acosmi/wrokbot/pull/62) | 未合入 |
 | V6-PR-051 | Infra 测试 Clippy 修复 | 开放候选，待独立验收 | [#64](https://github.com/acosmi/wrokbot/pull/64) | 未合入 |
@@ -69,7 +69,7 @@
 | V6-PR-055 | UI wasm32 Clippy 修复 | 开放候选，待独立验收 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
 | V6-PR-056 | Desktop Clippy 修复 | 开放候选，待独立验收 | [#72](https://github.com/acosmi/wrokbot/pull/72) | 未合入 |
 | V6-PR-057 | 既有格式差异修复 | 开放候选，待独立验收 | [#74](https://github.com/acosmi/wrokbot/pull/74) | 未合入 |
-| V6-PR-058 | AG-UI fixture README provenance 修复 | 开放候选，待独立验收 | [#76](https://github.com/acosmi/wrokbot/pull/76) | 未合入 |
+| V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验，集成状态见 PR | [#76](https://github.com/acosmi/wrokbot/pull/76) | 未合入 |
 | V6-PR-059 | SDK 自有登录合同草案 | 未批准；不得据此实施 | 无生产候选 PR | 未合入 |
 | V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选未取回；需核冻结合同后最小重建 | 未找到对应 PR | 未重建 |
 | V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选未取回；源码仍为收集后检查 | 未找到对应 PR | 未重建 |
@@ -85,7 +85,7 @@
 | 三模型 | custom 后端与四入口UI已局部验收；SDK5及账户身份已合，PG/Vault已完成本机及组合验收，集成记录见047；登录及模型运行组合仍待，账户桥Rust适配待做 |
 | Browser / 原生 | 有协调核心；实际执行、画面与GUI完整装配仍有缺口 |
 | 备份恢复 | 加密/归档基础已验；PG恢复、切换及完整演练未完成 |
-| 签名与交付 | 旧机曾记录有效 Developer ID 身份；新机签名身份和证据未核实，实际候选签名、公证及发行图验收待完成 |
+| 签名与交付 | 旧机曾记录有效 Developer ID 身份；本轮新机查询为 0 个有效身份，实际候选签名、公证及发行图验收待完成 |
 
 ## 历史验证（原始 QA 本轮未取回）
 
@@ -111,6 +111,8 @@
 046 主控亲读目录迁移及全部内容变化，最终候选 216 项 UI 单测、9 项发布守卫、严格 Clippy、生产 WASM/release 构建、中英文 1068 键、样式与资源预算检查通过。模型四入口、FIFO、有序技能、键盘、明确冲突和 Unknown 共 13 项浏览器请求场景在队列修复候选通过；其后错误提示修复重验 5 项受影响场景，最后收件人恢复修复在最终构建重验。不同构建的证据分别保留，未冒充全部场景在最终构建重跑。创建响应丢失时不再次创建，运行结果不明时仅显式原请求重试；目录版本冲突要求重新选择。首次读回操作漏选模型的失败记录保留并按原预期重做。浏览器使用合成 HTTP/SSE 后端；实际厂商、PG组合、Wry、完整可访问性与首发 A 门仍待。CSS 为 130505/131072 字节，已超过预警线，未放宽预算。UI 依赖守卫使用 locked/offline 元数据选中的实际来源通过；默认全局缓存因重复 registry 源首次拒绝，失败保留，未修改全局缓存或依赖。
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
+
+058 Copilot（临时实施执行方，非主控亲验）完成实现与本机验证，待主控独立验收：在完全干净的 `origin/main`（`66274f8`）上逐 crate 补跑测试时，发现 `openbot-agent` 的 `test_official_fixture_provenance_integrity` 既有失败（issue #75，与本次改动前任何工作无关）。根因是 `fixtures/agui/official-event-family.provenance.json` 对 `README.md` 记录的 `bytes`/`sha256` 是过期值（1341 字节），而该文件自本仓库当前历史根提交 `15d66ee` 起实际一直是 231 字节；`git log --oneline --all` 溯源确认 1341 字节仅存在于一个不在 `origin/main` 祖先链上的悬空分支草稿，从未对应过任何真正入库的内容。README.md 是 `vendored_schema` 里唯一标注"OpenBot-authored documentation"（非上游 vendor）的条目，故以当前实际、长期未变的文件内容为准，只更新 `bytes`/`sha256` 两个字段，未碰 `source` 字符串（属 #59/V6-PR-048 命名任务范围）、README.md 正文或其余 6 个已核对无误的 vendor 文件条目。`cargo test -p openbot-agent --all-targets`：58 项 lib 测试 + 5 项 fixture 测试全部通过（此前 4 通过/1 失败）；`cargo clippy -p openbot-agent --all-targets -- -D warnings` 干净。改动范围仅 provenance.json 的 2 行。
 
 ## 仍未完成
 
@@ -166,3 +168,9 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 用户补充输入材料可能在本仓库或附件。本轮已读取全部 78 条 issue/PR 正文和 11 条讨论评论，未发现规范附件链接；可访问的 Release、tag、Actions 制品、代码评论和提交评论列表均为空。已取回代码历史也未找到规范原件和原始交接入口。规范与冻结合同仍须可信原件核验；该搜索结果不等于规范不存在，也不把历史 PR 当成规范批准。048–058 继续保留待验状态，060/061 未重建，059/062 未批准。当前没有 A0–A7 的完整同候选通过证据。
 
 已建立本机私有 START 入口、执行队列和逐项报告，Git bundle 实际还原核验通过；私有交接包可取回索引与本轮证据。仅有本机副本，未创建或验证离机备份；私有内容不进入本 PR。
+
+## 058 新机独立验收
+
+本轮随后取得并在本机核对后端规范原件；此前“原件未恢复”为当时检查点。精确命名接口仍未冻结，048 保留待验，不以候选代码倒推批准。
+
+058 的产品差异仅为自有 fixture README 的 byte_length 与 sha256 两个过期记录。README、六份上游 schema、上游 commit 和协议身份不改；自有 README 的 231 字节与摘要已独立读取，上游六份文件逐一核对固定来源。原交付提交 `83399e77cfa9a8874cf46ce004b8511ef7eafe84` 为历史实施记录，其自报测试不继承为本轮证据。合入当前 main 的台账时逐段保留双方历史和新机核实事实；合入当前 main 后的候选 `50a27f507f29e96cf59e1d3a1c61546eaff82a34` 在固定 Rust 1.98.0 上运行 `cargo test -p openbot-agent --offline --locked --test agui_official_fixture`：5 项通过，0 失败；修改只涉及两项来源记录和公开台账，未改变测试断言或 schema。后续台账登记提交仍须在推送前对最终 head 复验同一测试。该局部验收不关闭 A0–A7。
