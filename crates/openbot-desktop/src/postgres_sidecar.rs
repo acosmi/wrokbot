@@ -551,10 +551,10 @@ impl PostgresStartLock {
             return false;
         }
         #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
-        if let Some(epoch) = &self.recovery_epoch {
-            if !epoch.is_current() {
-                return false;
-            }
+        if let Some(epoch) = &self.recovery_epoch
+            && !epoch.is_current()
+        {
+            return false;
         }
         true
     }
@@ -768,10 +768,7 @@ impl PostgresStartLock {
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let stored = stored.ok_or(PostgresSecretStoreError::ReconciliationRequired)?;
                 let secret = PostgresScramSecret::from_stored(stored)?;
-                #[cfg(all(
-                    feature = "postgres-supervisor",
-                    target_os = "macos"
-                ))]
+                #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
                 if disposition.is_existing() {
                     self.consume_recovery_epoch_if_pending()?;
                 }
@@ -784,10 +781,7 @@ impl PostgresStartLock {
                     self.secret_creation_attempted
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     let secret = PostgresScramSecret::from_stored(stored)?;
-                    #[cfg(all(
-                        feature = "postgres-supervisor",
-                        target_os = "macos"
-                    ))]
+                    #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
                     if disposition.is_existing() {
                         self.consume_recovery_epoch_if_pending()?;
                     }
@@ -2020,7 +2014,6 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), PostgresSidecarEr
     Ok(())
 }
 
-
 /// Remove a leftover `postmaster.pid` so PostgreSQL can start its own crash recovery.
 /// Callers must already prove no foreign data-dir openers. Never touches data/WAL/version files.
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
@@ -3236,16 +3229,157 @@ mod tests {
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
+    fn host_postgres_configuration(bin_dir: &Path, option: &str) -> String {
+        let program = bin_dir.join("pg_config");
+        let metadata = fs::symlink_metadata(&program).unwrap();
+        assert!(metadata.file_type().is_file());
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_ne!(metadata.permissions().mode() & 0o111, 0);
+        let output = std::process::Command::new(program)
+            .env_clear()
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .arg(option)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "the matching pg_config must succeed");
+        assert!(output.stdout.len() <= 4096);
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
+    fn copy_host_postgres_resource(
+        source: &Path,
+        destination: &Path,
+        depth: usize,
+        files: &mut usize,
+        bytes: &mut u64,
+    ) -> io::Result<()> {
+        if depth > 32 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "PostgreSQL fixture resource directory is too deep",
+            ));
+        }
+        let metadata = fs::symlink_metadata(source)?;
+        if metadata.file_type().is_dir() {
+            fs::create_dir(destination)?;
+            for entry in fs::read_dir(source)? {
+                let entry = entry?;
+                copy_host_postgres_resource(
+                    &entry.path(),
+                    &destination.join(entry.file_name()),
+                    depth + 1,
+                    files,
+                    bytes,
+                )?;
+            }
+        } else if metadata.file_type().is_file() {
+            if *files >= BUNDLE_MAX_FILES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "PostgreSQL fixture resource file budget exceeded",
+                ));
+            }
+            let next_bytes = bytes
+                .checked_add(metadata.len())
+                .filter(|total| *total <= BUNDLE_MAX_BYTES)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "PostgreSQL fixture resource byte budget exceeded",
+                    )
+                })?;
+            fs::copy(source, destination)?;
+            *files += 1;
+            *bytes = next_bytes;
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "PostgreSQL fixture resources must be regular files or directories",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
     pub(super) fn materialize_host_postgres_bundle(
         bin_dir: &Path,
     ) -> (PathBuf, PostgresBundleDigest) {
+        // This fixture uses one complete local installation. Resource copying does not attest
+        // release signing or make the host installation's external dylibs relocatable.
+        assert_eq!(
+            host_postgres_configuration(bin_dir, "--version"),
+            format!("PostgreSQL {POSTGRES_VERSION}")
+        );
+        let configured_bin = PathBuf::from(host_postgres_configuration(bin_dir, "--bindir"));
+        assert_eq!(
+            fs::canonicalize(configured_bin).unwrap(),
+            fs::canonicalize(bin_dir).unwrap()
+        );
+        let share = PathBuf::from(host_postgres_configuration(bin_dir, "--sharedir"));
+        let library = PathBuf::from(host_postgres_configuration(bin_dir, "--pkglibdir"));
+        assert!(share.is_absolute() && library.is_absolute());
+        let plpgsql = if cfg!(target_os = "macos") {
+            "plpgsql.dylib"
+        } else {
+            "plpgsql.so"
+        };
+        for source in [
+            share.join("postgres.bki"),
+            share.join("information_schema.sql"),
+            library.join(plpgsql),
+        ] {
+            assert!(fs::symlink_metadata(source).unwrap().file_type().is_file());
+        }
         let root = root("host-postgres");
         fs::create_dir_all(root.join("bin")).unwrap();
+        let mut files = 0;
+        let mut bytes = 0;
         for relative in expected_program_paths() {
             let name = Path::new(relative).file_name().unwrap();
-            fs::copy(bin_dir.join(name), root.join(relative)).unwrap();
+            copy_host_postgres_resource(
+                &bin_dir.join(name),
+                &root.join(relative),
+                0,
+                &mut files,
+                &mut bytes,
+            )
+            .unwrap();
         }
+        fs::create_dir(root.join("share")).unwrap();
+        fs::create_dir(root.join("lib")).unwrap();
+        copy_host_postgres_resource(
+            &share,
+            &root.join("share/postgresql"),
+            0,
+            &mut files,
+            &mut bytes,
+        )
+        .unwrap();
+        copy_host_postgres_resource(
+            &library,
+            &root.join("lib/postgresql"),
+            0,
+            &mut files,
+            &mut bytes,
+        )
+        .unwrap();
         let digest = write_manifest(&root);
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(root.join(MANIFEST_FILE)).unwrap()).unwrap();
+        for relative in [
+            "share/postgresql/postgres.bki".to_owned(),
+            "share/postgresql/information_schema.sql".to_owned(),
+            format!("lib/postgresql/{plpgsql}"),
+        ] {
+            assert!(fs::symlink_metadata(root.join(&relative)).unwrap().file_type().is_file());
+            assert_eq!(
+                manifest["files"][&relative].as_str().unwrap(),
+                encode_hex(&sha256_file(&root.join(relative)).unwrap())
+            );
+        }
         (root, digest)
     }
 
@@ -3747,7 +3881,12 @@ mod tests {
             .unwrap();
         let (first_material, proof, database_origin) = ready.into_parts();
         let data_plane = prepared
-            .complete_after_vault(&correct_package, database_origin, &proof, first_material.expose_audit_key())
+            .complete_after_vault(
+                &correct_package,
+                database_origin,
+                &proof,
+                first_material.expose_audit_key(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -4056,7 +4195,12 @@ mod tests {
             .unwrap();
         let (restarted_material, proof, database_origin) = ready.into_parts();
         let restarted = prepared
-            .complete_after_vault(&correct_package, database_origin, &proof, restarted_material.expose_audit_key())
+            .complete_after_vault(
+                &correct_package,
+                database_origin,
+                &proof,
+                restarted_material.expose_audit_key(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -4503,7 +4647,12 @@ mod tests {
             .unwrap();
         let (material, proof, origin) = ready.into_parts();
         let running = prepared
-            .complete_after_vault(&fixture.package, origin, &proof, material.expose_audit_key())
+            .complete_after_vault(
+                &fixture.package,
+                origin,
+                &proof,
+                material.expose_audit_key(),
+            )
             .await
             .unwrap();
         running.shutdown().await.unwrap();
@@ -4584,7 +4733,12 @@ mod tests {
             .unwrap();
         let (material, proof, database_origin) = ready.into_parts();
         let owner = prepared
-            .complete_after_vault(&package, database_origin, &proof, material.expose_audit_key())
+            .complete_after_vault(
+                &package,
+                database_origin,
+                &proof,
+                material.expose_audit_key(),
+            )
             .await
             .unwrap();
         let id = Uuid::from_u128(0x1234);
@@ -4680,7 +4834,12 @@ mod tests {
             .unwrap();
         let (restored, proof, database_origin) = ready.into_parts();
         let owner = prepared
-            .complete_after_vault(&package, database_origin, &proof, restored.expose_audit_key())
+            .complete_after_vault(
+                &package,
+                database_origin,
+                &proof,
+                restored.expose_audit_key(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -4751,9 +4910,7 @@ mod tests {
         probe_running_sidecar(&running).await;
         // V6-PR-032: a live owner must keep the second start busy without killing the first PG.
         assert_second_start_held(
-            &bundle_root,
-            digest,
-            &signing,
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
             &app_root,
             &instance,
             &data_dir,
@@ -4820,9 +4977,7 @@ mod tests {
         let recovered = match (left, right) {
             (Ok(winner), Err(PostgresSidecarError::StartLockHeld))
             | (Err(PostgresSidecarError::StartLockHeld), Ok(winner)) => winner,
-            other => panic!(
-                "expected one Existing recoverer and one StartLockHeld, got {other:?}"
-            ),
+            other => panic!("expected one Existing recoverer and one StartLockHeld, got {other:?}"),
         };
         assert_eq!(recovered.origin(), PostgresSidecarOrigin::Existing);
         assert_eq!(fs::read(data_dir.join("PG_VERSION")).unwrap(), pg_version);
@@ -4830,9 +4985,7 @@ mod tests {
         probe_running_sidecar(&recovered).await;
         assert_crash_recovery_marker(&recovered).await;
         assert_second_start_held(
-            &bundle_root,
-            digest,
-            &signing,
+            VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap(),
             &app_root,
             &instance,
             &data_dir,
@@ -4897,7 +5050,8 @@ mod tests {
                 assert!(tokio::time::Instant::now() < closed_after_orphan);
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
-            let bundle_after = VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
+            let bundle_after =
+                VerifiedPostgresBundle::open(&bundle_root, digest, &signing).unwrap();
             let after_orphan = PostgresSidecarSupervisor::start(
                 bundle_after,
                 &app_root,
@@ -4939,8 +5093,8 @@ mod tests {
             .as_ref()
             .and_then(tokio::process::Child::id)
             .expect("running postgres pid");
-        let identity =
-            ProcessIdentity::capture(pid).expect("capture identity of postgres before parent death");
+        let identity = ProcessIdentity::capture(pid)
+            .expect("capture identity of postgres before parent death");
         let leaked = LeakedPostgres {
             identity,
             port: running.port,
@@ -4979,16 +5133,13 @@ mod tests {
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
     async fn assert_second_start_held(
-        bundle_root: &Path,
-        digest: PostgresBundleDigest,
-        signing: &ReviewedPostgresSigningIdentity,
+        bundle: VerifiedPostgresBundle,
         app_root: &Path,
         instance: &str,
         data_dir: &Path,
         store: &MemorySecretStore,
         service: &ReviewedPostgresKeyStoreService,
     ) {
-        let bundle = VerifiedPostgresBundle::open(bundle_root, digest, signing).unwrap();
         assert!(
             matches!(
                 PostgresSidecarSupervisor::start(
@@ -5879,20 +6030,22 @@ mod tests {
         assert!(created.is_ok(), "{created:?}");
         assert!(!lock.control_invalidation_pending());
         assert!(store.writes.load(Ordering::Relaxed) >= 1);
-        assert!(root
-            .join(format!(".postgresql-17-{instance}.consumed-recovery-epoch-v1"))
-            .is_file());
+        assert!(
+            root.join(format!(
+                ".postgresql-17-{instance}.consumed-recovery-epoch-v1"
+            ))
+            .is_file()
+        );
         let auth_req = root.join(format!(
             ".postgresql-17-{instance}.auth-invalidation-required-v1"
         ));
         assert!(auth_req.is_file());
-        let epoch_hex = fs::read_to_string(root.join(format!(
-            ".postgresql-17-{instance}.recovery-epoch-v1"
-        )))
-        .unwrap()
-        .lines()
-        .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
-        .unwrap();
+        let epoch_hex =
+            fs::read_to_string(root.join(format!(".postgresql-17-{instance}.recovery-epoch-v1")))
+                .unwrap()
+                .lines()
+                .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
+                .unwrap();
         let auth_hex = fs::read_to_string(&auth_req)
             .unwrap()
             .lines()
@@ -6012,10 +6165,14 @@ mod tests {
         let existing = PostgresDataDisposition::for_test(&lock, PostgresSidecarOrigin::Existing);
         let rejected = lock.load_or_create_scram_secret(&store, &service, &existing);
         let consumed_exists = root
-            .join(format!(".postgresql-17-{instance}.consumed-recovery-epoch-v1"))
+            .join(format!(
+                ".postgresql-17-{instance}.consumed-recovery-epoch-v1"
+            ))
             .is_file();
         let auth_exists = root
-            .join(format!(".postgresql-17-{instance}.auth-invalidation-required-v1"))
+            .join(format!(
+                ".postgresql-17-{instance}.auth-invalidation-required-v1"
+            ))
             .is_file();
         drop(lock);
         fs::remove_dir_all(&root).unwrap();
@@ -6102,13 +6259,7 @@ mod tests {
             .find_map(|line| line.strip_prefix("epoch=").map(str::to_owned))
             .unwrap();
         assert_eq!(epoch_hex, auth_hex);
-        assert!(auth_req
-            .metadata()
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777
-            == 0o600);
+        assert!(auth_req.metadata().unwrap().permissions().mode() & 0o777 == 0o600);
         drop(lock);
         fs::remove_dir_all(&root).unwrap();
     }
