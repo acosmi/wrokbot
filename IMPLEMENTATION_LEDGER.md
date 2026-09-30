@@ -4,7 +4,7 @@
 
 001–047 已合入；048–058 已有开放候选，逐项独立验收中。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。
 
-本台账记录实施与验证事实，不定义产品能力或架构。每个任务对应一个独立 PR，按编号顺序集成。PR 链接中的合并状态与提交是远端集成事实；局部测试通过不表示产品阶段或发布验收完成。
+本台账记录实施与验证事实，不定义产品能力或架构。每个任务对应一个独立 PR，按冻结合同及实际依赖顺序集成。PR 链接中的合并状态与提交是远端集成事实；局部测试通过不表示产品阶段或发布验收完成。
 
 ## 任务与 PR
 
@@ -60,8 +60,8 @@
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已合入；本轮核实祖先，历史测试未重跑 | [#54](https://github.com/acosmi/wrokbot/pull/54) | [f93ffcbe7c](https://github.com/acosmi/wrokbot/commit/f93ffcbe7c66338f4014e30366942262f777387b) |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 精确命名合同未冻结，候选保留待验 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 未合入 |
-| V6-PR-049 | archive_bundle Clippy 修复 | 主控已验，集成状态见 PR | [#60](https://github.com/acosmi/wrokbot/pull/60) | 未合入 |
-| V6-PR-050 | native_0027/0028 历史幂等重检 | 开放候选，待独立验收 | [#62](https://github.com/acosmi/wrokbot/pull/62) | 未合入 |
+| V6-PR-049 | archive_bundle Clippy 修复 | 主控已验且已合 | [#60](https://github.com/acosmi/wrokbot/pull/60) | [45a0c4a7ac](https://github.com/acosmi/wrokbot/commit/45a0c4a7ac826b47884cd313f6313b461cf41379) |
+| V6-PR-050 | native_0027/0028 历史幂等重检 | 主控已验，集成状态见 PR | [#62](https://github.com/acosmi/wrokbot/pull/62) | 未合入 |
 | V6-PR-051 | Infra 测试 Clippy 修复 | 开放候选，待独立验收 | [#64](https://github.com/acosmi/wrokbot/pull/64) | 未合入 |
 | V6-PR-052 | Desktop ScreenSessionService 局部装配 | 开放候选，待独立验收 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 未合入 |
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 开放候选，待独立验收 | [#68](https://github.com/acosmi/wrokbot/pull/68) | 未合入 |
@@ -111,6 +111,8 @@
 046 主控亲读目录迁移及全部内容变化，最终候选 216 项 UI 单测、9 项发布守卫、严格 Clippy、生产 WASM/release 构建、中英文 1068 键、样式与资源预算检查通过。模型四入口、FIFO、有序技能、键盘、明确冲突和 Unknown 共 13 项浏览器请求场景在队列修复候选通过；其后错误提示修复重验 5 项受影响场景，最后收件人恢复修复在最终构建重验。不同构建的证据分别保留，未冒充全部场景在最终构建重跑。创建响应丢失时不再次创建，运行结果不明时仅显式原请求重试；目录版本冲突要求重新选择。首次读回操作漏选模型的失败记录保留并按原预期重做。浏览器使用合成 HTTP/SSE 后端；实际厂商、PG组合、Wry、完整可访问性与首发 A 门仍待。CSS 为 130505/131072 字节，已超过预警线，未放宽预算。UI 依赖守卫使用 locked/offline 元数据选中的实际来源通过；默认全局缓存因重复 registry 源首次拒绝，失败保留，未修改全局缓存或依赖。
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
+
+050 修复 issue #57 记录的既有失败：native_0027.rs / native_0028.rs 各自的幂等重检误用裸 native::apply()（目标随 NATIVE_LATEST_VERSION 漂移），改为 native_0029/native_0033 已确立的 apply_through(client, 自身版本) 写法，未改动任何产品代码。真实 PostgreSQL 17.11 验证：`cargo test -p openbot-infra --test native_0027 --test native_0028 --offline --locked -- --include-ignored` 两项转绿；全 crate `--no-fail-fast -- --include-ignored` 除一项既有、自诊断、与本次无关的环境性失败（schema_baseline_parity.rs 因本机 pg_hba 为 trust 认证无法验证口令是否泄漏，需 scram/md5 实例）外全部通过；两个改动文件的 clippy 干净。
 
 049 修复 archive_bundle.rs::hex_decode 中 `value.len() % 2 != 0` 触发的 clippy::manual_is_multiple_of（issue #58）。该 lint 在当前 rustc/clippy 1.98.0 下会使严格门禁 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 对任何 PR 必现失败，属既有代码、与具体改动无关。改为 `!value.len().is_multiple_of(2)`，语义等价，无行为变化。`cargo clippy -p openbot-infra --lib --offline --locked -- -D warnings` 转绿；`cargo test -p openbot-infra --lib --offline --locked` 370 项通过。修复后补跑全量 `--workspace --all-targets`，发现被该 lib 编译失败长期掩盖的第二波既有红（gateway_authority 测试 9 处 err_expect、gateway_sdk_transport/tls.rs 3 处 dead_code），已登记为 issue #61，作为独立后续任务处理，未在本次改动。
 
@@ -181,3 +183,7 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 ## 049 新机候选更新
 
 原交付 `a86d4cbdf89c63f31e4fde5b695ab39fe8a2d3c0` 的历史记录保留，本轮不继承其自报通过数字。产品差异仍为等价的长度奇偶判断；固定原生依赖已在隔离的本机目录构建，来源版本和摘要保持，候选 `2ca120c25b09603995f394a534bfe3e40fbc7098` 在固定 Rust 1.98.0 下，默认 feature 的 infra lib 严格 Clippy 通过，`backup::archive_bundle` 归档读写/完整认证/预算回归 30 项通过、0 失败。定向运行采用已校来源的隔离原生库，未改依赖、扩大 allow、删断言或改字节格式；这不等于完整发行闭包验收。台账登记后的最终 head 推送前复验同两项命令。058 的实际远端合并 SHA 已取回并同步上表；其已合分支及工作树在备份实际还原核验后正常清理。
+
+## 050 新机候选更新
+
+原交付 `ca0fb30f94820a3d5dc850535e5a2a09be3fce75` 的历史记录保留，本轮不继承自报测试。产品生产代码、DDL、schema fixture及断言均不改；两处历史重检仅指定本测试已施加的版本，以核对同版本幂等。已验049实际合并记录已同步，独立 PostgreSQL 17.11 / TCP SCRAM 已核实际版本，错口令确实拒绝，测试集群均正常停止且无 postmaster.pid 残留。基线 `45a0c4a7ac826b47884cd313f6313b461cf41379` 两项均真实失败于历史版本重检；候选 `41cffe0658e31ec04b2ac3068f54999cd9f3e5d6` 两项均通过，两个测试 target 的严格 Clippy 通过。台账登记后的最终 head 推送前复验同两项命令。该局部验证不证明完整产品恢复或 A 门通过。
