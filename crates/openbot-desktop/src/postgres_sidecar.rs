@@ -3200,16 +3200,157 @@ mod tests {
     }
 
     #[cfg(all(feature = "postgres-supervisor", unix))]
+    fn host_postgres_configuration(bin_dir: &Path, option: &str) -> String {
+        let program = bin_dir.join("pg_config");
+        let metadata = fs::symlink_metadata(&program).unwrap();
+        assert!(metadata.file_type().is_file());
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_ne!(metadata.permissions().mode() & 0o111, 0);
+        let output = std::process::Command::new(program)
+            .env_clear()
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .arg(option)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "the matching pg_config must succeed");
+        assert!(output.stdout.len() <= 4096);
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
+    fn copy_host_postgres_resource(
+        source: &Path,
+        destination: &Path,
+        depth: usize,
+        files: &mut usize,
+        bytes: &mut u64,
+    ) -> io::Result<()> {
+        if depth > 32 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "PostgreSQL fixture resource directory is too deep",
+            ));
+        }
+        let metadata = fs::symlink_metadata(source)?;
+        if metadata.file_type().is_dir() {
+            fs::create_dir(destination)?;
+            for entry in fs::read_dir(source)? {
+                let entry = entry?;
+                copy_host_postgres_resource(
+                    &entry.path(),
+                    &destination.join(entry.file_name()),
+                    depth + 1,
+                    files,
+                    bytes,
+                )?;
+            }
+        } else if metadata.file_type().is_file() {
+            if *files >= BUNDLE_MAX_FILES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "PostgreSQL fixture resource file budget exceeded",
+                ));
+            }
+            let next_bytes = bytes
+                .checked_add(metadata.len())
+                .filter(|total| *total <= BUNDLE_MAX_BYTES)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "PostgreSQL fixture resource byte budget exceeded",
+                    )
+                })?;
+            fs::copy(source, destination)?;
+            *files += 1;
+            *bytes = next_bytes;
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "PostgreSQL fixture resources must be regular files or directories",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "postgres-supervisor", unix))]
     pub(super) fn materialize_host_postgres_bundle(
         bin_dir: &Path,
     ) -> (PathBuf, PostgresBundleDigest) {
+        // This fixture uses one complete local installation. Resource copying does not attest
+        // release signing or make the host installation's external dylibs relocatable.
+        assert_eq!(
+            host_postgres_configuration(bin_dir, "--version"),
+            format!("PostgreSQL {POSTGRES_VERSION}")
+        );
+        let configured_bin = PathBuf::from(host_postgres_configuration(bin_dir, "--bindir"));
+        assert_eq!(
+            fs::canonicalize(configured_bin).unwrap(),
+            fs::canonicalize(bin_dir).unwrap()
+        );
+        let share = PathBuf::from(host_postgres_configuration(bin_dir, "--sharedir"));
+        let library = PathBuf::from(host_postgres_configuration(bin_dir, "--pkglibdir"));
+        assert!(share.is_absolute() && library.is_absolute());
+        let plpgsql = if cfg!(target_os = "macos") {
+            "plpgsql.dylib"
+        } else {
+            "plpgsql.so"
+        };
+        for source in [
+            share.join("postgres.bki"),
+            share.join("information_schema.sql"),
+            library.join(plpgsql),
+        ] {
+            assert!(fs::symlink_metadata(source).unwrap().file_type().is_file());
+        }
         let root = root("host-postgres");
         fs::create_dir_all(root.join("bin")).unwrap();
+        let mut files = 0;
+        let mut bytes = 0;
         for relative in expected_program_paths() {
             let name = Path::new(relative).file_name().unwrap();
-            fs::copy(bin_dir.join(name), root.join(relative)).unwrap();
+            copy_host_postgres_resource(
+                &bin_dir.join(name),
+                &root.join(relative),
+                0,
+                &mut files,
+                &mut bytes,
+            )
+            .unwrap();
         }
+        fs::create_dir(root.join("share")).unwrap();
+        fs::create_dir(root.join("lib")).unwrap();
+        copy_host_postgres_resource(
+            &share,
+            &root.join("share/postgresql"),
+            0,
+            &mut files,
+            &mut bytes,
+        )
+        .unwrap();
+        copy_host_postgres_resource(
+            &library,
+            &root.join("lib/postgresql"),
+            0,
+            &mut files,
+            &mut bytes,
+        )
+        .unwrap();
         let digest = write_manifest(&root);
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(root.join(MANIFEST_FILE)).unwrap()).unwrap();
+        for relative in [
+            "share/postgresql/postgres.bki".to_owned(),
+            "share/postgresql/information_schema.sql".to_owned(),
+            format!("lib/postgresql/{plpgsql}"),
+        ] {
+            assert!(fs::symlink_metadata(root.join(&relative)).unwrap().file_type().is_file());
+            assert_eq!(
+                manifest["files"][&relative].as_str().unwrap(),
+                encode_hex(&sha256_file(&root.join(relative)).unwrap())
+            );
+        }
         (root, digest)
     }
 
