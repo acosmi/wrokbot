@@ -35,8 +35,8 @@
         "git_blob": "b77bf2ab726c6e7cb5a81a9d3b7dc38266ebfd3d"
       },
       "README.md": {
-        "bytes": 1341,
-        "sha256": "3c194484b1edafc01619c4545285c796d89369dee26dc5dee056e876192fe5e7",
+        "bytes": 231,
+        "sha256": "d9248b19b09ffc680481367732741f9c48ac9e9eca47d28ed3ff3f7f520646cd",
         "source": "OpenBot-authored documentation"
       },
       "capabilities.ts": {
