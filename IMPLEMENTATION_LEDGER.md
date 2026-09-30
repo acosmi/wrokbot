@@ -69,7 +69,7 @@
 | V6-PR-055 | UI wasm32 Clippy 修复 | 开放候选，待独立验收 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
 | V6-PR-056 | Desktop Clippy 修复 | 开放候选，待独立验收 | [#72](https://github.com/acosmi/wrokbot/pull/72) | 未合入 |
 | V6-PR-057 | 既有格式差异修复 | 开放候选，待独立验收 | [#74](https://github.com/acosmi/wrokbot/pull/74) | 未合入 |
-| V6-PR-058 | AG-UI fixture README provenance 修复 | 源码及来源已审查，最终候选复验中 | [#76](https://github.com/acosmi/wrokbot/pull/76) | 未合入 |
+| V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验，集成状态见 PR | [#76](https://github.com/acosmi/wrokbot/pull/76) | 未合入 |
 | V6-PR-059 | SDK 自有登录合同草案 | 未批准；不得据此实施 | 无生产候选 PR | 未合入 |
 | V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选未取回；需核冻结合同后最小重建 | 未找到对应 PR | 未重建 |
 | V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选未取回；源码仍为收集后检查 | 未找到对应 PR | 未重建 |
@@ -85,7 +85,7 @@
 | 三模型 | custom 后端与四入口UI已局部验收；SDK5及账户身份已合，PG/Vault已完成本机及组合验收，集成记录见047；登录及模型运行组合仍待，账户桥Rust适配待做 |
 | Browser / 原生 | 有协调核心；实际执行、画面与GUI完整装配仍有缺口 |
 | 备份恢复 | 加密/归档基础已验；PG恢复、切换及完整演练未完成 |
-| 签名与交付 | 旧机曾记录有效 Developer ID 身份；新机签名身份和证据未核实，实际候选签名、公证及发行图验收待完成 |
+| 签名与交付 | 旧机曾记录有效 Developer ID 身份；本轮新机查询为 0 个有效身份，实际候选签名、公证及发行图验收待完成 |
 
 ## 历史验证（原始 QA 本轮未取回）
 
@@ -173,4 +173,4 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 
 本轮随后取得并在本机核对后端规范原件；此前“原件未恢复”为当时检查点。精确命名接口仍未冻结，048 保留待验，不以候选代码倒推批准。
 
-058 的产品差异仅为自有 fixture README 的 byte_length 与 sha256 两个过期记录。README、六份上游 schema、上游 commit 和协议身份不改；自有 README 的 231 字节与摘要已独立读取，上游六份文件逐一核对固定来源。原交付提交 `83399e77cfa9a8874cf46ce004b8511ef7eafe84` 为历史实施记录，其自报测试不继承为本轮证据。合入当前 main 的台账时逐段保留双方历史和新机核实事实；最终候选复验进行中。
+058 的产品差异仅为自有 fixture README 的 byte_length 与 sha256 两个过期记录。README、六份上游 schema、上游 commit 和协议身份不改；自有 README 的 231 字节与摘要已独立读取，上游六份文件逐一核对固定来源。原交付提交 `83399e77cfa9a8874cf46ce004b8511ef7eafe84` 为历史实施记录，其自报测试不继承为本轮证据。合入当前 main 的台账时逐段保留双方历史和新机核实事实；合入当前 main 后的候选 `50a27f507f29e96cf59e1d3a1c61546eaff82a34` 在固定 Rust 1.98.0 上运行 `cargo test -p openbot-agent --offline --locked --test agui_official_fixture`：5 项通过，0 失败；修改只涉及两项来源记录和公开台账，未改变测试断言或 schema。后续台账登记提交仍须在推送前对最终 head 复验同一测试。该局部验收不关闭 A0–A7。
