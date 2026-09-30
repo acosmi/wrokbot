@@ -12,6 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use openbot_application::tenant::package::{LoadedTenantPackage, TenantPackageError};
+use openbot_computer::screen::{
+    DEFAULT_SCREEN_VIEWERS_PER_STREAM, ScreenHub, ScreenSessionService,
+};
 use openbot_contracts::auth::AuthContext;
 use openbot_infra::application_assembly::{
     ChannelRoutingProviderInput, PostgresApplicationAssembly, PostgresApplicationAssemblyInput,
@@ -1158,6 +1161,16 @@ pub(crate) async fn prepare_desktop_local_runtime(
     if policy_store.load().await.is_err() {
         return Err(cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Policy).await);
     }
+    // Bind the existing Computer screen-session port to one bounded Rust hub. This local
+    // assembly has no Engine/source or viewer transport; absent targets still fail closed.
+    let screen_hub = match ScreenHub::new(DEFAULT_SCREEN_VIEWERS_PER_STREAM) {
+        Ok(hub) => hub,
+        Err(_) => {
+            return Err(
+                cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
+            );
+        }
+    };
     let auth = data_plane.auth_context().clone();
     let (credential_vault, audit_key, remote_assertions, mcp_oauth_state_key) =
         key_material.into_assembly_parts();
@@ -1182,7 +1195,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
         ui_preferences: Arc::new(DesktopUiPreferenceStore::new(
             app_data_root.as_path().join(DESKTOP_UI_PREFERENCES_FILE),
         )),
-        screen_sessions: Arc::new(openbot_application::NoScreenSessionAdministration),
+        screen_sessions: Arc::new(ScreenSessionService::new(screen_hub)),
         remote_agent_probe: remote_agent_probe.clone(),
         managed_slot_available: false,
         channel_routing_provider,

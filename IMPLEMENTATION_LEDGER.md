@@ -63,7 +63,7 @@
 | V6-PR-049 | archive_bundle Clippy 修复 | 主控已验且已合 | [#60](https://github.com/acosmi/wrokbot/pull/60) | [45a0c4a7ac](https://github.com/acosmi/wrokbot/commit/45a0c4a7ac826b47884cd313f6313b461cf41379) |
 | V6-PR-050 | native_0027/0028 历史幂等重检 | 主控已验且已合 | [#62](https://github.com/acosmi/wrokbot/pull/62) | [1f8e24b674](https://github.com/acosmi/wrokbot/commit/1f8e24b674dcd26c2478f6c0b7e40ed80eb32e97) |
 | V6-PR-051 | Infra 测试 Clippy 修复 | 主控已验且已合 | [#64](https://github.com/acosmi/wrokbot/pull/64) | [59647d1487](https://github.com/acosmi/wrokbot/commit/59647d1487930dd0504fd18f636379457104ba9f) |
-| V6-PR-052 | Desktop ScreenSessionService 局部装配 | 开放候选，待独立验收 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 未合入 |
+| V6-PR-052 | Desktop ScreenSessionService 局部装配 | 保持既有启动错误合同的返修待验 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 未合入 |
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 开放候选，待独立验收 | [#68](https://github.com/acosmi/wrokbot/pull/68) | 未合入 |
 | V6-PR-054 | skip-link 键盘焦点修复 | 开放候选，待独立验收 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
 | V6-PR-055 | UI wasm32 Clippy 修复 | 开放候选，待独立验收 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
@@ -72,7 +72,7 @@
 | V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验且已合 | [#76](https://github.com/acosmi/wrokbot/pull/76) | [9a3b5c7234](https://github.com/acosmi/wrokbot/commit/9a3b5c7234b8362e4765726c52a6db1c73e08a36) |
 | V6-PR-059 | SDK 自有登录合同草案 | 未批准；不得据此实施 | 无生产候选 PR | 未合入 |
 | V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选缺失后重建，主控已验且已合 | [#82](https://github.com/acosmi/wrokbot/pull/82) | [c8ce151835](https://github.com/acosmi/wrokbot/commit/c8ce151835b52b05ebb583b5e8c2d1ab543fcc37) |
-| V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选缺失后的重建；主控独立复验 | [#83](https://github.com/acosmi/wrokbot/pull/83) | 未合入 |
+| V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选缺失后重建，主控已验且已合 | [#83](https://github.com/acosmi/wrokbot/pull/83) | [b5aca7eb86](https://github.com/acosmi/wrokbot/commit/b5aca7eb863c836462a9abac713be6d8b2868e2e) |
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
 | V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验且已合 | [#80](https://github.com/acosmi/wrokbot/pull/80) | [55f34ae4f5](https://github.com/acosmi/wrokbot/commit/55f34ae4f525ede14bba891b2d0b90ce3785afb5) |
 | V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验且已合 | [#81](https://github.com/acosmi/wrokbot/pull/81) | [d80b685cf2](https://github.com/acosmi/wrokbot/commit/d80b685cf2427e6493e9a55fb1a84f8a4085db49) |
@@ -112,6 +112,10 @@
 046 主控亲读目录迁移及全部内容变化，最终候选 216 项 UI 单测、9 项发布守卫、严格 Clippy、生产 WASM/release 构建、中英文 1068 键、样式与资源预算检查通过。模型四入口、FIFO、有序技能、键盘、明确冲突和 Unknown 共 13 项浏览器请求场景在队列修复候选通过；其后错误提示修复重验 5 项受影响场景，最后收件人恢复修复在最终构建重验。不同构建的证据分别保留，未冒充全部场景在最终构建重跑。创建响应丢失时不再次创建，运行结果不明时仅显式原请求重试；目录版本冲突要求重新选择。首次读回操作漏选模型的失败记录保留并按原预期重做。浏览器使用合成 HTTP/SSE 后端；实际厂商、PG组合、Wry、完整可访问性与首发 A 门仍待。CSS 为 130505/131072 字节，已超过预警线，未放宽预算。UI 依赖守卫使用 locked/offline 元数据选中的实际来源通过；默认全局缓存因重复 registry 源首次拒绝，失败保留，未修改全局缓存或依赖。
 
 047 主控亲读 25 个产品、schema、测试和守卫文件。独立 PostgreSQL 验证：历史及新增 schema 6 项、Desktop bootstrap 3 项、Server 初始化 4 项、人员撤权恢复 1 项、自定义模型三协议 PG/TLS 1 项均通过。SDK 持久授权 12 个场景分两次完成验证（首轮 11 通过，纠正 SDK Missing 对象语义的测试预期后，剩余 1 项通过）；原 24 项 TLS、78 项数据库单测、依赖守卫和 Launcher all-target check 通过。初期编译错误和失败日志已保留；四个越界格式改动已恢复。并发刷新仅一次请求，响应丢失、取消、主体漂移及两阶段审计故障后保留未决状态，不重发旧令牌。接入已合入的 046 后，25 个后端文件及 265 个 UI/路径文件的已验内容均不变；主控补跑 Launcher all-target、SDK 依赖守卫及 9 项发布守卫通过。真实 App 登录、v2 模型运行和厂商旅程仍待。
+
+052 历史候选 69ee8fdd59804ef3fa14a972c6fa8a548afef19c 的作者记录（原始 QA 本轮未取回；局部装配仍待本轮独立验收）：
+
+052 主控亲读 Desktop/Server 双侧装配代码及第一真源 §8.1、§28.1 历史修订条目，确认 Server 已用 `ScreenHub`+`ScreenSessionService` 装配 `screen_sessions` 端口，Desktop 仍是 fail-closed 的 `NoScreenSessionAdministration` 占位；将 Desktop 对齐到 Server 已验证的同一模式，范围严格限定于生产装配收敛，不改动端口 trait 或 Computer 侧实现。`cargo check`/`cargo clippy --no-deps -D warnings` 在 `desktop-local-runtime` 与更完整的 `desktop-launcher` 两个 feature 集下均与未改动的 `origin/main` 逐行 diff 为空；针对本机真实 PostgreSQL 17 的 `--ignored` 集成测试新增 `IssueScreenSession` 断言，证明端口现在对目标可见性做真实判定（返回 `AppError::NotVisible`）而非旧 stub 恒定的 `DependencyUnavailable`；该测试与全量非 ignored 套件（341 通过）均通过。验证中发现的两处既有问题（`openbot-desktop` 自身第三波 Clippy 红、4 个 PostgreSQL sidecar 失败路径测试在本沙箱确定性失败）已通过 `git stash` A/B 确认与本次改动无关，归档为 #65、#66，未在本 PR 修复。本次改动不启动任何 engine 进程、不构造 `HostLocalBrowserRuntime`，也不涉及 Tool/Policy/Agent 层对 `BrowserOperation` 的执行管线；C05 的完整 Browser 产品链仍待后续多个 PR 完成。
 
 056 历史候选 3eeb833c7a8d8157e6879c2ea6a0ff2b79220cb5 的作者记录（原始 QA 本轮未取回；新增 allow 已进入返修）：
 
