@@ -74,7 +74,8 @@
 | V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选未取回；需核冻结合同后最小重建 | 未找到对应 PR | 未重建 |
 | V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选未取回；源码仍为收集后检查 | 未找到对应 PR | 未重建 |
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
-| V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验，集成状态见 PR | [#80](https://github.com/acosmi/wrokbot/pull/80) | 未合入 |
+| V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验且已合 | [#80](https://github.com/acosmi/wrokbot/pull/80) | [55f34ae4f5](https://github.com/acosmi/wrokbot/commit/55f34ae4f525ede14bba891b2d0b90ce3785afb5) |
+| V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验，集成状态见 PR | [#81](https://github.com/acosmi/wrokbot/pull/81) | 未合入 |
 ## macOS 首发进度
 
 当前尚无 A0–A7 中任何一项取得完整同候选通过证据；局部 PR 数量不代表首发完成比例。持续实施到首发验收完成。
@@ -193,3 +194,5 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 051 换机主控返修与实际验证：九处等价 expect_err 保留；Client 错误路径改显式 match，不要求存活凭据对象 Debug。共享 TLS fixture 的 HTTP framing 实际消费 Capture.headers，服务器直接消费自身持有的失败计数器；chat_text 原字节移到唯一消费的 SDK 测试入口。原候选四处新增 allow 全部移除，断言、HTTP 算法、TLS 计划及产品代码保持。固定 Rust 1.98.0、offline/locked 两个测试目标严格 Clippy 通过；独立 PG 17.11/TCP SCRAM 的 12 项 authority 显式 include-ignored 全通过，自有 TLS 24 项全通过。首次默认启动 authority 12 项 ignored 如实保留，未记作通过；最终候选重新执行完整 36 项。此结论不代表真实登录、厂商模型或 A2 完成。
 
 063 换机审查发现来源登记落后于现有固定工具链，Rust 记录的 versionInfo 与 purl 从 1.94.1 同步为 1.98.0。主控核当前固定配置与实装 rustc，逐字节差量只含两个登记字段；62 条来源、许可、下载位置、关系及其余字节不变。现有工具链与依赖未升级，公开内容及装配守卫单测 25 项通过；来源登记修正不等于完整签名发行图或 A0/A7 完成。
+
+064 主控实际补跑真实 PG 场景时，原 host 夹具只复制三个二进制，重定位后 initdb 找不到 postgres.bki，导致 11 个场景均失败；独立脱敏探针确证缺模板，控制 TTY 不可打开。测试辅助改从同安装 PG17.11 的 pg_config 核版本及 bin 路径，将普通 share/运行库资源有界复制进自有 bundle，全部摘要仍由原 manifest 和真实 binary 校验消费；保留全部测试断言、产品启动参数和口令通道。强制重编的同候选真实 PG 启动/重启、恢复、master journal、Application 装配及 owner 清理 11/11 全通过，最终台账候选再次完整复验。该测试夹具维护不修复生产控制 TTY 问题，不声明动态依赖发行闭包、签名产品/真实默认 Keychain 或 A0–A7 完成。
