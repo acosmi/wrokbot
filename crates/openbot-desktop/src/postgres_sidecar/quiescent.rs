@@ -387,16 +387,29 @@ mod tests {
             (
                 "uppercase-manifest",
                 canonical
-                    .replace(&manifest, &manifest.to_uppercase())
+                    .replace(
+                        &format!("manifest={manifest}"),
+                        &format!("manifest={}", manifest.to_uppercase()),
+                    )
                     .into_bytes(),
             ),
             (
                 "short-manifest",
-                canonical.replace(&manifest, &manifest[..63]).into_bytes(),
+                canonical
+                    .replace(
+                        &format!("manifest={manifest}"),
+                        &format!("manifest={}", &manifest[..63]),
+                    )
+                    .into_bytes(),
             ),
             (
                 "nonhex-manifest",
-                canonical.replace(&manifest, &"g".repeat(64)).into_bytes(),
+                canonical
+                    .replace(
+                        &format!("manifest={manifest}"),
+                        &format!("manifest={}", "g".repeat(64)),
+                    )
+                    .into_bytes(),
             ),
             (
                 "uppercase-nonce",
@@ -414,12 +427,20 @@ mod tests {
             ),
             (
                 "wrong-instance",
-                canonical.replace(instance, &"ef".repeat(32)).into_bytes(),
+                canonical
+                    .replace(
+                        &format!("instance={instance}"),
+                        &format!("instance={}", "ef".repeat(32)),
+                    )
+                    .into_bytes(),
             ),
             (
                 "uppercase-instance",
                 canonical
-                    .replace(instance, &instance.to_uppercase())
+                    .replace(
+                        &format!("instance={instance}"),
+                        &format!("instance={}", instance.to_uppercase()),
+                    )
                     .into_bytes(),
             ),
             (
