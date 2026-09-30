@@ -40,19 +40,18 @@ async fn assert_pending_without_second_post(
         )
         .await
         .unwrap();
-    // `acosmi::Client` intentionally does not implement `Debug` (it can hold live tokens), so
-    // `Result::expect_err` cannot be used here: it requires `T: Debug` for its panic message
-    // even on the `Err` path we're asserting.
-    #[allow(clippy::err_expect)]
-    let error = Client::create_with_authority(
+    // Match explicitly so the failure assertion does not require token-owning Client: Debug.
+    let error = match Client::create_with_authority(
         sdk_config(&tls.endpoint()),
         operation.transport(),
         operation.authority(),
         None,
     )
     .await
-    .err()
-    .expect("a new SDK client must preserve durable pending");
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a new SDK client must preserve durable pending"),
+    };
     assert!(error.to_string().contains("rotation_pending"));
     assert_eq!(tls.count(), expected_requests);
     assert_eq!(
