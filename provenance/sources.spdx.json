@@ -599,7 +599,7 @@
     {
       "SPDXID": "SPDXRef-Package-rust-toolchain",
       "name": "Rust toolchain",
-      "versionInfo": "1.94.1",
+      "versionInfo": "1.98.0",
       "downloadLocation": "https://static.rust-lang.org/dist/",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0 OR MIT",
@@ -609,7 +609,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:generic/rust@1.94.1"
+          "referenceLocator": "pkg:generic/rust@1.98.0"
         }
       ],
       "primaryPackagePurpose": "OTHER"

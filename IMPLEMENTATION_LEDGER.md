@@ -62,19 +62,20 @@
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 精确命名合同未冻结，候选保留待验 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 未合入 |
 | V6-PR-049 | archive_bundle Clippy 修复 | 主控已验且已合 | [#60](https://github.com/acosmi/wrokbot/pull/60) | [45a0c4a7ac](https://github.com/acosmi/wrokbot/commit/45a0c4a7ac826b47884cd313f6313b461cf41379) |
 | V6-PR-050 | native_0027/0028 历史幂等重检 | 主控已验且已合 | [#62](https://github.com/acosmi/wrokbot/pull/62) | [1f8e24b674](https://github.com/acosmi/wrokbot/commit/1f8e24b674dcd26c2478f6c0b7e40ed80eb32e97) |
-| V6-PR-051 | Infra 测试 Clippy 修复 | 主控已验，集成状态见 PR | [#64](https://github.com/acosmi/wrokbot/pull/64) | 未合入 |
-| V6-PR-052 | Desktop ScreenSessionService 局部装配 | 开放候选，待独立验收 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 未合入 |
+| V6-PR-051 | Infra 测试 Clippy 修复 | 主控已验且已合 | [#64](https://github.com/acosmi/wrokbot/pull/64) | [59647d1487](https://github.com/acosmi/wrokbot/commit/59647d1487930dd0504fd18f636379457104ba9f) |
+| V6-PR-052 | Desktop ScreenSessionService 局部装配 | 主控返修已验且已合，仅backend局部端口 | [#67](https://github.com/acosmi/wrokbot/pull/67) | [82db75413b](https://github.com/acosmi/wrokbot/commit/82db75413bd7ba7639abae2238a7d5ee722a0e0e) |
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 主控已验，集成状态见 PR | [#68](https://github.com/acosmi/wrokbot/pull/68) | 未合入 |
 | V6-PR-054 | skip-link 键盘焦点修复 | 开放候选，待独立验收 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
 | V6-PR-055 | UI wasm32 Clippy 修复 | 开放候选，待独立验收 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
-| V6-PR-056 | Desktop Clippy 修复 | 开放候选，待独立验收 | [#72](https://github.com/acosmi/wrokbot/pull/72) | 未合入 |
+| V6-PR-056 | Desktop Clippy 修复 | 主控返修已验且已合 | [#72](https://github.com/acosmi/wrokbot/pull/72) | [9bae520869](https://github.com/acosmi/wrokbot/commit/9bae520869f8dc2fb9833fae4b946cd99c3aa64a) |
 | V6-PR-057 | 既有格式差异修复 | 开放候选，待独立验收 | [#74](https://github.com/acosmi/wrokbot/pull/74) | 未合入 |
 | V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验且已合 | [#76](https://github.com/acosmi/wrokbot/pull/76) | [9a3b5c7234](https://github.com/acosmi/wrokbot/commit/9a3b5c7234b8362e4765726c52a6db1c73e08a36) |
 | V6-PR-059 | SDK 自有登录合同草案 | 未批准；不得据此实施 | 无生产候选 PR | 未合入 |
-| V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选未取回；需核冻结合同后最小重建 | 未找到对应 PR | 未重建 |
-| V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选未取回；源码仍为收集后检查 | 未找到对应 PR | 未重建 |
+| V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选缺失后重建，主控已验且已合 | [#82](https://github.com/acosmi/wrokbot/pull/82) | [c8ce151835](https://github.com/acosmi/wrokbot/commit/c8ce151835b52b05ebb583b5e8c2d1ab543fcc37) |
+| V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选缺失后重建，主控已验且已合 | [#83](https://github.com/acosmi/wrokbot/pull/83) | [b5aca7eb86](https://github.com/acosmi/wrokbot/commit/b5aca7eb863c836462a9abac713be6d8b2868e2e) |
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
-
+| V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验且已合 | [#80](https://github.com/acosmi/wrokbot/pull/80) | [55f34ae4f5](https://github.com/acosmi/wrokbot/commit/55f34ae4f525ede14bba891b2d0b90ce3785afb5) |
+| V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验且已合 | [#81](https://github.com/acosmi/wrokbot/pull/81) | [d80b685cf2](https://github.com/acosmi/wrokbot/commit/d80b685cf2427e6493e9a55fb1a84f8a4085db49) |
 ## macOS 首发进度
 
 当前尚无 A0–A7 中任何一项取得完整同候选通过证据；局部 PR 数量不代表首发完成比例。持续实施到首发验收完成。
@@ -115,6 +116,14 @@
 053 历史候选 259fe439453f7da8c78fae94c05368017fc0c30e 的作者记录（原始 QA 本轮未取回；本轮定向验证待执行）：
 
 053 Copilot（临时实施执行方）完成实现与本机验证，待主控独立验收：修复 `openbot-testkit/tests/transport_parity.rs` 里 `http_route_of` 穷举 match 缺失的 5 个 ModelConnection 变体（`AppCommand::E0004`，issue #63），阻塞的是 `cargo build/test/clippy --workspace --all-targets` 本身，不是 clippy 告警。确认这 5 个变体已有真实 HTTP 路由（`openbot-server/src/http/model_connections.rs`）及专项覆盖（`openbot-server/tests/model_connections_http_postgres.rs` 的真实 PG+HTTP CRUD 旅程），故沿用本文件对 People/audit/policy/thread/MCP/approval/UI-preference 等命令的既有约定，将其映射为 `None` 并在注释里点名专项覆盖来源，未新写 URI 拼装逻辑。独立 worktree（`origin/main` @ `66274f8`）验证：`cargo check --workspace --all-targets --all-features --offline --locked` 由硬编译失败变为完整通过（只剩其他 issue 已跟踪的既有 warning）；`cargo clippy -p openbot-testkit --all-targets --no-deps -- -D warnings` 干净；`cargo fmt -p openbot-testkit -- --check` 干净；`cargo test -p openbot-testkit --all-targets` 33 通过、0 失败、10 项既有 ignored（需要真实基础设施，与本次改动无关）。只改了这一个文件的 5 行 match 分支与注释扩展，未触碰 `command.rs`/`model_connections.rs`/其他文件，未新增测试。
+
+052 历史候选 69ee8fdd59804ef3fa14a972c6fa8a548afef19c 的作者记录（原始 QA 本轮未取回；局部装配仍待本轮独立验收）：
+
+052 主控亲读 Desktop/Server 双侧装配代码及第一真源 §8.1、§28.1 历史修订条目，确认 Server 已用 `ScreenHub`+`ScreenSessionService` 装配 `screen_sessions` 端口，Desktop 仍是 fail-closed 的 `NoScreenSessionAdministration` 占位；将 Desktop 对齐到 Server 已验证的同一模式，范围严格限定于生产装配收敛，不改动端口 trait 或 Computer 侧实现。`cargo check`/`cargo clippy --no-deps -D warnings` 在 `desktop-local-runtime` 与更完整的 `desktop-launcher` 两个 feature 集下均与未改动的 `origin/main` 逐行 diff 为空；针对本机真实 PostgreSQL 17 的 `--ignored` 集成测试新增 `IssueScreenSession` 断言，证明端口现在对目标可见性做真实判定（返回 `AppError::NotVisible`）而非旧 stub 恒定的 `DependencyUnavailable`；该测试与全量非 ignored 套件（341 通过）均通过。验证中发现的两处既有问题（`openbot-desktop` 自身第三波 Clippy 红、4 个 PostgreSQL sidecar 失败路径测试在本沙箱确定性失败）已通过 `git stash` A/B 确认与本次改动无关，归档为 #65、#66，未在本 PR 修复。本次改动不启动任何 engine 进程、不构造 `HostLocalBrowserRuntime`，也不涉及 Tool/Policy/Agent 层对 `BrowserOperation` 的执行管线；C05 的完整 Browser 产品链仍待后续多个 PR 完成。
+
+056 历史候选 3eeb833c7a8d8157e6879c2ea6a0ff2b79220cb5 的作者记录（原始 QA 本轮未取回；新增 allow 已进入返修）：
+
+056（Copilot 临时实施执行方，非主控亲验）：修复 issue #65（`openbot-desktop` 既有 Clippy 红第三波，17 处）。`needless_return` 2 处、`collapsible_if` 1 处（改写为 edition 2024 let-chain）、`chunks_exact` 常量分块 4 处（改为 `as_chunks::<2>()`）、`large_enum_variant` 2 处（`PreviousJournal::Retired.record` 装箱）均按 clippy 自身建议机械改写；`too_many_arguments` 7 处（均为 PostgreSQL 独占锁校验路径内部函数）评估后判断新增参数对象 struct 对这段安全关键代码只搬运字段、不降复杂度且引入设计风险，改为逐个附加有理由注释的 `#[allow(clippy::too_many_arguments)]`（issue 本身认可的备选方案）；`dead_code` 1 处（`DesktopUiResource::Verified` 变体）排查确认其唯一构造点只能从 `required-features = ["desktop-launcher"]` 的 `wrok-bot` 二进制到达，`test` cfg 分支为多余项，收紧变体与对应 match 分支的 cfg 为 `#[cfg(all(feature = "desktop-launcher", target_os = "macos"))]`，生产行为不变。验证：`cargo clippy --features desktop-local-runtime -D warnings` 17→0，`--features desktop-launcher` 变体同样干净；`cargo check` 通过；`cargo fmt --check` 与 origin/main 一致（既有格式化缺口，见新提交的 #73，与本 PR 无关）；`cargo test --test-threads=1` 331 通过 4 失败，经 A/B 对比与 origin/main、issue #66 记录的环境特有 flake 完全一致，无新增失败。
 
 051 历史候选 bfb79b542b02ed470cafa3bbecceccb855cf5859 的作者记录（原始 QA 本轮未取回；新增 allow 已进入返修）：
 
@@ -196,5 +205,13 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 原交付 `ca0fb30f94820a3d5dc850535e5a2a09be3fce75` 的历史记录保留，本轮不继承自报测试。产品生产代码、DDL、schema fixture及断言均不改；两处历史重检仅指定本测试已施加的版本，以核对同版本幂等。已验049实际合并记录已同步，独立 PostgreSQL 17.11 / TCP SCRAM 已核实际版本，错口令确实拒绝，测试集群均正常停止且无 postmaster.pid 残留。基线 `45a0c4a7ac826b47884cd313f6313b461cf41379` 两项均真实失败于历史版本重检；候选 `41cffe0658e31ec04b2ac3068f54999cd9f3e5d6` 两项均通过，两个测试 target 的严格 Clippy 通过。台账登记后的最终 head 推送前复验同两项命令。该局部验证不证明完整产品恢复或 A 门通过。
 
 051 换机主控返修与实际验证：九处等价 expect_err 保留；Client 错误路径改显式 match，不要求存活凭据对象 Debug。共享 TLS fixture 的 HTTP framing 实际消费 Capture.headers，服务器直接消费自身持有的失败计数器；chat_text 原字节移到唯一消费的 SDK 测试入口。原候选四处新增 allow 全部移除，断言、HTTP 算法、TLS 计划及产品代码保持。固定 Rust 1.98.0、offline/locked 两个测试目标严格 Clippy 通过；独立 PG 17.11/TCP SCRAM 的 12 项 authority 显式 include-ignored 全通过，自有 TLS 24 项全通过。首次默认启动 authority 12 项 ignored 如实保留，未记作通过；最终候选重新执行完整 36 项。此结论不代表真实登录、厂商模型或 A2 完成。
+
+063 换机审查发现来源登记落后于现有固定工具链，Rust 记录的 versionInfo 与 purl 从 1.94.1 同步为 1.98.0。主控核当前固定配置与实装 rustc，逐字节差量只含两个登记字段；62 条来源、许可、下载位置、关系及其余字节不变。现有工具链与依赖未升级，公开内容及装配守卫单测 25 项通过；来源登记修正不等于完整签名发行图或 A0/A7 完成。
+
+064 主控实际补跑真实 PG 场景时，原 host 夹具只复制三个二进制，重定位后 initdb 找不到 postgres.bki，导致 11 个场景均失败；独立脱敏探针确证缺模板，控制 TTY 不可打开。测试辅助改从同安装 PG17.11 的 pg_config 核版本及 bin 路径，将普通 share/运行库资源有界复制进自有 bundle，全部摘要仍由原 manifest 和真实 binary 校验消费；保留全部测试断言、产品启动参数和口令通道。强制重编的同候选真实 PG 启动/重启、恢复、master journal、Application 装配及 owner 清理 11/11 全通过，最终台账候选再次完整复验。该测试夹具维护不修复生产控制 TTY 问题，不声明动态依赖发行闭包、签名产品/真实默认 Keychain 或 A0–A7 完成。
+
+056 换机主控返修：原候选新增七处 too_many_arguments allow 全部移除，改私有借用观察参数结构；现有身份、路径、dev/inode/uid、原始字节、锁及原子落盘校验逐项保留。现有 public 方法、错误/证据协议不变，Verified cfg 仅在实际消费的 macOS launcher 上启用，测试辅助避免另一次无必要开 bundle。固定 Rust1.98.0 runtime/launcher 全目标严格 Clippy 已实跑通过；77 个现有 sidecar 回归通过。四个 issue66 历史预期按独立060冻结恢复合同处理，本项显式跳过且不记通过。已验064真实PG夹具合入后，最终候选再次运行严格 feature 检查以及77回归与11真实PG场景组合；该局部 lint/等价参数整理不代表完整M0通过。
+
+060 旧本地候选及原始QA没有取回，当前是缺失后的最小重建，生成新SHA。只改四个旧测试和其自有失败证据辅助；原fixture、版本/口令/数据失败类别及零写断言保持。macOS普通acquire保持失败锁/helper bytes并拒绝；受控收口依据真实child观察与数据形态，未齐的version helper仅收口exit_confirmed仍拒绝回收，合法initdb/完整helper路径方可受控处理。corrupt第二次仍按已有失败锁拒绝并保持原证据，不自动删锁。未改生产源码、恢复规则或口令通道。主控原始四项失败及错误中间结果留存，最终干净候选重新运行严格Clippy和sidecar回归，ignored真实PG不计通过；此前056的88项实际组合是独立证据。
 
 053 换机主控独立读 channel 对拍矩阵、五条 model HTTP/typed 路由与共享业务、现有 PG 专项源码。候选只是穷举登记五个 model 变体不进入 channel 专项，没有 wildcard、lint 豁免或断言变更。固定 Rust 1.98.0/locked 严格目标 Clippy 通过；实际 channel 对拍 8/8 通过，独立 PG17.11/SCRAM 上既有 model HTTP 会话/Vault 旅程 1/1 通过，集群停止无残留。该 HTTP 旅程使用应用请求 harness；不代表 model 五操作的两宿主 PG 对拍、Wry、真实 socket、跨 scope 撤权矩阵、厂商三来源或 A2 完成。
