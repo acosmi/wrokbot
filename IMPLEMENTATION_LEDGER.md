@@ -75,7 +75,7 @@
 | V6-PR-061 | macOS version helper 读取中执行输出预算 | 旧候选未取回；源码仍为收集后检查 | 未找到对应 PR | 未重建 |
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
 | V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验且已合 | [#80](https://github.com/acosmi/wrokbot/pull/80) | [55f34ae4f5](https://github.com/acosmi/wrokbot/commit/55f34ae4f525ede14bba891b2d0b90ce3785afb5) |
-| V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验，集成状态见 PR | 待创建 | 未合入 |
+| V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验，集成状态见 PR | [#81](https://github.com/acosmi/wrokbot/pull/81) | 未合入 |
 ## macOS 首发进度
 
 当前尚无 A0–A7 中任何一项取得完整同候选通过证据；局部 PR 数量不代表首发完成比例。持续实施到首发验收完成。
