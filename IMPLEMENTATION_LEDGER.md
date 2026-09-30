@@ -62,7 +62,7 @@
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 精确命名合同未冻结，候选保留待验 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 未合入 |
 | V6-PR-049 | archive_bundle Clippy 修复 | 主控已验且已合 | [#60](https://github.com/acosmi/wrokbot/pull/60) | [45a0c4a7ac](https://github.com/acosmi/wrokbot/commit/45a0c4a7ac826b47884cd313f6313b461cf41379) |
 | V6-PR-050 | native_0027/0028 历史幂等重检 | 主控已验且已合 | [#62](https://github.com/acosmi/wrokbot/pull/62) | [1f8e24b674](https://github.com/acosmi/wrokbot/commit/1f8e24b674dcd26c2478f6c0b7e40ed80eb32e97) |
-| V6-PR-051 | Infra 测试 Clippy 修复 | 移除新增 allow 的返修待验 | [#64](https://github.com/acosmi/wrokbot/pull/64) | 未合入 |
+| V6-PR-051 | Infra 测试 Clippy 修复 | 主控已验，集成状态见 PR | [#64](https://github.com/acosmi/wrokbot/pull/64) | 未合入 |
 | V6-PR-052 | Desktop ScreenSessionService 局部装配 | 开放候选，待独立验收 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 未合入 |
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 开放候选，待独立验收 | [#68](https://github.com/acosmi/wrokbot/pull/68) | 未合入 |
 | V6-PR-054 | skip-link 键盘焦点修复 | 开放候选，待独立验收 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
@@ -188,3 +188,5 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 ## 050 新机候选更新
 
 原交付 `ca0fb30f94820a3d5dc850535e5a2a09be3fce75` 的历史记录保留，本轮不继承自报测试。产品生产代码、DDL、schema fixture及断言均不改；两处历史重检仅指定本测试已施加的版本，以核对同版本幂等。已验049实际合并记录已同步，独立 PostgreSQL 17.11 / TCP SCRAM 已核实际版本，错口令确实拒绝，测试集群均正常停止且无 postmaster.pid 残留。基线 `45a0c4a7ac826b47884cd313f6313b461cf41379` 两项均真实失败于历史版本重检；候选 `41cffe0658e31ec04b2ac3068f54999cd9f3e5d6` 两项均通过，两个测试 target 的严格 Clippy 通过。台账登记后的最终 head 推送前复验同两项命令。该局部验证不证明完整产品恢复或 A 门通过。
+
+051 换机主控返修与实际验证：九处等价 expect_err 保留；Client 错误路径改显式 match，不要求存活凭据对象 Debug。共享 TLS fixture 的 HTTP framing 实际消费 Capture.headers，服务器直接消费自身持有的失败计数器；chat_text 原字节移到唯一消费的 SDK 测试入口。原候选四处新增 allow 全部移除，断言、HTTP 算法、TLS 计划及产品代码保持。固定 Rust 1.98.0、offline/locked 两个测试目标严格 Clippy 通过；独立 PG 17.11/TCP SCRAM 的 12 项 authority 显式 include-ignored 全通过，自有 TLS 24 项全通过。首次默认启动 authority 12 项 ignored 如实保留，未记作通过；最终候选重新执行完整 36 项。此结论不代表真实登录、厂商模型或 A2 完成。
