@@ -60,7 +60,7 @@
 | V6-PR-046 | 自定义模型四入口、队列消费与 UI 目录改名 | 已合入 | [#53](https://github.com/acosmi/wrokbot/pull/53) | [c970fced2e](https://github.com/acosmi/wrokbot/commit/c970fced2eb07f950033f42c8d13795e496b3e22) |
 | V6-PR-047 | SDK 个人凭据的 PG/Vault 持久授权与严格刷新 | 已合入；本轮核实祖先，历史测试未重跑 | [#54](https://github.com/acosmi/wrokbot/pull/54) | [f93ffcbe7c](https://github.com/acosmi/wrokbot/commit/f93ffcbe7c66338f4014e30366942262f777387b) |
 | V6-PR-048 | 第一方技术命名统一与既有数据兼容 | 精确命名合同未冻结，候选保留待验 | [#59](https://github.com/acosmi/wrokbot/pull/59) | 未合入 |
-| V6-PR-049 | archive_bundle Clippy 修复 | 源码审查完成，最终候选复验中 | [#60](https://github.com/acosmi/wrokbot/pull/60) | 未合入 |
+| V6-PR-049 | archive_bundle Clippy 修复 | 主控已验，集成状态见 PR | [#60](https://github.com/acosmi/wrokbot/pull/60) | 未合入 |
 | V6-PR-050 | native_0027/0028 历史幂等重检 | 开放候选，待独立验收 | [#62](https://github.com/acosmi/wrokbot/pull/62) | 未合入 |
 | V6-PR-051 | Infra 测试 Clippy 修复 | 开放候选，待独立验收 | [#64](https://github.com/acosmi/wrokbot/pull/64) | 未合入 |
 | V6-PR-052 | Desktop ScreenSessionService 局部装配 | 开放候选，待独立验收 | [#67](https://github.com/acosmi/wrokbot/pull/67) | 未合入 |
@@ -180,4 +180,4 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 
 ## 049 新机候选更新
 
-原交付 `a86d4cbdf89c63f31e4fde5b695ab39fe8a2d3c0` 的历史记录保留，本轮不继承其自报通过数字。产品差异仍为等价的长度奇偶判断；固定原生依赖已在隔离的本机目录构建，来源版本和摘要保持，最终组合验证进行中。058 的实际远端合并 SHA 已取回并同步上表；其已合分支及工作树在备份实际还原核验后正常清理。
+原交付 `a86d4cbdf89c63f31e4fde5b695ab39fe8a2d3c0` 的历史记录保留，本轮不继承其自报通过数字。产品差异仍为等价的长度奇偶判断；固定原生依赖已在隔离的本机目录构建，来源版本和摘要保持，候选 `2ca120c25b09603995f394a534bfe3e40fbc7098` 在固定 Rust 1.98.0 下，默认 feature 的 infra lib 严格 Clippy 通过，`backup::archive_bundle` 归档读写/完整认证/预算回归 30 项通过、0 失败。定向运行采用已校来源的隔离原生库，未改依赖、扩大 allow、删断言或改字节格式；这不等于完整发行闭包验收。台账登记后的最终 head 推送前复验同两项命令。058 的实际远端合并 SHA 已取回并同步上表；其已合分支及工作树在备份实际还原核验后正常清理。
