@@ -331,17 +331,31 @@ fn invalid_pg_version_preserves_mid_phase_journal_and_all_prior_evidence() {
             record.phase = phase;
             write_private(&harness.journal_path(), &encode_record(&record).unwrap());
             write_private(&harness.data_dir.join("PG_VERSION"), &bytes);
-            for label in [
-                "recovery-epoch",
-                "recovery-consumed",
-                "auth-epoch-required",
-                "auth-epoch-applied",
+            for (label, header) in [
+                ("recovery-epoch", "openbot-postgres-recovery-epoch-v1"),
+                (
+                    "consumed-recovery-epoch",
+                    "openbot-postgres-consumed-recovery-epoch-v1",
+                ),
+                (
+                    "auth-invalidation-required",
+                    "openbot-postgres-auth-invalidation-required-v1",
+                ),
+                (
+                    "auth-invalidation-applied",
+                    "openbot-postgres-auth-invalidation-applied-v1",
+                ),
             ] {
                 write_private(
                     &harness
                         .root
                         .join(format!(".postgresql-17-{}.{label}-v1", harness.instance)),
-                    b"owned-prior-evidence",
+                    format!(
+                        "{header}\ninstance={}\nepoch={}\n",
+                        harness.instance,
+                        "ab".repeat(32)
+                    )
+                    .as_bytes(),
                 );
             }
             let wal = harness.data_dir.join("pg_wal");
@@ -371,6 +385,17 @@ fn invalid_pg_version_preserves_mid_phase_journal_and_all_prior_evidence() {
                 "phase={phase:?} len={}",
                 bytes.len()
             );
+            let result = crate::postgres_sidecar::quiescent::recover_mid_phase_journals(
+                &harness.lock().kernel_guard,
+                &harness.root,
+                &harness.instance,
+                &harness.data_dir,
+            );
+            assert_eq!(
+                result,
+                Err(crate::postgres_sidecar::PostgresSidecarError::StartLockGuardInvalid)
+            );
+            assert_eq!(disposition_tree_snapshot(&harness.root), before);
         }
     }
 }
