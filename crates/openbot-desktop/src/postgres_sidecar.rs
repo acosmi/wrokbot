@@ -16,6 +16,8 @@ mod quiescent;
 mod recovery_epoch;
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 mod startup_journal;
+#[cfg(all(test, feature = "postgres-supervisor", target_os = "macos"))]
+mod version_output_tests;
 
 #[cfg(all(feature = "postgres-supervisor", target_os = "macos"))]
 use helper_journal::{HelperJournal, HelperJournalError, HelperJournalPreparation, HelperKind};
