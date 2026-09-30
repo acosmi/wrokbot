@@ -2,7 +2,7 @@
 
 更新时间：2026-09-30。独立验收主控核对远端与新机状态；2026-09-19 的实施、实测记录保留为历史记录。
 
-001–047 已合入；048–058 已有开放候选，逐项独立验收中。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。
+001–047 已核实为 main 祖先。换机主控已亲读、实测并正常合入049、050、051、052、053、056、057、058及重建060/061、新增必要维护063/064；048、054、055保留开放候选，059/062仍缺合同批准。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。下方历次检查点是历史记录，当前状态以任务表及本轮最终结论为准。
 
 本台账记录实施与验证事实，不定义产品能力或架构。每个任务对应一个独立 PR，按冻结合同及实际依赖顺序集成。PR 链接中的合并状态与提交是远端集成事实；局部测试通过不表示产品阶段或发布验收完成。
 
@@ -65,10 +65,10 @@
 | V6-PR-051 | Infra 测试 Clippy 修复 | 主控已验且已合 | [#64](https://github.com/acosmi/wrokbot/pull/64) | [59647d1487](https://github.com/acosmi/wrokbot/commit/59647d1487930dd0504fd18f636379457104ba9f) |
 | V6-PR-052 | Desktop ScreenSessionService 局部装配 | 主控返修已验且已合，仅backend局部端口 | [#67](https://github.com/acosmi/wrokbot/pull/67) | [82db75413b](https://github.com/acosmi/wrokbot/commit/82db75413bd7ba7639abae2238a7d5ee722a0e0e) |
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 主控已验且已合 | [#68](https://github.com/acosmi/wrokbot/pull/68) | [e7098b56fa](https://github.com/acosmi/wrokbot/commit/e7098b56fa58370811057b14d4715c642c4bc13b) |
-| V6-PR-054 | skip-link 键盘焦点修复 | 开放候选，待独立验收 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
-| V6-PR-055 | UI wasm32 Clippy 修复 | 开放候选，待独立验收 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
+| V6-PR-054 | skip-link 键盘焦点修复 | 阻塞：UI原件与真实焦点验收输入缺失 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
+| V6-PR-055 | UI wasm32 Clippy 修复 | 阻塞：UI原件与wasm实际分支验证缺失 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
 | V6-PR-056 | Desktop Clippy 修复 | 主控返修已验且已合 | [#72](https://github.com/acosmi/wrokbot/pull/72) | [9bae520869](https://github.com/acosmi/wrokbot/commit/9bae520869f8dc2fb9833fae4b946cd99c3aa64a) |
-| V6-PR-057 | 既有格式差异修复 | 已保留已验组合并核机械来源，最终检查与集成见 PR | [#74](https://github.com/acosmi/wrokbot/pull/74) | 未合入 |
+| V6-PR-057 | 既有格式差异修复 | 主控已验且已合 | [#74](https://github.com/acosmi/wrokbot/pull/74) | [acf1a26f15](https://github.com/acosmi/wrokbot/commit/acf1a26f15c5ef19f437ec77d56e7c51af0857fe) |
 | V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验且已合 | [#76](https://github.com/acosmi/wrokbot/pull/76) | [9a3b5c7234](https://github.com/acosmi/wrokbot/commit/9a3b5c7234b8362e4765726c52a6db1c73e08a36) |
 | V6-PR-059 | SDK 自有登录合同草案 | 未批准；不得据此实施 | 无生产候选 PR | 未合入 |
 | V6-PR-060 | Sidecar 失败证据与受控恢复测试 | 旧候选缺失后重建，主控已验且已合 | [#82](https://github.com/acosmi/wrokbot/pull/82) | [c8ce151835](https://github.com/acosmi/wrokbot/commit/c8ce151835b52b05ebb583b5e8c2d1ab543fcc37) |
@@ -147,11 +147,11 @@
 - SDK 的 App 登录、连接目录、v2 Provider 组合及三种模型完整旅程；PG/Vault 持久授权已由 047 验收，账户桥 Rust 接入与真实厂商旅程仍待完成。
 - Browser 与原生电脑的完整产品链、A0–A7 同一候选验收和 24 小时 soak。
 - M1 事件与同节点协作、M2 节点与文件能力，以及完整平台、安全和发布验收。
-- 严格 Clippy 门禁的第二波既有红（gateway_authority 测试 9 处 err_expect、gateway_sdk_transport/tls.rs 3 处 dead_code，见 issue #61），此前被 049 修复前的 lib 编译失败长期掩盖，从未被 clippy 实际检查到；049 只处理了 issue #58 报告的单点，未处理这批。
+- UI wasm32 严格 Clippy、真实键盘/DOM验收仍待054/055；后端已有两波及Desktop局部lint已分别由049/051/056实际验收，不继承为全仓或全部平台门禁通过。
 
 040 只验证有界归档的认证消费，不授予恢复切换权限，不关闭以上工作。
 
-## 2026-09-30 独立验收重建检查点
+## 历史：2026-09-30 独立验收重建检查点
 
 任务编号：REBUILD-20260930-01（公开台账事实纠正）。本任务只同步清点事实，不验收产品候选，不修改任何产品合同。
 
@@ -221,3 +221,30 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 053 换机主控独立读 channel 对拍矩阵、五条 model HTTP/typed 路由与共享业务、现有 PG 专项源码。候选只是穷举登记五个 model 变体不进入 channel 专项，没有 wildcard、lint 豁免或断言变更。固定 Rust 1.98.0/locked 严格目标 Clippy 通过；实际 channel 对拍 8/8 通过，独立 PG17.11/SCRAM 上既有 model HTTP 会话/Vault 旅程 1/1 通过，集群停止无残留。该 HTTP 旅程使用应用请求 harness；不代表 model 五操作的两宿主 PG 对拍、Wry、真实 socket、跨 scope 撤权矩阵、厂商三来源或 A2 完成。
 
 057 换机主控在已独立验收的功能组合上更新原 PR。先按 hunk 撤销原重叠格式补丁，再正常合入已验 main；格式处理前全部产品字节核同 main，未复制旧整文件覆盖功能。原12个后端文件逐一核固定 Rust1.98.0 格式器输出，其中两文件已由前项满足格式；另明确纳入061新增版本输出测试的一处链式换行。因此最终仅11个 Rust文件有机械差量。包含 use排序、换行、冗余 match arm块括号与逗号调整；字段、literal、断言、cfg条件和业务调用不变。主控已亲读最终完整差量并保存字节来源依据，最终同候选全仓 fmt 检查结果与合并事实见本 PR；未继承旧作者测试数或将此格式任务算作M0通过。
+
+## 2026-09-30 本轮最终独立验收与集成
+
+任务编号：REBUILD-20260930-04，仅同步最终事实和阻塞，不改变产品或规范。产品集成检查点为 `acf1a26f15c5ef19f437ec77d56e7c51af0857fe`。所有通过项均在正常合并前重新核对最终 head、亲读完整差量、核实际测试结果；合入后取回远端 merge SHA，逐项核 main 和候选代码树一致。CI status 空列表未被当作通过证据。
+
+| 任务 | 本轮最终干净候选 head | 实际验证及其边界 |
+|---|---|---|
+| 049 | `922c6e5665496064382f6e9b6a7e200ad786a11b` | 默认Infra lib严格Clippy；归档30/30 |
+| 050 | `2f84a09a15ae2633f4f033f0de51e6ebbb1f8cf3` | 两历史迁移真实PG17.11/SCRAM 2/2；两目标严格Clippy |
+| 051 | `8b0f751508d848d9a69a4e1a0e3d3f82e6e3ecb2` | 全部新增allow移除；两目标严格Clippy；实际PG authority12及自有TLS24，全36/36 |
+| 052 | `c218262035cfd7bb59e2aca0e003427248fd9b8e` | 默认/轻宿主依赖图、runtime/launcher严格Clippy；真实PG局部Application装配1/1。只局部Screen端口，不构成完整画面链 |
+| 053 | `f7148c139340cfe6d4edc2d849874d32cdc18697` | 严格目标Clippy；channel对拍8/8及实际PG model HTTP旅程1/1；不构成model五操作跨宿主完整对拍 |
+| 056 | `c23144d7b04213be32a84f15fdabef5a3d225601` | 七allow全部移除；最终干净候选两feature严格Clippy、77sidecar与11真实PG共88/88；四个旧失败预期在本项跳过、不计通过 |
+| 057 | `fb3eb4da9ab80d3d2650262af7f4241570cc2ffd` | 固定格式器输出字节逐文件核同；最终全仓fmt check通过；只机械调整 |
+| 058 | `7f5ebf354e74cbf78f84225d205f0c145ad0880f` | 本地7文件与固定上游6文件独立核字节，最终fixture5/5 |
+| 060 | `71c2d9eeb7764b316d8df4d506b80d0fb9035b07` | 旧候选缺失后重建；严格runtime Clippy；81sidecar真实通过，11真实PG ignored不计通过；失败锁及journal保留、受控恢复不自动删锁 |
+| 061 | `a57b64e413ae8229ef3e3e0cdcc011d7ef31f2be` | 旧候选缺失后重建；读取中4096/4097边界、流、超时/取消、exact Child及失败journal六场景；最终两feature严格Clippy、完整sidecar98/98含11真实PG，0 ignored |
+| 063 | `f6abfc7e550d923c842d26b7a6e3405eb2768e59` | 仅Rust来源两字段同步既有1.98.0；其余来源字节保持；25守卫单测 |
+| 064 | `c2d8462562f1042a4c1b91c07bc0f1e5821064c6` | 只测试夹具PG资源闭合；最终11真实PG场景通过，不修生产TTY或证明签名发行闭包 |
+
+早期离线缺依赖、资源缺失、旧预期失败、零测试被过滤，以及测试时带未提交机械格式的记录均保留并明确无效范围，没有转记为最终精确head通过；涉及后者的056/060已撤销额外差量并强制重编、重新验最终干净候选。以上数字不相加成为全仓或首发通过数。
+
+048保持原候选；精确命名及兼容身份合同未冻结，881文件范围含受保护移动端和历史SQL字节，不能按现实现倒推批准。054/055保持原候选；缺UI原件及真实wasm/键盘/提交状态验证。059登录草案未批准、原件未取回。062已亲读固定PG源码并取得自有PTY实际诊断：两次口令已写pipe仍等待、TTY echo关闭；只操作自有PTY且owned child已回收。生产仍未修复，session/TTY机制与权限范围须精确裁决；不能用测试集群的pwfile/无TTY启动替代产品修复。
+
+已合候选均先保存并实际还原核验Git bundle，再正常删除对应本地/远端分支及自有工作树。048/054/055未合分支保留。本轮产生的tracked差量已完成集成；用户或其它窗口的未跟踪工作材料保留，不用git clean删除或隐藏。新机只有已核本机备份，未创建或验证离机/云端私有备份。
+
+A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅程、账户桥精确接入合同、Browser/Engine/画面/GUI、原生OS/TCC、完整PG/WAL/凭据恢复与升级切换、签名公证/真实OS及四scope连续24小时均有明确缺口。本轮收尾不是M0首发完成；下一工作从已冻结恢复记录输入格式的最小反例验证开始，逐项亲验、每任务独立PR，正常合入后再推进下一项。
