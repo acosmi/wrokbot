@@ -113,9 +113,6 @@ pub enum DesktopLocalRuntimeError {
     /// The authoritative action-policy snapshot could not be loaded.
     #[error("desktop_local_runtime_policy_failed")]
     Policy,
-    /// The shared Computer screen-session hub could not be constructed.
-    #[error("desktop_local_runtime_screen_sessions_failed")]
-    ScreenSessions,
     /// Shared PostgreSQL application adapter assembly failed.
     #[error("desktop_local_runtime_application_failed")]
     Application,
@@ -172,7 +169,6 @@ impl DesktopLocalRuntimeError {
                 "desktop_local_runtime_initialization_reconciliation_required"
             }
             Self::Policy => "desktop_local_runtime_policy_failed",
-            Self::ScreenSessions => "desktop_local_runtime_screen_sessions_failed",
             Self::Application => "desktop_local_runtime_application_failed",
             Self::Agent => "desktop_local_runtime_agent_failed",
             Self::Host => "desktop_local_runtime_host_failed",
@@ -1165,16 +1161,13 @@ pub(crate) async fn prepare_desktop_local_runtime(
     if policy_store.load().await.is_err() {
         return Err(cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Policy).await);
     }
-    // Same real Computer adapter Server already wires (`DEFAULT_SCREEN_VIEWERS_PER_STREAM`, the
-    // fixed-upstream per-stream viewer cap): a `ScreenSessionService` bound to one process-wide
-    // `ScreenHub`, replacing the fail-closed `NoScreenSessionAdministration` default. No engine is
-    // started here; ticket issuance now runs real target-resolution logic against a hub that has
-    // no attached stream until a later change spawns one.
+    // Bind the existing Computer screen-session port to one bounded Rust hub. This local
+    // assembly has no Engine/source or viewer transport; absent targets still fail closed.
     let screen_hub = match ScreenHub::new(DEFAULT_SCREEN_VIEWERS_PER_STREAM) {
         Ok(hub) => hub,
         Err(_) => {
             return Err(
-                cleanup_data_plane(data_plane, DesktopLocalRuntimeError::ScreenSessions).await,
+                cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
             );
         }
     };
