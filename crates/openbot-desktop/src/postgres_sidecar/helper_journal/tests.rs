@@ -391,9 +391,12 @@ fn invalid_pg_version_preserves_mid_phase_journal_and_all_prior_evidence() {
                 &harness.instance,
                 &harness.data_dir,
             );
-            assert_eq!(
-                result,
-                Err(crate::postgres_sidecar::PostgresSidecarError::StartLockGuardInvalid)
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::postgres_sidecar::PostgresSidecarError::StartLockGuardInvalid)
+                ),
+                "{result:?}"
             );
             assert_eq!(disposition_tree_snapshot(&harness.root), before);
         }
