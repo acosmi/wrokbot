@@ -1683,6 +1683,8 @@ async fn verify_program_versions_with_helper(
     lock: &mut PostgresStartLock,
     helper_journal: &mut HelperJournal,
 ) -> Result<(), PostgresSidecarError> {
+    use tokio::io::AsyncReadExt as _;
+
     let programs = [
         (PostgresProgram::Server, "postgres", None),
         (
@@ -1739,22 +1741,47 @@ async fn verify_program_versions_with_helper(
             let _ = terminate_child(&mut child).await;
             return Err(map_helper_journal_error(error));
         }
-        let waited = tokio::time::timeout(VERSION_DEADLINE, child.wait_with_output()).await;
+        // Keep the owned Child outside the timed future so every read/wait failure can clean up
+        // that exact handle. The extra byte detects overflow without collecting an unbounded stream.
+        let waited = tokio::time::timeout(VERSION_DEADLINE, async {
+            let mut stdout = child
+                .stdout
+                .take()
+                .ok_or(PostgresSidecarError::VersionMismatch)?;
+            let mut bytes = [0_u8; 4097];
+            let mut length = 0;
+            loop {
+                let read = stdout
+                    .read(&mut bytes[length..])
+                    .await
+                    .map_err(|_| PostgresSidecarError::VersionMismatch)?;
+                length += read;
+                if length > 4096 {
+                    return Err(PostgresSidecarError::VersionMismatch);
+                }
+                if read == 0 {
+                    break;
+                }
+            }
+            let status = child
+                .wait()
+                .await
+                .map_err(|_| PostgresSidecarError::VersionMismatch)?;
+            if !status.success() {
+                return Err(PostgresSidecarError::VersionMismatch);
+            }
+            Ok(bytes[..length].to_vec())
+        })
+        .await;
         let output = match waited {
             Ok(Ok(output)) => output,
             _ => {
                 lock.preserve_on_drop();
+                let _ = terminate_child(&mut child).await;
                 return Err(PostgresSidecarError::VersionMismatch);
             }
         };
-        if !output.status.success()
-            || output.stdout.len() + output.stderr.len() > 4096
-            || !output.stderr.is_empty()
-        {
-            lock.preserve_on_drop();
-            return Err(PostgresSidecarError::VersionMismatch);
-        }
-        if let Err(error) = validate_version_line(label, &output.stdout) {
+        if let Err(error) = validate_version_line(label, &output) {
             lock.preserve_on_drop();
             return Err(error);
         }
