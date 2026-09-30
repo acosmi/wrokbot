@@ -10,7 +10,7 @@
 
 use super::kernel_start_lock::KernelStartLock;
 use super::{
-    encode_hex, path_matches_open_file, sync_directory, valid_instance_id, PostgresSidecarError,
+    PostgresSidecarError, encode_hex, path_matches_open_file, sync_directory, valid_instance_id,
 };
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -134,9 +134,11 @@ pub(super) fn mint_or_replace_for_reclaim(
                 owner,
                 app_data_root,
                 instance_id,
-                &path,
-                &old_file,
-                &old_bytes,
+                EpochFileObservation {
+                    path: &path,
+                    file: &old_file,
+                    bytes: &old_bytes,
+                },
                 bytes,
                 epoch_hex,
             )
@@ -195,20 +197,26 @@ fn publish_new(
     }
 }
 
-// Every parameter is an independently meaningful identity/path component this exclusive-lock
-// transition must check together; a parameter struct would relocate the same fields without
-// reducing this security-critical function's real complexity.
-#[allow(clippy::too_many_arguments)]
+/// Exact prior epoch file, borrowed without granting replacement authority.
+struct EpochFileObservation<'a> {
+    path: &'a Path,
+    file: &'a File,
+    bytes: &'a [u8],
+}
+
 fn replace_exact(
     owner: &KernelStartLock,
     root: &Path,
     instance_id: &str,
-    path: &Path,
-    old_file: &File,
-    old_bytes: &[u8],
+    previous: EpochFileObservation<'_>,
     bytes: Vec<u8>,
     epoch_hex: String,
 ) -> Result<RecoveryEpoch, PostgresSidecarError> {
+    let EpochFileObservation {
+        path,
+        file: old_file,
+        bytes: old_bytes,
+    } = previous;
     let (candidate_path, mut candidate) = create_candidate(root, instance_id)?;
     if candidate
         .write_all(&bytes)
@@ -340,7 +348,8 @@ pub(super) fn clear_auth_invalidation_required(
             }
             drop(file);
             fs::remove_file(&path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            sync_directory(app_data_root).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
+            sync_directory(app_data_root)
+                .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
             if !owner.is_current() || !current.is_current() {
                 return Err(PostgresSidecarError::StartLockGuardInvalid);
             }
@@ -349,7 +358,6 @@ pub(super) fn clear_auth_invalidation_required(
         Err(_) => Err(PostgresSidecarError::StartLockGuardInvalid),
     }
 }
-
 
 /// Plant auth-invalidation-applied equal to `current` (V6-PR-024). Idempotent when matching.
 pub(super) fn write_auth_invalidation_applied(
@@ -578,7 +586,6 @@ fn load_labeled_epoch_hex(
         Err(_) => Err(PostgresSidecarError::StartLockGuardInvalid),
     }
 }
-
 
 fn consumed_path(root: &Path, instance_id: &str) -> PathBuf {
     root.join(format!(
@@ -898,7 +905,6 @@ mod tests {
         std::io::Write::write_all(&mut file, body.as_bytes()).unwrap();
         file.sync_all().unwrap();
     }
-
 
     fn auth_invalidation_path_for(root: &Path, instance: &str) -> PathBuf {
         root.join(format!(

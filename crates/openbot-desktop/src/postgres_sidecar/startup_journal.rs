@@ -169,11 +169,13 @@ impl StartupJournalPreparation {
         validate_owner_and_directory(
             owner,
             &self.root,
-            &self.data_dir_path,
-            &self.data_dir_file,
-            self.data_dir_device,
-            self.data_dir_inode,
-            self.root_uid,
+            DirectoryObservation {
+                path: &self.data_dir_path,
+                file: &self.data_dir_file,
+                device: self.data_dir_device,
+                inode: self.data_dir_inode,
+                root_uid: self.root_uid,
+            },
             &self.owner_identity,
             &self.owner_observation,
         )?;
@@ -317,11 +319,13 @@ impl StartupJournal {
         validate_owner_and_directory(
             owner,
             &self.root,
-            &self.data_dir_path,
-            &self.data_dir_file,
-            self.data_dir_device,
-            self.data_dir_inode,
-            self.root_uid,
+            DirectoryObservation {
+                path: &self.data_dir_path,
+                file: &self.data_dir_file,
+                device: self.data_dir_device,
+                inode: self.data_dir_inode,
+                root_uid: self.root_uid,
+            },
             &self.owner_identity,
             &self.owner_observation,
         )?;
@@ -463,11 +467,13 @@ impl StartupJournal {
             || validate_owner_and_directory(
                 owner,
                 &self.root,
-                &self.data_dir_path,
-                &self.data_dir_file,
-                self.data_dir_device,
-                self.data_dir_inode,
-                self.root_uid,
+                DirectoryObservation {
+                    path: &self.data_dir_path,
+                    file: &self.data_dir_file,
+                    device: self.data_dir_device,
+                    inode: self.data_dir_inode,
+                    root_uid: self.root_uid,
+                },
                 &self.owner_identity,
                 &self.owner_observation,
             )
@@ -541,11 +547,13 @@ fn publish_absent(
         || validate_owner_and_directory(
             owner,
             &preparation.root,
-            &preparation.data_dir_path,
-            &preparation.data_dir_file,
-            preparation.data_dir_device,
-            preparation.data_dir_inode,
-            preparation.root_uid,
+            DirectoryObservation {
+                path: &preparation.data_dir_path,
+                file: &preparation.data_dir_file,
+                device: preparation.data_dir_device,
+                inode: preparation.data_dir_inode,
+                root_uid: preparation.root_uid,
+            },
             &preparation.owner_identity,
             &preparation.owner_observation,
         )
@@ -609,11 +617,13 @@ fn replace_exact(
         || validate_owner_and_directory(
             owner,
             &preparation.root,
-            &preparation.data_dir_path,
-            &preparation.data_dir_file,
-            preparation.data_dir_device,
-            preparation.data_dir_inode,
-            preparation.root_uid,
+            DirectoryObservation {
+                path: &preparation.data_dir_path,
+                file: &preparation.data_dir_file,
+                device: preparation.data_dir_device,
+                inode: preparation.data_dir_inode,
+                root_uid: preparation.root_uid,
+            },
             &preparation.owner_identity,
             &preparation.owner_observation,
         )
@@ -685,21 +695,29 @@ fn open_data_directory(
     Ok(binding)
 }
 
-// Every parameter is an independently meaningful identity/path component this exclusive-lock
-// validation must check together; a parameter struct would relocate the same fields without
-// reducing this security-critical function's real complexity.
-#[allow(clippy::too_many_arguments)]
+/// Borrowed directory identity; validation still rechecks every component against the owner.
+struct DirectoryObservation<'a> {
+    path: &'a Path,
+    file: &'a File,
+    device: u64,
+    inode: u64,
+    root_uid: u32,
+}
+
 fn validate_owner_and_directory(
     owner: &PostgresStartLock,
     root: &Path,
-    data_dir_path: &Path,
-    data_dir_file: &File,
-    data_dir_device: u64,
-    data_dir_inode: u64,
-    root_uid: u32,
+    directory: DirectoryObservation<'_>,
     owner_identity: &ProcessIdentity,
     owner_observation: &[u8; OBSERVATION_BYTES],
 ) -> Result<(), StartupJournalError> {
+    let DirectoryObservation {
+        path: data_dir_path,
+        file: data_dir_file,
+        device: data_dir_device,
+        inode: data_dir_inode,
+        root_uid,
+    } = directory;
     if owner.path.parent() != Some(root)
         || !owner.ownership_is_current()
         || data_dir_path != root.join(data_dir_name(&owner.instance_id))
@@ -1234,12 +1252,14 @@ pub(super) fn recover_mid_phase(
                         owner,
                         app_data_root,
                         instance_id,
-                        &path,
-                        &file,
-                        &bytes,
+                        JournalFileObservation {
+                            path: &path,
+                            file: &file,
+                            bytes: &bytes,
+                            root_uid,
+                        },
                         &next,
                         next_bytes,
-                        root_uid,
                     )?;
                     Ok(())
                 }
@@ -1281,21 +1301,28 @@ fn delete_exact_journal(
     Ok(())
 }
 
-// Every parameter is an independently meaningful identity/path component this exclusive-lock
-// transition must check together; a parameter struct would relocate the same fields without
-// reducing this security-critical function's real complexity.
-#[allow(clippy::too_many_arguments)]
+/// Exact prior file observation, borrowed without granting replacement authority.
+struct JournalFileObservation<'a> {
+    path: &'a Path,
+    file: &'a File,
+    bytes: &'a [u8],
+    root_uid: u32,
+}
+
 fn replace_exact_mid_phase(
     owner: &super::kernel_start_lock::KernelStartLock,
     root: &Path,
     instance_id: &str,
-    path: &Path,
-    old_file: &File,
-    old_bytes: &[u8],
+    previous: JournalFileObservation<'_>,
     record: &StartupJournalRecord,
     bytes: Vec<u8>,
-    root_uid: u32,
 ) -> Result<(), StartupJournalError> {
+    let JournalFileObservation {
+        path,
+        file: old_file,
+        bytes: old_bytes,
+        root_uid,
+    } = previous;
     validate_record(record, instance_id, data_dir_name(instance_id).as_str())?;
     if !owner.is_current() {
         return Err(StartupJournalError::Invalid);
