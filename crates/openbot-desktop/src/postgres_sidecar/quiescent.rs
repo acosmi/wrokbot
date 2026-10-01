@@ -5,13 +5,29 @@ use super::kernel_start_lock::KernelStartLock;
 use super::startup_journal::{self, StartupJournalError};
 use super::{PostgresSidecarError, path_matches_open_file, sync_directory, valid_instance_id};
 use std::fs::{self, File, OpenOptions};
-use std::io::Read as _;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use wrok_bot_macos_process::{
     DataDirectoryOpenerObservation, ProcessIdentity, observe_data_directory_openers,
 };
 
 const LOCK_HEADER: &str = "openbot-postgres-start-lock-v1";
+// Header+LF, pid=+nonzero unpadded u32+LF, instance/manifest=+64 hex+LF, nonce=+32 hex+LF.
+const MAX_LOCK_BYTES: usize =
+    LOCK_HEADER.len() + 1 + (4 + 10 + 1) + (9 + 64 + 1) + (9 + 64 + 1) + (6 + 32 + 1);
+
+fn read_bounded_start_lock_bytes(file: &mut File) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(MAX_LOCK_BYTES + 1);
+    file.take((MAX_LOCK_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() > MAX_LOCK_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid start-lock record length",
+        ));
+    }
+    Ok(bytes)
+}
 
 /// Exact closed start-lock observed before any recovery effect; no recovery authority itself.
 pub(super) struct StartLockEvidence {
@@ -52,8 +68,7 @@ impl StartLockEvidence {
         }
         let mut file =
             secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
+        let bytes = read_bounded_start_lock_bytes(&mut file)
             .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
         if !lock_bytes_match_instance(&bytes, instance_id) {
             return Err(PostgresSidecarError::StartLockRecoveryRequired);
@@ -300,7 +315,7 @@ mod tests {
     use crate::postgres_sidecar::kernel_start_lock::KernelStartLock;
     use crate::postgres_sidecar::{PostgresBundleDigest, PostgresSidecarError, PostgresStartLock};
     use std::fs::{self, File, OpenOptions};
-    use std::io::Write as _;
+    use std::io::{self, Seek as _, Write as _};
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
@@ -379,6 +394,116 @@ mod tests {
             "cd".repeat(16),
             header = super::LOCK_HEADER
         )
+    }
+
+    #[test]
+    fn bounded_start_lock_read_enforces_empty_233_and_234_byte_boundaries() {
+        assert_eq!(super::MAX_LOCK_BYTES, 233);
+        for length in [0, super::MAX_LOCK_BYTES, super::MAX_LOCK_BYTES + 1] {
+            let root = temp_root("068-read-boundary");
+            let path = root.join("record");
+            let expected = vec![b'x'; length];
+            write_private(&path, &expected);
+            let mut file = super::secure_open_read(&path).unwrap();
+            let result = super::read_bounded_start_lock_bytes(&mut file);
+            assert_eq!(file.stream_position().unwrap(), length as u64);
+            if length == super::MAX_LOCK_BYTES {
+                assert_eq!(result.unwrap(), expected);
+            } else {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+            }
+            eprintln!("bounded-lock-read boundary length={length} actual_read={length}");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn bounded_start_lock_read_rejects_growth_after_open_with_only_234_bytes_read() {
+        let root = temp_root("068-read-growth");
+        let instance = "ab".repeat(32);
+        let path = root.join("record");
+        let canonical = canonical_lock(&instance, &u32::MAX.to_string());
+        assert_eq!(canonical.len(), super::MAX_LOCK_BYTES);
+        assert!(super::lock_bytes_match_instance(
+            canonical.as_bytes(),
+            &instance
+        ));
+        write_private(&path, canonical.as_bytes());
+        let mut file = super::secure_open_read(&path).unwrap();
+        let observed = file.metadata().unwrap();
+        assert_eq!(observed.len(), super::MAX_LOCK_BYTES as u64);
+        assert_eq!(observed.mode() & 0o777, 0o600);
+        assert_eq!(observed.nlink(), 1);
+        let appended = vec![b'x'; 1024 * 1024];
+        let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+        writer.write_all(&appended).unwrap();
+        writer.sync_all().unwrap();
+        let grown = file.metadata().unwrap();
+        assert_eq!(grown.len(), (super::MAX_LOCK_BYTES + appended.len()) as u64);
+        assert_eq!(grown.dev(), observed.dev());
+        assert_eq!(grown.ino(), observed.ino());
+        assert_eq!(
+            super::read_bounded_start_lock_bytes(&mut file)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            file.stream_position().unwrap(),
+            (super::MAX_LOCK_BYTES + 1) as u64
+        );
+        eprintln!(
+            "bounded-lock-read growth observed_length={} grown_length={} actual_read={}",
+            observed.len(),
+            grown.len(),
+            file.stream_position().unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_start_lock_canonical_pid_bounds_inspect_recheck_and_reclaim() {
+        let instance = "ab".repeat(32);
+        for (pid, length) in [("1", 224), ("4294967295", 233)] {
+            let root = temp_root("068-canonical-inspect");
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+            let canonical = canonical_lock(&instance, pid);
+            assert_eq!(canonical.len(), length);
+            write_private(&lock_path, canonical.as_bytes());
+            let mut file = super::secure_open_read(&lock_path).unwrap();
+            let bytes = super::read_bounded_start_lock_bytes(&mut file).unwrap();
+            assert_eq!(bytes, canonical.as_bytes());
+            assert!(super::lock_bytes_match_instance(&bytes, &instance));
+            let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+            let evidence = super::StartLockEvidence::inspect(&owner, &root, &instance).unwrap();
+            assert_eq!(evidence.bytes, bytes);
+            assert!(evidence.is_current(&owner));
+            let data = data_dir.join("owned-data-sentinel");
+            write_private(&data, b"owned data stays");
+            let before = evidence_snapshots(std::slice::from_ref(&data));
+            let verified = super::VerifiedQuiescentInstance::try_verify(
+                &owner, &root, &instance, &data_dir, &evidence,
+            )
+            .unwrap();
+            assert!(evidence.is_current(&owner));
+            verified.reclaim_start_lock_evidence(&owner, &root).unwrap();
+            assert!(!lock_path.exists());
+            assert_eq!(evidence_snapshots(std::slice::from_ref(&data)), before);
+            assert!(owner.is_current());
+            assert!(
+                !root
+                    .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
+                    .exists()
+            );
+            eprintln!(
+                "bounded-lock canonical pid={pid} length={length} inspect_recheck_reclaim=true"
+            );
+            drop(owner);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     fn malformed_locks(instance: &str) -> Vec<(&'static str, Vec<u8>)> {
@@ -607,6 +732,203 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    fn plant_boundary_preservation_evidence(
+        root: &Path,
+        instance: &str,
+        data_dir: &Path,
+    ) -> Vec<PathBuf> {
+        let (device, inode) = data_dir_ids(data_dir);
+        let startup = root.join(format!(".postgresql-17-{instance}.startup-v1.json"));
+        let helper = root.join(format!(".postgresql-17-{instance}.helper-v1.json"));
+        let startup_record = serde_json::json!({"schema":"openbot-postgres-startup","schemaVersion":1,"instanceId":instance,"dataDirName":format!("postgresql-17-{instance}"),"dataDirDevice":device,"dataDirInode":inode,"attemptId":"34".repeat(16),"startEvidenceSha256":"12".repeat(32),"ownerObservation":owner_observation_hex(),"childObservation":null,"phase":"spawn_entered"});
+        let helper_record = serde_json::json!({"schema":"openbot-postgres-helper","schemaVersion":1,"instanceId":instance,"dataDirName":format!("postgresql-17-{instance}"),"dataDirDevice":device,"dataDirInode":inode,"attemptId":"56".repeat(16),"startEvidenceSha256":"12".repeat(32),"ownerObservation":owner_observation_hex(),"helperKind":"version_postgres","childObservation":null,"phase":"spawn_entered"});
+        write_private(&startup, &serde_json::to_vec(&startup_record).unwrap());
+        write_private(&helper, &serde_json::to_vec(&helper_record).unwrap());
+        let mut paths = vec![startup, helper];
+        for (suffix, header) in [
+            ("recovery-epoch-v1", "openbot-postgres-recovery-epoch-v1"),
+            (
+                "consumed-recovery-epoch-v1",
+                "openbot-postgres-consumed-recovery-epoch-v1",
+            ),
+            (
+                "auth-invalidation-required-v1",
+                "openbot-postgres-auth-invalidation-required-v1",
+            ),
+            (
+                "auth-invalidation-applied-v1",
+                "openbot-postgres-auth-invalidation-applied-v1",
+            ),
+        ] {
+            let path = root.join(format!(".postgresql-17-{instance}.{suffix}"));
+            write_private(
+                &path,
+                format!("{header}\ninstance={instance}\nepoch={}\n", "12".repeat(32)).as_bytes(),
+            );
+            paths.push(path);
+        }
+        for (name, bytes) in [
+            ("owned-data-sentinel", b"owned data stays".as_slice()),
+            ("owned-wal-sentinel", b"owned WAL stays".as_slice()),
+        ] {
+            let path = data_dir.join(name);
+            write_private(&path, bytes);
+            paths.push(path);
+        }
+        paths
+    }
+
+    fn root_entry_paths(root: &Path) -> Vec<PathBuf> {
+        let mut paths: Vec<_> = fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn bounded_start_lock_inspect_and_acquire_reject_bad_records_without_effect() {
+        let instance = "ab".repeat(32);
+        for length in [
+            0,
+            super::MAX_LOCK_BYTES,
+            super::MAX_LOCK_BYTES + 1,
+            super::MAX_LOCK_BYTES + 1024 * 1024,
+        ] {
+            let root = temp_root("068-boundary-inspect");
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+            let bytes = if length > super::MAX_LOCK_BYTES {
+                let mut canonical = canonical_lock(&instance, &u32::MAX.to_string()).into_bytes();
+                canonical.resize(length, b'x');
+                canonical
+            } else {
+                vec![b'x'; length]
+            };
+            write_private(&lock_path, &bytes);
+            let mut paths = plant_boundary_preservation_evidence(&root, &instance, &data_dir);
+            paths.push(lock_path);
+            let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+            paths.push(root.join(format!(".postgresql-17-{instance}.owner-guard-v1")));
+            let before = evidence_snapshots(&paths);
+            let before_entries = root_entry_paths(&root);
+            assert!(matches!(
+                super::StartLockEvidence::inspect(&owner, &root, &instance),
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ));
+            assert_eq!(evidence_snapshots(&paths), before);
+            assert_eq!(root_entry_paths(&root), before_entries);
+            assert!(owner.is_current());
+            drop(owner);
+            let acquired = PostgresStartLock::acquire_with_data_dir(
+                &root,
+                &instance,
+                PostgresBundleDigest([0x11; 32]),
+                &data_dir,
+            );
+            assert!(
+                matches!(
+                    acquired,
+                    Err(PostgresSidecarError::StartLockRecoveryRequired)
+                ),
+                "length={length}: {acquired:?}"
+            );
+            assert_eq!(evidence_snapshots(&paths), before);
+            assert_eq!(root_entry_paths(&root), before_entries);
+            eprintln!(
+                "bounded-lock production length={length} inspect_acquire=StartLockRecoveryRequired records_and_entries_unchanged=true"
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn bounded_start_lock_growth_blocks_verify_and_reclaim_after_inspect() {
+        let instance = "ab".repeat(32);
+        for after_verify in [false, true] {
+            let root = temp_root("068-post-inspect-growth");
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+            write_private(
+                &lock_path,
+                canonical_lock(&instance, &u32::MAX.to_string()).as_bytes(),
+            );
+            let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+            let evidence = super::StartLockEvidence::inspect(&owner, &root, &instance).unwrap();
+            let observed = fs::symlink_metadata(&lock_path).unwrap();
+            let verified = after_verify.then(|| {
+                super::VerifiedQuiescentInstance::try_verify(
+                    &owner, &root, &instance, &data_dir, &evidence,
+                )
+                .unwrap()
+            });
+            let mut writer = OpenOptions::new().append(true).open(&lock_path).unwrap();
+            writer.write_all(&vec![b'x'; 1024 * 1024]).unwrap();
+            writer.sync_all().unwrap();
+            assert_eq!(
+                fs::symlink_metadata(&lock_path).unwrap().dev(),
+                observed.dev()
+            );
+            assert_eq!(
+                fs::symlink_metadata(&lock_path).unwrap().ino(),
+                observed.ino()
+            );
+            let before = evidence_snapshots(std::slice::from_ref(&lock_path));
+            let before_entries = root_entry_paths(&root);
+            assert!(!evidence.is_current(&owner));
+            assert!(matches!(
+                super::VerifiedQuiescentInstance::try_verify(
+                    &owner, &root, &instance, &data_dir, &evidence
+                ),
+                Err(PostgresSidecarError::StartLockGuardInvalid)
+            ));
+            if let Some(verified) = verified {
+                assert!(matches!(
+                    verified.reclaim_start_lock_evidence(&owner, &root),
+                    Err(PostgresSidecarError::StartLockGuardInvalid)
+                ));
+            }
+            assert_eq!(evidence_snapshots(std::slice::from_ref(&lock_path)), before);
+            assert_eq!(root_entry_paths(&root), before_entries);
+            assert!(owner.is_current());
+            assert!(
+                !root
+                    .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
+                    .exists()
+            );
+            eprintln!(
+                "bounded-lock revalidation growth after_verify={after_verify} guard_invalid=true records_and_entries_unchanged=true"
+            );
+            drop(owner);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn bounded_start_lock_inspect_keeps_guard_invalid_on_owner_root_mismatch() {
+        let root = temp_root("068-owner-root");
+        let other_root = temp_root("068-other-root");
+        let instance = "ab".repeat(32);
+        let lock_path = plant_stale_lock(&root, &instance);
+        let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+        let before = evidence_snapshots(std::slice::from_ref(&lock_path));
+        assert!(matches!(
+            super::StartLockEvidence::inspect(&owner, &other_root, &instance),
+            Err(PostgresSidecarError::StartLockGuardInvalid)
+        ));
+        assert_eq!(evidence_snapshots(std::slice::from_ref(&lock_path)), before);
+        assert!(root_entry_paths(&other_root).is_empty());
+        assert!(owner.is_current());
+        drop(owner);
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(other_root).unwrap();
     }
 
     #[test]
