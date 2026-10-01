@@ -457,17 +457,17 @@ impl PostgresStartLock {
                             &evidence,
                         )
                         .and_then(|verified| {
+                            // Reject malformed consumed before minting or replacing the epoch.
+                            recovery_epoch::ensure_consumed_readable(
+                                &kernel_guard,
+                                app_data_root,
+                                instance_id,
+                            )?;
                             if !evidence.is_current(&kernel_guard) {
                                 return Err(PostgresSidecarError::StartLockRecoveryRequired);
                             }
                             // V6-PR-014: durable epoch before deleting the dynamic start-lock.
                             recovery_epoch::mint_or_replace_for_reclaim(
-                                &kernel_guard,
-                                app_data_root,
-                                instance_id,
-                            )?;
-                            // V6-PR-016: malformed consumed must not delete the stale start-lock.
-                            recovery_epoch::ensure_consumed_readable(
                                 &kernel_guard,
                                 app_data_root,
                                 instance_id,
@@ -4243,14 +4243,14 @@ mod tests {
             .unwrap();
         client
             .execute(
-                "INSERT INTO public.component_human_decisions(                   decision_id,deployment_id,tenant_id,thread_id,run_id,actor_id,bot_id,                   auth_generation,provider_call_id,component_name,arguments,arguments_hash,state,                   requested_at,expires_at,created_at,updated_at                 ) VALUES(                   'desktop-adv-hitl',$1,$2,'desktop-adv-thread','desktop-adv-run',$3,'desktop-assistant',                   0,'desktop-adv-provider-call','askApproval','{\"title\":\"x\"}'::jsonb,repeat('a',64),'pending',                   clock_timestamp(),clock_timestamp()+interval '30 minutes',clock_timestamp(),clock_timestamp()                 )",
+                "INSERT INTO public.component_human_decisions(                   decision_id,deployment_id,tenant_id,thread_id,run_id,actor_id,bot_id,                   auth_generation,provider_call_id,component_name,arguments,arguments_hash,state,                   requested_at,expires_at,created_at,updated_at                 ) VALUES(                   'desktop-adv-hitl',$1,$2,'desktop-adv-thread','desktop-adv-run',$3,'desktop-assistant',                   0,'desktop-adv-provider-call','askApproval','{\"title\":\"x\"}'::jsonb,repeat('a',64),'pending',                   statement_timestamp(),statement_timestamp()+interval '30 minutes',statement_timestamp(),statement_timestamp()                 )",
                 &[&deployment, &tenant, &DESKTOP_LOCAL_ACTOR_ID],
             )
             .await
             .unwrap();
         client
             .execute(
-                "INSERT INTO public.remote_agent_interrupts(                   request_id,deployment_id,tenant_id,thread_id,run_id,actor_id,bot_id,                   auth_generation,protocol_run_id,interrupt_id,position,descriptor,state,                   requested_at,expires_at,created_at,updated_at                 ) VALUES(                   '00000000-0000-7000-8000-000000000001',$1,$2,'desktop-adv-thread','desktop-adv-run',$3,'desktop-assistant',                   0,'desktop-adv-protocol','int-1',0,'{\"id\":\"int-1\",\"reason\":\"r\"}'::jsonb,'pending',                   clock_timestamp(),clock_timestamp()+interval '30 minutes',clock_timestamp(),clock_timestamp()                 )",
+                "INSERT INTO public.remote_agent_interrupts(                   request_id,deployment_id,tenant_id,thread_id,run_id,actor_id,bot_id,                   auth_generation,protocol_run_id,interrupt_id,position,descriptor,state,                   requested_at,expires_at,created_at,updated_at                 ) VALUES(                   '00000000-0000-7000-8000-000000000001',$1,$2,'desktop-adv-thread','desktop-adv-run',$3,'desktop-assistant',                   0,'desktop-adv-protocol','int-1',0,'{\"id\":\"int-1\",\"reason\":\"r\"}'::jsonb,'pending',                   statement_timestamp(),statement_timestamp()+interval '30 minutes',statement_timestamp(),statement_timestamp()                 )",
                 &[&deployment, &tenant, &DESKTOP_LOCAL_ACTOR_ID],
             )
             .await

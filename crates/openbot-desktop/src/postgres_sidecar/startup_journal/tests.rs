@@ -554,6 +554,7 @@ async fn cancelled_supervisor_preserves_observed_start_until_mid_phase_child_is_
     use crate::postgres_sidecar::tests::{
         MemorySecretStore, signing_identity, supervisor_test_paths,
     };
+    use crate::postgres_sidecar::{INITDB_DEADLINE, READY_DEADLINE, VERSION_DEADLINE};
     use std::sync::Arc;
 
     let (bundle_root, digest) = materialize_sleeping_supervisor_bundle("30");
@@ -583,8 +584,10 @@ async fn cancelled_supervisor_preserves_observed_start_until_mid_phase_child_is_
         .await
     });
 
+    let observation_budget = VERSION_DEADLINE * 3 + INITDB_DEADLINE + READY_DEADLINE;
+    let observation_deadline = tokio::time::Instant::now() + observation_budget;
     let mut observed = false;
-    for _ in 0..300 {
+    while tokio::time::Instant::now() < observation_deadline {
         if let Ok(bytes) = fs::read(&journal_path)
             && let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes)
             && record["phase"] == "child_observed"
@@ -592,10 +595,10 @@ async fn cancelled_supervisor_preserves_observed_start_until_mid_phase_child_is_
             observed = true;
             break;
         }
-        assert!(
-            !task.is_finished(),
-            "fake supervisor ended before child_observed"
-        );
+        if task.is_finished() {
+            let result = task.await;
+            panic!("fake supervisor ended before child_observed: {result:?}");
+        }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert!(observed, "fake supervisor did not persist child_observed");

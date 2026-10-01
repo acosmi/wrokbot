@@ -76,6 +76,24 @@
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
 | V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验且已合 | [#80](https://github.com/acosmi/wrokbot/pull/80) | [55f34ae4f5](https://github.com/acosmi/wrokbot/commit/55f34ae4f525ede14bba891b2d0b90ce3785afb5) |
 | V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验且已合 | [#81](https://github.com/acosmi/wrokbot/pull/81) | [d80b685cf2](https://github.com/acosmi/wrokbot/commit/d80b685cf2427e6493e9a55fb1a84f8a4085db49) |
+| V6-PR-065 | 恢复记录严格格式与坏consumed拒绝顺序 | 最终同候选模块15/15、真实PG110/110、双feature严格Clippy与fmt通过，已合入 | [#85](https://github.com/acosmi/wrokbot/pull/85) | [c9434011fb](https://github.com/acosmi/wrokbot/commit/c9434011fb07aed2ecd4afe1d97887d6687bef5e) |
+| V6-PR-066 | recovery epoch 首次读取512字节上限与513字节探测 | 最终同候选模块21/21、真实PG116/116、双feature严格Clippy与fmt通过，已合入 | [#90](https://github.com/acosmi/wrokbot/pull/90) | [1cfc3b705b](https://github.com/acosmi/wrokbot/commit/1cfc3b705b5f9844d7b91711a68c132eefc187e3) |
+| V6-PR-067 | 动态启动锁封闭格式、文件证据与恢复前复核 | 最终候选基于066已验main；同候选检查与集成事实见PR及交接证据 | [#86](https://github.com/acosmi/wrokbot/pull/86) | 以PR实际合并状态为准 |
+| V6-PR-068 | 动态启动锁读取预算 | 仅私有原语诊断与格式上限推导；依赖067最终已验main | 无生产候选 PR | 未合入 |
+| V6-PR-069 | helper PG_VERSION的16字节规则在读取中执行，复核已打开句柄与路径 | 主控定向及严格Clippy已验；最终组合验收与集成事实见PR | [#87](https://github.com/acosmi/wrokbot/pull/87) | [PR合并记录](https://github.com/acosmi/wrokbot/pull/87) |
+| V6-PR-070 | 真实PG审批组合测试夹具的单语句时间 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#88](https://github.com/acosmi/wrokbot/pull/88) | 以PR实际合并状态为准 |
+| V6-PR-071 | 取消测试的启动阶段观察预算 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#89](https://github.com/acosmi/wrokbot/pull/89) | 以PR实际合并状态为准 |
+
+接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
+
+069候选`add48717`定向12/12、runtime/launcher all-targets严格Clippy与格式检查通过。该输入面沿用现有UTF-8、trim及权限/硬链接语义；第一次固定17字节探测，成功后的字节重核仍有界，整次最多33字节。私有helper及三层错误映射已实测，拒绝后真实epoch/consumed/required/applied、helper journal、动态锁和自有data/WAL字节及inode保持。打开后增长证据由原语诊断及生产私有helper测试共同支持，不声称穷举任意生产调度竞态；最终组合回归及最后候选以本任务PR记录为准。069依赖已合015/R296，不依赖065–068代码；其完成也不关闭A1、M0或A0–A7。
+
+070修复既有真实PG组合测试中两条INSERT分别多次读取时钟导致的时间倒置；在065修复候选完整回归中实际观察到请求时间比创建时间早4微秒，触发既有约束。两条测试INSERT改用各自同一语句时间，保留30分钟未来到期值及授权失效后的取消、过期和审计断言，生产代码与DDL不改。main基线定向1/1、代码候选`39ae2620`定向1/1均实际通过，基线通过反映该缺陷的间歇性，未改写为失败；最终同候选检查及集成以本任务PR为准。此局部夹具修复不代表065完整验收、自然TTL边界或M0通过。
+
+071仅调整既有取消测试的观察watchdog：完整start先串行完成三个version helper，Fresh路径再initdb，原300×10ms局部预算可能在主startup child出现前耗尽。预算由现有version时限乘3、initdb时限及readiness时限相加形成当前55秒，仍须读到真实child_observed，提前返回真实Join/result并失败，原取消、证据保存及第二次启动断言保持。主控受控2秒helper输入在原窗口0/1，仅watchdog改变后1/1；main代码候选`820c11d6`定向1/1。该因果对照不唯一解释原间歇full失败；55秒只是测试watchdog，不能抢占同步IO，不构成启动SLA。两条正式夹具仍用原0.2秒，产品时限和恢复行为不变，未关闭065–068组合门禁、A1或M0。最终含台账的同候选完整检查与集成以本任务PR实际记录为准。
+
+066沿用四类恢复记录既有1..=512字节规则，用已打开句柄的513字节首次探测执行读取预算，保留原有权限、硬链接、I/O错误映射及定位后重核；065的consumed→mint→删锁顺序和071正式测试不变。旧私有组合`3f22e74`模块21/21、完整真实PG116/116、双严格Clippy/fmt已验；当前接已验065main的新候选须独立最终检查，旧结果不冒充新候选通过。空、512、513、打开后增长、四类canonical及坏格式拒绝现场均有局部见证；512字节只表示原语长度接受，生产解析仍校验闭格式。该输入面不证明任意竞态调度、递归data/WAL完整性、A1或M0。
+
 ## macOS 首发进度
 
 当前尚无 A0–A7 中任何一项取得完整同候选通过证据；局部 PR 数量不代表首发完成比例。持续实施到首发验收完成。
@@ -248,3 +266,5 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 已合候选均先保存并实际还原核验Git bundle，再正常删除对应本地/远端分支及自有工作树。048/054/055未合分支保留。本轮产生的tracked差量已完成集成；用户或其它窗口的未跟踪工作材料保留，不用git clean删除或隐藏。新机只有已核本机备份，未创建或验证离机/云端私有备份。
 
 A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅程、账户桥精确接入合同、Browser/Engine/画面/GUI、原生OS/TCC、完整PG/WAL/凭据恢复与升级切换、签名公证/真实OS及四scope连续24小时均有明确缺口。本轮收尾不是M0首发完成；下一工作从已冻结恢复记录输入格式的最小反例验证开始，逐项亲验、每任务独立PR，正常合入后再推进下一项。
+
+067 最终候选保留065 consumed-before-mint顺序，在任何恢复效果前检查动态启动锁完整五行格式与安全文件属性，持有文件/字节证据，并在静止核验、epoch铸造前及删除前复核；仅Startup/Helper journal恢复错误进入既有一次受控中间态退役。坏格式、文件替换或同inode改写的拒绝及记录保全由同候选回执记录。复核与path unlink仍是独立步骤，不把局部保全证明当作完整PG恢复验收。
