@@ -78,8 +78,8 @@
 | V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验且已合 | [#81](https://github.com/acosmi/wrokbot/pull/81) | [d80b685cf2](https://github.com/acosmi/wrokbot/commit/d80b685cf2427e6493e9a55fb1a84f8a4085db49) |
 | V6-PR-065 | 恢复记录严格格式与坏consumed拒绝顺序 | 最终同候选模块15/15、真实PG110/110、双feature严格Clippy与fmt通过，已合入 | [#85](https://github.com/acosmi/wrokbot/pull/85) | [c9434011fb](https://github.com/acosmi/wrokbot/commit/c9434011fb07aed2ecd4afe1d97887d6687bef5e) |
 | V6-PR-066 | recovery epoch 首次读取512字节上限与513字节探测 | 最终同候选模块21/21、真实PG116/116、双feature严格Clippy与fmt通过，已合入 | [#90](https://github.com/acosmi/wrokbot/pull/90) | [1cfc3b705b](https://github.com/acosmi/wrokbot/commit/1cfc3b705b5f9844d7b91711a68c132eefc187e3) |
-| V6-PR-067 | 动态启动锁封闭格式、文件证据与恢复前复核 | 最终候选基于066已验main；同候选检查与集成事实见PR及交接证据 | [#86](https://github.com/acosmi/wrokbot/pull/86) | 以PR实际合并状态为准 |
-| V6-PR-068 | 动态启动锁读取预算 | 仅私有原语诊断与格式上限推导；依赖067最终已验main | 无生产候选 PR | 未合入 |
+| V6-PR-067 | 动态启动锁封闭格式、文件证据与恢复前复核 | 最终同候选模块16/16、真实PG122/122、双feature严格Clippy与fmt通过，已合入 | [#86](https://github.com/acosmi/wrokbot/pull/86) | [c4ecdf4bd7](https://github.com/acosmi/wrokbot/commit/c4ecdf4bd74b9ed63b2f843970714a2e7b0c782d) |
+| V6-PR-068 | 动态启动锁首次读取233字节上限与234字节探测 | 最终候选基于067已验main；同候选检查与集成事实由远端PR及交接证据记录 | 生产PR链接见最终交接证据 | 以实际PR合并状态为准 |
 | V6-PR-069 | helper PG_VERSION的16字节规则在读取中执行，复核已打开句柄与路径 | 主控定向及严格Clippy已验；最终组合验收与集成事实见PR | [#87](https://github.com/acosmi/wrokbot/pull/87) | [PR合并记录](https://github.com/acosmi/wrokbot/pull/87) |
 | V6-PR-070 | 真实PG审批组合测试夹具的单语句时间 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#88](https://github.com/acosmi/wrokbot/pull/88) | 以PR实际合并状态为准 |
 | V6-PR-071 | 取消测试的启动阶段观察预算 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#89](https://github.com/acosmi/wrokbot/pull/89) | 以PR实际合并状态为准 |
@@ -268,3 +268,5 @@ A0–A7 仍无完整同候选通过证据。SDK App 登录、完整三模型与�
 A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅程、账户桥精确接入合同、Browser/Engine/画面/GUI、原生OS/TCC、完整PG/WAL/凭据恢复与升级切换、签名公证/真实OS及四scope连续24小时均有明确缺口。本轮收尾不是M0首发完成；下一工作从已冻结恢复记录输入格式的最小反例验证开始，逐项亲验、每任务独立PR，正常合入后再推进下一项。
 
 067 最终候选保留065 consumed-before-mint顺序，在任何恢复效果前检查动态启动锁完整五行格式与安全文件属性，持有文件/字节证据，并在静止核验、epoch铸造前及删除前复核；仅Startup/Helper journal恢复错误进入既有一次受控中间态退役。坏格式、文件替换或同inode改写的拒绝及记录保全由同候选回执记录。复核与path unlink仍是独立步骤，不把局部保全证明当作完整PG恢复验收。
+
+068 最终候选由start-lock封闭格式推导最大合法233字节，首次读取最多234字节并拒绝空或越界；合法最小/最大PID记录长度为224/233。保留严格grammar、owner/文件证据复核及065/066/067顺序，边界和打开后增长的局部读数/拒绝/保全由同候选回执记录。长度检查不替代格式核验，局部growth测试不宣称穷举生产竞争。
