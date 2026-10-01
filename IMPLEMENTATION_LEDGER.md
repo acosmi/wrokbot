@@ -76,6 +76,16 @@
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
 | V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验且已合 | [#80](https://github.com/acosmi/wrokbot/pull/80) | [55f34ae4f5](https://github.com/acosmi/wrokbot/commit/55f34ae4f525ede14bba891b2d0b90ce3785afb5) |
 | V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验且已合 | [#81](https://github.com/acosmi/wrokbot/pull/81) | [d80b685cf2](https://github.com/acosmi/wrokbot/commit/d80b685cf2427e6493e9a55fb1a84f8a4085db49) |
+| V6-PR-065 | 恢复记录严格格式与拒绝后证据保存 | 草稿；旧基线候选回归102通过/1失败，caller范围裁决待回应 | [#85](https://github.com/acosmi/wrokbot/pull/85) | 未合入 |
+| V6-PR-066 | recovery epoch 读取中512字节预算 | 仅隔离诊断；依赖065最终已验main，生产未实施 | 无生产候选 PR | 未合入 |
+| V6-PR-067 | 动态启动锁精确证据与恢复前核验 | 草稿；旧基线候选104/104，065/066整合后须重新验收 | [#86](https://github.com/acosmi/wrokbot/pull/86) | 未合入 |
+| V6-PR-068 | 动态启动锁读取预算 | 仅私有原语诊断与格式上限推导；依赖067最终已验main | 无生产候选 PR | 未合入 |
+| V6-PR-069 | helper PG_VERSION的16字节规则在读取中执行，复核已打开句柄与路径 | 主控定向及严格Clippy已验；最终组合验收与集成事实见PR | [#87](https://github.com/acosmi/wrokbot/pull/87) | [PR合并记录](https://github.com/acosmi/wrokbot/pull/87) |
+
+接续记录：065候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略。失败场景拒绝损坏consumed时已替换既有epoch，所需单处caller顺序调整超出本任务既定文件范围，尚未应用，不得把草稿计为通过。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代整合后的验收。两项检查结果均绑定其各自候选，不计作当前main同候选A门证据。
+
+069候选`add48717`定向12/12、runtime/launcher all-targets严格Clippy与格式检查通过。该输入面沿用现有UTF-8、trim及权限/硬链接语义；第一次固定17字节探测，成功后的字节重核仍有界，整次最多33字节。私有helper及三层错误映射已实测，拒绝后真实epoch/consumed/required/applied、helper journal、动态锁和自有data/WAL字节及inode保持。打开后增长证据由原语诊断及生产私有helper测试共同支持，不声称穷举任意生产调度竞态；最终组合回归及最后候选以本任务PR记录为准。069依赖已合015/R296，不依赖065–068代码；其完成也不关闭A1、M0或A0–A7。
+
 ## macOS 首发进度
 
 当前尚无 A0–A7 中任何一项取得完整同候选通过证据；局部 PR 数量不代表首发完成比例。持续实施到首发验收完成。
