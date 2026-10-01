@@ -76,8 +76,8 @@
 | V6-PR-062 | initdb 继承控制终端的口令读取路径 | 仅诊断；生产修复合同未批准 | 无生产修复 PR | 未完成 |
 | V6-PR-063 | 现有 Rust 工具链来源登记同步 | 主控已验且已合 | [#80](https://github.com/acosmi/wrokbot/pull/80) | [55f34ae4f5](https://github.com/acosmi/wrokbot/commit/55f34ae4f525ede14bba891b2d0b90ce3785afb5) |
 | V6-PR-064 | 真实 PG host 测试夹具资源闭合 | 主控已验且已合 | [#81](https://github.com/acosmi/wrokbot/pull/81) | [d80b685cf2](https://github.com/acosmi/wrokbot/commit/d80b685cf2427e6493e9a55fb1a84f8a4085db49) |
-| V6-PR-065 | 恢复记录严格格式与坏consumed拒绝顺序 | 主控返修模块15/15；最终同候选组合验收及集成事实见PR | [#85](https://github.com/acosmi/wrokbot/pull/85) | 以PR实际合并状态为准 |
-| V6-PR-066 | recovery epoch 读取中512字节预算 | 隔离准备；依065最终已验main再验收和集成 | 无生产候选 PR | 未合入 |
+| V6-PR-065 | 恢复记录严格格式与坏consumed拒绝顺序 | 最终候选模块15/15、真实PG110/110、双严格Clippy/fmt已验且已合 | [#85](https://github.com/acosmi/wrokbot/pull/85) | [c9434011fb](https://github.com/acosmi/wrokbot/commit/c9434011fb07aed2ecd4afe1d97887d6687bef5e) |
+| V6-PR-066 | recovery epoch 读取中512字节预算 | 私有组合模块21/21、真实PG116/116已验；当前main候选最终检查与集成见PR | 本任务PR | 以PR实际合并状态为准 |
 | V6-PR-067 | 动态启动锁精确证据与恢复前核验 | 草稿；旧基线候选104/104，065/066整合后须重新验收 | [#86](https://github.com/acosmi/wrokbot/pull/86) | 未合入 |
 | V6-PR-068 | 动态启动锁读取预算 | 仅私有原语诊断与格式上限推导；依赖067最终已验main | 无生产候选 PR | 未合入 |
 | V6-PR-069 | helper PG_VERSION的16字节规则在读取中执行，复核已打开句柄与路径 | 主控定向及严格Clippy已验；最终组合验收与集成事实见PR | [#87](https://github.com/acosmi/wrokbot/pull/87) | [PR合并记录](https://github.com/acosmi/wrokbot/pull/87) |
@@ -91,6 +91,8 @@
 070修复既有真实PG组合测试中两条INSERT分别多次读取时钟导致的时间倒置；在065修复候选完整回归中实际观察到请求时间比创建时间早4微秒，触发既有约束。两条测试INSERT改用各自同一语句时间，保留30分钟未来到期值及授权失效后的取消、过期和审计断言，生产代码与DDL不改。main基线定向1/1、代码候选`39ae2620`定向1/1均实际通过，基线通过反映该缺陷的间歇性，未改写为失败；最终同候选检查及集成以本任务PR为准。此局部夹具修复不代表065完整验收、自然TTL边界或M0通过。
 
 071仅调整既有取消测试的观察watchdog：完整start先串行完成三个version helper，Fresh路径再initdb，原300×10ms局部预算可能在主startup child出现前耗尽。预算由现有version时限乘3、initdb时限及readiness时限相加形成当前55秒，仍须读到真实child_observed，提前返回真实Join/result并失败，原取消、证据保存及第二次启动断言保持。主控受控2秒helper输入在原窗口0/1，仅watchdog改变后1/1；main代码候选`820c11d6`定向1/1。该因果对照不唯一解释原间歇full失败；55秒只是测试watchdog，不能抢占同步IO，不构成启动SLA。两条正式夹具仍用原0.2秒，产品时限和恢复行为不变，未关闭065–068组合门禁、A1或M0。最终含台账的同候选完整检查与集成以本任务PR实际记录为准。
+
+066沿用四类恢复记录既有1..=512字节规则，用已打开句柄的513字节首次探测执行读取预算，保留原有权限、硬链接、I/O错误映射及定位后重核；065的consumed→mint→删锁顺序和071正式测试不变。旧私有组合`3f22e74`模块21/21、完整真实PG116/116、双严格Clippy/fmt已验；当前接已验065main的新候选须独立最终检查，旧结果不冒充新候选通过。空、512、513、打开后增长、四类canonical及坏格式拒绝现场均有局部见证；512字节只表示原语长度接受，生产解析仍校验闭格式。该输入面不证明任意竞态调度、递归data/WAL完整性、A1或M0。
 
 ## macOS 首发进度
 
