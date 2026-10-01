@@ -18,6 +18,7 @@ use wrok_bot_macos_process::ProcessIdentity;
 const JOURNAL_SCHEMA: &str = "openbot-postgres-helper";
 const JOURNAL_SCHEMA_VERSION: u64 = 1;
 const JOURNAL_MAX_BYTES: usize = 2048;
+const PG_VERSION_MAX_BYTES: usize = 16;
 const RANDOM_ID_BYTES: usize = 16;
 const OBSERVATION_BYTES: usize = 32;
 const OBSERVATION_HEX_BYTES: usize = OBSERVATION_BYTES * 2;
@@ -1277,20 +1278,63 @@ enum DataDirOrigin {
     Existing,
 }
 
+fn pg_version_metadata_matches(metadata: &fs::Metadata, observed: &fs::Metadata) -> bool {
+    metadata.file_type().is_file()
+        && !metadata.file_type().is_symlink()
+        && metadata.len() <= PG_VERSION_MAX_BYTES as u64
+        && metadata.len() == observed.len()
+        && same_file(metadata, observed)
+}
+
+fn read_pg_version_probe(file: &File) -> Result<Vec<u8>, HelperJournalError> {
+    let mut buffer = [0_u8; PG_VERSION_MAX_BYTES + 1];
+    let read = positioned_read(file, &mut buffer).map_err(|_| HelperJournalError::Invalid)?;
+    if read > PG_VERSION_MAX_BYTES {
+        return Err(HelperJournalError::Invalid);
+    }
+    Ok(buffer[..read].to_vec())
+}
+
+fn read_pg_version_bytes(
+    path: &Path,
+    file: &File,
+    observed: &fs::Metadata,
+) -> Result<Vec<u8>, HelperJournalError> {
+    let path_before = fs::symlink_metadata(path).map_err(|_| HelperJournalError::Invalid)?;
+    let file_before = file.metadata().map_err(|_| HelperJournalError::Invalid)?;
+    if !pg_version_metadata_matches(observed, observed)
+        || !pg_version_metadata_matches(&path_before, observed)
+        || !pg_version_metadata_matches(&file_before, observed)
+    {
+        return Err(HelperJournalError::Invalid);
+    }
+    let bytes = read_pg_version_probe(file)?;
+    if bytes.len() as u64 != observed.len() || !positioned_equal(file, &bytes) {
+        return Err(HelperJournalError::Invalid);
+    }
+    // Final path/handle checks follow the second bounded byte observation.
+    let path_after = fs::symlink_metadata(path).map_err(|_| HelperJournalError::Invalid)?;
+    let file_after = file.metadata().map_err(|_| HelperJournalError::Invalid)?;
+    if !pg_version_metadata_matches(&path_after, observed)
+        || !pg_version_metadata_matches(&file_after, observed)
+    {
+        return Err(HelperJournalError::Invalid);
+    }
+    Ok(bytes)
+}
+
 fn read_data_directory_origin(data_dir: &Path) -> Result<DataDirOrigin, HelperJournalError> {
     let version = data_dir.join("PG_VERSION");
     match fs::symlink_metadata(&version) {
         Ok(metadata) => {
             if !metadata.file_type().is_file()
                 || metadata.file_type().is_symlink()
-                || metadata.len() > 16
+                || metadata.len() > PG_VERSION_MAX_BYTES as u64
             {
                 return Err(HelperJournalError::Invalid);
             }
-            let bytes = fs::read(&version).map_err(|_| HelperJournalError::Invalid)?;
-            if bytes.len() as u64 != metadata.len() {
-                return Err(HelperJournalError::Invalid);
-            }
+            let file = secure_open_file(&version).map_err(|_| HelperJournalError::Invalid)?;
+            let bytes = read_pg_version_bytes(&version, &file, &metadata)?;
             let text = std::str::from_utf8(&bytes).map_err(|_| HelperJournalError::Invalid)?;
             if text.trim() != "17" {
                 return Err(HelperJournalError::Invalid);
