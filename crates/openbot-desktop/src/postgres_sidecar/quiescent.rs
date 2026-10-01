@@ -3,38 +3,107 @@
 use super::helper_journal::{self, HelperJournalError};
 use super::kernel_start_lock::KernelStartLock;
 use super::startup_journal::{self, StartupJournalError};
-use super::{PostgresSidecarError, path_matches_open_file, sync_directory};
+use super::{PostgresSidecarError, path_matches_open_file, sync_directory, valid_instance_id};
 use std::fs::{self, File, OpenOptions};
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use wrok_bot_macos_process::{
     DataDirectoryOpenerObservation, ProcessIdentity, observe_data_directory_openers,
 };
 
 const LOCK_HEADER: &str = "openbot-postgres-start-lock-v1";
 
+/// Exact closed start-lock observed before any recovery effect; no recovery authority itself.
+pub(super) struct StartLockEvidence {
+    root: PathBuf,
+    instance_id: String,
+    path: PathBuf,
+    bytes: Vec<u8>,
+    file: File,
+}
+
+impl core::fmt::Debug for StartLockEvidence {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("StartLockEvidence(<sealed>)")
+    }
+}
+
+impl StartLockEvidence {
+    pub(super) fn inspect(
+        owner: &KernelStartLock,
+        app_data_root: &Path,
+        instance_id: &str,
+    ) -> Result<Self, PostgresSidecarError> {
+        if !owner.is_current() || owner.root() != app_data_root || !valid_instance_id(instance_id) {
+            return Err(PostgresSidecarError::StartLockGuardInvalid);
+        }
+        let path = app_data_root.join(format!(".postgresql-17-{instance_id}.start-lock-v1"));
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
+        if !metadata.is_file() {
+            return Err(PostgresSidecarError::StartLockRecoveryRequired);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if metadata.nlink() != 1 || metadata.mode() & 0o777 != 0o600 {
+                return Err(PostgresSidecarError::StartLockRecoveryRequired);
+            }
+        }
+        let mut file =
+            secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
+        if !lock_bytes_match_instance(&bytes, instance_id) {
+            return Err(PostgresSidecarError::StartLockRecoveryRequired);
+        }
+        let observed = Self {
+            root: app_data_root.to_owned(),
+            instance_id: instance_id.to_owned(),
+            path,
+            bytes,
+            file,
+        };
+        if !observed.is_current(owner) {
+            return Err(PostgresSidecarError::StartLockRecoveryRequired);
+        }
+        Ok(observed)
+    }
+
+    pub(super) fn is_current(&self, owner: &KernelStartLock) -> bool {
+        owner.is_current()
+            && owner.root() == self.root
+            && path_matches_open_file(&self.path, &self.file, &self.bytes, true)
+    }
+}
+
 /// Proof that one instance is quiescent enough to reclaim its dynamic start-lock evidence.
 ///
 /// Not serializable, not a wire type, and not recovery/epoch authority.
-pub(super) struct VerifiedQuiescentInstance {
-    instance_id: String,
+pub(super) struct VerifiedQuiescentInstance<'a> {
+    evidence: &'a StartLockEvidence,
 }
 
-impl core::fmt::Debug for VerifiedQuiescentInstance {
+impl core::fmt::Debug for VerifiedQuiescentInstance<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("VerifiedQuiescentInstance(<sealed>)")
     }
 }
 
-impl VerifiedQuiescentInstance {
+impl<'a> VerifiedQuiescentInstance<'a> {
     /// Mint only when owner, empty openers, and cleanup-eligible journals all hold.
     pub(super) fn try_verify(
         owner: &KernelStartLock,
         app_data_root: &Path,
         instance_id: &str,
         data_dir: &Path,
+        evidence: &'a StartLockEvidence,
     ) -> Result<Self, PostgresSidecarError> {
-        if !owner.is_current() || owner.root() != app_data_root {
+        if !evidence.is_current(owner)
+            || evidence.root != app_data_root
+            || evidence.instance_id != instance_id
+        {
             return Err(PostgresSidecarError::StartLockGuardInvalid);
         }
         if data_dir.parent() != Some(app_data_root)
@@ -87,12 +156,10 @@ impl VerifiedQuiescentInstance {
                 }
             },
         )?;
-        if !owner.is_current() {
+        if !evidence.is_current(owner) {
             return Err(PostgresSidecarError::StartLockGuardInvalid);
         }
-        Ok(Self {
-            instance_id: instance_id.to_owned(),
-        })
+        Ok(Self { evidence })
     }
 
     /// Delete this instance's dynamic start-lock evidence only.
@@ -101,35 +168,11 @@ impl VerifiedQuiescentInstance {
         owner: &KernelStartLock,
         app_data_root: &Path,
     ) -> Result<(), PostgresSidecarError> {
-        if !owner.is_current() || owner.root() != app_data_root {
+        if !self.evidence.is_current(owner) || self.evidence.root != app_data_root {
             return Err(PostgresSidecarError::StartLockGuardInvalid);
         }
-        let path = app_data_root.join(format!(".postgresql-17-{}.start-lock-v1", self.instance_id));
-        let metadata = fs::symlink_metadata(&path)
+        fs::remove_file(&self.evidence.path)
             .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
-        if !metadata.is_file() {
-            return Err(PostgresSidecarError::StartLockRecoveryRequired);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            if metadata.nlink() != 1 || metadata.mode() & 0o777 != 0o600 {
-                return Err(PostgresSidecarError::StartLockRecoveryRequired);
-            }
-        }
-        let mut file =
-            secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
-        if !lock_bytes_match_instance(&bytes, &self.instance_id) {
-            return Err(PostgresSidecarError::StartLockRecoveryRequired);
-        }
-        if !path_matches_open_file(&path, &file, &bytes, true) {
-            return Err(PostgresSidecarError::StartLockRecoveryRequired);
-        }
-        drop(file);
-        fs::remove_file(&path).map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
         sync_directory(app_data_root)?;
         if !owner.is_current() {
             return Err(PostgresSidecarError::StartLockGuardInvalid);
@@ -208,25 +251,37 @@ fn lock_bytes_match_instance(bytes: &[u8], instance_id: &str) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
     };
-    let mut lines = text.lines();
+    let mut lines = text.split('\n');
     if lines.next() != Some(LOCK_HEADER) {
         return false;
     }
-    let mut saw_instance = false;
-    for line in lines {
-        if let Some(value) = line.strip_prefix("instance=") {
-            if value != instance_id || saw_instance {
-                return false;
-            }
-            saw_instance = true;
-        } else if !(line.starts_with("pid=")
-            || line.starts_with("manifest=")
-            || line.starts_with("nonce="))
-        {
-            return false;
-        }
+    let Some(pid) = lines.next().and_then(|line| line.strip_prefix("pid=")) else {
+        return false;
+    };
+    if pid.starts_with('0')
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !pid.parse::<u32>().is_ok_and(|value| value != 0)
+    {
+        return false;
     }
-    saw_instance
+    let Some(instance) = lines.next().and_then(|line| line.strip_prefix("instance=")) else {
+        return false;
+    };
+    let Some(manifest) = lines.next().and_then(|line| line.strip_prefix("manifest=")) else {
+        return false;
+    };
+    let Some(nonce) = lines.next().and_then(|line| line.strip_prefix("nonce=")) else {
+        return false;
+    };
+    instance == instance_id
+        && valid_instance_id(instance)
+        && valid_instance_id(manifest)
+        && nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && lines.next() == Some("")
+        && lines.next().is_none()
 }
 
 fn secure_open_read(path: &Path) -> std::io::Result<File> {
@@ -315,6 +370,387 @@ mod tests {
             fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         }
         root
+    }
+
+    fn canonical_lock(instance: &str, pid: &str) -> String {
+        format!(
+            "{header}\npid={pid}\ninstance={instance}\nmanifest={}\nnonce={}\n",
+            "ab".repeat(32),
+            "cd".repeat(16),
+            header = super::LOCK_HEADER
+        )
+    }
+
+    fn malformed_locks(instance: &str) -> Vec<(&'static str, Vec<u8>)> {
+        let canonical = canonical_lock(instance, "1");
+        let manifest = "ab".repeat(32);
+        let nonce = "cd".repeat(16);
+        vec![
+            (
+                "only-instance",
+                format!("{}\ninstance={instance}\n", super::LOCK_HEADER).into_bytes(),
+            ),
+            ("missing-pid", canonical.replace("pid=1\n", "").into_bytes()),
+            (
+                "missing-manifest",
+                canonical
+                    .replace(&format!("manifest={manifest}\n"), "")
+                    .into_bytes(),
+            ),
+            (
+                "missing-nonce",
+                canonical
+                    .replace(&format!("nonce={nonce}\n"), "")
+                    .into_bytes(),
+            ),
+            (
+                "reversed",
+                format!(
+                    "{}\ninstance={instance}\npid=1\nmanifest={manifest}\nnonce={nonce}\n",
+                    super::LOCK_HEADER
+                )
+                .into_bytes(),
+            ),
+            ("duplicate-pid", format!("{canonical}pid=1\n").into_bytes()),
+            (
+                "duplicate-manifest",
+                format!("{canonical}manifest={manifest}\n").into_bytes(),
+            ),
+            (
+                "duplicate-nonce",
+                format!("{canonical}nonce={nonce}\n").into_bytes(),
+            ),
+            (
+                "duplicate-instance",
+                format!("{canonical}instance={instance}\n").into_bytes(),
+            ),
+            ("crlf", canonical.replace('\n', "\r\n").into_bytes()),
+            (
+                "missing-final-lf",
+                canonical.trim_end_matches('\n').as_bytes().to_vec(),
+            ),
+            ("unknown", format!("{canonical}other=value\n").into_bytes()),
+            ("empty-pid", canonical_lock(instance, "").into_bytes()),
+            ("zero-pid", canonical_lock(instance, "0").into_bytes()),
+            ("negative-pid", canonical_lock(instance, "-1").into_bytes()),
+            ("plus-pid", canonical_lock(instance, "+1").into_bytes()),
+            ("padded-pid", canonical_lock(instance, "01").into_bytes()),
+            (
+                "overflow-pid",
+                canonical_lock(instance, "4294967296").into_bytes(),
+            ),
+            (
+                "uppercase-manifest",
+                canonical
+                    .replace(
+                        &format!("manifest={manifest}"),
+                        &format!("manifest={}", manifest.to_uppercase()),
+                    )
+                    .into_bytes(),
+            ),
+            (
+                "short-manifest",
+                canonical
+                    .replace(
+                        &format!("manifest={manifest}"),
+                        &format!("manifest={}", &manifest[..63]),
+                    )
+                    .into_bytes(),
+            ),
+            (
+                "nonhex-manifest",
+                canonical
+                    .replace(
+                        &format!("manifest={manifest}"),
+                        &format!("manifest={}", "g".repeat(64)),
+                    )
+                    .into_bytes(),
+            ),
+            (
+                "uppercase-nonce",
+                canonical
+                    .replace(&nonce, &nonce.to_uppercase())
+                    .into_bytes(),
+            ),
+            (
+                "short-nonce",
+                canonical.replace(&nonce, &nonce[..31]).into_bytes(),
+            ),
+            (
+                "nonhex-nonce",
+                canonical.replace(&nonce, &"g".repeat(32)).into_bytes(),
+            ),
+            (
+                "wrong-instance",
+                canonical
+                    .replace(
+                        &format!("instance={instance}"),
+                        &format!("instance={}", "ef".repeat(32)),
+                    )
+                    .into_bytes(),
+            ),
+            (
+                "uppercase-instance",
+                canonical
+                    .replace(
+                        &format!("instance={instance}"),
+                        &format!("instance={}", instance.to_uppercase()),
+                    )
+                    .into_bytes(),
+            ),
+            (
+                "truncated",
+                b"openbot-postgres-start-lock-v1\npid=".to_vec(),
+            ),
+            ("invalid-utf8", vec![0xff]),
+        ]
+    }
+
+    #[test]
+    fn closed_start_lock_records_accept_canonical_pid_bounds() {
+        let instance = "ab".repeat(32);
+        for pid in ["1", "4294967295"] {
+            assert!(super::lock_bytes_match_instance(
+                canonical_lock(&instance, pid).as_bytes(),
+                &instance
+            ));
+        }
+    }
+
+    #[test]
+    fn closed_start_lock_records_reject_malformed() {
+        let instance = "ab".repeat(32);
+        let mut accepted = Vec::new();
+        for (name, bytes) in malformed_locks(&instance) {
+            let valid = super::lock_bytes_match_instance(&bytes, &instance);
+            eprintln!("start-lock case={name} accepted={valid}");
+            if valid {
+                accepted.push(name);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "malformed start-lock records accepted: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_start_lock_reclaim_has_no_evidence_effect() {
+        let instance = "ab".repeat(32);
+        let mut violations = Vec::new();
+        for (name, bytes) in malformed_locks(&instance) {
+            let root = temp_root(name);
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = root.join(format!(".postgresql-17-{instance}.start-lock-v1"));
+            write_private(&lock_path, &bytes);
+            let epoch_path = root.join(format!(".postgresql-17-{instance}.recovery-epoch-v1"));
+            let epoch_bytes = format!(
+                "openbot-postgres-recovery-epoch-v1\ninstance={instance}\nepoch={}\n",
+                "12".repeat(32)
+            );
+            write_private(&epoch_path, epoch_bytes.as_bytes());
+            let before_epoch = fs::symlink_metadata(&epoch_path).unwrap();
+            let before_lock = fs::symlink_metadata(&lock_path).unwrap();
+            let acquired = PostgresStartLock::acquire_with_data_dir(
+                &root,
+                &instance,
+                PostgresBundleDigest([0x11; 32]),
+                &data_dir,
+            );
+            let rejected = matches!(
+                acquired,
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            );
+            let epoch_unchanged = fs::read(&epoch_path).unwrap() == epoch_bytes.as_bytes()
+                && fs::symlink_metadata(&epoch_path).unwrap().ino() == before_epoch.ino();
+            let lock_unchanged = fs::read(&lock_path).unwrap() == bytes
+                && fs::symlink_metadata(&lock_path).unwrap().ino() == before_lock.ino();
+            eprintln!(
+                "start-lock-reclaim case={name} rejected={rejected} epoch_unchanged={epoch_unchanged} lock_unchanged={lock_unchanged}"
+            );
+            if !(rejected && epoch_unchanged && lock_unchanged) {
+                violations.push(name);
+            }
+            drop(acquired);
+            fs::remove_dir_all(root).unwrap();
+        }
+        assert!(
+            violations.is_empty(),
+            "start-lock rejection changed evidence or accepted: {violations:?}"
+        );
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct EvidenceSnapshot {
+        path: PathBuf,
+        bytes: Vec<u8>,
+        mode: u32,
+        device: u64,
+        inode: u64,
+        links: u64,
+    }
+
+    fn evidence_snapshots(paths: &[PathBuf]) -> Vec<EvidenceSnapshot> {
+        paths
+            .iter()
+            .map(|path| {
+                let metadata = fs::symlink_metadata(path).unwrap();
+                EvidenceSnapshot {
+                    path: path.clone(),
+                    bytes: fs::read(path).unwrap(),
+                    mode: metadata.mode(),
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                    links: metadata.nlink(),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn malformed_lock_never_retires_mid_phase_journal_or_changes_other_evidence() {
+        for bad_mode in [false, true] {
+            let root = temp_root("067-preflight-journal");
+            let instance = "ef".repeat(32);
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = plant_stale_lock(&root, &instance);
+            if bad_mode {
+                fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+            } else {
+                write_private(
+                    &lock_path,
+                    format!("{}\ninstance={instance}\n", super::LOCK_HEADER).as_bytes(),
+                );
+            }
+            let (device, inode) = data_dir_ids(&data_dir);
+            let journal = root.join(format!(".postgresql-17-{instance}.startup-v1.json"));
+            let record = serde_json::json!({"schema":"openbot-postgres-startup","schemaVersion":1,"instanceId":instance,"dataDirName":format!("postgresql-17-{instance}"),"dataDirDevice":device,"dataDirInode":inode,"attemptId":"34".repeat(16),"startEvidenceSha256":"12".repeat(32),"ownerObservation":owner_observation_hex(),"childObservation":null,"phase":"spawn_entered"});
+            write_private(&journal, &serde_json::to_vec(&record).unwrap());
+            let mut paths = vec![lock_path, journal];
+            for (suffix, header) in [
+                ("recovery-epoch-v1", "openbot-postgres-recovery-epoch-v1"),
+                (
+                    "consumed-recovery-epoch-v1",
+                    "openbot-postgres-consumed-recovery-epoch-v1",
+                ),
+                (
+                    "auth-invalidation-required-v1",
+                    "openbot-postgres-auth-invalidation-required-v1",
+                ),
+                (
+                    "auth-invalidation-applied-v1",
+                    "openbot-postgres-auth-invalidation-applied-v1",
+                ),
+            ] {
+                let path = root.join(format!(".postgresql-17-{instance}.{suffix}"));
+                write_private(
+                    &path,
+                    format!("{header}\ninstance={instance}\nepoch={}\n", "12".repeat(32))
+                        .as_bytes(),
+                );
+                paths.push(path);
+            }
+            let data = data_dir.join("owned-data-sentinel");
+            let wal = data_dir.join("owned-wal-sentinel");
+            write_private(&data, b"owned data stays");
+            write_private(&wal, b"owned WAL stays");
+            paths.extend([data, wal]);
+            drop(KernelStartLock::acquire(&root, &instance).unwrap());
+            let before = evidence_snapshots(&paths);
+            let rejected = PostgresStartLock::acquire_with_data_dir(
+                &root,
+                &instance,
+                PostgresBundleDigest([0x11; 32]),
+                &data_dir,
+            );
+            assert!(
+                matches!(
+                    rejected,
+                    Err(PostgresSidecarError::StartLockRecoveryRequired)
+                ),
+                "{rejected:?}"
+            );
+            assert_eq!(evidence_snapshots(&paths), before);
+            assert_eq!(fs::metadata(&root).unwrap().mode() & 0o777, 0o700);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn observed_lock_rejects_replacement_and_same_inode_rewrite_before_mint() {
+        for replace in [false, true] {
+            let root = temp_root("067-observed-replace");
+            let instance = "ef".repeat(32);
+            let data_dir = root.join(format!("postgresql-17-{instance}"));
+            fs::create_dir(&data_dir).unwrap();
+            fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let lock_path = plant_stale_lock(&root, &instance);
+            let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+            let evidence = super::StartLockEvidence::inspect(&owner, &root, &instance).unwrap();
+            if replace {
+                let candidate = root.join("owned-replacement");
+                write_private(&candidate, &fs::read(&lock_path).unwrap());
+                fs::rename(candidate, &lock_path).unwrap();
+            } else {
+                write_private(&lock_path, canonical_lock(&instance, "2").as_bytes());
+            }
+            let before = evidence_snapshots(std::slice::from_ref(&lock_path));
+            assert!(!evidence.is_current(&owner));
+            assert!(matches!(
+                super::VerifiedQuiescentInstance::try_verify(
+                    &owner, &root, &instance, &data_dir, &evidence
+                ),
+                Err(PostgresSidecarError::StartLockGuardInvalid)
+            ));
+            assert_eq!(evidence_snapshots(std::slice::from_ref(&lock_path)), before);
+            assert!(
+                !root
+                    .join(format!(".postgresql-17-{instance}.recovery-epoch-v1"))
+                    .exists()
+            );
+            drop(owner);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn observed_lock_replacement_after_mint_cannot_be_deleted() {
+        let root = temp_root("067-after-mint-replace");
+        let instance = "ef".repeat(32);
+        let data_dir = root.join(format!("postgresql-17-{instance}"));
+        fs::create_dir(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let lock_path = plant_stale_lock(&root, &instance);
+        let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+        let evidence = super::StartLockEvidence::inspect(&owner, &root, &instance).unwrap();
+        let verified = super::VerifiedQuiescentInstance::try_verify(
+            &owner, &root, &instance, &data_dir, &evidence,
+        )
+        .unwrap();
+        let epoch = crate::postgres_sidecar::recovery_epoch::mint_or_replace_for_reclaim(
+            &owner, &root, &instance,
+        )
+        .unwrap();
+        let candidate = root.join("owned-replacement");
+        write_private(&candidate, &fs::read(&lock_path).unwrap());
+        fs::rename(candidate, &lock_path).unwrap();
+        let paths = [
+            lock_path,
+            root.join(format!(".postgresql-17-{instance}.recovery-epoch-v1")),
+        ];
+        let before = evidence_snapshots(&paths);
+        assert!(matches!(
+            verified.reclaim_start_lock_evidence(&owner, &root),
+            Err(PostgresSidecarError::StartLockGuardInvalid)
+        ));
+        assert_eq!(evidence_snapshots(&paths), before);
+        assert!(epoch.is_current());
+        drop(owner);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
