@@ -13,7 +13,7 @@ use super::{
     PostgresSidecarError, encode_hex, path_matches_open_file, sync_directory, valid_instance_id,
 };
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read as _, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 const EPOCH_HEADER: &str = "openbot-postgres-recovery-epoch-v1";
@@ -25,6 +25,20 @@ const EPOCH_HEX_BYTES: usize = EPOCH_BYTES * 2;
 const MAX_FILE_BYTES: usize = 512;
 const MAX_CANDIDATE_ATTEMPTS: usize = 8;
 const CANDIDATE_NONCE_BYTES: usize = 16;
+
+fn read_bounded_epoch_bytes(file: &mut File) -> io::Result<Vec<u8>> {
+    // Read one sentinel byte beyond the record budget, including when the file grew after open.
+    let mut bytes = Vec::with_capacity(MAX_FILE_BYTES + 1);
+    file.take((MAX_FILE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid recovery epoch record length",
+        ));
+    }
+    Ok(bytes)
+}
 
 /// Sealed local recovery epoch bound to one instance file.
 pub(super) struct RecoveryEpoch {
@@ -68,12 +82,8 @@ pub(super) fn load_optional(
             }
             let mut file =
                 secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)
+            let bytes = read_bounded_epoch_bytes(&mut file)
                 .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
-                return Err(PostgresSidecarError::StartLockGuardInvalid);
-            }
             let epoch_hex = parse_epoch_bytes(&bytes, instance_id)?;
             if !path_matches_open_file(&path, &file, &bytes, true) || !owner.is_current() {
                 return Err(PostgresSidecarError::StartLockGuardInvalid);
@@ -117,9 +127,7 @@ pub(super) fn mint_or_replace_for_reclaim(
             }
             let mut old_file = secure_open_read(&path)
                 .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
-            let mut old_bytes = Vec::new();
-            old_file
-                .read_to_end(&mut old_bytes)
+            let old_bytes = read_bounded_epoch_bytes(&mut old_file)
                 .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
             let old_hex = parse_epoch_bytes(&old_bytes, instance_id)
                 .map_err(|_| PostgresSidecarError::StartLockRecoveryRequired)?;
@@ -333,12 +341,8 @@ pub(super) fn clear_auth_invalidation_required(
             }
             let mut file =
                 secure_open_read(&path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)
+            let bytes = read_bounded_epoch_bytes(&mut file)
                 .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
-                return Err(PostgresSidecarError::StartLockGuardInvalid);
-            }
             let hex = parse_epoch_bytes_with_header(&bytes, instance_id, AUTH_INVALIDATION_HEADER)?;
             if hex != current.epoch_hex()
                 || !path_matches_open_file(&path, &file, &bytes, true)
@@ -501,9 +505,7 @@ fn write_labeled_epoch_replace(
     }
     let mut old_file =
         secure_open_read(path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-    let mut old_bytes = Vec::new();
-    old_file
-        .read_to_end(&mut old_bytes)
+    let old_bytes = read_bounded_epoch_bytes(&mut old_file)
         .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
     let old_hex = parse_epoch_bytes_with_header(&old_bytes, instance_id, header)?;
     if !path_matches_open_file(path, &old_file, &old_bytes, true) {
@@ -571,12 +573,8 @@ fn load_labeled_epoch_hex(
             }
             let mut file =
                 secure_open_read(path).map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)
+            let bytes = read_bounded_epoch_bytes(&mut file)
                 .map_err(|_| PostgresSidecarError::StartLockGuardInvalid)?;
-            if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
-                return Err(PostgresSidecarError::StartLockGuardInvalid);
-            }
             let epoch_hex = parse_epoch_bytes_with_header(&bytes, instance_id, header)?;
             if !path_matches_open_file(path, &file, &bytes, true) || !owner.is_current() {
                 return Err(PostgresSidecarError::StartLockGuardInvalid);
@@ -741,6 +739,7 @@ mod tests {
     use super::*;
     use crate::postgres_sidecar::{PostgresBundleDigest, PostgresStartLock};
     use std::fs::{self, OpenOptions};
+    use std::io::Seek as _;
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
     use std::path::PathBuf;
 
@@ -783,6 +782,86 @@ mod tests {
 
     fn record_bytes(header: &str, instance: &str, epoch: &str) -> Vec<u8> {
         format!("{header}\ninstance={instance}\nepoch={epoch}\n").into_bytes()
+    }
+
+    #[test]
+    fn bounded_epoch_read_enforces_empty_512_and_513_byte_boundaries() {
+        for length in [0, MAX_FILE_BYTES, MAX_FILE_BYTES + 1] {
+            let root = temp_root("066-read-boundary");
+            let path = root.join("record");
+            let expected = vec![b'x'; length];
+            plant_record(&path, &expected);
+            let mut file = secure_open_read(&path).unwrap();
+            let result = read_bounded_epoch_bytes(&mut file);
+            assert_eq!(file.stream_position().unwrap(), length as u64);
+            if length == MAX_FILE_BYTES {
+                assert_eq!(result.unwrap(), expected);
+            } else {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+            }
+            eprintln!("bounded-read boundary length={length} actual_read={length}");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn bounded_epoch_read_rejects_growth_after_open_with_only_513_bytes_read() {
+        let root = temp_root("066-read-growth");
+        let path = root.join("record");
+        plant_record(&path, &vec![b'x'; MAX_FILE_BYTES]);
+        let mut file = secure_open_read(&path).unwrap();
+        let observed = file.metadata().unwrap();
+        assert!(valid_epoch_metadata(&observed, Some(MAX_FILE_BYTES)));
+        let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+        writer.write_all(&vec![b'y'; 1024 * 1024]).unwrap();
+        writer.sync_all().unwrap();
+        assert_eq!(
+            file.metadata().unwrap().len(),
+            (MAX_FILE_BYTES + 1024 * 1024) as u64
+        );
+        assert_eq!(file.metadata().unwrap().dev(), observed.dev());
+        assert_eq!(file.metadata().unwrap().ino(), observed.ino());
+        let result = read_bounded_epoch_bytes(&mut file);
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(file.stream_position().unwrap(), (MAX_FILE_BYTES + 1) as u64);
+        eprintln!(
+            "bounded-read growth observed_length={} grown_length={} actual_read={}",
+            observed.len(),
+            file.metadata().unwrap().len(),
+            file.stream_position().unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_epoch_read_preserves_canonical_records_for_all_four_headers() {
+        let instance = "ab".repeat(32);
+        let epoch = "cd".repeat(32);
+        for header in [
+            EPOCH_HEADER,
+            CONSUMED_HEADER,
+            AUTH_INVALIDATION_HEADER,
+            AUTH_INVALIDATION_APPLIED_HEADER,
+        ] {
+            let root = temp_root("066-read-canonical");
+            let path = root.join("record");
+            let expected = record_bytes(header, &instance, &epoch);
+            plant_record(&path, &expected);
+            let mut file = secure_open_read(&path).unwrap();
+            let bytes = read_bounded_epoch_bytes(&mut file).unwrap();
+            assert_eq!(bytes, expected);
+            assert_eq!(file.stream_position().unwrap(), bytes.len() as u64);
+            assert_eq!(
+                parse_epoch_bytes_with_header(&bytes, &instance, header).unwrap(),
+                epoch
+            );
+            assert!(path_matches_open_file(&path, &file, &bytes, true));
+            eprintln!(
+                "bounded-read canonical header={header} actual_read={}",
+                bytes.len()
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     fn malformed_records(
@@ -944,6 +1023,197 @@ mod tests {
         }
         records.sort_by(|left, right| left.path.cmp(&right.path));
         records
+    }
+
+    #[test]
+    fn epoch_load_and_reclaim_reject_boundary_records_without_persistent_changes() {
+        let instance = "ab".repeat(32);
+        let epoch = "cd".repeat(32);
+        for length in [
+            0,
+            MAX_FILE_BYTES,
+            MAX_FILE_BYTES + 1,
+            MAX_FILE_BYTES + 1024 * 1024,
+        ] {
+            let root = temp_root("066-epoch-entries");
+            let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+            plant_stale_lock(&root, &instance);
+            plant_record(&epoch_path(&root, &instance), &vec![b'x'; length]);
+            for (header, path) in [
+                (CONSUMED_HEADER, consumed_path(&root, &instance)),
+                (
+                    AUTH_INVALIDATION_HEADER,
+                    auth_invalidation_path(&root, &instance),
+                ),
+                (
+                    AUTH_INVALIDATION_APPLIED_HEADER,
+                    auth_invalidation_applied_path(&root, &instance),
+                ),
+            ] {
+                plant_record(&path, &record_bytes(header, &instance, &epoch));
+            }
+            let before = snapshot_records(&root);
+            assert!(matches!(
+                load_optional(&owner, &root, &instance),
+                Err(PostgresSidecarError::StartLockGuardInvalid)
+            ));
+            assert_eq!(
+                snapshot_records(&root),
+                before,
+                "load_optional length={length}"
+            );
+            assert!(matches!(
+                mint_or_replace_for_reclaim(&owner, &root, &instance),
+                Err(PostgresSidecarError::StartLockRecoveryRequired)
+            ));
+            assert_eq!(
+                snapshot_records(&root),
+                before,
+                "mint_or_replace length={length}"
+            );
+            assert!(owner.is_current());
+            eprintln!(
+                "epoch-entries length={length} load=StartLockGuardInvalid reclaim=StartLockRecoveryRequired records_unchanged=true"
+            );
+            drop(owner);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn labeled_epoch_entries_reject_boundary_records_without_persistent_changes() {
+        let instance = "ab".repeat(32);
+        let epoch = "cd".repeat(32);
+        for header in [
+            CONSUMED_HEADER,
+            AUTH_INVALIDATION_HEADER,
+            AUTH_INVALIDATION_APPLIED_HEADER,
+        ] {
+            for length in [
+                0,
+                MAX_FILE_BYTES,
+                MAX_FILE_BYTES + 1,
+                MAX_FILE_BYTES + 1024 * 1024,
+            ] {
+                let root = temp_root("066-labeled-entries");
+                let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+                plant_stale_lock(&root, &instance);
+                plant_record(
+                    &epoch_path(&root, &instance),
+                    &record_bytes(EPOCH_HEADER, &instance, &epoch),
+                );
+                let current = load_optional(&owner, &root, &instance).unwrap().unwrap();
+                for (label, path) in [
+                    (CONSUMED_HEADER, consumed_path(&root, &instance)),
+                    (
+                        AUTH_INVALIDATION_HEADER,
+                        auth_invalidation_path(&root, &instance),
+                    ),
+                    (
+                        AUTH_INVALIDATION_APPLIED_HEADER,
+                        auth_invalidation_applied_path(&root, &instance),
+                    ),
+                ] {
+                    let bytes = if label == header {
+                        vec![b'x'; length]
+                    } else {
+                        record_bytes(label, &instance, &epoch)
+                    };
+                    plant_record(&path, &bytes);
+                }
+                let before = snapshot_records(&root);
+                let (loaded, written) = match header {
+                    CONSUMED_HEADER => (
+                        invalidation_pending(&owner, &root, &instance, Some(&current)),
+                        write_consumed_matching(&owner, &root, &instance, &current),
+                    ),
+                    AUTH_INVALIDATION_HEADER => {
+                        assert!(matches!(
+                            clear_auth_invalidation_required(&owner, &root, &instance, &current),
+                            Err(PostgresSidecarError::StartLockGuardInvalid)
+                        ));
+                        assert_eq!(
+                            snapshot_records(&root),
+                            before,
+                            "clear_required length={length}"
+                        );
+                        (
+                            auth_invalidation_required(&owner, &root, &instance, &current),
+                            write_auth_invalidation_required(&owner, &root, &instance, &current),
+                        )
+                    }
+                    AUTH_INVALIDATION_APPLIED_HEADER => (
+                        auth_invalidation_applied(&owner, &root, &instance, &current),
+                        write_auth_invalidation_applied(&owner, &root, &instance, &current),
+                    ),
+                    _ => unreachable!(),
+                };
+                assert!(matches!(
+                    loaded,
+                    Err(PostgresSidecarError::StartLockGuardInvalid)
+                ));
+                assert!(matches!(
+                    written,
+                    Err(PostgresSidecarError::StartLockGuardInvalid)
+                ));
+                assert_eq!(snapshot_records(&root), before, "{header} length={length}");
+                assert!(current.is_current() && owner.is_current());
+                eprintln!(
+                    "labeled-entries header={header} length={length} read_and_write=StartLockGuardInvalid records_unchanged=true"
+                );
+                drop(current);
+                drop(owner);
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_epoch_entries_load_rotate_read_replace_and_clear() {
+        let root = temp_root("066-canonical-entries");
+        let instance = "ab".repeat(32);
+        let epoch = "cd".repeat(32);
+        let owner = KernelStartLock::acquire(&root, &instance).unwrap();
+        plant_record(
+            &epoch_path(&root, &instance),
+            &record_bytes(EPOCH_HEADER, &instance, &epoch),
+        );
+        let prior = load_optional(&owner, &root, &instance).unwrap().unwrap();
+        assert_eq!(prior.epoch_hex(), epoch);
+        let current = mint_or_replace_for_reclaim(&owner, &root, &instance).unwrap();
+        assert_ne!(current.epoch_hex(), prior.epoch_hex());
+        assert!(current.is_current());
+        for (header, path) in [
+            (CONSUMED_HEADER, consumed_path(&root, &instance)),
+            (
+                AUTH_INVALIDATION_HEADER,
+                auth_invalidation_path(&root, &instance),
+            ),
+            (
+                AUTH_INVALIDATION_APPLIED_HEADER,
+                auth_invalidation_applied_path(&root, &instance),
+            ),
+        ] {
+            plant_record(&path, &record_bytes(header, &instance, &epoch));
+        }
+        write_consumed_matching(&owner, &root, &instance, &current).unwrap();
+        write_auth_invalidation_required(&owner, &root, &instance, &current).unwrap();
+        write_auth_invalidation_applied(&owner, &root, &instance, &current).unwrap();
+        assert!(!invalidation_pending(&owner, &root, &instance, Some(&current)).unwrap());
+        assert!(auth_invalidation_required(&owner, &root, &instance, &current).unwrap());
+        assert!(auth_invalidation_applied(&owner, &root, &instance, &current).unwrap());
+        let before = snapshot_records(&root);
+        write_consumed_matching(&owner, &root, &instance, &current).unwrap();
+        write_auth_invalidation_required(&owner, &root, &instance, &current).unwrap();
+        write_auth_invalidation_applied(&owner, &root, &instance, &current).unwrap();
+        assert_eq!(snapshot_records(&root), before);
+        clear_auth_invalidation_required(&owner, &root, &instance, &current).unwrap();
+        assert!(!auth_invalidation_path(&root, &instance).exists());
+        assert!(current.is_current() && owner.is_current());
+        drop(current);
+        drop(prior);
+        drop(owner);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
