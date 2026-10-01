@@ -83,6 +83,7 @@
 | V6-PR-069 | helper PG_VERSION的16字节规则在读取中执行，复核已打开句柄与路径 | 主控定向及严格Clippy已验；最终组合验收与集成事实见PR | [#87](https://github.com/acosmi/wrokbot/pull/87) | [PR合并记录](https://github.com/acosmi/wrokbot/pull/87) |
 | V6-PR-070 | 真实PG审批组合测试夹具的单语句时间 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#88](https://github.com/acosmi/wrokbot/pull/88) | 以PR实际合并状态为准 |
 | V6-PR-071 | 取消测试的启动阶段观察预算 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#89](https://github.com/acosmi/wrokbot/pull/89) | 以PR实际合并状态为准 |
+| V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 本地通过；未发布 | 无 | 未合入 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -278,3 +279,9 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 ## Desktop UI preference 最终交接基底整合
 
 2026-10-01：065–068 正式 READY 已由主控接收后，在既有 `codex/m0-preferences-read-budget` 隔离分支正常合入固定主线 `b3f1dc9f7923b2fb650f8e589f046f099f69b290`，保留主线全部台账历史及上述 preference 原条目。preference 源码保持旧正式候选的 `34bce60879ff3fbd90a3f52c306a6a566893ad49d25f421e1e84f6be47c90192`；无新增预算、测试或产品合同变更。最终冻结 HEAD 的默认 lib、默认全目标严格 Clippy 与 fmt 状态只以本次独立私有回执和交付 manifest 为准；此处不把旧候选检查标为新候选通过，不重复既有 065–068 的 PG 套件，也不宣称 A1、M0 或 full_v6 完成。
+
+## V6-PR-072 Desktop UI preference 正式编号与局部验证引用
+
+2026-10-01：主控正式分配 V6-PR-072；上述未编号准备与交接记录作为历史保留。本地候选已通过，尚未发布、无 PR、未合入。实际运行候选 `60ba855390d57f6e8ec625d50d85f1e71354e81c`（tree `833df1b45167d18a7f2d3ece191a70004d2f76a2`，固定主线基底 `b3f1dc9f7923b2fb650f8e589f046f099f69b290`）的默认 Desktop lib 为 86 passed、0 failed、0 ignored、0 filtered；默认 all-targets Clippy `-D warnings` 与全仓 fmt 检查退出均为 0。原始命令、日志及 SHA 由该候选不可变私有交付回执记录，主控已核对接受。
+
+本次只增加任务表编号和本段事实，产品源码、测试、预算、合同及 Rust/build/lock/UI 输入不变。依唯一规范 §24.3，完整 tracked 产品 manifest、全仓除台账 manifest 和工作树一致性核对后，按 manifest 精确引用 `60ba855` 的上述局部证据；不是本次编号提交的新 HEAD 实测，本次未重跑产品检查。引用边界仅为这些原默认 lib/Clippy/fmt 检查，不把局部结果记为 A1、A0–A7、M0 或 full_v6 通过；发布仍等待既有直接人类授权问题的回答。
