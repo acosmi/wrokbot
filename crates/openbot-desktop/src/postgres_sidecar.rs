@@ -450,14 +450,14 @@ impl PostgresStartLock {
                             data_dir,
                         )
                         .and_then(|verified| {
-                            // V6-PR-014: durable epoch before deleting the dynamic start-lock.
-                            recovery_epoch::mint_or_replace_for_reclaim(
+                            // Reject malformed consumed before minting or replacing the epoch.
+                            recovery_epoch::ensure_consumed_readable(
                                 &kernel_guard,
                                 app_data_root,
                                 instance_id,
                             )?;
-                            // V6-PR-016: malformed consumed must not delete the stale start-lock.
-                            recovery_epoch::ensure_consumed_readable(
+                            // V6-PR-014: durable epoch before deleting the dynamic start-lock.
+                            recovery_epoch::mint_or_replace_for_reclaim(
                                 &kernel_guard,
                                 app_data_root,
                                 instance_id,
