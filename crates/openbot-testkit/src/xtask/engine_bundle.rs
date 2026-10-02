@@ -758,12 +758,8 @@ fn drain_fixture_codesign_pipes(
     err_limit: usize,
 ) -> io::Result<()> {
     use rustix::event::{PollFd, PollFlags, poll};
-    use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
-
-    let out_flags = fcntl_getfl(&*out)?;
-    fcntl_setfl(&*out, out_flags | OFlags::NONBLOCK)?;
-    let err_flags = fcntl_getfl(&*err)?;
-    fcntl_setfl(&*err, err_flags | OFlags::NONBLOCK)?;
+    set_fixture_pipe_nonblocking(&*out, true)?;
+    set_fixture_pipe_nonblocking(&*err, true)?;
     loop {
         let ready = {
             let mut fds = [
@@ -782,14 +778,30 @@ fn drain_fixture_codesign_pipes(
             [!fds[0].revents().is_empty(), !fds[1].revents().is_empty()]
         };
         if ready[0] && drain_fixture_codesign_reader(out, stdout, out_limit)? {
-            fcntl_setfl(&*err, err_flags & !OFlags::NONBLOCK)?;
+            set_fixture_pipe_nonblocking(&*err, false)?;
             return drain_fixture_codesign_reader(err, stderr, err_limit).map(|_| ());
         }
         if ready[1] && drain_fixture_codesign_reader(err, stderr, err_limit)? {
-            fcntl_setfl(&*out, out_flags & !OFlags::NONBLOCK)?;
+            set_fixture_pipe_nonblocking(&*out, false)?;
             return drain_fixture_codesign_reader(out, stdout, out_limit).map(|_| ());
         }
     }
+}
+
+#[cfg(unix)]
+fn set_fixture_pipe_nonblocking(pipe: &impl std::os::fd::AsFd, enabled: bool) -> io::Result<()> {
+    use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+
+    let old = fcntl_getfl(pipe)?;
+    let new = if enabled {
+        old | OFlags::NONBLOCK
+    } else {
+        old & !OFlags::NONBLOCK
+    };
+    if new != old {
+        fcntl_setfl(pipe, new)?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
