@@ -32,6 +32,7 @@ pub fn AgentsPage() -> impl IntoView {
     let loading = RwSignal::new(true);
     let load_error = RwSignal::new(false);
     let reload_generation = RwSignal::new(0_u64);
+    let directory_generation = use_context::<super::AgentDirectoryGeneration>();
     install_agent_loader(
         reload_generation,
         agents,
@@ -74,6 +75,11 @@ pub fn AgentsPage() -> impl IntoView {
     let changed_navigate = navigate.clone();
     let changed = UnsyncCallback::new(move |agent: AgentProfile| {
         reload_generation.update(|generation| *generation = generation.saturating_add(1));
+        if let Some(directory) = directory_generation {
+            directory
+                .0
+                .update(|generation| *generation = generation.saturating_add(1));
+        }
         let href = crate::api::agent_profile_href(agent.id.as_str())
             .expect("server Agent id must be route-safe");
         changed_navigate(&href, Default::default());
@@ -81,6 +87,11 @@ pub fn AgentsPage() -> impl IntoView {
     let closed_navigate = navigate;
     let closed = UnsyncCallback::new(move |_| {
         reload_generation.update(|generation| *generation = generation.saturating_add(1));
+        if let Some(directory) = directory_generation {
+            directory
+                .0
+                .update(|generation| *generation = generation.saturating_add(1));
+        }
         closed_navigate("/agents", Default::default());
     });
     let detail_agent = Signal::derive(move || selected_agent_id.get());

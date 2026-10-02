@@ -29,6 +29,29 @@ fn token_contrast_wcag_aa_covers_all_84_required_pairs() {
 }
 
 #[test]
+fn compact_visual_roles_keep_aa_on_their_declared_surfaces() {
+    let tokens = tokens();
+    let color = table(&tokens, "color");
+    for theme in ["light", "dark"] {
+        let colors = child_table(color, theme);
+        for (foreground, background) in [
+            ("fg_rail", "bg_rail"),
+            ("fg_weak", "bg"),
+            ("fg_weak", "bg_sidebar"),
+            ("fg_weak", "bg_pane"),
+            ("fg_nav_group", "bg_sidebar"),
+            ("fg_agent_row", "bg_sidebar"),
+            ("fg_agent_row", "bg_agent_selected"),
+            ("fg_breadcrumb", "bg"),
+            ("fg_user_bubble", "bg_user_bubble"),
+            ("fg_review_positive", "bg_review_positive"),
+        ] {
+            assert_contrast(colors, foreground, background, 4.5, theme);
+        }
+    }
+}
+
+#[test]
 fn app_css_handwritten_theme_values_match_tokens_toml() {
     let tokens = tokens();
     let css = include_str!("../design/app.css");

@@ -1,5 +1,9 @@
 //! Agent-facing business projections.
 
+/// Authenticated-shell invalidation after confirmed directory mutations, without polling.
+#[derive(Clone, Copy)]
+pub(crate) struct AgentDirectoryGeneration(pub leptos::prelude::RwSignal<u64>);
+
 pub mod agent_card;
 pub mod agent_editor;
 pub mod agent_presence;

@@ -5,6 +5,8 @@ use std::collections::HashSet;
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
+use leptos_router::hooks::use_query_map;
+use openbot_contracts::agent::AgentProfile;
 #[cfg(any(target_arch = "wasm32", test))]
 use openbot_contracts::command::ChannelPage;
 use openbot_contracts::command::ChannelSummary;
@@ -147,6 +149,7 @@ pub fn AppSidebar() -> impl IntoView {
         <SidebarHeader>
             <a class="ob-sidebar-brand" href="/" aria-label=move || t_string!(i18n, common.app_name).to_owned()>
                 <crate::primitives::BrandMark/>
+                <span class="ob-brand-wordmark" aria-hidden="true"></span>
             </a>
             <button class="ob-sidebar-search-toggle" type="button"
                 aria-label=move || t_string!(i18n, shell.search_toggle).to_owned()
@@ -173,7 +176,8 @@ pub fn AppSidebar() -> impl IntoView {
                         label=move || t_string!(i18n, admin.nav_approvals).to_owned()
                         current=Signal::derive(move || approvals_location.pathname.get() == "/approvals") />
                 </SidebarNavList>
-                <div class="ob-sidebar-chats-heading">
+                <SidebarAgents />
+                <div id="sidebar-history" class="ob-sidebar-chats-heading" tabindex="-1">
                     <SidebarGroupLabel>{move || t!(i18n, shell.chats)}</SidebarGroupLabel>
                     <a href="/channel/new" aria-label=move || t_string!(i18n, shell.new_channel).to_owned()>
                         <IconView icon=Icon::Plus size=IconSize::Inline />
@@ -262,6 +266,86 @@ pub fn AppSidebar() -> impl IntoView {
             <Show when=move || sign_out_error.get()><p class="ob-sidebar-alert" role="alert">{move || t!(i18n, auth.sign_out_error)}</p></Show>
             <Show when=move || account_error.get()><p class="ob-sidebar-alert" role="alert">{move || t!(i18n, account.load_failed)}</p></Show>
         </SidebarFooter>
+    }
+}
+
+/// Read only the existing authorized Agent directory, never selecting a fallback recipient.
+#[component]
+fn SidebarAgents() -> impl IntoView {
+    let i18n = use_i18n();
+    let location = use_location();
+    let reload_location = location.clone();
+    let direct_route = Memo::new(move |_| location.pathname.get() == "/bot");
+    let query = use_query_map();
+    let agents = RwSignal::new(Vec::<AgentProfile>::new());
+    let loading = RwSignal::new(true);
+    let failed = RwSignal::new(false);
+    let generation = RwSignal::new(0_u64);
+    let directory_generation = use_context::<crate::features::agents::AgentDirectoryGeneration>();
+    let retry = move |_| generation.update(|value| *value = value.saturating_add(1));
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        let _ = reload_location.pathname.get();
+        if let Some(directory) = directory_generation {
+            let _ = directory.0.get();
+        }
+        generation.update(|value| *value = value.saturating_add(1));
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (reload_location, directory_generation);
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        let expected = generation.get();
+        loading.set(true);
+        failed.set(false);
+        agents.set(Vec::new());
+        leptos::task::spawn_local_scoped_with_cancellation(async move {
+            let response = crate::api::list_agents(false).await;
+            if generation.get_untracked() != expected {
+                return;
+            }
+            match response {
+                Ok(rows) => agents.set(rows),
+                Err(_) => {
+                    agents.set(Vec::new());
+                    failed.set(true);
+                }
+            }
+            loading.set(false);
+        });
+    });
+    view! {
+        <SidebarGroupLabel>{move || t!(i18n, shell.nav_agents)}</SidebarGroupLabel>
+        <Show when=move || loading.get()><p class="ob-sidebar-loading" role="status">{move || t!(i18n, common.loading)}</p></Show>
+        <Show when=move || failed.get()>
+            <div class="ob-sidebar-alert" role="alert">
+                <span>{move || t!(i18n, agents.load_error)}</span>
+                <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry>{move || t!(i18n, common.retry)}</Button>
+            </div>
+        </Show>
+        <Show when=move || !loading.get() && !failed.get() && agents.get().is_empty()>
+            <p class="ob-sidebar-search-empty">{move || t!(i18n, agents.empty_title)}</p>
+        </Show>
+        <SidebarNavList>
+            <For each=move || agents.get() key=|agent| agent.id.clone() children=move |agent| {
+                let href = crate::api::bot_chat_href(agent.id.as_str());
+                let id = agent.id.as_str().to_owned();
+                let selected_id = id.clone();
+                let avatar_seed = agent.avatar_seed;
+                let name = agent.name;
+                let remote = agent.endpoint.is_some();
+                href.ok().map(|href| view! {
+                    <li>
+                        <a class="ob-sidebar-agent" href=href
+                            aria-current=move || (direct_route.get() && query.read().get("agent").as_deref() == Some(selected_id.as_str())).then_some("page")>
+                            <span aria-hidden="true"><Avatar principal_id=avatar_seed name=name.clone() size=AvatarSize::Medium /></span>
+                            <span class="ob-sidebar-agent-name">{name}</span>
+                            {remote.then(|| view! { <span class="ob-sidebar-agent-remote" title=move || t_string!(i18n, shell.remote_agent).to_owned()><IconView icon=Icon::Globe size=IconSize::Inline /><span class="ob-visually-hidden">{move || t!(i18n, shell.remote_agent)}</span></span> })}
+                        </a>
+                    </li>
+                })
+            } />
+        </SidebarNavList>
     }
 }
 

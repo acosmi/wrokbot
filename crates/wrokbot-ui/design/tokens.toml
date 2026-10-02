@@ -1,8 +1,8 @@
-# Wrok Bot UI v3 — token 单一真源
+# Wrok Bot UI v5.1 — frozen visual token roles
 #
 # 真源文档：repository contract
-# 本文件是那几张表的机器可读形态；文档表是本文件的人类快照。两者不一致时以本文件为准，
-# 并在同一个 PR 里把文档改回来（GUI 方案 §4.1「单一来源」）。
+# 本文件投影冻结视觉值；如有冲突，以已授权的现行视觉规范为准，
+# 同批同步机器值与受控 CSS 映射，并保留漂移检查。
 #
 # 消费者（GUI 方案 §4.1、§13）：
 #   crates/wrokbot-ui/build.rs 从本文件生成
@@ -89,17 +89,17 @@ shadow_popover = "elevation-popover"
 shadow_dialog = "elevation-dialog"
 
 [color.light]
-bg = "#FAF9F7"              # 页面 / 卡片 / 输入框底
-bg_subtle = "#F1F0EE"       # hover 底、表头、代码块底
-bg_chip = "#EAE8E6"         # 中性按钮 / 胶囊 / 芯片底、选中行
-bg_sidebar = "#F4F3F1"      # 侧栏底
+bg = "#FFFFFF"
+bg_subtle = "#FAFAFA"
+bg_chip = "#EDEDED"
+bg_sidebar = "#F9F9F9"
 bg_popover = "#FFFFFF"      # popover / menu / dialog 底
-bg_inverse = "#111111"      # primary 按钮底（唯一实心色）
-fg = "#191918"              # 正文、标题、选中态文字
-fg_secondary = "#60615F"    # 次级文字、按钮默认文字、侧栏项
-fg_muted = "#676864"        # 占位符、时间戳、说明
+bg_inverse = "#292929"
+fg = "#242424"
+fg_secondary = "#666666"
+fg_muted = "#666666"
 fg_inverse = "#FFFFFF"      # primary 按钮文字
-border = "#E5E3E0"          # 输入框 / 分隔线 / 表格线
+border = "#E7E7E7"
 ring = "#1A1A1A"            # :focus-visible 环（中性，不用品牌色）
 danger = "#B42318"          # 错误文字 / 图标 / 状态点
 caution = "#9A5100"         # 警告
@@ -110,10 +110,10 @@ chart_2 = "#0AA074"
 chart_3 = "#E8590C"
 chart_4 = "#AE3EC9"
 chart_5 = "#868E96"
-shadow_popover = "0 4px 16px rgb(0 0 0 / .10)"
-shadow_dialog = "0 12px 40px rgb(0 0 0 / .18)"
+shadow_popover = "0 8px 25px #2B382318"
+shadow_dialog = "0 20px 80px #30344419"
 image_dim = "1"             # 暗色下内容图片 filter: brightness()
-modal_overlay = "rgb(0 0 0 / .10)"
+modal_overlay = "#34394D30"
 avatar_0 = "#E8E8EA"
 avatar_1 = "#E8ECEB"
 avatar_2 = "#E9EBE4"
@@ -122,17 +122,36 @@ avatar_4 = "#ECE7EA"
 avatar_5 = "#E7E9EE"
 avatar_6 = "#ECEBE5"
 avatar_7 = "#E5ECEC"
+bg_rail = "#F5F5F5"
+bg_pane = "#FAFAFA"
+bg_input = "#FFFFFF"
+bg_modal = "#FFFEFC"
+fg_assistant = "#373737"
+fg_weak = "#707070"
+fg_nav_group = "#646B61"
+fg_agent_row = "#58634F"
+fg_breadcrumb = "#636D5B"
+input_border = "#DEDEDE"
+menu_border = "#E1E5DC"
+modal_border = "#EEECE8"
+bg_agent_selected = "#ECEFF7"
+bg_user_bubble = "#3D7E75"
+fg_user_bubble = "#FFFFFF"
+bg_review_positive = "#496D61"
+fg_review_positive = "#FFFFFF"
+shadow_composer = "0 3px 14px #00000006"
+fg_rail = "#555555"
 
 [color.dark]
 bg = "#141415"
 bg_subtle = "#1F1F22"
 bg_chip = "#27272B"
-bg_sidebar = "#0F0F10"
+bg_sidebar = "#18181A"
 bg_popover = "#1C1C1F"
-bg_inverse = "#F4F4F5"
+bg_inverse = "#ECECEE"
 fg = "#ECECEE"
 fg_secondary = "#A6A6AF"
-fg_muted = "#8E8E98"
+fg_muted = "#A6A6AF"
 fg_inverse = "#111111"
 border = "#2E2E33"
 ring = "#F4F4F5"
@@ -161,16 +180,36 @@ avatar_7 = "#263132"
 # ---------------------------------------------------------------------------
 # §4.3 字体与排版
 # ---------------------------------------------------------------------------
+bg_rail = "#0F0F10"
+bg_pane = "#1C1C1F"
+bg_input = "#1C1C1F"
+bg_modal = "#1C1C1F"
+fg_assistant = "#ECECEE"
+fg_weak = "#A6A6AF"
+fg_nav_group = "#A6A6AF"
+fg_agent_row = "#ECECEE"
+fg_breadcrumb = "#A6A6AF"
+input_border = "#2E2E33"
+menu_border = "#2E2E33"
+modal_border = "#2E2E33"
+bg_agent_selected = "#27272B"
+bg_user_bubble = "#3D7E75"
+fg_user_bubble = "#FFFFFF"
+bg_review_positive = "#496D61"
+fg_review_positive = "#FFFFFF"
+shadow_composer = "0 3px 14px #00000030"
+fg_rail = "#A6A6AF"
+
 [typography]
 css_prefix = ""
 
 # 字体栈。CJK 不随包（Noto Sans CJK 体量与授权复杂度都不值得）；
 # golden 只在钉了 CJK 字体包的 Linux 容器里跑（GUI 方案 §10.2）。
-font_sans = '"Inter Variable", ui-sans-serif, system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif'
-font_mono = 'ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans Mono CJK SC", monospace'
+font_sans = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+font_mono = 'ui-monospace, SFMono-Regular, Menlo, monospace'
 
-# 字重只用这三档
-font_weights = [400, 500, 600]
+# 冻结的部件字重；品牌资产自身的字形不由正文排版替换。
+font_weights = [400, 500, 550, 600, 630, 700]
 
 # 数字一律 tabular-nums（时间、计数、表格）
 font_variant_numeric = "tabular-nums"
@@ -246,9 +285,9 @@ allowed_steps = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16]
 css_prefix = "radius"
 base = "8px"
 sm = "8px"
-md = "10px"
-lg = "16px"
-xl = "24px"
+md = "9px"
+lg = "14px"
+xl = "22px"
 full = "9999px"
 
 # 边框：1px border 色；只用于 Input / Select / Textarea / Separator / Table / Combobox 列表容器。
@@ -265,8 +304,8 @@ outline_offset = "2px"
 # 控件高度与固定尺寸（单位 px）。
 [size]
 css_prefix = "size"
-sidebar_min = 280
-sidebar_max = 280
+sidebar_min = 220
+sidebar_max = 220
 home_top_min = 72
 home_top_max = 200
 home_pad_min = 24
@@ -274,12 +313,12 @@ home_pad_max = 56
 agent_picker_max = 280
 account_panel_min = 240
 account_panel_max = 520
-brand_mark = 40
-brand_mark_small = 28
+brand_mark = 30
+brand_mark_small = 19
 brand_sign = 64
-home_title = 32
+home_title = 24
 composer_height = 132
-composer_radius = 28
+composer_radius = 22
 control_sm = 32
 control_md = 36          # 默认
 control_lg = 40
@@ -289,53 +328,66 @@ avatar_md = 32
 avatar_lg = 40
 kbd = 22
 toast_viewport_gutter = 32
-modal_gutter = 32
-modal_max = 512
-menu_min = 180
+modal_gutter = 24
+modal_max = 460
+menu_min = 220
 message_scroller_preview = 320
 listbox_min = 180
 listbox_max = 288
 sidebar_preview = 360
 table_row = 36
-sidebar_item = 44
-topbar = 80
+sidebar_item = 42
+topbar = 64
 native_toolbar = 56    # macOS unified title/toolbar; host-authored overlay mode only
-sidebar = 280            # §5.1
-sidebar_rail = 64
+sidebar = 220
+sidebar_rail = 48
 detail_panel = 360
 subnav = 184             # admin / settings 二级侧栏
-content_max = 960        # 配置类页面
+content_max = 1040
 content_max_table = 1200 # 表格类页面
-content_max_chat = 880   # Chat 模板内容列
+content_max_chat = 850
 icon_inline = 16         # §4.6.1 行内 / 文字旁
 icon_nav = 20            # §4.6.1 导航 / 按钮
 min_viewport_w = 1024    # §5.3 最小支持视口
 min_viewport_h = 640
 
 # 断点（§5.3；上游 24 处断点用法不构成契约，本表是唯一真源）。
+home_content_max = 800
+rail_button = 36
+rail_icon = 18
+nav_sheet = 252
+modal_radius = 17
+modal_padding = 36
+menu_radius = 10
+menu_padding = 6
+nav_font = 13
+nav_group_font = 10
+agent_row_font = 12
+aux_time_font = 11
+ordinary_control_font = 12
+assistant_row_avatar = 30
 [breakpoint]
-md = "768px"
-lg = "1024px"
+md = "701px"
+lg = "1101px"
 
 # z-index 阶。禁止其它值。
 [z_index]
 css_prefix = "z"
 base = 0
 sticky = 10
-sidebar = 304
-detail_panel = 20
-popover = 30
-menu = 30
-combobox = 30
-sheet = 40
-dialog = 50
+sidebar = 30
+detail_panel = 15
+popover = 35
+menu = 35
+combobox = 35
+sheet = 25
+dialog = 100
 tooltip = 60
-toast = 70
+toast = 100
 
-# 阴影：只有这两个 token（值在 [color.*]，因为它们随主题变化）；
-# 卡片、按钮、输入框零阴影。
+# 菜单、模态和 Composer 分别使用明确的语义阴影。
 [shadow]
-tokens = ["shadow_popover", "shadow_dialog"]
+tokens = ["shadow_popover", "shadow_dialog", "shadow_composer"]
 
 # ---------------------------------------------------------------------------
 # §4.5 动效
@@ -350,7 +402,7 @@ css_prefix = "motion"
 ease_enter = "cubic-bezier(0.2, 0, 0, 1)"
 ease_exit = "cubic-bezier(0.4, 0, 1, 1)"
 
-duration_hover = "120ms"            # hover / 底色
+duration_hover = "150ms"
 duration_overlay_enter = "180ms"    # popover / menu / sheet 进入
 duration_overlay_exit = "120ms"     # 同上退出
 duration_dialog_enter = "240ms"     # dialog 进入
