@@ -1,8 +1,8 @@
 //! Native run 与 replay event repositories（v3 §4.3）。
 
-use crate::db::InfraError;
 use crate::db::tables::{run_events, runs};
-use crate::repo::common::{columns_sql, define_table_repo};
+use crate::db::{InfraError, RowDecodeError, occupancy};
+use crate::repo::common::{columns_sql, define_table_repo, qualified_columns_sql};
 
 define_table_repo!(
     /// `runs` repository。
@@ -13,18 +13,44 @@ define_table_repo!(
 );
 
 impl RunRepo {
-    /// 读取占用 foreground slot 的 run；部分唯一索引保证最多一行。
+    /// Read the exact projected foreground owner and reject any inconsistent thread projection.
     pub async fn active_foreground_for_thread(
         &self,
         thread_id: &str,
     ) -> Result<Option<runs::Row>, InfraError> {
-        self.core
-            .find(
-                "\"thread_id\"=$1 AND \"foreground\" \
-                 AND \"status\" IN ('queued','running','reconciliation_required')",
-                &[&thread_id],
-            )
+        let sql = format!(
+            "WITH occupancy_scope AS (SELECT $1::text AS thread_id) {}
+             SELECT i.bad_occupancy,{} FROM occupancy_integrity i
+             LEFT JOIN LATERAL (
+               SELECT original.* FROM public.thread_run_occupancy slot
+               JOIN public.runs original ON original.run_id=slot.run_id AND original.thread_id=slot.thread_id
+               WHERE slot.thread_id=i.thread_id LIMIT 1
+             ) r ON true",
+            occupancy::INTEGRITY_CTE, qualified_columns_sql::<runs::Row>("r")
+        );
+        let client = self
+            .core
+            .pool()
+            .get()
             .await
+            .map_err(|error| InfraError::connect("为 RunRepo occupancy 获取连接", error))?;
+        let row = client
+            .query_one(&sql, &[&thread_id])
+            .await
+            .map_err(|error| InfraError::query("读取 foreground occupancy", error))?;
+        let bad: bool = row.try_get("bad_occupancy").map_err(|error| {
+            RowDecodeError::column("thread_run_occupancy", "bad_occupancy", error)
+        })?;
+        if bad {
+            return Err(InfraError::repository_invariant(occupancy::INCONSISTENT));
+        }
+        let id: Option<String> = row
+            .try_get("run_id")
+            .map_err(|error| RowDecodeError::column("runs", "run_id", error))?;
+        if id.is_none() {
+            return Ok(None);
+        }
+        runs::Row::try_from(&row).map(Some).map_err(Into::into)
     }
 }
 

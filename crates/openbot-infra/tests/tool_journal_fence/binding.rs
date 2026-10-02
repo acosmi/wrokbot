@@ -145,7 +145,8 @@ async fn missing_expected_rows_conflict_but_stored_binding_status_and_decode_dam
         // Only this disposable database drops checks to model persisted damage. Production SQL is unchanged.
         client
             .batch_execute(
-                "ALTER TABLE public.runs DROP CONSTRAINT runs_status_known,
+                "ALTER TABLE public.runs DISABLE TRIGGER USER;
+            ALTER TABLE public.runs DROP CONSTRAINT runs_status_known,
             DROP CONSTRAINT runs_terminal_shape,DROP CONSTRAINT runs_started_shape;
             ALTER TABLE public.tool_attempts DROP CONSTRAINT tool_attempts_status_known;
             ALTER TABLE public.tool_calls DROP CONSTRAINT tool_calls_run_id_fkey;

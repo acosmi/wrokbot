@@ -89,6 +89,7 @@
 | V6-PR-074 | Unknown原run的受权持久事实只读分页；Server/Desktop接入 | 已正常合入；原局部验证和独立复核记录保留 | [#95](https://github.com/acosmi/wrokbot/pull/95) | [8ef3188bfb](https://github.com/acosmi/wrokbot/commit/8ef3188bfb2b789d8a5f4a670fda574ab7c57154) |
 | V6-PR-075 | remember同事务业务回执、后置结果防矛盾及受权只读页 | 已正常合入；原局部验证和独立复核记录保留 | [#96](https://github.com/acosmi/wrokbot/pull/96) | [36cfd67f28](https://github.com/acosmi/wrokbot/commit/36cfd67f284103d26b54afe6547e011993003d24) |
 | V6-PR-076 | 原run终态后的tool journal写入防护及真实应用旅程 | 精确源码候选独立复核通过；集成状态以PR实际记录为准 | [#97](https://github.com/acosmi/wrokbot/pull/97) | 见PR合并记录 |
+| V6-PR-077 | 兼容foreground占用投影、写入防护与五消费者完整性核验 | 定向验证通过，待精确候选独立验收 | 待创建 | 未合并 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -372,3 +373,15 @@ remember保留原actor优先的强guard、取得锁后的独立receipt读取和�
 最终源码候选 `e6435ece9051d230775e5bc88856fa84f8b35dc7`（tree `54c67523703ad2cfc923fccb37f86fd53ccd06c9`，base `36cfd67f284103d26b54afe6547e011993003d24`）已完成独立实施与原始证据复核，7项最终记录、411个不同通过用例及28项局部验收映射核同，无阻断项。1125个产品/构建输入与已验候选逐项相同；本次后续登记只更新公开台账，不重复运行未变化的检查。最终HEAD及实际集成见[PR #97](https://github.com/acosmi/wrokbot/pull/97)。
 
 本项未运行默认server-sso、完整CI、手动Actions或完整跨宿主验收。完整Unknown处置、占用迁移、安全续作、profile/HumanLease、A0–A7及M1/M2继续开放；J25仍仅为R322源码保持，不将28项局部映射说成全量动态验收。
+
+## V6-PR-077 兼容foreground占用投影
+
+2026-10-02：从已合主线 `9f4f70d79746e43b25d4dd9a403dde3131227d85` 按R409增加native0036。迁移在显式Read Committed事务中锁定runs，以精确thread/run复合外键建立两列占用投影，完整回填并核验；重复apply只核验、不修复。AFTER run trigger维护自身占用，正常完成/失败/取消仅释放精确槽；Unknown仍持有槽。原run身份、foreground、RR状态、终态重新激活及直接投影写入有防护，删除/cascade/TRUNCATE不能绕过。保留旧partial unique index，未提供处置、解除Unknown、重试或新权限。
+
+begin、conversation、RunRepo active及074/075两个只读页共用同一静态完整性谓词，在各自SQL快照内同时检查缺失和反向错绑，不回退到历史status。已可见但坏投影拒绝；新begin先核原目标权限，再核投影，其他runtime的有效lease不能掩盖损坏；历史精确重放保持原授权语义并核投影。074/075当前owner、认证代次和完整ACL保持，conversation仍用原scope/membership合同。begin显式RC及5秒事务锁等待；维护trigger的5秒设置仅约束函数内等待，自身槽用NOWAIT，不声称覆盖进入AFTER前的run或旧索引等待。
+
+固定Rust1.98.0、offline/locked、`CARGO_INCREMENTAL=0`，最终完整输入未变的定向检查通过464个不同Rust用例，零failed/ignored：Infra lib360；实际PG上的0031/0035/0036迁移13、占用11、导入4、074/075查询14、remember16、Repo5、run runtime5、begin6、conversation1、tool application5、076 journal fence18及journey6。真实数据库覆盖全部六状态/foreground组合、旧writer锁屏障及默认RR下的RC迁移、fresh/begin实际隔离观察、回滚、重复apply坏槽、精确释放、多行失败整体回滚、锁冲突、导入RR和DO NOTHING零投影写入、五消费者双向损坏及权限优先级。新连接池/adapter下Unknown仍阻塞；此项不冒称PG进程重启。0036 fixture由新建隔离PG实际提取，生成操作不计产品测试。
+
+受影响lib/测试与Desktop最小`desktop-local-vault` lib严格Clippy、全仓fmt及diff检查通过。最终5项检查的1132个产品/构建输入逐项一致；旧SQL、旧schema fixture、依赖及hooks保持。首次PG运行的0035旧canary断言失败原记录保留，修正为旧版仅可升级、0036才是当前后完整重跑；两处begin顺序审阅问题均补真实回归。历史0031/0035测试明确钉住其原版本；既有损坏夹具仅在专属一次性数据库中显式停用guard，不放宽产品约束。4次自有PG均stop等待退出0并移除临时密码，未访问用户数据库、备份、Keychain、TTY或受保护062资源。
+
+此处为独立候选验收前记录，未提前声明PR合并。未运行完整CI、手动Actions、默认server-sso或完整跨宿主验收。R385处置/CAS/audit/精确占用转移/安全后继及旧索引和兼容guard同步改造仍须后续闭环；R258、A6、M0的A0–A7与M1/M2仍开放。
