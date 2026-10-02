@@ -4,6 +4,9 @@
 //! 哪组 current private-egress authority”，并把 refresh-token exchange 与 vendor access token
 //! 做成两个不同类型。真实 RMCP/Drive executor 只能取得完成选择与 rotation commit 后的 access token。
 
+mod refresh_operation;
+
+use refresh_operation::{OperationSendFence, RefreshSendFence};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -80,6 +83,9 @@ pub enum UserCredentialSelectionError {
     /// Another request rotated/reconnected the same credential first.
     #[error("plugin_user_credential_conflict")]
     Conflict,
+    /// An existing operation owns this credential; inspection never grants another send.
+    #[error("plugin_user_credential_rotation_pending")]
+    RotationPending,
     /// Rotation transaction may have committed; caller must not use the access token automatically.
     #[error("plugin_user_credential_commit_unknown")]
     CommitUnknown,
@@ -101,9 +107,16 @@ pub struct OAuthRefreshExchange<'a> {
     oauth_client: &'a SecretBytes,
     refresh_token: &'a SecretBytes,
     egress_allowlist: &'a CidrAllowlist,
+    send_fence: &'a dyn RefreshSendFence,
 }
 
 impl OAuthRefreshExchange<'_> {
+    /// Admit this exact token POST once, immediately before the adapter calls SafeDialer.
+    /// Discovery is not admission; a second call always fails without another token send.
+    pub async fn admit_token_send(&self) -> Result<(), OAuthTokenExchangeError> {
+        self.send_fence.admit().await
+    }
+
     /// 目标 server 的稳定 catalog id。
     #[must_use]
     pub const fn server_id(&self) -> &str {
@@ -180,16 +193,6 @@ pub enum OAuthTokenExchangeError {
     /// The current grant cannot satisfy the resource server's required scope.
     #[error("oauth_insufficient_scope")]
     InsufficientScope,
-}
-
-/// OAuth token endpoint 端口。实现归未来 G4 safe-dialer adapter，本批只固定秘密的类型边界。
-#[async_trait]
-pub trait OAuthTokenExchanger: Send + Sync {
-    /// 用个人 refresh token 换一次短寿命 access token。
-    async fn exchange(
-        &self,
-        request: OAuthRefreshExchange<'_>,
-    ) -> Result<SecretBytes, OAuthTokenExchangeError>;
 }
 
 /// OAuth token response whose optional refresh token still has to be durably rotated before the
@@ -278,6 +281,11 @@ pub struct PreparedUserOAuthCredential {
     refresh_token: SecretBytes,
     oauth_client: SecretBytes,
     user_encrypted_value: String,
+    client_encrypted_value: String,
+    auth_generation: i64,
+    server_generation: i64,
+    server_updated_at: OffsetDateTime,
+    client_updated_at: OffsetDateTime,
     egress_allowlist: CidrAllowlist,
     egress_allow_cidrs: Vec<String>,
 }
@@ -313,37 +321,10 @@ impl PreparedUserOAuthCredential {
         self.deployment_credential_id
     }
 
-    /// 通过窄 token endpoint port 交换，并产出 vendor 专用 access-token 类型。
-    ///
-    /// 即使 endpoint adapter 错把输入 refresh token 原样返回，也会在这里常数时间拒绝，
-    /// `VendorAccessToken` 不会被铸造。
-    pub async fn exchange<E: OAuthTokenExchanger + ?Sized>(
-        &self,
-        exchanger: &E,
-    ) -> Result<VendorAccessToken, OAuthTokenExchangeError> {
-        let access = exchanger
-            .exchange(OAuthRefreshExchange {
-                server_id: &self.server_id,
-                endpoint: &self.endpoint,
-                transport: &self.transport,
-                granted_scope: &self.scope,
-                oauth_client: &self.oauth_client,
-                refresh_token: &self.refresh_token,
-                egress_allowlist: &self.egress_allowlist,
-            })
-            .await?;
-        if access.is_empty() {
-            return Err(OAuthTokenExchangeError::InvalidResponse);
-        }
-        if access.ct_eq(&self.refresh_token) {
-            return Err(OAuthTokenExchangeError::RefreshTokenPassthrough);
-        }
-        Ok(VendorAccessToken(access))
-    }
-
     async fn exchange_rotating<E: RotatingOAuthTokenExchanger + ?Sized>(
         &self,
         exchanger: &E,
+        send_fence: &dyn RefreshSendFence,
     ) -> Result<RotatingOAuthGrant, OAuthTokenExchangeError> {
         let grant = exchanger
             .exchange_rotating(OAuthRefreshExchange {
@@ -354,6 +335,7 @@ impl PreparedUserOAuthCredential {
                 oauth_client: &self.oauth_client,
                 refresh_token: &self.refresh_token,
                 egress_allowlist: &self.egress_allowlist,
+                send_fence,
             })
             .await?;
         if grant.access_token.is_empty() {
@@ -362,7 +344,7 @@ impl PreparedUserOAuthCredential {
         if grant.access_token.ct_eq(&self.refresh_token)
             || grant.refresh_token.as_ref().is_some_and(|refresh| {
                 refresh.is_empty()
-                    || refresh.ct_eq(&self.refresh_token)
+                    || (exchanger.requires_refresh_rotation() && refresh.ct_eq(&self.refresh_token))
                     || refresh.ct_eq(&grant.access_token)
             })
         {
@@ -489,6 +471,9 @@ impl PluginUserCredentialStore {
         })?;
         let user_pointer = optional_column::<Uuid>(&row, "user_pointer")?
             .ok_or(UserCredentialRefusal::ConnectionRequired)?;
+        if !required_column::<bool>(&row, "actor_current")? {
+            return Err(UserCredentialRefusal::ReconnectRequired.into());
+        }
         let user_id = required_joined::<Uuid>(&row, "user_credential_id")?;
         if user_id != user_pointer {
             return Err(UserCredentialSelectionError::Corrupt {
@@ -584,6 +569,11 @@ impl PluginUserCredentialStore {
             refresh_token,
             oauth_client,
             user_encrypted_value: user_encrypted,
+            client_encrypted_value: deployment_encrypted,
+            auth_generation: required_column(&row, "auth_generation")?,
+            server_generation: required_column(&row, "server_generation")?,
+            server_updated_at: required_column(&row, "server_updated_at")?,
+            client_updated_at: required_column(&row, "client_updated_at")?,
             egress_allowlist,
             egress_allow_cidrs,
         })
@@ -602,21 +592,57 @@ impl PluginUserCredentialStore {
             .prepare_user_oauth_call(server_id, actor)
             .await
             .map_err(UserOAuthAccessError::Selection)?;
-        let mut grant = prepared
-            .exchange_rotating(exchanger)
+        let operation = self
+            .claim_refresh(&prepared)
             .await
-            .map_err(UserOAuthAccessError::Exchange)?;
-        match grant.refresh_token.take() {
-            Some(refresh) => self
-                .persist_refresh_rotation(&prepared, refresh, grant.scope.take())
-                .await
-                .map_err(UserOAuthAccessError::Selection)?,
-            None if exchanger.requires_refresh_rotation() => {
+            .map_err(UserOAuthAccessError::Selection)?;
+        let fence = OperationSendFence::new(self, &prepared, &operation);
+        let mut grant = match prepared.exchange_rotating(exchanger, &fence).await {
+            Ok(grant) if fence.admitted() => grant,
+            Ok(_) => {
                 return Err(UserOAuthAccessError::Exchange(
                     OAuthTokenExchangeError::InvalidResponse,
                 ));
             }
-            None => {}
+            Err(error) => {
+                self.fail_refresh(
+                    &operation,
+                    matches!(
+                        error,
+                        OAuthTokenExchangeError::AuthRequired
+                            | OAuthTokenExchangeError::InsufficientScope
+                    ),
+                )
+                .await;
+                return Err(UserOAuthAccessError::Exchange(error));
+            }
+        };
+        if grant.refresh_token.is_none() && exchanger.requires_refresh_rotation() {
+            self.fail_refresh(&operation, false).await;
+            return Err(UserOAuthAccessError::Exchange(
+                OAuthTokenExchangeError::InvalidResponse,
+            ));
+        }
+        // A reusable provider may echo its current refresh token; that is not a rotation.
+        if !exchanger.requires_refresh_rotation()
+            && grant
+                .refresh_token
+                .as_ref()
+                .is_some_and(|token| token.ct_eq(&prepared.refresh_token))
+        {
+            grant.refresh_token = None;
+        }
+        if let Err(error) = self
+            .finish_refresh(
+                &prepared,
+                &operation,
+                grant.refresh_token.take(),
+                grant.scope.take(),
+            )
+            .await
+        {
+            self.fail_refresh(&operation, false).await;
+            return Err(UserOAuthAccessError::Selection(error));
         }
         Ok(VendorAccessToken(grant.access_token))
     }
@@ -658,160 +684,6 @@ impl PluginUserCredentialStore {
                 })
             })
             .collect()
-    }
-
-    async fn persist_refresh_rotation(
-        &self,
-        prepared: &PreparedUserOAuthCredential,
-        refresh_token: SecretBytes,
-        scope: Option<String>,
-    ) -> Result<(), UserCredentialSelectionError> {
-        let checkpoint_key =
-            self.rotation_checkpoint_key
-                .as_ref()
-                .ok_or(UserCredentialSelectionError::Corrupt {
-                    field: "audit_checkpoint_key",
-                })?;
-        let scope = scope.unwrap_or_else(|| prepared.scope.clone());
-        if scope.len() > 16 * 1024 || scope.as_bytes().contains(&0) {
-            return Err(UserCredentialSelectionError::Corrupt { field: "scope" });
-        }
-        let encrypted = self
-            .vault
-            .seal(
-                &prepared.user_credential_id,
-                SecretKind::McpUserToken,
-                SecretPrincipal::Actor(prepared.actor.clone()),
-                SecretPrincipal::Service(ServiceId::new(&prepared.server_id)),
-                &refresh_token,
-            )
-            .map_err(|_| UserCredentialSelectionError::Corrupt {
-                field: "rotated_refresh_token",
-            })?;
-        let mut client = self.pool.get().await.map_err(|error| {
-            tracing::error!(error = %error, "refresh rotation 获取 PostgreSQL 连接失败");
-            UserCredentialSelectionError::Unavailable
-        })?;
-        let transaction = client.transaction().await.map_err(|error| {
-            tracing::error!(error = %error, "refresh rotation 开始事务失败");
-            UserCredentialSelectionError::Unavailable
-        })?;
-        let now: OffsetDateTime = transaction
-            .query_one("SELECT clock_timestamp()", &[])
-            .await
-            .map_err(|error| {
-                tracing::error!(error = %error, "refresh rotation 读取数据库时钟失败");
-                UserCredentialSelectionError::Unavailable
-            })?
-            .try_get(0)
-            .map_err(|_| UserCredentialSelectionError::Corrupt { field: "clock" })?;
-        let current_server = transaction
-            .query_opt(
-                "SELECT s.id FROM public.mcp_servers s
-                   JOIN public.credentials d ON d.id=s.credential_id
-                  WHERE s.id=$1 AND s.url=$2 AND coalesce(s.transport,'mcp')=$3
-                    AND coalesce(s.egress_allow_cidrs,ARRAY[]::text[])=$4
-                    AND s.credential_id=$5 AND d.kind='mcp_oauth_client'
-                    AND d.provider=s.id AND d.revoked_at IS NULL
-                  FOR SHARE OF s,d",
-                &[
-                    &prepared.server_id,
-                    &prepared.endpoint,
-                    &prepared.transport,
-                    &prepared.egress_allow_cidrs,
-                    &prepared.deployment_credential_id,
-                ],
-            )
-            .await
-            .map_err(|error| {
-                tracing::error!(error = %error, "refresh rotation 复核server binding失败");
-                UserCredentialSelectionError::Unavailable
-            })?;
-        if current_server.is_none() {
-            return Err(UserCredentialSelectionError::Conflict);
-        }
-        let updated = transaction
-            .execute(
-                "UPDATE public.credentials SET encrypted_value=$3,
-                   metadata=coalesce(metadata,'{}'::jsonb)||
-                            jsonb_build_object('server',$4::text,'scope',$5::text,
-                                               'rotation','oauth_refresh'),updated_at=$6
-                 WHERE id=$1 AND encrypted_value=$2 AND revoked_at IS NULL",
-                &[
-                    &prepared.user_credential_id,
-                    &prepared.user_encrypted_value,
-                    &encrypted,
-                    &prepared.server_id,
-                    &scope,
-                    &now,
-                ],
-            )
-            .await
-            .map_err(|error| {
-                tracing::error!(error = %error, "refresh rotation credential CAS 失败");
-                UserCredentialSelectionError::Unavailable
-            })?;
-        let connected = transaction
-            .execute(
-                "UPDATE public.mcp_user_credentials SET scope=$4,updated_at=$5
-                  WHERE server_id=$1 AND user_id=$2 AND credential_id=$3",
-                &[
-                    &prepared.server_id,
-                    &prepared.actor.as_str(),
-                    &prepared.user_credential_id,
-                    &scope,
-                    &now,
-                ],
-            )
-            .await
-            .map_err(|error| {
-                tracing::error!(error = %error, "refresh rotation connection CAS 失败");
-                UserCredentialSelectionError::Unavailable
-            })?;
-        if updated != 1 || connected != 1 {
-            return Err(UserCredentialSelectionError::Conflict);
-        }
-        let (id, created_at) = next_event_coordinates(&transaction)
-            .await
-            .map_err(|_| UserCredentialSelectionError::Unavailable)?;
-        let event = AuditEvent {
-            id,
-            actor: Some(prepared.actor.clone()),
-            event_type: AuditEventType::parse("credential.rotated").ok_or(
-                UserCredentialSelectionError::Corrupt {
-                    field: "audit_event_type",
-                },
-            )?,
-            target_kind: AuditLabel::new("credential"),
-            target_id: Some(
-                AuditIdentifier::new(prepared.user_credential_id.to_string()).map_err(|_| {
-                    UserCredentialSelectionError::Corrupt {
-                        field: "credential_id",
-                    }
-                })?,
-            ),
-            payload: AuditPayload::from_facts([
-                AuditFact::CredentialOwner(
-                    AuditIdentifier::new(prepared.actor.as_str())
-                        .map_err(|_| UserCredentialSelectionError::Corrupt { field: "actor_id" })?,
-                ),
-                AuditFact::RevocationReason(AuditLabel::new("oauth_refresh_rotation")),
-            ])
-            .map_err(|_| UserCredentialSelectionError::Corrupt {
-                field: "audit_payload",
-            })?,
-            created_at,
-        };
-        append_event_in_transaction(&transaction, &event, checkpoint_key.expose())
-            .await
-            .map_err(|error| {
-                tracing::error!(error = %error, "refresh rotation audit 写入失败");
-                UserCredentialSelectionError::Unavailable
-            })?;
-        transaction.commit().await.map_err(|error| {
-            tracing::error!(error = %error, "refresh rotation commit 结果未知");
-            UserCredentialSelectionError::CommitUnknown
-        })
     }
 }
 
@@ -995,6 +867,11 @@ impl OwnedCredentialRetirer for PostgresOwnedCredentialRetirer {
 }
 
 const SELECTION_SQL: &str = "SELECT s.url AS server_endpoint, \
+            coalesce(owner.auth_generation,0) AS auth_generation, \
+            (owner.id IS NOT NULL AND EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=owner.id) \
+             AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(owner.email))) AS actor_current, \
+            coalesce(s.credential_generation,0) AS server_generation, \
+            s.updated_at AS server_updated_at,d.updated_at AS client_updated_at, \
             coalesce(s.transport,'mcp') AS server_transport, \
             coalesce(s.egress_allow_cidrs,ARRAY[]::text[]) AS egress_allow_cidrs, \
             uc.credential_id AS user_pointer,uc.scope AS granted_scope, \
@@ -1009,6 +886,7 @@ const SELECTION_SQL: &str = "SELECT s.url AS server_endpoint, \
      LEFT JOIN public.mcp_user_credentials uc ON uc.server_id=s.id AND uc.user_id=$2 \
      LEFT JOIN public.credentials u ON u.id=uc.credential_id \
      LEFT JOIN public.credentials d ON d.id=s.credential_id \
+     LEFT JOIN public.users owner ON owner.id=$2 \
      WHERE s.id=$1";
 
 fn optional_column<T: FromSqlOwned>(

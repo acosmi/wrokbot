@@ -161,10 +161,10 @@ async fn post_0033_preserves_0032_applies_once_and_fresh_matches_owned_fixture()
         fresh::apply(&mut client)
             .await
             .map_err(|error| error.to_string())?;
-        assert_eq!(
-            schema_facts::fetch(&client).await.unwrap(),
-            read_post_0033()
-        );
+        let current = schema_facts::fetch(&client).await.unwrap();
+        for old in &read_post_0033().tables {
+            assert_eq!(current.table(&old.name), Some(old), "{}", old.name);
+        }
         drop(client);
         pool.close();
         Ok(())

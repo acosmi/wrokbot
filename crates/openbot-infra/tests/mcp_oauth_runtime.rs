@@ -640,6 +640,41 @@ async fn actor_oauth_rotates_before_use_and_retries_one_401_exactly_once() {
                 )
                 .await
                 .map_err(|error| error.to_string())?;
+            // R395: changing configuration cannot reclaim a durable refresh operation. Even a
+            // pre-admission discovery failure remains a tombstone across configuration rollback.
+            if !matches!(
+                broker.bearer_for(SERVER, &ActorId::new(ACTOR)).await,
+                Err(McpCredentialError::CommitUnknown)
+            ) || spawned.state.token_calls.load(Ordering::SeqCst) != 0
+            {
+                return Err("configuration rollback reopened an owned refresh operation".to_owned());
+            }
+            // Explicit fixture reconnect allocates a new credential identity just like the
+            // callback writer. The old pending row is retained, never deleted to make tests pass.
+            let previous_credential_id = user_credential_id;
+            let user_credential_id = uuid::Uuid::now_v7();
+            let sealed_refresh = vault.seal(
+                &user_credential_id,
+                SecretKind::McpUserToken,
+                SecretPrincipal::Actor(ActorId::new(ACTOR)),
+                SecretPrincipal::Service(ServiceId::new(SERVER)),
+                &SecretBytes::new(b"refresh-0".to_vec()),
+            ).map_err(|error| error.to_string())?;
+            let mut pg = pool.get().await.map_err(|error| error.to_string())?;
+            let tx = pg.transaction().await.map_err(|error| error.to_string())?;
+            tx.execute(
+                "INSERT INTO public.credentials(id,kind,provider,encrypted_value,key_id,metadata)
+                   VALUES($1,'mcp_user_token',$2,$3,$4,'{}')",
+                &[&user_credential_id, &SERVER, &sealed_refresh, &ACTOR],
+            ).await.map_err(|error| error.to_string())?;
+            tx.execute("UPDATE public.mcp_user_credentials SET credential_id=$3,updated_at=clock_timestamp() WHERE server_id=$1 AND user_id=$2", &[&SERVER, &ACTOR, &user_credential_id]).await.map_err(|error| error.to_string())?;
+            tx.execute("UPDATE public.credentials SET revoked_at=clock_timestamp() WHERE id=$1", &[&previous_credential_id]).await.map_err(|error| error.to_string())?;
+            let old = tx.query_one("SELECT state,admitted_at IS NULL FROM public.oauth_refresh_operations WHERE credential_id=$1", &[&previous_credential_id]).await.map_err(|error| error.to_string())?;
+            if old.get::<_,String>(0) != "pending" || !old.get::<_,bool>(1) {
+                return Err("pre-admission tombstone changed during reconnect".to_owned());
+            }
+            tx.commit().await.map_err(|error| error.to_string())?;
+            drop(pg);
             if !matches!(
                 broker.bearer_for(SERVER, &ActorId::new(OTHER)).await,
                 Err(McpCredentialError::AuthRequired)

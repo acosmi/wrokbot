@@ -1,5 +1,8 @@
 //! Axum + production session + ApplicationService + PostgreSQL remote callback security slice.
 
+#[path = "support/transport_fixture.rs"]
+mod transport_fixture;
+
 mod harness {
     include!("../../../test-support/postgres_harness.rs");
 }
@@ -47,7 +50,7 @@ use openbot_infra::provider::context::PostgresAgentContextSource;
 use openbot_infra::repo::ChannelRepo;
 use openbot_infra::repo::tools::PostgresToolJournal;
 use openbot_infra::vault::CredentialRecordVault;
-use openbot_server::{PostgresSessionAuthResolver, SensitiveWriteSecurity, ServerBuilder, router};
+use openbot_server::{PostgresSessionAuthResolver, SensitiveWriteSecurity, ServerBuilder};
 use time::{Duration, OffsetDateTime};
 use tower::ServiceExt as _;
 
@@ -361,8 +364,9 @@ async fn production_http_issues_hash_only_token_and_refuses_ungranted_callback()
                 )
                 .map_err(|error| error.to_string())?,
             );
-            let app = router(
+            let app = transport_fixture::loopback_router(
                 ServerBuilder::new(application, Arc::new(resolver))
+                    .with_transport_policy(transport_fixture::loopback_policy())
                     .with_sensitive_write_security(SensitiveWriteSecurity::new(
                         default_session_lifetime(),
                         TrustedOrigins::from_configured([ORIGIN])
@@ -773,8 +777,9 @@ async fn production_callback_http_reaches_governed_real_rmcp_with_durable_sequen
                 Arc::new(PostgresAgentToolSequence::new(pool.clone())),
             ));
             let callback_tools: Arc<dyn RemoteAgentToolInvoker> = governed;
-            let app = router(
+            let app = transport_fixture::loopback_router(
                 ServerBuilder::new(application, Arc::new(resolver))
+                    .with_transport_policy(transport_fixture::loopback_policy())
                     .with_sensitive_write_security(SensitiveWriteSecurity::new(
                         default_session_lifetime(),
                         TrustedOrigins::from_configured([ORIGIN])

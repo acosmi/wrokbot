@@ -2,6 +2,9 @@
 
 #![cfg(target_os = "macos")]
 
+#[path = "support/transport_fixture.rs"]
+mod transport_fixture;
+
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -157,6 +160,7 @@ async fn real_engine_frame_crosses_ticketed_server_binary_websocket() {
         other => panic!("unexpected screen reply: {other:?}"),
     };
     let router = ServerBuilder::new(application, Arc::new(ExactAuth(auth)))
+        .with_transport_policy(transport_fixture::loopback_policy())
         .with_sensitive_write_security(SensitiveWriteSecurity::new(
             default_session_lifetime(),
             TrustedOrigins::from_configured([ORIGIN]).expect("trusted origin"),
@@ -169,11 +173,14 @@ async fn real_engine_frame_crosses_ticketed_server_binary_websocket() {
     let address = listener.local_addr().expect("server address");
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async move {
-                let _ = stopped.await;
-            })
-            .await
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = stopped.await;
+        })
+        .await
     });
     let mut request = format!("ws://{address}/api/screen")
         .into_client_request()

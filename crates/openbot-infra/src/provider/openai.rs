@@ -216,6 +216,11 @@ impl ProviderAdapter for OpenAiProvider {
         request: ProviderRequest,
     ) -> Result<Box<dyn ProviderSession>, ProviderPortError> {
         validate_request(&request)?;
+        if openbot_domain::content_governance::contains_known_secret(&self.config.model) {
+            return Err(ProviderPortError::InvalidRequest {
+                field: "content_secret",
+            });
+        }
         let body = build_request_body(self.config.protocol, &self.config.model, &request)?;
         let api_key = match self.credentials.resolve().await {
             Ok(value) => value,

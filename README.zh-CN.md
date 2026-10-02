@@ -12,7 +12,7 @@ Wrok Bot 是使用 Rust 构建的 AI 工作台，包含桌面宿主、服务端�
 
 ## 当前进度
 
-状态更新：2026-09-07。以下依据截至该日的开发与验收记录；分项测试通过不代表安装包或完整产品已经验收。
+状态更新：2026-10-02。以下依据当前源码与本地验证；分项测试通过不代表安装包或完整产品已经验收。
 
 | 模块 | 当前情况 | 首版仍需完成 |
 | --- | --- | --- |
@@ -23,11 +23,9 @@ Wrok Bot 是使用 Rust 构建的 AI 工作台，包含桌面宿主、服务端�
 | 浏览器与电脑操作 | Engine、画面传输、控制权限与输入已有分项实现 | 产品内真实操作、人工接管、停止和故障恢复的完整验证 |
 | 移动客户端 | 共享页面源码和本地 Web 预览可用，已有 iOS/Android 资源编译记录 | 真实账户、设备绑定、原生安装及各平台真机验收；不计入 macOS 首版完成范围 |
 
-## 预计完成情况
+## 发布条件
 
-**当前交付目标：macOS 首版，预计 2–4 周完成。**
-
-以 2026-09-07 为起点，目标窗口为 **2026-09-21 至 2026-10-05**。这是开发目标估算；最终交付时间取决于剩余功能、签名安装包和真实使用流程的验收结果，有变化会更新本页。
+**当前交付目标：macOS 首版，发布验收尚未完成。** 先前九月的估算不构成已经验证的交付承诺；新的日期须以剩余产品流程和签名安装包的验收证据为依据。
 
 首版目标是可安装的 macOS 产品，完成工作台与 AI 工具、浏览器操作与接管、原生电脑操作与停止三类核心使用流程，并验证模型接入、凭据保护、数据恢复和安装启动。
 
@@ -43,14 +41,30 @@ Wrok Bot 是使用 Rust 构建的 AI 工作台，包含桌面宿主、服务端�
 
 Rust 工具链由 `rust-toolchain.toml` 固定，Rust 依赖由 `Cargo.lock` 锁定。原生库要求因平台而异；CI 工作流记录 Linux 构建依赖，`.cargo/config.toml` 配置 macOS 库搜索路径。
 
+## 服务端传输
+
+服务端监听 `127.0.0.1`，本机单用户运行使用 `--local`。远程部署必须使用同机 TLS 反向代理，配置 HTTPS `WROK_BOT_PUBLIC_URL`，以及包含 64 位小写十六进制字符的 `WROK_BOT_TLS_PROXY_SECRET`；原 `OPENBOT_*` 变量名仍兼容。
+
+代理须丢弃客户端传入的 `x-wrok-bot-proxy-secret`、`x-forwarded-proto`、`x-forwarded-host`，分别重新设置唯一的共享秘密、`https` 和公共 URL 的精确 authority（含显式配置的端口），且只转发实际通过 HTTPS 到达的请求。秘密仅保存在代理与后端，不得放进浏览器代码或客户端请求。仅声明公共 URL 不构成请求授权。未经核验的请求只能读取健康诊断，readiness 返回 503，登录与业务路由不可用。服务端本身不提供直接 TLS listener。
+
+### MCP 凭据撤销与恢复
+
+断开 MCP 连接先让本地凭据失效，厂商侧撤销可能仍待完成。须保留撤销记录，服务才能按原服务器及凭据上下文继续补偿。出现 `operator_required` 时，应在厂商管理界面撤销对应凭据并核实结果，再重新连接。不得删除撤销记录、重建同名服务器替换原身份，或恢复旧凭据来消除报错。
+
+处于 pending 或 unknown 的 OAuth 刷新操作同样会阻止旧凭据复用，不会因超时或配置回退自动清除。须显式重连取得新凭据，旧操作仍保留供查证；若厂商可能继续接受旧凭据，也应在厂商侧撤销。本地断开或重连成功，不代表厂商撤销已经完成。
+
 ## 本地检查
 
 ```sh
 cargo fmt --all -- --check
 cargo test -p openbot-testkit --features xtask --bin xtask
+cargo xtask parity-check --fixtures-only
+cargo xtask recount --fixtures-only
 cargo xtask i18n-check
 cargo xtask design-lint
 ```
+
+两条 `--fixtures-only` 命令只检查公开 fixture 台账及其六项登记计数。复算由固定的 Rust YAML 解析器执行精确已知查询，不需要 Python 或 PyYAML；结果不代表迁移 parity、overlay 或产品准入通过。省略该参数时必须提供九份迁移账本、overlay 和 fixture 台账，缺一即失败；完整复算还可通过 `--require-upstream` 要求固定上游检出。
 
 提交前安装本地发布检查，需要 Python 3 和 Gitleaks：
 

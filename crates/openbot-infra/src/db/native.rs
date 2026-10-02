@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0033_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0034_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -216,6 +216,12 @@ pub const NATIVE_0033_VERSION: i32 = 33;
 pub const NATIVE_0033_NAME: &str = "native_0033_sdk_gateway_authority";
 /// 0033 expand-only SQL source.
 pub const NATIVE_0033_SQL: &str = include_str!("../../sql/native_0033.sql");
+/// Durable MCP/Drive refresh-operation schema.
+pub const NATIVE_0034_VERSION: i32 = 34;
+/// Stable name; old migration bytes remain immutable.
+pub const NATIVE_0034_NAME: &str = "native_0034_oauth_refresh_operations";
+/// Expand-only operation records.
+pub const NATIVE_0034_SQL: &str = include_str!("../../sql/native_0034.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -336,6 +342,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0033_VERSION,
         name: NATIVE_0033_NAME,
         sql: NATIVE_0033_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0034_VERSION,
+        name: NATIVE_0034_NAME,
+        sql: NATIVE_0034_SQL,
     },
 ];
 
@@ -509,6 +520,12 @@ pub fn native_0031_checksum() -> String {
 #[must_use]
 pub fn native_0032_checksum() -> String {
     Sha256Digest::of(NATIVE_0032_SQL.as_bytes()).to_hex()
+}
+
+/// SHA-256 of the exact native 0034 SQL bytes.
+#[must_use]
+pub fn native_0034_checksum() -> String {
+    Sha256Digest::of(NATIVE_0034_SQL.as_bytes()).to_hex()
 }
 
 /// SHA-256 of the exact native 0033 SQL bytes.
@@ -884,6 +901,7 @@ mod tests {
             .chain(statement_lines(NATIVE_0031_SQL))
             .chain(statement_lines(NATIVE_0032_SQL))
             .chain(statement_lines(NATIVE_0033_SQL))
+            .chain(statement_lines(NATIVE_0034_SQL))
         {
             let uppercase = line.to_ascii_uppercase();
             assert!(
@@ -1010,6 +1028,7 @@ mod tests {
                 .chain(statement_lines(NATIVE_0031_SQL))
                 .chain(statement_lines(NATIVE_0032_SQL))
                 .chain(statement_lines(NATIVE_0033_SQL))
+                .chain(statement_lines(NATIVE_0034_SQL))
                 .any(|line| line.contains("IF NOT EXISTS"))
         );
         assert!(LEDGER_BOOTSTRAP_SQL.contains("IF NOT EXISTS"));
@@ -1087,7 +1106,7 @@ mod tests {
         let sdk_gateway_authority = native_0033_checksum();
         assert_eq!(sdk_gateway_authority.len(), 64);
         assert_ne!(desktop_vault_canary, sdk_gateway_authority);
-        assert_eq!(MIGRATIONS.len(), 21);
-        assert_eq!(MIGRATIONS[20].version, NATIVE_LATEST_VERSION);
+        assert_eq!(MIGRATIONS.len(), 22);
+        assert_eq!(MIGRATIONS[21].version, NATIVE_LATEST_VERSION);
     }
 }

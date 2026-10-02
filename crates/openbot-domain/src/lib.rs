@@ -56,6 +56,7 @@ pub mod audit;
 pub mod backup;
 pub mod channel;
 pub mod components;
+pub mod content_governance;
 pub mod identity;
 pub mod memory;
 pub mod policy;

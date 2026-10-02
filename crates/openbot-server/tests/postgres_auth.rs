@@ -1,5 +1,8 @@
 //! W-4 production PostgreSQL AuthResolver 的 PostgreSQL 17 真库矩阵。
 
+#[path = "support/transport_fixture.rs"]
+mod transport_fixture;
+
 mod harness {
     include!("../../../test-support/postgres_harness.rs");
 }
@@ -17,7 +20,7 @@ use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::repo::ChannelRepo;
 use openbot_infra::repo::people_admin::PostgresPeopleAdministration;
 use openbot_server::{
-    AuthResolver, PostgresSessionAuthResolver, SensitiveWriteSecurity, ServerBuilder, router,
+    AuthResolver, PostgresSessionAuthResolver, SensitiveWriteSecurity, ServerBuilder,
 };
 use time::{Duration, OffsetDateTime};
 use tower::ServiceExt as _;
@@ -331,8 +334,9 @@ async fn real_cookie_to_http_application_people_and_audit_is_one_vertical_slice(
                 ])
                 .unwrap(),
             );
-            let app = router(
+            let app = transport_fixture::loopback_router(
                 ServerBuilder::new(application, std::sync::Arc::new(auth))
+                    .with_transport_policy(transport_fixture::loopback_policy())
                     .with_sensitive_write_security(security)
                     .build(),
             );
@@ -485,8 +489,9 @@ async fn sign_out_deletes_only_the_resolved_session_and_same_cookie_immediately_
 
             let application: std::sync::Arc<dyn ApplicationService> =
                 std::sync::Arc::new(OpenBotApplication::new(ChannelRepo::new(pool.clone())));
-            let app = router(
+            let app = transport_fixture::loopback_router(
                 ServerBuilder::new(application, std::sync::Arc::new(resolver(&pool)))
+                    .with_transport_policy(transport_fixture::loopback_policy())
                     .with_sensitive_write_security(SensitiveWriteSecurity::new(
                         default_session_lifetime(),
                         openbot_domain::identity::session::TrustedOrigins::from_configured([

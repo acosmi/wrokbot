@@ -47,12 +47,12 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let report = check(root)?;
     if report.present {
         println!(
-            "electron-shim-check: ok (files={}; non-empty LOC={}/{LOC_LIMIT}; package.json outside grok-bot=1; protocol hash=match)",
+            "electron-shim-check: ok (scope=product sources; files={}; non-empty LOC={}/{LOC_LIMIT}; product package.json=1; protocol hash=match)",
             report.files, report.nonempty_loc
         );
     } else {
         println!(
-            "electron-shim-check: ok (P1 shim absent; allowlist rules active; package.json outside grok-bot=0; non-empty LOC=0/{LOC_LIMIT})"
+            "electron-shim-check: ok (scope=product sources; P1 shim absent; allowlist rules active; product package.json=0; non-empty LOC=0/{LOC_LIMIT})"
         );
     }
     Ok(())
@@ -137,11 +137,15 @@ fn workspace_package_manifests(root: &Path) -> Result<BTreeSet<String>> {
             if entry.depth() == 0 {
                 return true;
             }
+            // These are repository-root local/reference/build surfaces, never product inputs.
+            // Do not ignore an arbitrary nested Git tree or a same-named directory in crates/:
+            // a new product package must still be rejected, including an untracked one.
             let name = entry.file_name().to_string_lossy();
-            !matches!(
-                name.as_ref(),
-                ".git" | "grok-bot" | "target" | "target-xtask"
-            )
+            !(entry.depth() == 1
+                && matches!(
+                    name.as_ref(),
+                    ".git" | "grok-bot" | ".local-private" | "target" | "target-xtask"
+                ))
         });
     for entry in walker {
         let entry = entry.context("walk repository package manifests")?;
@@ -365,7 +369,55 @@ fn relative(root: &Path, path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_cdp_methods, check_electron_bindings, check_javascript};
+    use super::{
+        check_cdp_methods, check_electron_bindings, check_javascript, workspace_package_manifests,
+    };
+    use crate::tests::TempRepo;
+
+    #[test]
+    fn local_reference_and_build_worktrees_are_outside_product_scan() {
+        let repo = TempRepo::new("shim-scan-boundaries");
+        for surface in [".local-private", "grok-bot", "target", "target-xtask"] {
+            repo.write(&format!("{surface}/worktree/.git"), "gitdir: nowhere");
+            repo.write(&format!("{surface}/worktree/package.json"), "{}");
+            repo.write(&format!("{surface}/worktree/pnpm-lock.yaml"), "ignored");
+        }
+        let shim = "crates/openbot-desktop/engine-shim/package.json";
+        repo.write(shim, "{}");
+        assert_eq!(
+            workspace_package_manifests(&repo.root).unwrap(),
+            [shim.to_owned()].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn extra_product_packages_and_locks_remain_visible_even_in_nested_git_trees() {
+        for directory in [
+            "crates/extra",
+            "crates/.local-private",
+            "apps/worktree",
+            "new-product",
+        ] {
+            let repo = TempRepo::new("shim-product-scan");
+            repo.write(&format!("{directory}/.git"), "gitdir: elsewhere");
+            let package = format!("{directory}/package.json");
+            repo.write(&package, "{}");
+            assert!(
+                workspace_package_manifests(&repo.root)
+                    .unwrap()
+                    .contains(&package)
+            );
+            assert!(
+                super::check(&repo.root).is_err(),
+                "extra manifest cannot pass the shim gate"
+            );
+            repo.write(&format!("{directory}/package-lock.json"), "{}");
+            assert!(
+                workspace_package_manifests(&repo.root).is_err(),
+                "{directory}"
+            );
+        }
+    }
 
     #[test]
     fn electron_and_node_import_domains_are_closed() {

@@ -23,7 +23,7 @@ env:
 
 jobs:
   gates:
-    name: gates（fmt / clippy / test / native guards / parity）
+    name: gates（fmt / clippy / test / native guards / fixtures only）
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -72,8 +72,17 @@ jobs:
       - name: G3/G8 Intelligence importer crypto / runtime-exclusion guard
         run: bash tools/check-intelligence-import-dependencies.sh
 
-      - name: xtask parity-check
-        run: cargo xtask parity-check
+      - name: Shared Application constructor ownership and guard mutation tests
+        run: |
+          python3 -B tools/test_application_assembly_guard.py
+          bash tools/check-application-assembly.sh
+
+      # The public checkout contains fixtures, not the complete migration acceptance inputs.
+      # These checks never certify full parity, overlay closure or product/release admission.
+      - name: xtask fixture structure and Rust recount (fixtures only)
+        run: |
+          cargo xtask parity-check --fixtures-only
+          cargo xtask recount --fixtures-only
 
   supply-chain:
     name: supply-chain（cargo deny / cargo audit / cargo vet）

@@ -164,7 +164,7 @@ impl fmt::Display for AuditEventType {
     }
 }
 
-/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt 19 项。
+/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt 20 项。
 ///
 /// 顺序也照抄上游，方便逐行对拍。
 pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
@@ -198,6 +198,7 @@ pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
     AuditEventType("mcp.callback_refused"),
     AuditEventType("mcp.oauth_client_registered"),
     AuditEventType("mcp.account_connected"),
+    AuditEventType("mcp.token_refreshed"),
     AuditEventType("mcp.account_disconnected"),
     AuditEventType("mcp.tool_suspended_missing"),
     AuditEventType("computer.action_allowed"),
@@ -304,10 +305,10 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn catalog_is_upstream_fifty_seven_plus_nineteen_new_and_has_no_duplicates() {
-        assert_eq!(AUDIT_EVENT_TYPES.len(), 76);
+    fn catalog_is_upstream_fifty_seven_plus_twenty_new_and_has_no_duplicates() {
+        assert_eq!(AUDIT_EVENT_TYPES.len(), 77);
         let unique: BTreeSet<&str> = AUDIT_EVENT_TYPES.iter().map(|t| t.0).collect();
-        assert_eq!(unique.len(), 76, "目录里有重复的事件类型");
+        assert_eq!(unique.len(), 77, "目录里有重复的事件类型");
     }
 
     #[test]

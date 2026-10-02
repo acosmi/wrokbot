@@ -159,6 +159,11 @@ impl ProviderAdapter for AnthropicProvider {
         request: ProviderRequest,
     ) -> Result<Box<dyn ProviderSession>, ProviderPortError> {
         validate_request(&request)?;
+        if openbot_domain::content_governance::contains_known_secret(&self.config.model) {
+            return Err(ProviderPortError::InvalidRequest {
+                field: "content_secret",
+            });
+        }
         let body = build_request_body(&self.config.model, &request)?;
         let key = core::str::from_utf8(self.config.api_key.0.expose())
             .map_err(|_| ProviderPortError::InvalidRequest { field: "api_key" })?;

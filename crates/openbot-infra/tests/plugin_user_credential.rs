@@ -15,7 +15,7 @@ use openbot_domain::vault::{
 use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::repo::people_admin::PostgresPeopleAdministration;
 use openbot_infra::store::plugin_user_credential::{
-    OAuthRefreshExchange, OAuthTokenExchangeError, OAuthTokenExchanger, PluginUserCredentialStore,
+    OAuthRefreshExchange, OAuthTokenExchangeError, PluginUserCredentialStore,
     PostgresOwnedCredentialRetirer, RotatingOAuthGrant, RotatingOAuthTokenExchanger,
     UserCredentialRefusal, UserCredentialSelectionError, UserOAuthAccessError,
 };
@@ -238,17 +238,24 @@ impl RecordingExchanger {
 }
 
 #[async_trait]
-impl OAuthTokenExchanger for RecordingExchanger {
-    async fn exchange(
+impl RotatingOAuthTokenExchanger for RecordingExchanger {
+    fn requires_refresh_rotation(&self) -> bool {
+        false
+    }
+
+    async fn exchange_rotating(
         &self,
         request: OAuthRefreshExchange<'_>,
-    ) -> Result<SecretBytes, OAuthTokenExchangeError> {
+    ) -> Result<RotatingOAuthGrant, OAuthTokenExchangeError> {
+        request.admit_token_send().await?;
         self.calls.lock().unwrap().push(ExchangeObservation {
             refresh: digest(request.expose_refresh_token()),
             client: digest(request.expose_oauth_client()),
         });
-        Ok(SecretBytes::new(
-            format!("access-token-for-{}", request.server_id()).into_bytes(),
+        Ok(RotatingOAuthGrant::new(
+            SecretBytes::new(format!("access-token-for-{}", request.server_id()).into_bytes()),
+            None,
+            None,
         ))
     }
 }
@@ -256,24 +263,42 @@ impl OAuthTokenExchanger for RecordingExchanger {
 struct EchoExchanger;
 
 #[async_trait]
-impl OAuthTokenExchanger for EchoExchanger {
-    async fn exchange(
+impl RotatingOAuthTokenExchanger for EchoExchanger {
+    fn requires_refresh_rotation(&self) -> bool {
+        false
+    }
+
+    async fn exchange_rotating(
         &self,
         request: OAuthRefreshExchange<'_>,
-    ) -> Result<SecretBytes, OAuthTokenExchangeError> {
-        Ok(SecretBytes::new(request.expose_refresh_token().to_vec()))
+    ) -> Result<RotatingOAuthGrant, OAuthTokenExchangeError> {
+        request.admit_token_send().await?;
+        Ok(RotatingOAuthGrant::new(
+            SecretBytes::new(request.expose_refresh_token().to_vec()),
+            None,
+            None,
+        ))
     }
 }
 
 struct EmptyExchanger;
 
 #[async_trait]
-impl OAuthTokenExchanger for EmptyExchanger {
-    async fn exchange(
+impl RotatingOAuthTokenExchanger for EmptyExchanger {
+    fn requires_refresh_rotation(&self) -> bool {
+        false
+    }
+
+    async fn exchange_rotating(
         &self,
-        _request: OAuthRefreshExchange<'_>,
-    ) -> Result<SecretBytes, OAuthTokenExchangeError> {
-        Ok(SecretBytes::new(Vec::new()))
+        request: OAuthRefreshExchange<'_>,
+    ) -> Result<RotatingOAuthGrant, OAuthTokenExchangeError> {
+        request.admit_token_send().await?;
+        Ok(RotatingOAuthGrant::new(
+            SecretBytes::new(Vec::new()),
+            None,
+            None,
+        ))
     }
 }
 
@@ -287,6 +312,7 @@ impl RotatingOAuthTokenExchanger for EgressDriftExchanger {
         &self,
         request: OAuthRefreshExchange<'_>,
     ) -> Result<RotatingOAuthGrant, OAuthTokenExchangeError> {
+        request.admit_token_send().await?;
         if request.server_id() != "private-oauth"
             || request.transport() != "mcp"
             || request.egress_allowlist().len() != 1
@@ -321,14 +347,10 @@ async fn successful_exchange(
     server: &str,
     actor: &str,
 ) -> Result<([u8; 32], Vec<ExchangeObservation>), String> {
-    let prepared = fixture
-        .store
-        .prepare_user_oauth_call(server, &ActorId::new(actor))
-        .await
-        .map_err(|error| error.to_string())?;
     let exchanger = RecordingExchanger::default();
-    let access = prepared
-        .exchange(&exchanger)
+    let access = fixture
+        .store
+        .fresh_user_access_token(server, &ActorId::new(actor), &exchanger)
         .await
         .map_err(|error| error.to_string())?;
     Ok((digest(access.expose_for_vendor()), exchanger.calls()))
@@ -490,16 +512,26 @@ async fn never_sends_the_refresh_token_itself_to_the_vendor() {
             if debug.contains("refresh-token") || debug.contains("client-secret") {
                 return Err("prepared credential Debug 泄露秘密".to_owned());
             }
-            if prepared.exchange(&EchoExchanger).await.unwrap_err()
-                != OAuthTokenExchangeError::RefreshTokenPassthrough
+            if fixture
+                .store
+                .fresh_user_access_token(DRIVE, &ActorId::new(ASKER), &EchoExchanger)
+                .await
+                .unwrap_err()
+                != UserOAuthAccessError::Exchange(OAuthTokenExchangeError::RefreshTokenPassthrough)
             {
                 return Err("refresh token echo 没有在 VendorAccessToken 铸造前被拒绝".to_owned());
             }
-            if prepared.exchange(&EmptyExchanger).await.unwrap_err()
-                != OAuthTokenExchangeError::InvalidResponse
+            connect(&fixture, DRIVE, ASKER, ASKER_REFRESH).await?;
+            if fixture
+                .store
+                .fresh_user_access_token(DRIVE, &ActorId::new(ASKER), &EmptyExchanger)
+                .await
+                .unwrap_err()
+                != UserOAuthAccessError::Exchange(OAuthTokenExchangeError::InvalidResponse)
             {
                 return Err("空 access token 没有在 VendorAccessToken 铸造前被拒绝".to_owned());
             }
+            connect(&fixture, DRIVE, ASKER, ASKER_REFRESH).await?;
             let (access_hash, calls) = successful_exchange(&fixture, DRIVE, ASKER).await?;
             if calls.len() != 1
                 || calls[0].refresh != digest(ASKER_REFRESH)
@@ -824,3 +856,9 @@ async fn retiring_twice_is_quiet_and_nobody_owns_nothing() {
     )
     .await;
 }
+
+#[path = "plugin_user_credential/refresh_tests.rs"]
+mod refresh_tests;
+
+#[path = "plugin_user_credential/commit_proxy.rs"]
+mod commit_proxy;

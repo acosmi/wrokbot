@@ -1,4 +1,6 @@
-//! Same-origin ScreenSession viewer. No frame queue, ticket URL, renderer-issued input, or authority guesses.
+//! Same-origin ScreenSession viewer with one active image and one replaceable latest JPEG.
+//! Image load completion is a display receipt, not a measured compositor paint timestamp.
+//! No ticket URL, renderer-issued input, authority guesses or unbounded frame queue.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 use crate::{
     features::computer::ComputerPlaceholder,
@@ -19,23 +21,62 @@ enum ScreenStatus {
     Unavailable,
     Failed,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ImageIdentity {
+    connection: u64,
+    sequence: u64,
+}
+#[derive(Clone)]
+struct ViewerImage {
+    identity: ImageIdentity,
+    src: String,
+}
+
+fn image_callback_matches(
+    connection: Option<u64>,
+    closed: bool,
+    current: Option<ImageIdentity>,
+    completed: ImageIdentity,
+) -> bool {
+    !closed && connection == Some(completed.connection) && current == Some(completed)
+}
+
 #[derive(Clone, Copy)]
 struct ViewerState {
     status: RwSignal<ScreenStatus>,
-    src: RwSignal<Option<String>>,
-    decoding: RwSignal<bool>,
+    image: RwSignal<Option<ViewerImage>>,
+    connection: RwSignal<u64>,
     generation: RwSignal<u64>,
     sequence: RwSignal<u64>,
-    pending_sequence: RwSignal<u64>,
-    paint_failed: RwSignal<Option<ScreenSessionTarget>>,
-    decode_started: RwSignal<f64>,
+    received_sequence: RwSignal<u64>,
+    received_at_ms: RwSignal<f64>,
+    displayed_at_ms: RwSignal<f64>,
+    #[cfg(target_arch = "wasm32")]
+    renderer: StoredValue<Option<std::rc::Rc<ImageRenderer>>, LocalStorage>,
 }
 impl ViewerState {
     fn clear(self, status: ScreenStatus) {
         self.status.set(status);
-        self.src.set(None);
-        self.decoding.set(false);
+        self.image.set(None);
+        self.generation.set(0);
         self.sequence.set(0);
+        self.received_sequence.set(0);
+        self.received_at_ms.set(0.0);
+        self.displayed_at_ms.set(0.0);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn image_completed(self, identity: ImageIdentity, failed: bool) {
+        let renderer = self.renderer.with_value(Clone::clone);
+        if let Some(renderer) = renderer
+            && renderer.connection == identity.connection
+        {
+            if failed {
+                renderer.image_failed(identity);
+            } else {
+                renderer.image_loaded(identity);
+            }
+        }
     }
 }
 
@@ -47,13 +88,15 @@ pub(crate) fn ScreenViewer(
     let i18n = use_i18n();
     let state = ViewerState {
         status: RwSignal::new(ScreenStatus::Waiting),
-        src: RwSignal::new(None),
-        decoding: RwSignal::new(false),
+        image: RwSignal::new(None),
+        connection: RwSignal::new(0),
         generation: RwSignal::new(0),
         sequence: RwSignal::new(0),
-        pending_sequence: RwSignal::new(0),
-        paint_failed: RwSignal::new(None),
-        decode_started: RwSignal::new(0.0),
+        received_sequence: RwSignal::new(0),
+        received_at_ms: RwSignal::new(0.0),
+        displayed_at_ms: RwSignal::new(0.0),
+        #[cfg(target_arch = "wasm32")]
+        renderer: StoredValue::new_local(None),
     };
     let reload = RwSignal::new(0_u64);
     install_viewer(target, active, reload, state);
@@ -68,19 +111,24 @@ pub(crate) fn ScreenViewer(
             )
     });
     view! {
-        <Show when=move || state.src.get().is_some() fallback=move || view! { <ComputerPlaceholder/> }>
-            <div class="ob-computer-placeholder" data-frame-generation=move || state.generation.get() data-frame-sequence=move || state.sequence.get()>
-                <img class="ob-computer-placeholder-art object-contain" src=move || state.src.get() alt=move || t_string!(i18n, computer.screen).to_owned()
-                    on:load=move |event| {
+        <Show when=move || state.image.get().is_some() fallback=move || view! { <ComputerPlaceholder/> }>
+            <div class="ob-computer-placeholder" data-frame-generation=move || state.generation.get() data-frame-sequence=move || state.sequence.get()
+                data-frame-received-sequence=move || state.received_sequence.get() data-frame-received-at-ms=move || state.received_at_ms.get()
+                data-frame-loaded-at-ms=move || state.displayed_at_ms.get()>
+                <For each={move || state.image.get().into_iter().collect::<Vec<_>>()} key=|image| image.identity children=move |image| {
+                    let identity = image.identity;
+                    view! { <img class="ob-computer-placeholder-art object-contain" src=image.src alt=move || t_string!(i18n, computer.screen).to_owned()
+                    on:load=move |_| {
                         #[cfg(target_arch = "wasm32")]
-                        if current_image_event(&event, state) { state.sequence.set(state.pending_sequence.get_untracked()); state.decoding.set(false); state.status.set(ScreenStatus::Live); }
-                        #[cfg(not(target_arch = "wasm32"))] let _ = event;
+                        state.image_completed(identity, false);
+                        #[cfg(not(target_arch = "wasm32"))] let _ = identity;
                     }
-                    on:error=move |event| {
+                    on:error=move |_| {
                         #[cfg(target_arch = "wasm32")]
-                        if current_image_event(&event, state) { state.paint_failed.set(target.get_untracked()); }
-                        #[cfg(not(target_arch = "wasm32"))] let _ = event;
-                    }/>
+                        state.image_completed(identity, true);
+                        #[cfg(not(target_arch = "wasm32"))] let _ = identity;
+                    }/> }
+                }/>
             </div>
         </Show>
         <p class="ob-page-intro" role="status">{move || match state.status.get() {
@@ -93,7 +141,7 @@ pub(crate) fn ScreenViewer(
             ScreenStatus::Unavailable => t_string!(i18n, computer.screen_unavailable).to_owned(),
             ScreenStatus::Failed => t_string!(i18n, computer.screen_failed).to_owned(),
         }}</p>
-        <Show when=move || can_retry.get()><Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=move |_| { state.paint_failed.set(None); reload.update(|n| *n = n.saturating_add(1)); }>{move || t!(i18n, common.retry)}</Button></Show>
+        <Show when=move || can_retry.get()><Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=move |_| { reload.update(|n| *n = n.saturating_add(1)); }>{move || t!(i18n, common.retry)}</Button></Show>
     }
 }
 
@@ -134,10 +182,11 @@ fn install_viewer(
             reload.track();
             let selected = target.get();
             let enabled = active.get() && visible.get();
-            if selected.is_some() && state.paint_failed.get() == selected {
+            let Some(connection_id) = state.connection.get_untracked().checked_add(1) else {
                 state.clear(ScreenStatus::Failed);
                 return;
-            }
+            };
+            state.connection.set(connection_id);
             state.clear(ScreenStatus::Waiting);
             if !enabled {
                 return;
@@ -153,14 +202,23 @@ fn install_viewer(
             on_cleanup(move || {
                 connection.update_value(|value| {
                     value.take();
-                })
+                });
+                state.renderer.update_value(|renderer| {
+                    if renderer
+                        .as_ref()
+                        .is_some_and(|renderer| renderer.connection == connection_id)
+                    {
+                        renderer.take();
+                    }
+                });
             });
             state.status.set(ScreenStatus::Connecting);
             state.generation.set(selected.computer_generation.get());
             leptos::task::spawn_local_scoped_with_cancellation(async move {
-                match connect_screen(selected, state).await {
+                match connect_screen(selected, state, connection_id).await {
                     Ok(socket) => {
-                        let last = socket.last_frame_at.clone();
+                        let renderer = socket.renderer.clone();
+                        state.renderer.set_value(Some(renderer.clone()));
                         connection.set_value(Some(socket));
                         loop {
                             let promise = js_sys::Promise::new(&mut |resolve, _| {
@@ -172,23 +230,14 @@ fn install_viewer(
                                 }
                             });
                             _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-                            if matches!(
-                                state.status.get_untracked(),
-                                ScreenStatus::Disconnected
-                                    | ScreenStatus::Invalidated
-                                    | ScreenStatus::Failed
-                            ) {
+                            if !renderer.is_current() {
                                 connection.update_value(|value| {
                                     value.take();
                                 });
                                 break;
                             }
-                            let now = monotonic_ms();
-                            if now - last.get() > 2_000.0
-                                || (state.decoding.get_untracked()
-                                    && now - state.decode_started.get_untracked() > 2_000.0)
-                            {
-                                state.clear(ScreenStatus::Stalled);
+                            if renderer.progress_timed_out() {
+                                renderer.close(Some(ScreenStatus::Stalled));
                                 connection.update_value(|value| {
                                     value.take();
                                 });
@@ -196,7 +245,11 @@ fn install_viewer(
                             }
                         }
                     }
-                    Err(status) => state.clear(status),
+                    Err(status) => {
+                        if state.connection.try_get_untracked() == Some(connection_id) {
+                            state.clear(status);
+                        }
+                    }
                 }
             });
         });
@@ -261,13 +314,143 @@ impl Drop for ObjectUrls {
 }
 
 #[cfg(target_arch = "wasm32")]
+struct ImageRenderer {
+    state: ViewerState,
+    connection: u64,
+    socket: web_sys::WebSocket,
+    frames: std::cell::RefCell<super::latest_frame::LatestFrame<Vec<u8>>>,
+    urls: std::cell::RefCell<ObjectUrls>,
+    connected_at_ms: f64,
+    closed: std::cell::Cell<bool>,
+}
+#[cfg(target_arch = "wasm32")]
+impl ImageRenderer {
+    fn is_current(&self) -> bool {
+        !self.closed.get() && self.state.connection.try_get_untracked() == Some(self.connection)
+    }
+
+    fn owns_image(&self, identity: ImageIdentity) -> bool {
+        identity.connection == self.connection
+            && image_callback_matches(
+                self.state.connection.try_get_untracked(),
+                self.closed.get(),
+                self.state
+                    .image
+                    .try_get_untracked()
+                    .flatten()
+                    .map(|image| image.identity),
+                identity,
+            )
+    }
+
+    fn last_received_sequence(&self) -> u64 {
+        self.frames
+            .borrow()
+            .received()
+            .map_or(0, |frame| frame.sequence)
+    }
+
+    fn receive(&self, sequence: u64, jpeg: &[u8]) {
+        if !self.is_current() {
+            return;
+        }
+        let now = monotonic_ms();
+        let accepted = self
+            .frames
+            .borrow_mut()
+            .receive(sequence, now, jpeg.to_vec());
+        let Ok(next) = accepted else {
+            self.close(Some(ScreenStatus::Failed));
+            return;
+        };
+        self.state.received_sequence.set(sequence);
+        self.state.received_at_ms.set(now);
+        if let Some(frame) = next {
+            self.start_image(frame);
+        }
+    }
+
+    fn start_image(&self, frame: super::latest_frame::Frame<Vec<u8>>) {
+        if !self.is_current() {
+            return;
+        }
+        let data = js_sys::Uint8Array::from(frame.payload.as_slice());
+        let parts = js_sys::Array::new();
+        parts.push(&data);
+        let options = web_sys::BlobPropertyBag::new();
+        options.set_type("image/jpeg");
+        let url = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
+            .and_then(|blob| web_sys::Url::create_object_url_with_blob(&blob));
+        let Ok(src) = url else {
+            self.close(Some(ScreenStatus::Failed));
+            return;
+        };
+        self.urls.borrow_mut().replace(Some(src.clone()));
+        self.state.image.set(Some(ViewerImage {
+            identity: ImageIdentity {
+                connection: self.connection,
+                sequence: frame.received.sequence,
+            },
+            src,
+        }));
+    }
+
+    fn image_loaded(&self, identity: ImageIdentity) {
+        if !self.owns_image(identity) {
+            return;
+        }
+        let completed = self
+            .frames
+            .borrow_mut()
+            .complete(identity.sequence, monotonic_ms());
+        let Some(completed) = completed else {
+            return;
+        };
+        self.state
+            .sequence
+            .set(completed.displayed.received.sequence);
+        self.state
+            .displayed_at_ms
+            .set(completed.displayed.loaded_at_ms);
+        self.state.status.set(ScreenStatus::Live);
+        if let Some(next) = completed.next {
+            self.start_image(next);
+        }
+    }
+
+    fn image_failed(&self, identity: ImageIdentity) {
+        if self.owns_image(identity) {
+            self.close(Some(ScreenStatus::Failed));
+        }
+    }
+
+    fn progress_timed_out(&self) -> bool {
+        self.frames
+            .borrow()
+            .progress_timed_out(self.connected_at_ms, monotonic_ms())
+    }
+
+    fn close(&self, status: Option<ScreenStatus>) {
+        if self.closed.replace(true) {
+            return;
+        }
+        self.frames.borrow_mut().close();
+        self.urls.borrow_mut().replace(None);
+        if self.state.connection.try_get_untracked() == Some(self.connection) {
+            self.state
+                .clear(status.unwrap_or_else(|| self.state.status.get_untracked()));
+        }
+        _ = self.socket.close();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 struct ScreenConnection {
     socket: web_sys::WebSocket,
     _message: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::MessageEvent)>,
     _close: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::CloseEvent)>,
     _error: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>,
-    urls: std::rc::Rc<std::cell::RefCell<ObjectUrls>>,
-    last_frame_at: std::rc::Rc<std::cell::Cell<f64>>,
+    renderer: std::rc::Rc<ImageRenderer>,
 }
 #[cfg(target_arch = "wasm32")]
 impl Drop for ScreenConnection {
@@ -275,8 +458,7 @@ impl Drop for ScreenConnection {
         self.socket.set_onmessage(None);
         self.socket.set_onclose(None);
         self.socket.set_onerror(None);
-        _ = self.socket.close();
-        self.urls.borrow_mut().replace(None);
+        self.renderer.close(None);
     }
 }
 
@@ -284,6 +466,7 @@ impl Drop for ScreenConnection {
 async fn connect_screen(
     target: ScreenSessionTarget,
     state: ViewerState,
+    connection: u64,
 ) -> Result<ScreenConnection, ScreenStatus> {
     use std::{
         cell::{Cell, RefCell},
@@ -317,6 +500,9 @@ async fn connect_screen(
         .json::<openbot_contracts::screen::ScreenSessionTicket>()
         .await
         .map_err(|_| ScreenStatus::Failed)?;
+    if state.connection.try_get_untracked() != Some(connection) {
+        return Err(ScreenStatus::Invalidated);
+    }
     let Some(token) = ticket.ticket_protocol().strip_prefix("obot_screen_") else {
         return Err(ScreenStatus::Failed);
     };
@@ -334,20 +520,23 @@ async fn connect_screen(
         .map_err(|_| ScreenStatus::Failed)?;
     drop(ticket); // never retained in renderer signals, URL, logs, or retry state
     socket.set_binary_type(web_sys::BinaryType::Arraybuffer);
-    let urls = Rc::new(RefCell::new(ObjectUrls { current: None }));
-    let last = Rc::new(Cell::new(0_u64));
-    let last_frame_at = Rc::new(Cell::new(monotonic_ms()));
-    let message_time = last_frame_at.clone();
-    let message_socket = socket.clone();
-    let message_urls = urls.clone();
+    let renderer = Rc::new(ImageRenderer {
+        state,
+        connection,
+        socket: socket.clone(),
+        frames: RefCell::new(super::latest_frame::LatestFrame::default()),
+        urls: RefCell::new(ObjectUrls { current: None }),
+        connected_at_ms: monotonic_ms(),
+        closed: Cell::new(false),
+    });
+    let message_renderer = renderer.clone();
     let generation = target.computer_generation.get();
     let message = Closure::wrap(Box::new(move |event: web_sys::MessageEvent| {
-        let reject = || {
-            state.clear(ScreenStatus::Failed);
-            message_urls.borrow_mut().replace(None);
-            _ = message_socket.close_with_code(4000);
-        };
-        if message_socket.protocol() != "openbot.screen.v1" {
+        if !message_renderer.is_current() {
+            return;
+        }
+        let reject = || message_renderer.close(Some(ScreenStatus::Failed));
+        if message_renderer.socket.protocol() != "openbot.screen.v1" {
             reject();
             return;
         }
@@ -360,55 +549,29 @@ async fn connect_screen(
             return;
         }
         let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-        let Ok(frame) = super::frame::decode_frame(&bytes, generation, last.get()) else {
+        let Ok(frame) = super::frame::decode_frame(
+            &bytes,
+            generation,
+            message_renderer.last_received_sequence(),
+        ) else {
             reject();
             return;
         };
-        last.set(frame.sequence);
-        message_time.set(monotonic_ms());
-        // Backpressure at the renderer boundary: no MPSC queue or retained pending frames.
-        if state.decoding.get_untracked() {
-            return;
-        }
-        let data = js_sys::Uint8Array::from(frame.jpeg);
-        let parts = js_sys::Array::new();
-        parts.push(&data);
-        let options = web_sys::BlobPropertyBag::new();
-        options.set_type("image/jpeg");
-        let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
-        else {
-            reject();
-            return;
-        };
-        let Ok(src) = web_sys::Url::create_object_url_with_blob(&blob) else {
-            reject();
-            return;
-        };
-        message_urls.borrow_mut().replace(Some(src.clone()));
-        state.pending_sequence.set(frame.sequence);
-        state.decode_started.set(monotonic_ms());
-        state.decoding.set(true);
-        state.src.set(Some(src));
+        message_renderer.receive(frame.sequence, frame.jpeg);
     }) as Box<dyn FnMut(_)>);
     socket.set_onmessage(Some(message.as_ref().unchecked_ref()));
-    let close_urls = urls.clone();
+    let close_renderer = renderer.clone();
     let close = Closure::wrap(Box::new(move |event: web_sys::CloseEvent| {
-        state.clear(if state.status.get_untracked() == ScreenStatus::Failed {
-            ScreenStatus::Failed
-        } else if event.code() == 1008 {
+        close_renderer.close(Some(if event.code() == 1008 {
             ScreenStatus::Invalidated
         } else {
             ScreenStatus::Disconnected
-        });
-        close_urls.borrow_mut().replace(None);
+        }));
     }) as Box<dyn FnMut(_)>);
     socket.set_onclose(Some(close.as_ref().unchecked_ref()));
-    let error_urls = urls.clone();
-    let error_socket = socket.clone();
+    let error_renderer = renderer.clone();
     let error = Closure::wrap(Box::new(move |_: web_sys::Event| {
-        state.clear(ScreenStatus::Failed);
-        error_urls.borrow_mut().replace(None);
-        _ = error_socket.close();
+        error_renderer.close(Some(ScreenStatus::Failed));
     }) as Box<dyn FnMut(_)>);
     socket.set_onerror(Some(error.as_ref().unchecked_ref()));
     Ok(ScreenConnection {
@@ -416,8 +579,7 @@ async fn connect_screen(
         _message: message,
         _close: close,
         _error: error,
-        urls,
-        last_frame_at,
+        renderer,
     })
 }
 
@@ -427,18 +589,32 @@ fn monotonic_ms() -> f64 {
         .and_then(|w| w.performance())
         .map_or_else(js_sys::Date::now, |p| p.now())
 }
-#[cfg(target_arch = "wasm32")]
-fn current_image_event(event: &web_sys::Event, state: ViewerState) -> bool {
-    use wasm_bindgen::JsCast as _;
-    event
-        .target()
-        .and_then(|t| t.dyn_into::<web_sys::HtmlImageElement>().ok())
-        .is_some_and(|img| state.src.get_untracked().as_deref() == Some(img.current_src().as_str()))
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn image_callbacks_are_bound_to_connection_and_exact_image() {
+        let old = ImageIdentity {
+            connection: 1,
+            sequence: 7,
+        };
+        let next = ImageIdentity {
+            connection: 2,
+            sequence: 7,
+        };
+        let newer = ImageIdentity {
+            connection: 2,
+            sequence: 8,
+        };
+        assert!(image_callback_matches(Some(2), false, Some(next), next));
+        assert!(!image_callback_matches(Some(2), false, Some(next), old));
+        assert!(!image_callback_matches(Some(2), false, Some(newer), next));
+        assert!(!image_callback_matches(Some(2), true, Some(next), next));
+        assert!(!image_callback_matches(Some(2), false, None, next));
+        assert!(!image_callback_matches(None, false, Some(next), next));
+    }
+
     #[test]
     fn screen_connection_url_never_contains_a_ticket_or_query() {
         assert_eq!(

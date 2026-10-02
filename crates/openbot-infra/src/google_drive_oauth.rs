@@ -348,7 +348,30 @@ impl RotatingOAuthTokenExchanger for GoogleDriveOAuthClient {
                 secret_str(&client.client_secret).map_err(map_exchange_error)?,
             ),
         ]);
-        let response = self.token_request(body).await.map_err(map_exchange_error)?;
+        let plan = SafeHttpRequest::oauth_refresh_form(
+            self.endpoints.token.clone(),
+            self.scheme_policy,
+            body,
+            None,
+            oauth_budget().map_err(map_exchange_error)?,
+        )
+        .map_err(|_| OAuthTokenExchangeError::InvalidResponse)?;
+        request.admit_token_send().await?;
+        let response = self
+            .dialer
+            .execute(plan)
+            .await
+            .map_err(|_| OAuthTokenExchangeError::Unavailable)?;
+        let (status, _, raw) = response.into_parts();
+        let raw = Zeroizing::new(raw);
+        // No second hop and no terminal classification based on an ambiguous 3xx body.
+        if status.is_redirection() {
+            return Err(OAuthTokenExchangeError::Unavailable);
+        }
+        if !status.is_success() {
+            return Err(map_exchange_error(classify_error(status, &raw)));
+        }
+        let response = parse_token_response(&raw).map_err(map_exchange_error)?;
         if response
             .scope
             .as_deref()
