@@ -16,7 +16,10 @@ const PAGE_QUERY: &str = r"
 SELECT v.run_id,v.thread_id,
        CASE WHEN v.status IN ('queued','running','completed','failed','cancelled',
                              'reconciliation_required') THEN v.status END AS run_status,
-       v.foreground,v.terminal_event_seq,statement_timestamp() AS observed_at,
+       i.bad_occupancy,
+       EXISTS(SELECT 1 FROM public.thread_run_occupancy slot
+              WHERE slot.thread_id=v.thread_id AND slot.run_id=v.run_id) AS foreground_blocked,
+       v.terminal_event_seq,statement_timestamp() AS observed_at,
        EXISTS(SELECT 1 FROM public.tool_calls c WHERE c.run_id=v.run_id
               AND (c.actor_id<>v.actor_id OR c.bot_id<>v.bot_id)) AS bad_call_binding,
        EXISTS(SELECT 1 FROM public.run_events e WHERE e.run_id=v.run_id
@@ -57,6 +60,7 @@ SELECT v.run_id,v.thread_id,
        ) AS bad_receipt_binding,
        x.receipt_id,x.tool_call_id,x.call_sequence,x.attempt_id,x.attempt_sequence,x.recorded_at
 FROM visible_run v
+JOIN occupancy_integrity i ON i.thread_id=v.thread_id
 LEFT JOIN LATERAL (
   SELECT CASE WHEN octet_length(e.receipt_id) BETWEEN 1 AND 512
                     AND e.receipt_id !~ U&'[\0001-\001F\007F-\009F]'
@@ -97,8 +101,9 @@ pub(super) async fn read(
     let after_attempt = request.after.map(|cursor| cursor.attempt_sequence);
     let fetch_limit = i64::from(request.limit) + 1;
     let query = format!(
-        "{}{}",
+        "{}, occupancy_scope AS (SELECT thread_id FROM visible_run) {} {}",
         super::reconciliation_visibility::VISIBLE_RUN,
+        crate::db::occupancy::INTEGRITY_CTE,
         PAGE_QUERY
     );
     let client = pool
@@ -123,6 +128,9 @@ pub(super) async fn read(
         .await
         .map_err(|_| ThreadDirectoryError::Unavailable)?;
     let first = rows.first().ok_or(ThreadDirectoryError::NotVisible)?;
+    if value::<bool>(first, "bad_occupancy")? {
+        return Err(corrupt());
+    }
     match value::<&str>(first, "run_status")? {
         "reconciliation_required" => {}
         "queued" | "running" | "completed" | "failed" | "cancelled" => {
@@ -166,7 +174,7 @@ pub(super) async fn read(
         status: RunReconciliationStatus::ReconciliationRequired,
         terminal_event_sequence,
         observed_at: value(first, "observed_at")?,
-        foreground_blocked: value(first, "foreground")?,
+        foreground_blocked: value(first, "foreground_blocked")?,
         receipts,
         next,
         available_actions: [],

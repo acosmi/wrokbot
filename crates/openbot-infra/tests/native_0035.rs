@@ -79,7 +79,7 @@ async fn assert_ledger(client: &tokio_postgres::Client) {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 17; explicit include-ignored only"]
-async fn upgrade_is_additive_once_and_fresh_matches_owned_0035_fixture() {
+async fn upgrade_is_additive_once_and_historical_0035_matches_owned_fixture() {
     let admin = harness::admin_config("native0035_schema");
     harness::with_temp_database(&admin, "receipt35upgrade", |config| async move {
         let pool = pool::connect(&config)
@@ -121,18 +121,24 @@ async fn upgrade_is_additive_once_and_fresh_matches_owned_0035_fixture() {
             .await
             .map_err(|error| error.to_string())?;
         let mut client = pool.get().await.map_err(|error| error.to_string())?;
+        // Historical 0035 oracle stays pinned; current fresh/canary behavior is tested in 0036.
+        baseline::apply(&client).await.unwrap();
         assert_eq!(
-            fresh::apply(&mut client).await.unwrap(),
-            fresh::FreshApplyOutcome::Applied(ApplyOutcome::Applied)
+            native::apply_through(&mut client, native::NATIVE_0035_VERSION)
+                .await
+                .unwrap(),
+            ApplyOutcome::Applied
         );
         assert_eq!(schema_facts::fetch(&client).await.unwrap(), expected());
         assert_ledger(&client).await;
         assert_eq!(
-            fresh::apply(&mut client).await.unwrap(),
-            fresh::FreshApplyOutcome::AlreadyInitialized
+            native::apply_through(&mut client, native::NATIVE_0035_VERSION)
+                .await
+                .unwrap(),
+            ApplyOutcome::AlreadyApplied
         );
         drop(client);
-        desktop_vault_canary::verify_current_layout(&pool)
+        desktop_vault_canary::verify_pre_upgrade_layout(&pool)
             .await
             .unwrap();
         pool.close();
@@ -468,7 +474,7 @@ async fn typed_receipts_are_immutable_and_binding_constraints_are_enforced() {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 17; explicit include-ignored only"]
-async fn desktop_canary_accepts_registered_34_and_35_but_rejects_public_drift() {
+async fn desktop_canary_accepts_registered_prefixes_and_current36_but_rejects_public_drift() {
     let admin = harness::admin_config("native0035_canary");
     harness::with_temp_database(&admin, "receipt35canary", |config| async move {
         let pool = pool::connect(&config).await.map_err(|error| error.to_string())?;
@@ -479,6 +485,8 @@ async fn desktop_canary_accepts_registered_34_and_35_but_rejects_public_drift() 
         assert!(desktop_vault_canary::verify_current_layout(&pool).await.is_err());
         native::apply_through(&mut client, native::NATIVE_0035_VERSION).await.unwrap();
         assert_eq!(desktop_vault_canary::verify_pre_upgrade_layout(&pool).await.unwrap().native_version(), 35);
+        assert!(desktop_vault_canary::verify_current_layout(&pool).await.is_err());
+        native::apply(&mut client).await.unwrap();
         desktop_vault_canary::verify_current_layout(&pool).await.unwrap();
         client.batch_execute("DROP TRIGGER remember_effect_receipts_no_truncate ON public.remember_effect_receipts").await.unwrap();
         assert!(desktop_vault_canary::verify_pre_upgrade_layout(&pool).await.is_err());

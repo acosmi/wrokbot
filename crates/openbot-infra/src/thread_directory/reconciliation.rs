@@ -16,7 +16,10 @@ const PAGE_QUERY: &str = r"
 SELECT v.run_id,v.thread_id,
        CASE WHEN v.status IN ('queued','running','completed','failed','cancelled',
                              'reconciliation_required') THEN v.status END AS run_status,
-       v.foreground,v.terminal_event_seq,
+       i.bad_occupancy,
+       EXISTS(SELECT 1 FROM public.thread_run_occupancy slot
+              WHERE slot.thread_id=v.thread_id AND slot.run_id=v.run_id) AS foreground_blocked,
+       v.terminal_event_seq,
        statement_timestamp() AS observed_at,
        EXISTS(SELECT 1 FROM public.tool_calls c WHERE c.run_id=v.run_id
               AND (c.actor_id<>v.actor_id OR c.bot_id<>v.bot_id)) AS bad_binding,
@@ -26,6 +29,7 @@ SELECT v.run_id,v.thread_id,
        a.call_sequence,a.attempt_sequence,a.tool_call_id,a.attempt_id,a.attempt_status,
        a.commit_state,a.created_at,a.started_at,a.finished_at,a.bad_shape
 FROM visible_run v
+JOIN occupancy_integrity i ON i.thread_id=v.thread_id
 LEFT JOIN LATERAL (
   SELECT c.call_seq AS call_sequence,t.attempt_seq AS attempt_sequence,
          CASE WHEN octet_length(c.tool_call_id) BETWEEN 1 AND 512
@@ -86,8 +90,9 @@ pub(super) async fn read(
         .await
         .map_err(|_| ThreadDirectoryError::Unavailable)?;
     let query = format!(
-        "{}{}",
+        "{}, occupancy_scope AS (SELECT thread_id FROM visible_run) {} {}",
         super::reconciliation_visibility::VISIBLE_RUN,
+        crate::db::occupancy::INTEGRITY_CTE,
         PAGE_QUERY
     );
     let rows = client
@@ -108,6 +113,9 @@ pub(super) async fn read(
         .await
         .map_err(|_| ThreadDirectoryError::Unavailable)?;
     let first = rows.first().ok_or(ThreadDirectoryError::NotVisible)?;
+    if value::<bool>(first, "bad_occupancy")? {
+        return Err(corrupt());
+    }
     let status: &str = value(first, "run_status")?;
     match status {
         "reconciliation_required" => {}
@@ -149,7 +157,7 @@ pub(super) async fn read(
         status: RunReconciliationStatus::ReconciliationRequired,
         terminal_event_sequence,
         observed_at: value(first, "observed_at")?,
-        foreground_blocked: value(first, "foreground")?,
+        foreground_blocked: value(first, "foreground_blocked")?,
         attempts,
         next,
         available_actions: [],

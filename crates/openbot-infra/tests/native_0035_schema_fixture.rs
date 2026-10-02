@@ -3,7 +3,7 @@
 
 mod harness;
 
-use openbot_infra::db::{fresh, native, pool, schema_facts};
+use openbot_infra::db::{baseline, native, pool, schema_facts};
 
 #[tokio::test]
 #[ignore = "fixture generation only: requires owned PostgreSQL and OPENBOT_REGENERATE_SCHEMA_0035=1"]
@@ -19,8 +19,10 @@ async fn generate_schema_fixture_from_owned_pg() {
             .await
             .map_err(|error| error.to_string())?;
         let mut client = pool.get().await.map_err(|error| error.to_string())?;
-        assert_eq!(native::NATIVE_LATEST_VERSION, native::NATIVE_0035_VERSION);
-        fresh::apply(&mut client)
+        baseline::apply(&client)
+            .await
+            .map_err(|error| error.to_string())?;
+        native::apply_through(&mut client, native::NATIVE_0035_VERSION)
             .await
             .map_err(|error| error.to_string())?;
         let facts = schema_facts::fetch(&client)

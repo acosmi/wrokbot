@@ -54,6 +54,16 @@ fn fixture() -> (
     IntelligenceImportMapping,
     Vec<String>,
 ) {
+    fixture_with_unknown(false)
+}
+
+fn fixture_with_unknown(
+    unknown: bool,
+) -> (
+    VerifiedIntelligenceBundle,
+    IntelligenceImportMapping,
+    Vec<String>,
+) {
     let deployment = DeploymentId::new("target-deployment");
     let identity = ThreadIdentity::new(&deployment);
     let first_id = identity.mint_from_entropy([1; 16]).as_str().to_owned();
@@ -174,6 +184,13 @@ fn fixture() -> (
     for memory in &mut first.memories {
         memory.source.thread_id = ThreadId::new(&first.thread_id);
     }
+    if unknown {
+        first.runs[0].status = IntelligenceRunStatus::ReconciliationRequired;
+        first.runs[0].error_code = Some("journal_commit_unknown".to_owned());
+        let terminal = first.runs[0].events.last_mut().unwrap();
+        terminal.event_type = ThreadRunEventKind::ReconciliationRequired;
+        terminal.payload = json!({"status":"reconciliation_required"});
+    }
     first.checksum = compute_intelligence_thread_checksum(&first).unwrap();
 
     let mut second = IntelligenceThreadExport {
@@ -242,6 +259,33 @@ fn fixture() -> (
         claimed_thread_ids: Default::default(),
     };
     (verified, mapping, sorted_ids)
+}
+
+#[tokio::test]
+#[ignore = "requires owned isolated PostgreSQL 17"]
+async fn imported_unknown_owns_a_slot_and_exact_import_replay_preserves_it() {
+    let admin = admin_config("imported_unknown_occupancy");
+    with_temp_database(&admin, "imported_unknown_occupancy", |config| async move {
+        let p = pool::connect(&config).await.map_err(|e| e.to_string())?;
+        provision(&p).await?;
+        let (bundle, mapping, _) = fixture_with_unknown(true);
+        let store = PostgresIntelligenceImportStore::new(p.clone());
+        let report = import_intelligence_bundle(&store, bundle.clone(), mapping.clone())
+            .await.map_err(|e| e.to_string())?;
+        assert_eq!(report.status, IntelligenceImportReportStatus::Completed);
+        let c = p.get().await.map_err(|e| e.to_string())?;
+        let query = "SELECT o.thread_id,o.run_id,o.xmin::text,o.ctid::text FROM public.thread_run_occupancy o JOIN public.runs r ON r.run_id=o.run_id WHERE r.status='reconciliation_required'";
+        let row = c.query_one(query, &[]).await.map_err(|e| e.to_string())?;
+        let before: (String,String,String,String) = (row.get(0),row.get(1),row.get(2),row.get(3));
+        assert_eq!(before.1,"run-1");
+        assert_eq!(import_intelligence_bundle(&store,bundle,mapping).await.map_err(|e|e.to_string())?,report);
+        // Exercise the import's actual SQL conflict behavior too: no inserted row means no AFTER maintenance.
+        c.batch_execute("INSERT INTO public.runs SELECT * FROM public.runs WHERE run_id='run-1' ON CONFLICT(run_id) DO NOTHING").await.map_err(|e|e.to_string())?;
+        let row = c.query_one(query, &[]).await.map_err(|e| e.to_string())?;
+        let after: (String,String,String,String) = (row.get(0),row.get(1),row.get(2),row.get(3));
+        assert_eq!(before,after);
+        drop(c);p.close();Ok(())
+    }).await;
 }
 
 fn zero_checksum() -> IntelligenceThreadChecksum {

@@ -499,7 +499,12 @@ async fn effect_receipts_channel_membership_bot_link_and_packages_are_current() 
             fixture.sql(restore).await?;
             fixture.read().await?;
         }
-        fixture.sql("UPDATE public.runs SET status='failed'").await?;
+        // Dedicated negative fixture: inject a non-Unknown endpoint state, not a permitted RR transition.
+        fixture.sql("BEGIN; ALTER TABLE public.runs DISABLE TRIGGER USER;
+          ALTER TABLE public.thread_run_occupancy DISABLE TRIGGER USER;
+          UPDATE public.runs SET status='failed'; DELETE FROM public.thread_run_occupancy;
+          ALTER TABLE public.runs ENABLE TRIGGER USER;
+          ALTER TABLE public.thread_run_occupancy ENABLE TRIGGER USER; COMMIT").await?;
         require(fixture.directory.run_effect_receipts(fixture.request()).await == Err(ThreadDirectoryError::RequestConflict),
             "visible non-Unknown run must be a conflict")?;
         fixture.sql("DELETE FROM public.channel_memberships WHERE user_id='actor-a'").await?;
@@ -542,7 +547,12 @@ async fn effect_receipts_rejects_hidden_bad_bindings_and_unbound_terminal_events
         fixture.expect_corrupt().await?;
         fixture.sql("UPDATE public.runs SET terminal_event_seq=1").await?;
         fixture.read().await?;
-        fixture.sql("UPDATE public.runs SET foreground=false").await?;
+        // Model a legacy background RR in this corruption-only database; production downgrade is prohibited.
+        fixture.sql("BEGIN; ALTER TABLE public.runs DISABLE TRIGGER USER;
+          ALTER TABLE public.thread_run_occupancy DISABLE TRIGGER USER;
+          UPDATE public.runs SET foreground=false; DELETE FROM public.thread_run_occupancy;
+          ALTER TABLE public.runs ENABLE TRIGGER USER;
+          ALTER TABLE public.thread_run_occupancy ENABLE TRIGGER USER; COMMIT").await?;
         require(!fixture.read().await?.foreground_blocked,
             "foregroundBlocked must describe only this original run")?;
         fixture.sql("DELETE FROM public.run_events WHERE terminal").await?;

@@ -2,7 +2,7 @@
 mod harness;
 use openbot_infra::db::schema_facts::SchemaFacts;
 use openbot_infra::db::tables::{NATIVE_0031_TABLES, run_model_selections};
-use openbot_infra::db::{baseline, fresh, native, pool, schema_facts};
+use openbot_infra::db::{baseline, native, pool, schema_facts};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -74,7 +74,10 @@ async fn post_0031_typed_roundtrip_checks_and_only_run_deletion_cascades() {
     harness::with_temp_database(&admin,"model31rows",|config|async move {
         let pool=pool::connect(&config).await.map_err(|e|e.to_string())?;
         let mut c=pool.get().await.map_err(|e|e.to_string())?;
-        fresh::apply(&mut c).await.map_err(|e|e.to_string())?;
+        // This historical 0031 deletion contract is pinned before the 0036 active-run guard.
+        // Current active/terminal deletion behavior has dedicated occupancy tests.
+        baseline::apply(&c).await.map_err(|e|e.to_string())?;
+        native::apply_through(&mut c,native::NATIVE_0031_VERSION).await.map_err(|e|e.to_string())?;
         c.batch_execute("INSERT INTO public.users(id,email) VALUES('owner','owner@example.test');
           INSERT INTO public.user_roles(user_id,role) VALUES('owner','user');
           INSERT INTO public.threads(thread_id,tenant_id,deployment_id,created_by,anchor_kind,anchor_id,status,created_at,updated_at) VALUES('thread','tenant','dep','owner','direct_bot','bot','active',now(),now());

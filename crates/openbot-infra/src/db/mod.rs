@@ -28,6 +28,7 @@ pub mod desktop_vault_canary;
 pub mod fresh;
 pub mod initialization;
 pub mod native;
+pub(crate) mod occupancy;
 pub mod pool;
 pub mod schema_facts;
 pub mod tables;

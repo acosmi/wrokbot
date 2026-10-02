@@ -26,6 +26,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{AsyncMessage, Client, Connection, NoTls, Socket, Transaction};
 
+use crate::db::{InfraError, occupancy};
 use crate::run_runtime::{RUN_CANCEL_DESTINATION, RUN_CONTROL_TOPIC, run_cancel_outbox_id};
 use crate::thread_id::mint_thread_id;
 use crate::thread_listener::ThreadListenerDatabase;
@@ -174,9 +175,15 @@ impl ThreadDirectory for PostgresThreadDirectory {
             ThreadDirectoryError::Unavailable
         })?;
         let transaction = client
-            .transaction()
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
             .await
             .map_err(|error| unavailable("begin thread run 开始事务失败", error))?;
+        transaction
+            .batch_execute("SET LOCAL lock_timeout='5s'")
+            .await
+            .map_err(|error| unavailable("begin thread run 设置锁等待限制失败", error))?;
         let outcome = apply_begin(&transaction, runtime, &request).await;
         match outcome {
             Ok(BeginOutcome::Replayed(receipt)) => {
@@ -351,15 +358,17 @@ impl ThreadDirectory for PostgresThreadDirectory {
             tracing::error!(error = %error, "thread conversation 获取数据库连接失败");
             ThreadDirectoryError::Unavailable
         })?;
-        let rows = client
-            .query(
-                "SELECT t.next_event_seq,coalesce(a.run_ids,'{}'::text[]) AS active_run_ids, \
+        let query = format!(
+            "WITH occupancy_scope AS (SELECT $1::text AS thread_id) {} {}",
+            occupancy::INTEGRITY_CTE,
+            "SELECT i.bad_occupancy,t.next_event_seq,coalesce(a.run_ids,'{}'::text[]) AS active_run_ids, \
                         coalesce(a.run_statuses,'{}'::text[]) AS active_run_statuses, \
                         coalesce(a.run_actors,'{}'::text[]) AS active_run_actors, \
                         coalesce(a.cancel_requested,'{}'::boolean[]) AS cancel_requested, \
                         coalesce(a.run_texts,'{}'::text[]) AS active_run_texts, \
                         m.message_id,m.role,m.content,mr.bot_id AS agent_id \
                  FROM public.threads t \
+                 JOIN occupancy_integrity i ON i.thread_id=t.thread_id \
                  LEFT JOIN public.messages m ON m.thread_id=t.thread_id \
                  LEFT JOIN public.runs mr ON mr.run_id=m.run_id \
                  LEFT JOIN LATERAL ( \
@@ -381,8 +390,9 @@ impl ThreadDirectory for PostgresThreadDirectory {
                                   AND c.payload->>'kind'='tool_exchange' \
                               ),-1) \
                           ),'') ORDER BY r.created_at,r.run_id) AS run_texts \
-                   FROM public.runs r WHERE r.thread_id=t.thread_id AND r.foreground \
-                     AND r.status IN ('queued','running','reconciliation_required') \
+                   FROM public.thread_run_occupancy slot \
+                   JOIN public.runs r ON r.thread_id=slot.thread_id AND r.run_id=slot.run_id \
+                   WHERE slot.thread_id=t.thread_id \
                  ) a ON true \
                  WHERE t.thread_id=$1 AND t.deployment_id=$2 AND t.tenant_id=$3 \
                    AND t.status<>'deleted' AND ( \
@@ -394,7 +404,11 @@ impl ThreadDirectory for PostgresThreadDirectory {
                        WHERE cm.channel_id=t.anchor_id AND cm.user_id=$4 \
                      )) \
                    ) \
-                 ORDER BY m.seq NULLS FIRST",
+                 ORDER BY m.seq NULLS FIRST"
+        );
+        let rows = client
+            .query(
+                &query,
                 &[
                     &request.thread.as_str(),
                     &request.deployment.as_str(),
@@ -408,6 +422,11 @@ impl ThreadDirectory for PostgresThreadDirectory {
         let Some(first) = rows.first() else {
             return Ok(ThreadConversationSnapshot::default());
         };
+        if decode::<bool>(first, "bad_occupancy")? {
+            return Err(ThreadDirectoryError::Corrupt {
+                field: "thread_run_occupancy",
+            });
+        }
         let next_event_sequence: i64 = decode(first, "next_event_seq")?;
         if next_event_sequence < 0 {
             return Err(ThreadDirectoryError::Corrupt {
@@ -1139,6 +1158,22 @@ struct ThreadState {
     next_event_seq: i64,
 }
 
+async fn checked_thread_occupancy(
+    transaction: &Transaction<'_>,
+    thread: &ThreadId,
+) -> Result<bool, ThreadDirectoryError> {
+    occupancy::thread_is_occupied(transaction, thread.as_str())
+        .await
+        .map_err(|error| match error {
+            InfraError::RepositoryInvariant { .. } | InfraError::RowDecode(_) => {
+                ThreadDirectoryError::Corrupt {
+                    field: "thread_run_occupancy",
+                }
+            }
+            _ => ThreadDirectoryError::Unavailable,
+        })
+}
+
 async fn apply_begin(
     transaction: &Transaction<'_>,
     runtime: &RuntimeLease,
@@ -1166,6 +1201,8 @@ async fn apply_begin(
         crate::model_runtime::validate_thread(transaction, request).await?;
     }
     if let Some(receipt) = replay_existing(transaction, request).await? {
+        // Preserve historical replay's original authority checks; still reject damaged occupancy.
+        checked_thread_occupancy(transaction, &command.thread_id).await?;
         return Ok(BeginOutcome::Replayed(receipt));
     }
 
@@ -1196,6 +1233,9 @@ async fn apply_begin(
         }
     };
 
+    // Check visible state before a competing lease can hide a damaged projection.
+    let active = checked_thread_occupancy(transaction, &command.thread_id).await?;
+
     if matches!(&command.anchor, ThreadRunAnchor::Channel { .. }) {
         transaction
             .execute(
@@ -1214,19 +1254,6 @@ async fn apply_begin(
         })?;
     let fencing = acquire_lease(transaction, request, runtime, now, expires_at).await?;
 
-    let active: bool = transaction
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM public.runs \
-             WHERE thread_id=$1 AND foreground \
-               AND status IN ('queued','running','reconciliation_required'))",
-            &[&command.thread_id.as_str()],
-        )
-        .await
-        .map_err(|error| unavailable("检查 foreground run 失败", error))?
-        .try_get(0)
-        .map_err(|_| ThreadDirectoryError::Corrupt {
-            field: "active_foreground",
-        })?;
     if active {
         return Err(ThreadDirectoryError::LeaseConflict);
     }

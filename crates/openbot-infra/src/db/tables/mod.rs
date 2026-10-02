@@ -702,6 +702,7 @@ pub mod run_model_selections;
 pub mod sdk_gateway_connections;
 pub mod sdk_gateway_operations;
 pub mod sdk_gateway_secrets;
+pub mod thread_run_occupancy;
 
 /// Native 0031 private historical custom-model run selection.
 pub const NATIVE_0031_TABLES: &[TableSpec] = &[TableSpec {
@@ -757,6 +758,13 @@ pub const NATIVE_0035_TABLES: &[TableSpec] = &[TableSpec {
     column_specs: remember_effect_receipts::COLUMN_SPECS,
 }];
 
+/// Current exact foreground owner (native 0036); no general write repository is exposed.
+pub const NATIVE_0036_TABLES: &[TableSpec] = &[TableSpec {
+    name: thread_run_occupancy::TABLE_NAME,
+    columns: thread_run_occupancy::COLUMNS,
+    column_specs: thread_run_occupancy::COLUMN_SPECS,
+}];
+
 /// Complete current public-table registry: fixed upstream 0012 plus every Rust-owned native table.
 /// Historical callers that specifically compare the upstream boundary must continue using
 /// [`ALL_TABLES`] instead.
@@ -776,6 +784,7 @@ pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
         .chain(NATIVE_0033_TABLES.iter())
         .chain(NATIVE_0034_TABLES.iter())
         .chain(NATIVE_0035_TABLES.iter())
+        .chain(NATIVE_0036_TABLES.iter())
 }
 
 #[cfg(test)]

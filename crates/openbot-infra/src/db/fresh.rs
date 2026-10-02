@@ -25,7 +25,9 @@ pub enum FreshApplyOutcome {
 /// 开事务、任一 DDL/账本步骤或 commit 失败时返回脱敏 [`InfraError`]；事务整体回滚。
 pub async fn apply(client: &mut Client) -> Result<FreshApplyOutcome, InfraError> {
     let transaction = client
-        .transaction()
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+        .start()
         .await
         .map_err(|source| InfraError::query("开始 fresh database bootstrap 事务", source))?;
     native::lock_migrations(&transaction).await?;

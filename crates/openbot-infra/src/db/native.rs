@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0035_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0036_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -228,6 +228,13 @@ pub const NATIVE_0035_VERSION: i32 = 35;
 pub const NATIVE_0035_NAME: &str = "native_0035_remember_effect_receipts";
 /// Expand-only evidence table and mutation guards.
 pub const NATIVE_0035_SQL: &str = include_str!("../../sql/native_0035.sql");
+
+/// Compatibility foreground occupancy projection; reconciliation remains blocked.
+pub const NATIVE_0036_VERSION: i32 = 36;
+/// Stable migration identity.
+pub const NATIVE_0036_NAME: &str = "native_0036_thread_run_occupancy";
+/// New projection, exact binding and run-maintenance guards.
+pub const NATIVE_0036_SQL: &str = include_str!("../../sql/native_0036.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -358,6 +365,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0035_VERSION,
         name: NATIVE_0035_NAME,
         sql: NATIVE_0035_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0036_VERSION,
+        name: NATIVE_0036_NAME,
+        sql: NATIVE_0036_SQL,
     },
 ];
 
@@ -545,6 +557,12 @@ pub fn native_0035_checksum() -> String {
     Sha256Digest::of(NATIVE_0035_SQL.as_bytes()).to_hex()
 }
 
+/// SHA-256 of the exact native 0036 SQL bytes.
+#[must_use]
+pub fn native_0036_checksum() -> String {
+    Sha256Digest::of(NATIVE_0036_SQL.as_bytes()).to_hex()
+}
+
 /// SHA-256 of the exact native 0033 SQL bytes.
 #[must_use]
 pub fn native_0033_checksum() -> String {
@@ -570,7 +588,9 @@ pub async fn apply_through(
     max_version: i32,
 ) -> Result<ApplyOutcome, InfraError> {
     let transaction = client
-        .transaction()
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+        .start()
         .await
         .map_err(|source| InfraError::query("开始 native schema migration 事务", source))?;
 
@@ -870,6 +890,10 @@ pub(crate) async fn apply_through_in_transaction(
         applied += 1;
     }
 
+    if max_version >= NATIVE_0036_VERSION {
+        // Even an exact ledger replay must reject a missing or misbound projection. Never repair.
+        super::occupancy::validate_all(transaction).await?;
+    }
     Ok(if applied == 0 {
         ApplyOutcome::AlreadyApplied
     } else {
@@ -920,6 +944,14 @@ mod tests {
             .chain(statement_lines(NATIVE_0033_SQL))
             .chain(statement_lines(NATIVE_0034_SQL))
             .chain(statement_lines(NATIVE_0035_SQL))
+            // Stored trigger bodies contain the specifically authorized exact-slot DELETE.
+            // The migration's top-level DDL still has the same expand-only check.
+            .chain(
+                NATIVE_0036_SQL
+                    .split("$$")
+                    .step_by(2)
+                    .flat_map(statement_lines),
+            )
         {
             let uppercase = line.to_ascii_uppercase();
             assert!(
@@ -1048,6 +1080,12 @@ mod tests {
                 .chain(statement_lines(NATIVE_0033_SQL))
                 .chain(statement_lines(NATIVE_0034_SQL))
                 .chain(statement_lines(NATIVE_0035_SQL))
+                .chain(
+                    NATIVE_0036_SQL
+                        .split("$$")
+                        .step_by(2)
+                        .flat_map(statement_lines)
+                )
                 .any(|line| line.contains("IF NOT EXISTS"))
         );
         assert!(LEDGER_BOOTSTRAP_SQL.contains("IF NOT EXISTS"));
@@ -1127,7 +1165,9 @@ mod tests {
         assert_ne!(desktop_vault_canary, sdk_gateway_authority);
         assert_eq!(native_0035_checksum().len(), 64);
         assert_ne!(native_0034_checksum(), native_0035_checksum());
-        assert_eq!(MIGRATIONS.len(), 23);
-        assert_eq!(MIGRATIONS[22].version, NATIVE_LATEST_VERSION);
+        assert_eq!(native_0036_checksum().len(), 64);
+        assert_ne!(native_0035_checksum(), native_0036_checksum());
+        assert_eq!(MIGRATIONS.len(), 24);
+        assert_eq!(MIGRATIONS[23].version, NATIVE_LATEST_VERSION);
     }
 }
