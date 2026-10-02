@@ -1,6 +1,6 @@
 # Wrok Bot 后端实施台账
 
-更新时间：2026-09-30。独立验收主控核对远端与新机状态；2026-09-19 的实施、实测记录保留为历史记录。
+更新时间：2026-10-01。055 已补充本轮独立本地检查；其余检查点及 2026-09-19 的实施、实测记录保留为历史记录。
 
 001–047 已核实为 main 祖先。换机主控已亲读、实测并正常合入049、050、051、052、053、056、057、058及重建060/061、新增必要维护063/064；048、054、055保留开放候选，059/062仍缺合同批准。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。下方历次检查点是历史记录，当前状态以任务表及本轮最终结论为准。
 
@@ -66,7 +66,7 @@
 | V6-PR-052 | Desktop ScreenSessionService 局部装配 | 主控返修已验且已合，仅backend局部端口 | [#67](https://github.com/acosmi/wrokbot/pull/67) | [82db75413b](https://github.com/acosmi/wrokbot/commit/82db75413bd7ba7639abae2238a7d5ee722a0e0e) |
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 主控已验且已合 | [#68](https://github.com/acosmi/wrokbot/pull/68) | [e7098b56fa](https://github.com/acosmi/wrokbot/commit/e7098b56fa58370811057b14d4715c642c4bc13b) |
 | V6-PR-054 | skip-link 键盘焦点修复 | 阻塞：UI原件与真实焦点验收输入缺失 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
-| V6-PR-055 | UI wasm32 Clippy 修复 | 阻塞：UI原件与wasm实际分支验证缺失 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
+| V6-PR-055 | UI wasm32 Clippy 修复 | 本轮独立本地检查通过；待主控发布及正常集成 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
 | V6-PR-056 | Desktop Clippy 修复 | 主控返修已验且已合 | [#72](https://github.com/acosmi/wrokbot/pull/72) | [9bae520869](https://github.com/acosmi/wrokbot/commit/9bae520869f8dc2fb9833fae4b946cd99c3aa64a) |
 | V6-PR-057 | 既有格式差异修复 | 主控已验且已合 | [#74](https://github.com/acosmi/wrokbot/pull/74) | [acf1a26f15](https://github.com/acosmi/wrokbot/commit/acf1a26f15c5ef19f437ec77d56e7c51af0857fe) |
 | V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验且已合 | [#76](https://github.com/acosmi/wrokbot/pull/76) | [9a3b5c7234](https://github.com/acosmi/wrokbot/commit/9a3b5c7234b8362e4765726c52a6db1c73e08a36) |
@@ -169,7 +169,7 @@
 - SDK 的 App 登录、连接目录、v2 Provider 组合及三种模型完整旅程；PG/Vault 持久授权已由 047 验收，账户桥 Rust 接入与真实厂商旅程仍待完成。
 - Browser 与原生电脑的完整产品链、A0–A7 同一候选验收和 24 小时 soak。
 - M1 事件与同节点协作、M2 节点与文件能力，以及完整平台、安全和发布验收。
-- UI wasm32 严格 Clippy、真实键盘/DOM验收仍待054/055；后端已有两波及Desktop局部lint已分别由049/051/056实际验收，不继承为全仓或全部平台门禁通过。
+- 055 的 UI wasm32/native 严格 Clippy 已在本轮本地候选实测通过；054 的真实键盘/DOM焦点验收仍待。后端已有两波及Desktop局部lint已分别由049/051/056实际验收，不继承为全仓或全部平台门禁通过。
 
 040 只验证有界归档的认证消费，不授予恢复切换权限，不关闭以上工作。
 
@@ -274,3 +274,11 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 067 最终候选保留065 consumed-before-mint顺序，在任何恢复效果前检查动态启动锁完整五行格式与安全文件属性，持有文件/字节证据，并在静止核验、epoch铸造前及删除前复核；仅Startup/Helper journal恢复错误进入既有一次受控中间态退役。坏格式、文件替换或同inode改写的拒绝及记录保全由同候选回执记录。复核与path unlink仍是独立步骤，不把局部保全证明当作完整PG恢复验收。
 
 068 最终候选由start-lock封闭格式推导最大合法233字节，首次读取最多234字节并拒绝空或越界；合法最小/最大PID记录长度为224/233。保留严格grammar、owner/文件证据复核及065/066/067顺序，边界和打开后增长的局部读数/拒绝/保全由同候选回执记录。长度检查不替代格式核验，局部growth测试不宣称穷举生产竞争。
+
+## 055 本轮独立本地候选验证（2026-10-01）
+
+原 PR head `86d261c10c13dce9b377ea635a85d8afcb574404` 正常合入精确已验 main `b3f1dc9f7923b2fb650f8e589f046f099f69b290`；仅本台账冲突，当前其他任务、历次失败和原 055 作者历史均保留。三个产品文件与原 PR head 逐字节相同：Request 私有构造方法改名为 builder，五调用同步；StartFailure 五构造装箱、两消费解构。五种失败分类、原 attempt 恢复、Conflict 目录重载、submitting 收尾及请求身份均保持。没有命名身份、schema、route、CSS、Engine 或 native 权限变化。
+
+干净检查候选 `acb12126ca22cf94e585f323c8785b63d77a481a` 在固定 Rust 1.98.0、独立 target 下实际完成 UI wasm32 offline/locked check、wasm32 与 native all-targets offline/locked 严格 Clippy（-D warnings）、crate fmt check 和既有 crate 单测：216 通过、0 失败、0 忽略、0 过滤；bin 与 doc 各零项不计为通过。此 216 来自本轮原始运行日志，不继承旧作者计数。Cargo 仍报告锁定 proc-macro-error2 的未来 Rust 兼容性提示，未放宽 lint。
+
+初次 Cargo PATH 启动失败、wasm 离线缺锁定缓存、单测编译磁盘不足及清缓存被目录保护拒绝均保留，不记为测试执行或删除成功。定向 locked 缓存准备完成后重跑受阻离线检查；实际可用空间恢复后，同原环境单测重新完成。最终登记仅改台账；全部产品及构建输入字节核同上述已检查候选，明确继承这些局部检查，不冒充在登记后的 head 重跑。055 是既有私有代码 lint 维护，本轮未执行 GUI 焦点、PG、厂商旅程或 A0–A7 验收；当前仍为本地候选，未写入远端。
