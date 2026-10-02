@@ -439,6 +439,12 @@ fn install_lifecycle(context: ListboxContext) {
     let open_context = context.clone();
     Effect::new(move |_| {
         let open = open_context.open.get();
+        if open && open_context.disabled.get() {
+            open_context.open.set(false);
+            open_context.active_id.set(None);
+            was_open.set_value(false);
+            return;
+        }
         let previous = was_open.get_value();
         if open && !previous {
             let initial = open_context.pending_initial.get_value();
@@ -578,6 +584,9 @@ fn select_value(
     label: String,
     return_focus: bool,
 ) {
+    if context.disabled.get_untracked() {
+        return;
+    }
     let changed = context.value.get_untracked().as_ref() != Some(&value);
     context.value.set(Some(value.clone()));
     context.committed_label.set(Some(label.clone()));

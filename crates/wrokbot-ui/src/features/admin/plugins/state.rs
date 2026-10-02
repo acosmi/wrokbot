@@ -4,12 +4,13 @@ use openbot_contracts::mcp::{McpAdminPage, McpConnections};
 
 use crate::api::ApiError;
 
-/// App-owned write state survives route unmount; it holds no credentials or request payload.
+/// Authenticated-mount-owned write state survives route unmount; it holds no request payload.
 #[derive(Clone, Copy)]
 pub(crate) struct PluginActions {
     pub busy: RwSignal<bool>,
     pub revision: RwSignal<u64>,
     pub failed: RwSignal<bool>,
+    pub unknown: RwSignal<bool>,
     pub target: RwSignal<Option<String>>,
     #[cfg(target_arch = "wasm32")]
     focus: RwSignal<Option<(String, String)>>,
@@ -21,6 +22,7 @@ impl PluginActions {
             busy: RwSignal::new(false),
             revision: RwSignal::new(0),
             failed: RwSignal::new(false),
+            unknown: RwSignal::new(false),
             target: RwSignal::new(None),
             #[cfg(target_arch = "wasm32")]
             focus: RwSignal::new(None),
@@ -40,17 +42,30 @@ impl PluginActions {
         self.focus.set(capture_focus());
         self.busy.set(true);
         self.failed.set(false);
+        self.unknown.set(false);
         self.target.set(Some(target));
         // A write is not a mount-scoped read: dropping the page must not pretend the submitted
         // operation was cancelled. Completion only updates app-owned state and guarded UI signals.
         leptos::task::spawn_local(async move {
-            let success = work.await.is_ok();
-            self.failed.try_set(!success);
-            finished(success);
+            let result = work.await;
+            self.complete(result, finished);
+        });
+    }
+
+    fn complete(self, result: Result<(), ApiError>, finished: impl FnOnce(bool)) {
+        if self.busy.try_get_untracked().is_none() {
+            return;
+        }
+        let unknown = result.is_err_and(plugin_write_unknown);
+        self.failed.try_set(result.is_err());
+        self.unknown.try_set(unknown);
+        // No exact effect readback exists here. A list refresh cannot prove non-commit.
+        self.busy.try_set(unknown);
+        finished(result.is_ok());
+        if result.is_ok() {
             self.revision
                 .try_update(|revision| *revision = revision.saturating_add(1));
-            self.busy.try_set(false);
-        });
+        }
     }
 
     pub fn return_to(self, id: &str) {
@@ -75,6 +90,9 @@ impl PluginActions {
             use wasm_bindgen::JsCast;
             leptos::task::spawn_local(async move {
                 leptos::task::tick().await;
+                if self.focus.try_get_untracked().is_none() {
+                    return;
+                }
                 let Some(window) = web_sys::window() else {
                     return;
                 };
@@ -109,6 +127,75 @@ impl PluginActions {
                 }
             });
         }
+    }
+}
+
+fn plugin_write_unknown(error: ApiError) -> bool {
+    !matches!(
+        error,
+        ApiError::Unauthorized | ApiError::Forbidden | ApiError::NotFound | ApiError::Conflict
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn incomplete_or_lost_ack_never_unlocks_an_effect() {
+        for error in [
+            ApiError::Network,
+            ApiError::ReconciliationRequired,
+            ApiError::InvalidResponse,
+            ApiError::Server,
+            ApiError::Unavailable,
+        ] {
+            assert!(plugin_write_unknown(error));
+        }
+        for error in [
+            ApiError::Unauthorized,
+            ApiError::Forbidden,
+            ApiError::NotFound,
+            ApiError::Conflict,
+        ] {
+            assert!(!plugin_write_unknown(error));
+        }
+    }
+    #[test]
+    fn late_plugin_completion_does_not_enter_the_next_authenticated_mount() {
+        for result in [Ok(()), Err(ApiError::ReconciliationRequired)] {
+            let old_owner = Owner::new();
+            let old = old_owner.with(PluginActions::new);
+            old.busy.set(true);
+            old_owner.cleanup();
+            Owner::new().with(|| {
+                let new = PluginActions::new();
+                let invoked = std::cell::Cell::new(false);
+                old.complete(result, |_| invoked.set(true));
+                assert!(!invoked.get());
+                assert!(!new.busy.get_untracked());
+                assert!(!new.unknown.get_untracked());
+                assert_eq!(new.revision.get_untracked(), 0);
+            });
+        }
+    }
+    #[test]
+    fn refresh_cannot_release_unknown_and_only_acknowledgements_advance_revision() {
+        Owner::new().with(|| {
+            let actions = PluginActions::new();
+            actions.complete(Err(ApiError::ReconciliationRequired), |_| {});
+            assert!(actions.busy.get_untracked());
+            assert!(actions.unknown.get_untracked());
+            assert_eq!(actions.revision.get_untracked(), 0);
+            // Page reload has no reference to the latch. No new dispatch can be admitted.
+            actions.launch("blocked".into(), async { Ok(()) }, |_| {
+                panic!("must remain blocked")
+            });
+            assert!(actions.busy.get_untracked());
+            let acknowledged = PluginActions::new();
+            acknowledged.complete(Ok(()), |_| {});
+            assert!(!acknowledged.busy.get_untracked());
+            assert_eq!(acknowledged.revision.get_untracked(), 1);
+        });
     }
 }
 

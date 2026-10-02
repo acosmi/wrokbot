@@ -49,19 +49,54 @@ impl RememberActions {
         });
         leptos::task::spawn_local(async move {
             let result = crate::api::remember_memory_record(input).await.map(|_| ());
-            self.entries.try_update(|entries| match result {
-                Ok(()) => {
-                    entries.insert(key, RememberStatus::Saved);
-                }
-                Err(ApiError::Unauthorized | ApiError::Forbidden | ApiError::NotFound) => {
-                    entries.remove(&key);
-                }
-                Err(_) => {
-                    entries.insert(key, RememberStatus::Unknown);
-                }
-            });
-            finished(result);
+            self.complete(key, result, finished);
         });
+    }
+    fn complete(
+        self,
+        key: (String, String),
+        result: Result<(), ApiError>,
+        finished: impl FnOnce(Result<(), ApiError>),
+    ) {
+        if self.entries.try_get_untracked().is_none() {
+            return;
+        }
+        self.entries.try_update(|entries| match result {
+            Ok(()) => {
+                entries.insert(key, RememberStatus::Saved);
+            }
+            Err(ApiError::Unauthorized | ApiError::Forbidden | ApiError::NotFound) => {
+                entries.remove(&key);
+            }
+            Err(_) => {
+                entries.insert(key, RememberStatus::Unknown);
+            }
+        });
+        finished(result);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn late_remember_completion_cannot_mark_the_next_accounts_message() {
+        for result in [Ok(()), Err(ApiError::ReconciliationRequired)] {
+            let owner = Owner::new();
+            let old = owner.with(RememberActions::new);
+            let key = ("same-thread".into(), "same-message".into());
+            old.entries.update(|entries| {
+                entries.insert(key.clone(), RememberStatus::Pending);
+            });
+            owner.cleanup();
+            Owner::new().with(|| {
+                let new = RememberActions::new();
+                let invoked = std::cell::Cell::new(false);
+                old.complete(key, result, |_| invoked.set(true));
+                assert!(!invoked.get());
+                assert!(new.entries.get_untracked().is_empty());
+            });
+        }
     }
 }
 

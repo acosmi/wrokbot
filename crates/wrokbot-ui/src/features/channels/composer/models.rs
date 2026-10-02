@@ -2,7 +2,9 @@
 
 use leptos::prelude::*;
 use openbot_contracts::ids::BotId;
-use openbot_contracts::model_connections::{ModelConnection, RunModelSelection};
+use openbot_contracts::model_connections::{
+    ModelConnection, ModelConnectionSource, RunModelSelection,
+};
 
 use crate::api::ApiError;
 #[cfg(target_arch = "wasm32")]
@@ -257,15 +259,7 @@ pub(crate) fn ModelPicker(state: ModelComposer, disabled: Signal<bool>) -> impl 
     if state.directory.status.get_untracked() == DirectoryStatus::Idle {
         state.directory.reload();
     }
-    let rows = Signal::derive(move || {
-        state
-            .directory
-            .rows
-            .get()
-            .into_iter()
-            .filter(|row| row.enabled && row.has_credential)
-            .collect::<Vec<_>>()
-    });
+    let rows = Signal::derive(move || state.directory.rows.get());
     let selection_status = Signal::derive(move || state.selection_status());
     let picker_value = RwSignal::new(displayed_selection_key(
         state.selection_status_untracked(),
@@ -274,12 +268,15 @@ pub(crate) fn ModelPicker(state: ModelComposer, disabled: Signal<bool>) -> impl 
     Effect::new(move |_| {
         let status = selection_status.get();
         let selection = state.selected.get();
-        if selection.is_some() && status != ModelSelectionStatus::Ready {
+        if disabled.get() || (selection.is_some() && status != ModelSelectionStatus::Ready) {
             state.open.set(false);
         }
         picker_value.set(displayed_selection_key(status, selection.as_ref()));
     });
     let choose = UnsyncCallback::new(move |value: Option<String>| {
+        if disabled.get_untracked() {
+            return;
+        }
         let Some(value) = value else {
             return;
         };
@@ -362,20 +359,31 @@ pub(crate) fn ModelPicker(state: ModelComposer, disabled: Signal<bool>) -> impl 
                         };
                         let value = selection_key(Some(&selection)).expect("selection key");
                         let option_id = format!("run-model-{}-{}", row.id, row.revision);
-                        let label = format!("{} · {}", row.name, row.model);
+                        let source_label = match row.source {
+                            ModelConnectionSource::Custom => t_string!(i18n, models.custom_source).to_owned(),
+                        };
+                        let availability = if !row.enabled {
+                            t_string!(i18n, models.disabled).to_owned()
+                        } else if !row.has_credential {
+                            t_string!(i18n, models.key_missing).to_owned()
+                        } else {
+                            t_string!(i18n, models.key_stored).to_owned()
+                        };
+                        let summary = format!("{} · {source_label} · {} · {availability}", row.model, row.id);
+                        let label = format!("{} · {summary}", row.name);
                         view! {
                             <SelectItem
                                 id=option_id
                                 value=value
                                 label=label
                                 disabled=Signal::derive(move || {
-                                    !can_choose_explicit(
+                                    !row.enabled || !row.has_credential || !can_choose_explicit(
                                         state.directory.status.get(),
                                         state.supports_explicit.get(),
                                     )
                                 })
                             >
-                                <strong>{row.name}</strong><small>{row.model}</small>
+                                <strong>{row.name}</strong><small>{summary}</small>
                             </SelectItem>
                         }
                     }/>
@@ -400,6 +408,12 @@ pub(crate) fn ModelPicker(state: ModelComposer, disabled: Signal<bool>) -> impl 
                 <span class="ob-page-empty">{move || t!(i18n, models.managed_by_agent)}</span>
             </Show>
         </div>
+        <Show when=move || state.directory.status.get()==DirectoryStatus::Ready && !state.directory.rows.get().iter().any(|row| row.enabled && row.has_credential)>
+            <aside class="ob-model-setup" role="note">
+                <span>{move || t!(i18n, models.custom_setup_note)}</span>
+                <a href="/settings/models">{move || t!(i18n, models.custom_setup_action)}</a>
+            </aside>
+        </Show>
     }
 }
 

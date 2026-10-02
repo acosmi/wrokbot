@@ -29,8 +29,6 @@ use crate::shell::{
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
-    provide_context(crate::features::admin::plugins::PluginActions::new());
-    provide_context(crate::features::memory::remember::RememberActions::new());
     view! {
         <I18nContextProvider set_lang_attr_on_html=true enable_cookie=false>
             <Title text="Wrok Bot" />
@@ -48,6 +46,8 @@ pub fn App() -> impl IntoView {
 /// Authenticated-mount-owned projections cannot survive a session boundary or accept its late reads.
 #[component]
 fn AuthenticatedWorkspace() -> impl IntoView {
+    provide_context(crate::features::admin::plugins::PluginActions::new());
+    provide_context(crate::features::memory::remember::RememberActions::new());
     let model_actions = crate::features::settings::models::ModelActions::new();
     provide_context(model_actions);
     provide_context(

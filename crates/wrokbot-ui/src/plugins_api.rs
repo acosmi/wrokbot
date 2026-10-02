@@ -297,7 +297,8 @@ pub(crate) async fn request(
             request.send().await
         }
         .map_err(|_| ApiError::Network)?;
-        // 202 is an unknown commit, never a success receipt. The UI always refetches after writes.
+        // 202 is an unknown commit, never a success receipt. Only an acknowledged write refreshes;
+        // an ordinary list read cannot release the authenticated owner's unknown-effect latch.
         if response.status() != 200 {
             return Err(super::status_error(response.status()));
         }

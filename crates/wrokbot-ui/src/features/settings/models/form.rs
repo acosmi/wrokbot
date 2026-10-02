@@ -169,7 +169,7 @@ fn ModelForm(
         invalid.set(false);
         actions.launch(input, move |ok| {
             if ok {
-                close.run(());
+                let _ = close.try_run(());
             }
         });
     };

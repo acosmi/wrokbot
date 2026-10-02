@@ -387,6 +387,9 @@ fn install_resize_observer(context: MessageScrollerContext) {
 
 #[cfg(target_arch = "wasm32")]
 fn note_content_change(context: MessageScrollerContext) {
+    if context.content_change_pending.try_get_value().is_none() {
+        return;
+    }
     context.content_change_pending.set_value(true);
     schedule_content_sync(context);
 }
@@ -395,12 +398,15 @@ fn note_content_change(context: MessageScrollerContext) {
 fn schedule_content_sync(context: MessageScrollerContext) {
     use wasm_bindgen::{JsCast, closure::Closure};
 
-    if context.resize_scheduled.get_value() {
+    if context.resize_scheduled.try_get_value() != Some(false) {
         return;
     }
     context.resize_scheduled.set_value(true);
     let callback_context = context.clone();
     let callback = Closure::once_into_js(move || {
+        if callback_context.resize_scheduled.try_get_value().is_none() {
+            return;
+        }
         callback_context.resize_scheduled.set_value(false);
         sync_content(callback_context.clone());
         callback_context.content_change_pending.set_value(false);
@@ -713,7 +719,8 @@ fn mark_programmatic_scroll(context: MessageScrollerContext) {
     context.programmatic_generation.set_value(generation);
     context.programmatic_scroll.set_value(true);
     schedule_timeout(AUTOSCROLL_SETTLE_MS, move || {
-        if context.programmatic_generation.get_value() == generation {
+        // The browser timer can outlive this transcript owner after route navigation.
+        if context.programmatic_generation.try_get_value() == Some(generation) {
             context.programmatic_scroll.set_value(false);
         }
     });
