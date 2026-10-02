@@ -1,6 +1,6 @@
 # Wrok Bot 后端实施台账
 
-更新时间：2026-10-01。055 已补充本轮独立本地检查；其余检查点及 2026-09-19 的实施、实测记录保留为历史记录。
+更新时间：2026-10-02。055 已补充本轮独立本地检查；其余检查点及 2026-09-19 的实施、实测记录保留为历史记录。
 
 001–047 已核实为 main 祖先。换机主控已亲读、实测并正常合入049、050、051、052、053、056、057、058及重建060/061、新增必要维护063/064；048、054、055保留开放候选，059/062仍缺合同批准。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。下方历次检查点是历史记录，当前状态以任务表及本轮最终结论为准。
 
@@ -83,7 +83,8 @@
 | V6-PR-069 | helper PG_VERSION的16字节规则在读取中执行，复核已打开句柄与路径 | 主控定向及严格Clippy已验；最终组合验收与集成事实见PR | [#87](https://github.com/acosmi/wrokbot/pull/87) | [PR合并记录](https://github.com/acosmi/wrokbot/pull/87) |
 | V6-PR-070 | 真实PG审批组合测试夹具的单语句时间 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#88](https://github.com/acosmi/wrokbot/pull/88) | 以PR实际合并状态为准 |
 | V6-PR-071 | 取消测试的启动阶段观察预算 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#89](https://github.com/acosmi/wrokbot/pull/89) | 以PR实际合并状态为准 |
-| V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 当前055主线整合后默认lib86/86、严格Clippy与fmt实测通过；待主控发布合入 | 无 | 未合入 |
+| V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 已正常合入；原局部默认lib86/86、严格Clippy与fmt实测记录保留 | [#92](https://github.com/acosmi/wrokbot/pull/92) | [b62f3ae4e8](https://github.com/acosmi/wrokbot/commit/b62f3ae4e84d8998703113ab62363d5d3eb59c0c) |
+| V6-PR-073 | Unix诊断fixture codesign输出有界保留 | 局部16/16、xtask全目标严格Clippy及fmt实测通过；待主控发布合入 | 无 | 未合入 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -303,3 +304,13 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 2026-10-02：正常合入已发布并合并的055主线 `8f7f75f4faa549472e0fcb343278ed343554712d`；仅解本台账冲突，保留055、065–068状态及原失败历史。三个UI文件属于已合主线基线；072产品差量仍只为既有preferences有界读取，源码与原交付逐字节一致。以上旧候选和发布等待记录保留为历史；当前发布授权已由主控接收，远端动作由主控统一完成。新基线受影响检查以本轮真实回执为准，不能将旧计数直接继承为新HEAD实测。
 
 2026-10-02 本轮实测：干净检查候选 `44f2ece2080ac146f04ab18f187ad8884247a139`（tree `476507cef65142ee0db62cae2ba367a689a65bad`，基底 `8f7f75f4faa549472e0fcb343278ed343554712d`）在固定Rust 1.98.0、独立target、offline/locked下，实际执行默认 `openbot-desktop --lib`：86 passed、0 failed、0 ignored、0 measured、0 filtered；默认all-targets严格Clippy（`-D warnings`）与workspace fmt check均退出0。未开启额外feature、未运行PG、Keychain、native probe、TTY或全仓测试。最终登记仅改台账；完整tracked树除台账与已检查候选逐字节一致，故精确引用以上本轮回执，不冒充在登记后HEAD重新运行。上述局部开发检查不代表A1、A0–A7、M0或full_v6通过。
+
+## V6-PR-073 Unix诊断fixture codesign输出有界保留
+
+2026-10-02：从正常已合主线 `b62f3ae4e84d8998703113ab62363d5d3eb59c0c` 维护既有 `verify_fixture_signing` 的两次诊断捕获。metadata只保留stderr最多64KiB+1，entitlements只保留stdout最多16KiB+1，额外1字节仅标记原预算超限；另一流零保留并持续排空。正常与超限路径均读完两流真实EOF后wait原持有Child，不增总输出限制或deadline。状态失败/原预算超限仍先于UTF-8、flags和plist解析；恰好64KiB/16KiB仍接受。已有锁定rustix1.1.4仅在testkit原optional、xtask依赖边追加event；workspace依赖声明、版本、checksum及Cargo.lock不变，不增加生产依赖。
+
+读取控制流按Rust1.98实际实现保持：stdout优先poll、Interrupted重试、任一EOF后剩流恢复blocking读取。HUP/ERR/NVAL进入read，事件本身不充当EOF；blocking剩流的WouldBlock保留hard-read错误。不可恢复读/模式/poll错误仍经原式unwrap在wait前panic、关闭pipe且不保证等待Child或排空另一流；此历史生命周期缺口未修复，不把正常/超限的wait保证扩写到读故障。没有新增线程错误路径。非Unix保留原捕获实现；本项运行证据仅macOS/Unix。
+
+干净检查候选 `019c2889fdfd27a85afd2a2db285211ea2d97429`（tree `73b8108268413a9bd69c85f47ffb67f2c7f8b634`）在固定Rust1.98.0、独立target、offline/locked及既有原生构建依赖路径下，实际运行 `openbot-testkit --features xtask --bin xtask engine_bundle::tests`：16 passed、0 failed、0 ignored、0 measured、179 filtered；11项新增覆盖边界/增长、零保留、读故障、两流各2MiB的四种组合、buffered HUP、EOF后原Child等待和错误优先级。同feature all-targets严格Clippy（`-D warnings`）及workspace fmt check均退出0。原首轮缺xmlsec1-config的构建101/零测试与新增测试helper的Clippy101均保留；后者已不放宽lint地修复，旧9fea候选15/15只作该候选历史。
+
+最终登记只改台账，并把072任务行校正为实际PR92/b62f3ae合入事实；原055、072、065–068记录及失败历史不改写。完整tracked树除台账与上述检查候选逐字节一致，精确引用该候选真实局部回执，不冒充在登记后HEAD重新执行。未运行真实codesign、签名证书、PG、TTY、Keychain或原生权限探测；签名profile、entitlements、命令、manifest、生产Engine协议、权限及release拒绝路径保持。本项不是生产Engine合同冻结、真实签名验收或A0–A7/M0完成。
