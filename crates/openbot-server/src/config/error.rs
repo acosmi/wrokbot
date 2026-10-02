@@ -63,6 +63,10 @@ pub enum Expectation {
     NonEmptySecret,
     /// Complete operator-attested provider price snapshot.
     ProviderRateCard,
+    /// Exactly 64 lowercase hexadecimal characters for the trusted local TLS proxy.
+    TlsProxySecret,
+    /// A valid HTTPS public address without credentials, query or fragment.
+    HttpsProxyPublicUrl,
 }
 
 impl Expectation {
@@ -84,6 +88,8 @@ impl Expectation {
             Self::WholeTokensOneToMillion => "whole_tokens_one_to_million",
             Self::NonEmptySecret => "non_empty_secret",
             Self::ProviderRateCard => "provider_rate_card",
+            Self::TlsProxySecret => "tls_proxy_secret_64_lower_hex",
+            Self::HttpsProxyPublicUrl => "https_proxy_public_url",
         }
     }
 }

@@ -7,8 +7,8 @@
 //!
 //! 子命令：
 //!
-//! - `parity-check` —— 校验 `parity/*.yaml` **与** `fixtures/MANIFEST.yaml`，强制统一
-//!   schema v1 的 8 条规则。
+//! - `parity-check` —— 默认要求完整 parity/overlay/fixtures；公开 checkout 须显式
+//!   `--fixtures-only`，只校验 fixtures，不认证产品或完整迁移覆盖率。
 //! - `recount`      —— 真跑每份台账 `recount` 数组里的复算命令，把 `expect` 与实得 stdout 逐条对账。
 //! - `i18n-check`   —— 中英文键与插值占位符集合逐字相等。
 //! - `design-lint`  —— GUI 反向视觉约束与图标 allowlist。
@@ -286,9 +286,11 @@ fn print_usage() {
 xtask —— OpenBot 仓库闸门驱动器
 
 用法：
-  cargo xtask parity-check [--json]   校验 parity/*.yaml 与 fixtures/MANIFEST.yaml
+  cargo xtask parity-check [--fixtures-only] [--json]
+                                      默认要求九份 parity/overlay/fixtures，缺项失败。
+                                      --fixtures-only 只校 fixtures，不校 parity/overlay。
                                       （统一 schema v1 的 8 条规则；fixtures 台账不进 parity 合计）
-  cargo xtask recount [--json] [--require-upstream]
+  cargo xtask recount [--fixtures-only] [--json] [--require-upstream]
                                       真跑每份台账 recount 数组里的复算命令并与 expect 对账。
                                       cwd: upstream 的项需要环境变量 OPENBOT_UPSTREAM_DIR 指向上游克隆；
                                       未设置时这些项报告为 SKIPPED（计数并打印，不当成通过）。
@@ -390,6 +392,12 @@ struct LedgerReport {
 
 #[derive(Serialize)]
 struct ParityReport {
+    scope: CheckScope,
+    /// Completeness here concerns input identities, not evidence validity or product admission.
+    required_inputs_present: bool,
+    product_certified: bool,
+    parity_checked: bool,
+    overlay_checked: bool,
     /// `parity/*.yaml` 的九份 parity ledger。
     ledgers: Vec<LedgerReport>,
     /// `fixtures/MANIFEST.yaml`（0 或 1 条）。**刻意与 `ledgers` 分开**：
@@ -406,13 +414,30 @@ struct ParityReport {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CheckScope {
+    Full,
+    FixturesOnly,
+}
+
+impl CheckScope {
+    fn from_args(args: &[String]) -> Self {
+        if args.iter().any(|a| a == "--fixtures-only") {
+            Self::FixturesOnly
+        } else {
+            Self::Full
+        }
+    }
+}
+
 /// 一份待校验的台账：文件路径 + 它属于哪一类。
 struct LedgerSource {
     path: PathBuf,
     kind: LedgerKind,
 }
 
-/// 收集 `parity/*.yaml`。顺带把 `.yml` 写进 `warnings` 点名，避免"文件名写错所以没被校验"。
+/// Collect yaml/yml ledger candidates. Full scope rejects names outside the exact yaml set.
 fn collect_parity_ledgers(root: &Path, warnings: &mut Vec<String>) -> Result<Vec<PathBuf>> {
     let parity_dir = root.join("parity");
     let mut files = Vec::new();
@@ -430,10 +455,13 @@ fn collect_parity_ledgers(root: &Path, warnings: &mut Vec<String>) -> Result<Vec
         match entry.path().extension().and_then(|e| e.to_str()) {
             // 只认 .yaml。
             Some("yaml") => files.push(entry.into_path()),
-            Some("yml") => warnings.push(format!(
-                "{}：扩展名是 .yml，parity-check 只扫 .yaml，这个文件没有被校验",
-                rel(root, entry.path())
-            )),
+            Some("yml") => {
+                warnings.push(format!(
+                    "{}：扩展名是 .yml，不属于必需的 .yaml 台账集合",
+                    rel(root, entry.path())
+                ));
+                files.push(entry.into_path());
+            }
             _ => {}
         }
     }
@@ -442,17 +470,19 @@ fn collect_parity_ledgers(root: &Path, warnings: &mut Vec<String>) -> Result<Vec
 
 /// 组装本次要校验的全部台账：九份 parity ledger + fixtures 台账。
 ///
-/// fixtures 台账缺失时的判定刻意分两档：
-/// - `fixtures/` 目录在、`MANIFEST.yaml` 不在 ⇒ **违反**。fixtures 语料还在而它的台账没了，
-///   等于这批语料重新变成没人记账的散文件。
-/// - `fixtures/` 目录压根不存在 ⇒ **告警**。骨架仓（Phase 0）确实可能还没有这个目录，
-///   在那种世界里判红就是一条恒红闸门。
+/// The fixture manifest is required in either scope. Only full scope reads migration ledgers.
 fn collect_ledger_sources(
     root: &Path,
+    scope: CheckScope,
     violations: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) -> Result<Vec<LedgerSource>> {
-    let mut sources: Vec<LedgerSource> = collect_parity_ledgers(root, warnings)?
+    let parity_files = if scope == CheckScope::Full {
+        collect_parity_ledgers(root, warnings)?
+    } else {
+        Vec::new()
+    };
+    let mut sources: Vec<LedgerSource> = parity_files
         .into_iter()
         .map(|path| LedgerSource {
             path,
@@ -466,13 +496,9 @@ fn collect_ledger_sources(
             path: fixtures_manifest,
             kind: LedgerKind::Fixtures,
         });
-    } else if root.join("fixtures").is_dir() {
-        violations.push(format!(
-            "{FIXTURES_MANIFEST_RELPATH}：fixtures/ 目录存在但台账文件不存在 —— fixtures 语料必须有台账，否则这批文件没有任何计数与规则约束"
-        ));
     } else {
-        warnings.push(format!(
-            "{FIXTURES_MANIFEST_RELPATH} 不存在，且 fixtures/ 目录也不存在 —— 本次没有校验 fixtures 台账"
+        violations.push(format!(
+            "{FIXTURES_MANIFEST_RELPATH}：必需台账不存在，不能按零项通过"
         ));
     }
 
@@ -482,13 +508,13 @@ fn collect_ledger_sources(
 fn cmd_parity_check(args: &[String]) -> Result<()> {
     let json = args.iter().any(|a| a == "--json");
     for a in args {
-        if a != "--json" {
-            bail!("parity-check: 未知参数 `{a}`（只接受 --json）");
+        if a != "--json" && a != "--fixtures-only" {
+            bail!("parity-check: 未知参数 `{a}`（只接受 --json / --fixtures-only）");
         }
     }
 
     let root = workspace_root()?;
-    let report = build_parity_report(&root)?;
+    let report = build_parity_report(&root, CheckScope::from_args(args))?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -505,32 +531,33 @@ fn cmd_parity_check(args: &[String]) -> Result<()> {
 
 /// 组装完整的校验报告。**只读、不打印、不决定退出码** —— 这样单测可以拿一个临时目录
 /// 当仓根，直接断言"fixtures 台账确实被纳入了 8 条规则"以及"它没有污染 parity 的合计"。
-fn build_parity_report(root: &Path) -> Result<ParityReport> {
+fn build_parity_report(root: &Path, scope: CheckScope) -> Result<ParityReport> {
     let mut violations: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-    let sources = collect_ledger_sources(root, &mut violations, &mut warnings)?;
-
-    // 一份台账都没有时必须优雅返回，不 panic：Phase 0 里 parity/ 由别的 agent 填，
-    // 骨架 PR 自己跑 `cargo xtask ci` 时它就是空的。
-    if sources.is_empty() {
-        let parity_dir = root.join("parity");
-        let reason = if parity_dir.is_dir() {
-            format!("{} 存在但没有 *.yaml", parity_dir.display())
-        } else {
-            format!("{} 不存在", parity_dir.display())
-        };
-        warnings.push(format!("0 ledger：{reason}"));
-        let overlay = parity_overlay::OverlayReport::empty(0);
-        return Ok(ParityReport {
-            ledgers: Vec::new(),
-            fixtures: Vec::new(),
-            total_entries: 0,
-            total_status_counts: BTreeMap::new(),
-            overlay,
-            violations,
-            warnings,
-        });
+    let sources = collect_ledger_sources(root, scope, &mut violations, &mut warnings)?;
+    if scope == CheckScope::Full {
+        let expected = KNOWN_SCHEMAS
+            .iter()
+            .map(|schema| format!("parity/{schema}.yaml"))
+            .collect::<BTreeSet<_>>();
+        let actual = sources
+            .iter()
+            .filter(|source| source.kind == LedgerKind::Parity)
+            .map(|source| rel(root, &source.path))
+            .collect::<BTreeSet<_>>();
+        for missing in expected.difference(&actual) {
+            violations.push(format!("full scope: 缺少必需台账 {missing}"));
+        }
+        for unexpected in actual.difference(&expected) {
+            violations.push(format!("full scope: 未登记台账 {unexpected}"));
+        }
+        if !root.join("parity/overlay/v4.yaml").is_file() {
+            violations.push("full scope: 缺少必需 overlay parity/overlay/v4.yaml".into());
+        }
+    } else {
+        warnings.push("fixtures_only：parity/overlay 未检查；不认证产品、发布或完整完成率".into());
     }
+    let required_inputs_present = violations.is_empty();
 
     let mut ledgers: Vec<LedgerReport> = Vec::new();
     let mut fixtures: Vec<LedgerReport> = Vec::new();
@@ -566,6 +593,23 @@ fn build_parity_report(root: &Path) -> Result<ParityReport> {
             &mut warnings,
             &mut global_test_ids,
         ) {
+            let expected_schema = match source.kind {
+                LedgerKind::Parity => source
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(""),
+                LedgerKind::Fixtures => "fixtures",
+            };
+            if report.schema != expected_schema {
+                violations.push(format!(
+                    "{display}: schema 必须为 {expected_schema}，实际为 {}",
+                    report.schema
+                ));
+            }
+            if report.entries == 0 {
+                violations.push(format!("{display}: 必需生产台账 entries 不能为空"));
+            }
             match source.kind {
                 LedgerKind::Parity => ledgers.push(report),
                 LedgerKind::Fixtures => fixtures.push(report),
@@ -582,7 +626,8 @@ fn build_parity_report(root: &Path) -> Result<ParityReport> {
         }
     }
     let overlay_path = root.join("parity/overlay/v4.yaml");
-    let overlay = if overlay_path.is_file() || ledgers.len() == KNOWN_SCHEMAS.len() {
+    let overlay_checked = scope == CheckScope::Full && overlay_path.is_file();
+    let overlay = if overlay_checked {
         parity_overlay::validate(
             root,
             &parity_test_ids,
@@ -591,14 +636,15 @@ fn build_parity_report(root: &Path) -> Result<ParityReport> {
             &mut violations,
         )
     } else {
-        // Unit/skeleton repositories may intentionally exercise one ledger in isolation. Once all
-        // nine production ledgers exist, absence becomes a hard R124 violation above.
-        warnings
-            .push("parity/overlay/v4.yaml 未校验：当前不是九份生产 ledger 的完整仓库".to_owned());
         parity_overlay::OverlayReport::empty(total_entries)
     };
 
     Ok(ParityReport {
+        scope,
+        required_inputs_present,
+        product_certified: false,
+        parity_checked: scope == CheckScope::Full && !ledgers.is_empty(),
+        overlay_checked,
         ledgers,
         fixtures,
         total_entries,
@@ -633,7 +679,8 @@ fn print_ledger_line(ledger: &LedgerReport) {
 
 fn print_parity_report(report: &ParityReport) {
     println!(
-        "parity-check: {} parity ledger + {} fixtures 台账",
+        "parity-check: scope={:?}; {} parity ledger + {} fixtures 台账（不认证产品/发布）",
+        report.scope,
         report.ledgers.len(),
         report.fixtures.len()
     );
@@ -654,16 +701,20 @@ fn print_parity_report(report: &ParityReport) {
         }
     }
 
-    let overlay = &report.overlay.disposition_counts;
-    println!(
-        "\nv4 overlay（carry 隐含；显式 exceptions={}；git diff 要求 revalidate={}）：carry={} revalidate={} split={} superseded={}",
-        report.overlay.explicit_entries,
-        report.overlay.diff_required_revalidations,
-        overlay.get("carry").copied().unwrap_or_default(),
-        overlay.get("revalidate").copied().unwrap_or_default(),
-        overlay.get("split").copied().unwrap_or_default(),
-        overlay.get("superseded").copied().unwrap_or_default(),
-    );
+    if report.overlay_checked {
+        let overlay = &report.overlay.disposition_counts;
+        println!(
+            "\nv4 overlay（carry 隐含；显式 exceptions={}；git diff 要求 revalidate={}）：carry={} revalidate={} split={} superseded={}",
+            report.overlay.explicit_entries,
+            report.overlay.diff_required_revalidations,
+            overlay.get("carry").copied().unwrap_or_default(),
+            overlay.get("revalidate").copied().unwrap_or_default(),
+            overlay.get("split").copied().unwrap_or_default(),
+            overlay.get("superseded").copied().unwrap_or_default(),
+        );
+    } else {
+        println!("\nv4 overlay：未检查");
+    }
 
     if !report.warnings.is_empty() {
         println!("\n告警（不影响退出码）：");
@@ -1131,12 +1182,15 @@ struct RecountItemReport {
     command: String,
     cwd: &'static str,
     expect: String,
+    executor: &'static str,
     #[serde(flatten)]
     outcome: RecountOutcome,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct RecountReport {
+    scope: CheckScope,
+    product_certified: bool,
     /// 实际使用的 shell 绝对路径 —— 换了 shell 就是换了一批工具，必须写进报告。
     shell: String,
     /// `OPENBOT_UPSTREAM_DIR` 的实际取值；`None` = 未设置。
@@ -1259,10 +1313,11 @@ fn scalar_to_string(value: &serde_yaml::Value) -> Option<String> {
 /// 结构性问题（缺 `command` / `cwd` 非法 / `expect` 不是标量）这里**不修补也不跳过**，
 /// 而是收集起来一次性报错并指向 `parity-check` —— 那才是这些规则的归属地，
 /// 在两个地方各写一份判据必然漂移。
-fn collect_recount_items(root: &Path) -> Result<Vec<RecountItem>> {
+fn collect_recount_items(root: &Path, scope: CheckScope) -> Result<Vec<RecountItem>> {
     let mut ignored_violations = Vec::new();
     let mut ignored_warnings = Vec::new();
-    let sources = collect_ledger_sources(root, &mut ignored_violations, &mut ignored_warnings)?;
+    let sources =
+        collect_ledger_sources(root, scope, &mut ignored_violations, &mut ignored_warnings)?;
 
     let mut items = Vec::new();
     let mut structural: Vec<String> = Vec::new();
@@ -1435,23 +1490,163 @@ fn cmd_recount(args: &[String]) -> Result<()> {
     let json = args.iter().any(|a| a == "--json");
     let require_upstream = args.iter().any(|a| a == "--require-upstream");
     for a in args {
-        if a != "--json" && a != "--require-upstream" {
-            bail!("recount: 未知参数 `{a}`（只接受 --json / --require-upstream）");
+        if a != "--json" && a != "--require-upstream" && a != "--fixtures-only" {
+            bail!(
+                "recount: 未知参数 `{a}`（只接受 --json / --require-upstream / --fixtures-only）"
+            );
         }
     }
-    run_recount(json, require_upstream).map(|_| ())
+    let scope = CheckScope::from_args(args);
+    if scope == CheckScope::FixturesOnly && require_upstream {
+        bail!("recount: --fixtures-only 不消费上游输入，不能与 --require-upstream 混用");
+    }
+    run_recount(json, require_upstream, scope).map(|_| ())
+}
+
+// Exact equivalents of the six reviewed MANIFEST queries. Do not execute Python or
+// interpret arbitrary source text. Unknown, missing or duplicated queries require review.
+const FIXTURE_QUERY_PREFIX: &str = "python3 -c \"import yaml,io;d=yaml.safe_load(io.open('fixtures/MANIFEST.yaml',encoding='utf-8'));";
+const FIXTURE_QUERIES: [&str; 6] = [
+    "print(len(d['entries']))",
+    "print(sum(1 for e in d['entries'] if e['status']=='todo'))",
+    "print(sum(1 for e in d['entries'] if e['status']=='done'))",
+    "e=d['entries'];assert all(('done_evidence' in x)==(x['status']=='done') for x in e);print('ok')",
+    "t=[x['test_id'] for x in d['entries']];print(len(t),len(set(t)))",
+    "print(sum(1 for e in d['entries'] if e['label']=='parity'),sum(1 for e in d['entries'] if e['label']=='新增'),sum(1 for e in d['entries'] if e['label']=='替代'))",
+];
+
+fn fixture_query_index(item: &RecountItem) -> Result<usize> {
+    if item.file != FIXTURES_MANIFEST_RELPATH || item.cwd != RecountCwd::Repo {
+        bail!("fixture recount requires the reviewed repo manifest");
+    }
+    let query = item
+        .command
+        .strip_prefix(FIXTURE_QUERY_PREFIX)
+        .and_then(|s| s.strip_suffix('"'));
+    FIXTURE_QUERIES
+        .iter()
+        .position(|known| Some(*known) == query)
+        .ok_or_else(|| {
+            anyhow!(
+                "{} recount#{}: unknown fixture query; no shell/Python fallback",
+                item.file,
+                item.index
+            )
+        })
+}
+
+fn fixture_recount_values(root: &Path, items: &[RecountItem]) -> Result<Vec<String>> {
+    let mut queries = BTreeSet::new();
+    for item in items
+        .iter()
+        .filter(|item| item.file == FIXTURES_MANIFEST_RELPATH)
+    {
+        if !queries.insert(fixture_query_index(item)?) {
+            bail!("fixture recount: duplicate query");
+        }
+    }
+    if queries.len() != FIXTURE_QUERIES.len() {
+        bail!("fixture recount: all six reviewed queries are required");
+    }
+    let document: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(
+        root.join(FIXTURES_MANIFEST_RELPATH),
+    )?)?;
+    let entries = document
+        .get("entries")
+        .and_then(serde_yaml::Value::as_sequence)
+        .ok_or_else(|| anyhow!("fixture recount: entries must be a sequence"))?;
+    let count = |field: &str, value: &str| {
+        entries
+            .iter()
+            .filter(|e| e.get(field).and_then(serde_yaml::Value::as_str) == Some(value))
+            .count()
+    };
+    let ids = entries
+        .iter()
+        .map(|e| {
+            e.get("test_id")
+                .and_then(serde_yaml::Value::as_str)
+                .ok_or_else(|| anyhow!("fixture recount: missing test_id"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !entries.iter().all(|e| {
+        e.get("done_evidence").is_some()
+            == (e.get("status").and_then(serde_yaml::Value::as_str) == Some("done"))
+    }) {
+        bail!("fixture recount: done_evidence/status equivalence failed");
+    }
+    Ok(vec![
+        entries.len().to_string(),
+        count("status", "todo").to_string(),
+        count("status", "done").to_string(),
+        "ok".into(),
+        format!(
+            "{} {}",
+            ids.len(),
+            ids.iter().collect::<BTreeSet<_>>().len()
+        ),
+        format!(
+            "{} {} {}",
+            count("label", "parity"),
+            count("label", "新增"),
+            count("label", "替代")
+        ),
+    ])
+}
+
+fn evaluate_fixture_recount(item: &RecountItem, values: &[String]) -> Result<RecountOutcome> {
+    let actual = values
+        .get(fixture_query_index(item)?)
+        .ok_or_else(|| anyhow!("fixture recount value missing"))?;
+    Ok(RecountOutcome {
+        status: if recount_matches(&item.expect, actual) {
+            RecountStatus::Pass
+        } else {
+            RecountStatus::Mismatch
+        },
+        actual: Some(actual.clone()),
+        exit_code: None,
+        stderr: None,
+        reason: None,
+    })
 }
 
 /// `recount` 的本体。返回报告，让 `ci` 能在自己的收尾行里如实转述跳过条数。
-fn run_recount(json: bool, require_upstream: bool) -> Result<RecountReport> {
+fn run_recount(json: bool, require_upstream: bool, scope: CheckScope) -> Result<RecountReport> {
     let root = workspace_root()?;
-    let items = collect_recount_items(&root)?;
-    let upstream = resolve_upstream_dir()?;
-    let runner = locate_shell()?;
+    let parity = build_parity_report(&root, scope)?;
+    if !parity.violations.is_empty() {
+        bail!(
+            "recount: required inputs/structure failed; run parity-check with the same scope:\n{}",
+            parity.violations.join("\n")
+        );
+    }
+    let items = collect_recount_items(&root, scope)?;
+    let fixture_values = fixture_recount_values(&root, &items)?;
+    let uses_shell = items
+        .iter()
+        .any(|item| item.file != FIXTURES_MANIFEST_RELPATH);
+    let upstream = if uses_shell {
+        resolve_upstream_dir()?
+    } else {
+        None
+    };
+    let runner = if uses_shell {
+        Some(locate_shell()?)
+    } else {
+        None
+    };
+    let shell = runner
+        .as_ref()
+        .map(|runner| runner.shell.display().to_string())
+        .unwrap_or_else(|| "not used; Rust fixture queries".into());
 
     if !json {
-        println!("recount: {} 条复算命令", items.len());
-        println!("  shell        = {}", runner.shell.display());
+        println!(
+            "recount: scope={scope:?}; {} 条复算（不认证产品/发布）",
+            items.len()
+        );
+        println!("  shell        = {shell}");
         println!(
             "  {UPSTREAM_DIR_ENV} = {}",
             upstream
@@ -1464,7 +1659,24 @@ fn run_recount(json: bool, require_upstream: bool) -> Result<RecountReport> {
 
     let mut reports: Vec<RecountItemReport> = Vec::new();
     for item in &items {
-        let outcome = evaluate_recount(item, &root, upstream.as_deref(), &runner)?;
+        let (outcome, executor) = if item.file == FIXTURES_MANIFEST_RELPATH {
+            (
+                evaluate_fixture_recount(item, &fixture_values)?,
+                "rust_fixture_query",
+            )
+        } else {
+            (
+                evaluate_recount(
+                    item,
+                    &root,
+                    upstream.as_deref(),
+                    runner
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("shell runner missing"))?,
+                )?,
+                "shell",
+            )
+        };
         if !json {
             let marker = match outcome.status {
                 RecountStatus::Pass => "ok",
@@ -1485,6 +1697,7 @@ fn run_recount(json: bool, require_upstream: bool) -> Result<RecountReport> {
             command: item.command.clone(),
             cwd: item.cwd.as_str(),
             expect: item.expect.clone(),
+            executor,
             outcome,
         });
     }
@@ -1503,7 +1716,9 @@ fn run_recount(json: bool, require_upstream: bool) -> Result<RecountReport> {
         .count();
 
     let report = RecountReport {
-        shell: runner.shell.display().to_string(),
+        scope,
+        product_certified: false,
+        shell,
         upstream_dir: upstream.as_ref().map(|p| p.display().to_string()),
         items: reports,
         passed,
@@ -1731,7 +1946,7 @@ fn run_ci_steps(root: &Path, child_target: &Path) -> Result<()> {
     // 4) 想把跳过也变成硬闸门的场合（CI 里已经 checkout 了上游克隆）用
     //    `cargo xtask recount --require-upstream` —— 这是一条真正的杠杆，不是装饰。
     println!("\n=== xtask ci [7/7] recount ===");
-    let recount = run_recount(false, false).context("第 7 步失败：recount")?;
+    let recount = run_recount(false, false, CheckScope::Full).context("第 7 步失败：recount")?;
 
     if recount.skipped > 0 {
         println!(
@@ -2290,12 +2505,12 @@ mod tests {
     }
 
     /// 用完即删的临时仓根。本 crate 没有 `tempfile` 依赖，所以自带一个最小实现。
-    struct TempRepo {
-        root: PathBuf,
+    pub(crate) struct TempRepo {
+        pub(crate) root: PathBuf,
     }
 
     impl TempRepo {
-        fn new(tag: &str) -> Self {
+        pub(crate) fn new(tag: &str) -> Self {
             // 目录名带 pid + 纳秒：`cargo test` 默认并行，固定名字会让两个用例互相踩。
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -2309,7 +2524,7 @@ mod tests {
             Self { root }
         }
 
-        fn write(&self, relpath: &str, content: &str) {
+        pub(crate) fn write(&self, relpath: &str, content: &str) {
             let path = self.root.join(relpath);
             let parent = path.parent().expect("相对路径必须有父目录");
             std::fs::create_dir_all(parent).expect("建父目录失败");
@@ -2392,7 +2607,7 @@ mod tests {
         );
         repo.write(FIXTURES_MANIFEST_RELPATH, &fixtures_doc(&bad));
 
-        let report = build_parity_report(&repo.root).expect("组装报告不该出错");
+        let report = build_parity_report(&repo.root, CheckScope::Full).expect("组装报告不该出错");
         assert!(
             report
                 .violations
@@ -2415,10 +2630,17 @@ mod tests {
             &fixtures_doc(VALID_FIXTURES_ENTRY),
         );
 
-        let report = build_parity_report(&repo.root).expect("组装报告不该出错");
+        let report = build_parity_report(&repo.root, CheckScope::Full).expect("组装报告不该出错");
         assert!(
-            report.violations.is_empty(),
-            "两份台账都合法：{:?}",
+            !report.required_inputs_present,
+            "partial inputs must not pass full scope"
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .all(|v| v.starts_with("full scope:")),
+            "the supplied entries themselves are valid: {:?}",
             report.violations
         );
         assert_eq!(report.ledgers.len(), 1, "parity ledger 只有一份");
@@ -2444,7 +2666,7 @@ mod tests {
         repo.write("parity/api.yaml", &minimal_parity_doc());
         repo.mkdir("fixtures/policy");
 
-        let report = build_parity_report(&repo.root).expect("组装报告不该出错");
+        let report = build_parity_report(&repo.root, CheckScope::Full).expect("组装报告不该出错");
         assert!(
             report
                 .violations
@@ -2456,30 +2678,25 @@ mod tests {
     }
 
     #[test]
-    fn missing_fixtures_dir_is_only_a_warning() {
-        // 负向对照：骨架仓（连 fixtures/ 目录都还没有）判红就是一条恒红闸门。
+    fn missing_fixtures_dir_fails_in_both_scopes() {
         let repo = TempRepo::new("nodir");
         repo.write("Cargo.toml", "[workspace]\n");
         repo.write("parity/api.yaml", &minimal_parity_doc());
 
-        let report = build_parity_report(&repo.root).expect("组装报告不该出错");
-        assert!(
-            report.violations.is_empty(),
-            "没有 fixtures/ 目录时不该判红：{:?}",
-            report.violations
-        );
-        assert!(
-            report
-                .warnings
-                .iter()
-                .any(|w| w.contains(FIXTURES_MANIFEST_RELPATH)),
-            "但必须留下可见的告警：{:?}",
-            report.warnings
-        );
+        for scope in [CheckScope::Full, CheckScope::FixturesOnly] {
+            let report = build_parity_report(&repo.root, scope).expect("report");
+            assert!(!report.required_inputs_present);
+            assert!(
+                report
+                    .violations
+                    .iter()
+                    .any(|v| v.contains(FIXTURES_MANIFEST_RELPATH))
+            );
+        }
     }
 
     #[test]
-    fn real_repo_passes_and_keeps_fixtures_out_of_the_parity_total() {
+    fn real_repo_fixtures_only_does_not_certify_missing_parity() {
         // 对真仓跑一遍。断言用不变式而不是硬编码 1641：ledger 条目会随实施推进增长，
         // 而"合计恰好等于九份 parity ledger 之和、且 fixtures 那份不在里面"永远该成立。
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2487,7 +2704,8 @@ mod tests {
             .and_then(Path::parent)
             .expect("crates/openbot-testkit 的祖父目录 = 仓根")
             .to_path_buf();
-        let report = build_parity_report(&root).expect("组装报告不该出错");
+        let report =
+            build_parity_report(&root, CheckScope::FixturesOnly).expect("组装报告不该出错");
 
         assert!(
             report.violations.is_empty(),
@@ -2503,6 +2721,8 @@ mod tests {
             "fixture counts must not become migration totals"
         );
         assert_eq!(report.fixtures.len(), 1, "fixtures 台账恰好一份");
+        assert_eq!(report.scope, CheckScope::FixturesOnly);
+        assert!(!report.parity_checked && !report.overlay_checked && !report.product_certified);
 
         let fixtures_entries = report.fixtures[0].entries;
         assert!(
@@ -2516,6 +2736,136 @@ mod tests {
             parity_sum + fixtures_entries,
             "合计里不得混入 fixtures 的 {fixtures_entries} 条"
         );
+    }
+
+    #[test]
+    fn full_scope_missing_migration_inputs_fails_while_explicit_fixtures_pass() {
+        let repo = TempRepo::new("scopes");
+        repo.write(
+            FIXTURES_MANIFEST_RELPATH,
+            &fixtures_doc(VALID_FIXTURES_ENTRY),
+        );
+        let full = build_parity_report(&repo.root, CheckScope::Full).expect("full report");
+        assert!(!full.required_inputs_present);
+        assert_eq!(full.violations.len(), KNOWN_SCHEMAS.len() + 1);
+        let fixtures =
+            build_parity_report(&repo.root, CheckScope::FixturesOnly).expect("fixture report");
+        assert!(fixtures.required_inputs_present && fixtures.violations.is_empty());
+        assert!(!fixtures.parity_checked && !fixtures.overlay_checked);
+        // Explicit scope must not even parse a private ledger, including malformed input.
+        repo.write("parity/api.yaml", "{broken yaml");
+        assert!(
+            build_parity_report(&repo.root, CheckScope::FixturesOnly)
+                .unwrap()
+                .violations
+                .is_empty()
+        );
+        assert!(
+            !build_parity_report(&repo.root, CheckScope::Full)
+                .unwrap()
+                .violations
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn full_scope_rejects_renamed_mislabelled_and_empty_migration_inputs() {
+        let repo = TempRepo::new("identity");
+        repo.write(
+            FIXTURES_MANIFEST_RELPATH,
+            &fixtures_doc(VALID_FIXTURES_ENTRY),
+        );
+        repo.write("parity/not-api.yaml", &minimal_parity_doc());
+        repo.write("parity/api.yml", &minimal_parity_doc());
+        repo.write("parity/routes.yaml", &minimal_parity_doc());
+        repo.write(
+            "parity/env.yaml",
+            &doc("")
+                .replace("schema: api", "schema: env")
+                .replace("entries:\n", "entries: []\n"),
+        );
+        let report = build_parity_report(&repo.root, CheckScope::Full).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("缺少必需台账 parity/api.yaml"))
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("未登记台账 parity/not-api.yaml"))
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("未登记台账 parity/api.yml"))
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("schema 必须为 routes"))
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("entries 不能为空"))
+        );
+    }
+
+    #[test]
+    fn all_nine_ledger_identities_still_require_an_overlay() {
+        let repo = TempRepo::new("complete-identities");
+        repo.write(
+            FIXTURES_MANIFEST_RELPATH,
+            &fixtures_doc(VALID_FIXTURES_ENTRY),
+        );
+        for (index, schema) in KNOWN_SCHEMAS.iter().enumerate() {
+            let entry = VALID_ENTRY.replace("T-API-0001", &format!("T-API-{:04}", index + 1));
+            let yaml = doc(&entry).replace("schema: api", &format!("schema: {schema}"));
+            repo.write(&format!("parity/{schema}.yaml"), &yaml);
+        }
+        let missing = build_parity_report(&repo.root, CheckScope::Full).unwrap();
+        assert_eq!(missing.ledgers.len(), 9);
+        assert_eq!(missing.violations.len(), 1, "{:?}", missing.violations);
+        assert!(missing.violations[0].contains("缺少必需 overlay"));
+        repo.write("parity/overlay/v4.yaml", "{not valid");
+        let bad = build_parity_report(&repo.root, CheckScope::Full).unwrap();
+        assert!(bad.required_inputs_present && bad.overlay_checked);
+        assert!(
+            bad.violations
+                .iter()
+                .any(|v| v.contains("overlay/v4.yaml") && v.contains("YAML"))
+        );
+    }
+
+    #[test]
+    fn fixture_recount_uses_rust_for_all_six_queries_and_rejects_drift() {
+        let repo = TempRepo::new("native-fixture-recount");
+        let manifest = include_str!("../../../../fixtures/MANIFEST.yaml");
+        repo.write(FIXTURES_MANIFEST_RELPATH, manifest);
+        let mut items = collect_recount_items(&repo.root, CheckScope::FixturesOnly).unwrap();
+        let values = fixture_recount_values(&repo.root, &items).unwrap();
+        assert_eq!(items.len(), 6);
+        for item in &items {
+            let outcome = evaluate_fixture_recount(item, &values).unwrap();
+            assert_eq!(outcome.status, RecountStatus::Pass);
+            assert_eq!(outcome.exit_code, None, "no external process was run");
+        }
+        items[0].expect = "0".into();
+        assert_eq!(
+            evaluate_fixture_recount(&items[0], &values).unwrap().status,
+            RecountStatus::Mismatch
+        );
+        items[0].command.push_str("; echo unexpected");
+        assert!(fixture_recount_values(&repo.root, &items).is_err());
+        assert!(fixture_recount_values(&repo.root, &items[1..]).is_err());
+        let duplicate = vec![items[1].clone(); 6];
+        assert!(fixture_recount_values(&repo.root, &duplicate).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -2734,7 +3084,7 @@ mod tests {
             &fixtures_doc(VALID_FIXTURES_ENTRY),
         );
 
-        let items = collect_recount_items(&repo.root).expect("收集不该出错");
+        let items = collect_recount_items(&repo.root, CheckScope::Full).expect("收集不该出错");
         assert_eq!(items.len(), 2, "两份台账各一条 recount：{items:?}");
         assert!(
             items.iter().any(|i| i.file == "parity/api.yaml"
@@ -2760,7 +3110,8 @@ mod tests {
             &minimal_parity_doc().replace("    cwd: upstream\n", "    cwd: /tmp\n"),
         );
 
-        let err = collect_recount_items(&repo.root).expect_err("cwd 非法必须报错");
+        let err =
+            collect_recount_items(&repo.root, CheckScope::Full).expect_err("cwd 非法必须报错");
         let text = format!("{err:#}");
         assert!(text.contains("parity-check"), "报错要指向归属地：{text}");
         assert!(text.contains("/tmp"), "报错要点名坏值：{text}");

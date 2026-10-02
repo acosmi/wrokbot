@@ -426,6 +426,21 @@ impl SafeHttpRequest {
         })
     }
 
+    /// One admitted OAuth refresh is one token POST. A redirect response is returned to the
+    /// adapter without a second request, including same-origin 307/308 or a 303 GET conversion.
+    pub(crate) fn oauth_refresh_form(
+        url: Url,
+        scheme_policy: SchemePolicy,
+        body: Vec<u8>,
+        authorization: Option<AuthorizationValue>,
+        budget: SafeHttpBudget,
+    ) -> Result<Self, SafeHttpError> {
+        let mut request =
+            Self::post_form_with_scheme(url, scheme_policy, body, authorization, budget)?;
+        request.follow_redirects = false;
+        Ok(request)
+    }
+
     /// HTTPS JSON POST；provider stream 与 remote protocol request 使用。
     pub fn post_json(
         url: Url,

@@ -9,4 +9,6 @@ pub(crate) mod workspace;
 
 pub(crate) mod frame;
 
+mod latest_frame;
+
 pub(crate) mod viewer;

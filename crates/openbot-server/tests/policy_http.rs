@@ -1,5 +1,8 @@
 //! W-5 batch 4：Policy HTTP → ApplicationService → PostgreSQL store 真腿。
 
+#[path = "support/transport_fixture.rs"]
+mod transport_fixture;
+
 mod harness {
     include!("../../../test-support/postgres_harness.rs");
 }
@@ -18,7 +21,7 @@ use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::policy::{PolicyOrigin, PolicyStore};
 use openbot_infra::repo::ChannelRepo;
 use openbot_server::{
-    SINGLE_USER_ACTOR_ID, SensitiveWriteSecurity, ServerBuilder, SingleUserAuthResolver, router,
+    SINGLE_USER_ACTOR_ID, SensitiveWriteSecurity, ServerBuilder, SingleUserAuthResolver,
 };
 use time::Duration;
 use tower::ServiceExt as _;
@@ -82,8 +85,9 @@ async fn policy_http_persists_authoritative_actor_and_survives_a_new_store() {
                 TrustedOrigins::from_configured(["https://app.example.test"])
                     .map_err(|error| error.to_string())?,
             );
-            let router = router(
+            let router = transport_fixture::loopback_router(
                 ServerBuilder::new(application, Arc::new(resolver))
+                    .with_transport_policy(transport_fixture::loopback_policy())
                     .with_sensitive_write_security(security)
                     .build(),
             );

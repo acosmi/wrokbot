@@ -247,29 +247,13 @@ async fn refresh_actor_bearer<E: RotatingOAuthTokenExchanger + ?Sized>(
     server_id: &str,
     actor: &ActorId,
 ) -> Result<McpBearerToken, McpCredentialError> {
-    // A concurrent replica may rotate first. Re-read its winning ciphertext and retry once;
-    // every other failure remains fail-closed and no access token leaves the broker.
-    for attempt in 0..2 {
-        match store
-            .fresh_user_access_token(server_id, actor, exchanger)
-            .await
-        {
-            Ok(token) => {
-                return McpBearerToken::from_secret(token.into_secret()).map_err(|_| {
-                    McpCredentialError::Corrupt {
-                        field: "access_token",
-                    }
-                });
-            }
-            Err(UserOAuthAccessError::Selection(UserCredentialSelectionError::Conflict))
-                if attempt == 0 =>
-            {
-                continue;
-            }
-            Err(error) => return Err(map_user_oauth_error(error)),
-        }
-    }
-    Err(McpCredentialError::Unavailable)
+    let token = store
+        .fresh_user_access_token(server_id, actor, exchanger)
+        .await
+        .map_err(map_user_oauth_error)?;
+    McpBearerToken::from_secret(token.into_secret()).map_err(|_| McpCredentialError::Corrupt {
+        field: "access_token",
+    })
 }
 
 impl core::fmt::Debug for PostgresMcpCredentialBroker {
@@ -288,7 +272,8 @@ fn map_selection_error(error: UserCredentialSelectionError) -> McpCredentialErro
         UserCredentialSelectionError::Unavailable | UserCredentialSelectionError::Conflict => {
             McpCredentialError::Unavailable
         }
-        UserCredentialSelectionError::CommitUnknown => McpCredentialError::CommitUnknown,
+        UserCredentialSelectionError::CommitUnknown
+        | UserCredentialSelectionError::RotationPending => McpCredentialError::CommitUnknown,
         UserCredentialSelectionError::Corrupt { field } => McpCredentialError::Corrupt { field },
     }
 }

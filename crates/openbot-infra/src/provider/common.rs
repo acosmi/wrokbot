@@ -17,6 +17,7 @@ pub(crate) const MAX_PROVIDER_TOOLS: usize = 256;
 pub(crate) const MAX_PROVIDER_FIELD_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn validate_request(request: &ProviderRequest) -> Result<(), ProviderPortError> {
+    request.validate_business_content()?;
     if request.messages.is_empty()
         || request.messages.len() > MAX_PROVIDER_MESSAGES
         || request.tools.len() > MAX_PROVIDER_TOOLS

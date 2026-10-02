@@ -9,18 +9,7 @@ fail() {
   exit 1
 }
 
-owners=$(
-  while IFS= read -r file; do
-    production=$(awk '/^mod tests \{/{exit} {print}' "$file")
-    if rg -q 'OpenBotApplication::new' <<<"$production"; then
-      echo "$file"
-    fi
-  done < <(rg -l 'OpenBotApplication::new' \
-    crates/openbot-infra/src/application_assembly.rs \
-    crates/openbot-server/src/main.rs \
-    crates/openbot-desktop/src \
-    --glob '*.rs' | sort || true)
-)
+owners=$(python3 -B tools/application_assembly_guard.py)
 [[ "$owners" == "crates/openbot-infra/src/application_assembly.rs" ]] || \
   fail "production OpenBotApplication constructor owners drift: ${owners:-none}"
 

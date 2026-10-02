@@ -1,54 +1,143 @@
-//! 公共传输的安全档位 —— session cookie 的 `Secure` 属性由它单点决定（v3 §6.3）。
+//! Public URL metadata and the closed request-level trusted-transport policy (R394).
 //!
-//! # 判据只有一条：`OPENBOT_PUBLIC_URL` 是不是 `https`
-//!
-//! v3 §6.3 逐字：「`Secure` 当且仅当 `OPENBOT_PUBLIC_URL` 是 `https` 时设置」。**不另设开关。**
-//!
-//! 不设开关这件事本身是裁决，理由是"开关"在这里必然是错的：
-//!
-//! - 一个允许"明文也强制 `Secure`"的开关，会造出一个**浏览器根本不会回传**的 cookie ——
-//!   症状是"登录之后又回到登录页"，而配置看起来完全正确。上游 CHANGELOG 修过的
-//!   「plain HTTP 真实地址上无法开始会话」正是这个形态。
-//! - 一个允许"HTTPS 下不加 `Secure`"的开关，是把一个纯粹的降级做成了可配置项。
-//!
-//! 于是 `Secure` 不是策略，是**对当前 scheme 的事实陈述**。
-//!
-//! # 非 loopback 的明文部署：仍可登录，但会被点名
-//!
-//! 同样出自 §6.3：上游 `repository contract` 写的是"把 TLS 放在前面"而不是"拒绝 HTTP"，
-//! 所以这里**不拒绝启动**。代价用另外两件事兑现：启动日志告警，以及 `/health` readiness
-//! 附带 `insecure_transport: true`。
-//!
-//! 这两件事都不是可选的 —— 一个既不加 `Secure`、又什么都不说的部署，
-//! 在运维看来与一个 HTTPS 部署逐字节相同。
-//!
-//! # 为什么是四态而不是布尔
-//!
-//! "要不要加 `Secure`"和"要不要点亮 `insecure_transport`"是**两个不同的问题**，
-//! 它们的答案在 loopback 明文这一档上分叉：不加 `Secure`（浏览器不会回传），
-//! 但也不点亮告警（本机开发是正常形态，把它点亮等于训练所有人忽略这盏灯）。
-//!
-//! 把它压成一个布尔，必然有一档被折进另一档 —— 而被折掉的那一档就是"真实暴露的明文部署"
-//! 与"开发机"分不开的那一刻。
-//!
-//! | 档位 | `Secure` | `insecure_transport` | 启动告警 |
-//! | --- | --- | --- | --- |
-//! | [`PublicTransport::Https`] | ✅ | ❌ | 无 |
-//! | [`PublicTransport::LoopbackHttp`] | ❌ | ❌ | 无 |
-//! | [`PublicTransport::PublicHttp`] | ❌ | ✅ | 有 |
-//! | [`PublicTransport::Unconfigured`] | ❌ | ❌ | 有 |
-//!
-//! # `Unconfigured` 为什么不点亮 `insecure_transport`
-//!
-//! 没配公共地址的部署，就是 v3 §6.1 那个"无 IdP + `OPENBOT_SINGLE_USER=true`"的本机形态，
-//! 而那一档的暴露面由**绑定地址**管住（`openbot_infra::auth::config::single_user_binding_verdict`），
-//! 不由这里管。`insecure_transport` 说的是"有人的 session cookie 正在网络上裸奔"，
-//! 而这一档我们并不知道有没有网络 —— 把"不知道"渲染成"有问题"，与渲染成"没问题"
-//! 一样是在编造。所以它走**告警**（说出"你没配公共地址"这个事实），不走那面旗。
-//!
-//! 这一档仍然要有话说，因此 [`PublicTransport::startup_warning`] 对它返回 `Some`。
+//! A declared HTTPS URL controls cookie attributes; it does not prove how a request arrived.
+//! Business routes additionally require a verified loopback single-user connection or an explicit
+//! same-machine HTTPS proxy secret plus exact forwarded authority/protocol. Other configurations
+//! retain diagnostics but cannot authenticate users, issue sessions or perform actions.
 
 use crate::config::address::{DeploymentAddress, Scheme};
+use crate::config::{ConfigProblem, EnvMap, Expectation, Secret};
+
+/// Explicit transport authority supplied by the host. Neither headers nor a public URL alone
+/// can construct an accepted request. The production builder defaults to [`Self::deny`].
+#[derive(Clone, Debug)]
+pub struct TrustedTransportPolicy {
+    pub(crate) mode: TrustedTransportMode,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum TrustedTransportMode {
+    Deny,
+    LoopbackSingleUser,
+    LoopbackHttpsProxy {
+        authority: String,
+        secret: Secret,
+    },
+    #[cfg(any(test, feature = "testkit"))]
+    TestOnlyUnchecked,
+}
+
+impl TrustedTransportPolicy {
+    /// Disable business and authentication routes while retaining non-sensitive diagnostics.
+    #[must_use]
+    pub const fn deny() -> Self {
+        Self {
+            mode: TrustedTransportMode::Deny,
+        }
+    }
+
+    pub(crate) fn from_configuration(
+        public_url: Option<&DeploymentAddress>,
+        secret: Option<Secret>,
+        single_user: bool,
+    ) -> Self {
+        if let (Some(address), Some(secret)) = (public_url, secret.as_ref()) {
+            if valid_proxy_secret(secret.expose())
+                && let Some(authority) = proxy_authority(address)
+            {
+                return Self {
+                    mode: TrustedTransportMode::LoopbackHttpsProxy {
+                        authority,
+                        secret: secret.clone(),
+                    },
+                };
+            }
+            return Self::deny();
+        }
+        if single_user
+            && secret.is_none()
+            && public_url
+                .is_none_or(|address| address.scheme() == Scheme::Http && address.is_loopback())
+        {
+            return Self {
+                mode: TrustedTransportMode::LoopbackSingleUser,
+            };
+        }
+        Self::deny()
+    }
+
+    pub(crate) const fn builder_default() -> Self {
+        #[cfg(any(test, feature = "testkit"))]
+        {
+            // Existing in-memory transport fixtures have no socket. This variant is absent from
+            // the default production feature graph; main always supplies a configuration-derived policy.
+            Self {
+                mode: TrustedTransportMode::TestOnlyUnchecked,
+            }
+        }
+        #[cfg(not(any(test, feature = "testkit")))]
+        {
+            Self::deny()
+        }
+    }
+}
+
+fn valid_proxy_secret(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// Preserve the configured authority byte-for-byte, including an explicit default port, after
+/// parsing with the already locked URL dependency. Userinfo and ambiguous forwarding values deny.
+fn proxy_authority(address: &DeploymentAddress) -> Option<String> {
+    let parsed = url::Url::parse(address.as_str()).ok()?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return None;
+    }
+    let (_, rest) = address.as_str().split_once("://")?;
+    let authority = rest.split('/').next()?;
+    if authority.is_empty()
+        || authority.len() > 512
+        || !authority.is_ascii()
+        || authority.bytes().any(|byte| {
+            byte.is_ascii_whitespace() || matches!(byte, b'@' | b',' | b';' | b'\\' | b'?' | b'#')
+        })
+    {
+        return None;
+    }
+    Some(authority.to_owned())
+}
+
+pub(crate) fn parse_tls_proxy_secret(
+    env: &EnvMap,
+    public_url: Option<&DeploymentAddress>,
+    problems: &mut Vec<ConfigProblem>,
+) -> Option<Secret> {
+    let raw = env.get("OPENBOT_TLS_PROXY_SECRET")?;
+    if !valid_proxy_secret(raw) {
+        problems.push(ConfigProblem::Malformed {
+            variable: "OPENBOT_TLS_PROXY_SECRET",
+            expectation: Expectation::TlsProxySecret,
+        });
+        return None;
+    }
+    if public_url.and_then(proxy_authority).is_none() {
+        problems.push(ConfigProblem::Malformed {
+            variable: "OPENBOT_PUBLIC_URL",
+            expectation: Expectation::HttpsProxyPublicUrl,
+        });
+        return None;
+    }
+    Some(Secret::new(raw.clone()))
+}
 
 /// 这个部署的公共传输长什么样。四态，理由见模块文档。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -57,7 +146,7 @@ pub enum PublicTransport {
     Https,
     /// `OPENBOT_PUBLIC_URL` 是 `http`，且 host 只能从本机到达。
     LoopbackHttp,
-    /// `OPENBOT_PUBLIC_URL` 是 `http`，host 不是 loopback。**明文会话正在网络上跑。**
+    /// `OPENBOT_PUBLIC_URL` 是 `http`，host 不是 loopback；业务请求必须拒绝。
     PublicHttp,
     /// 没有配 `OPENBOT_PUBLIC_URL`。
     Unconfigured,
@@ -102,7 +191,7 @@ impl PublicTransport {
             Self::Https | Self::LoopbackHttp => None,
             Self::PublicHttp => Some(
                 "OPENBOT_PUBLIC_URL 是明文 http 且不是 loopback：session cookie 不会带 Secure，\
-                 会话凭据将以明文经过网络。请在前面放 TLS。",
+                 业务请求被可信传输入口拒绝。请配置受信 HTTPS 代理。",
             ),
             Self::Unconfigured => Some(
                 "未配置 OPENBOT_PUBLIC_URL：本部署没有对外公共地址，OAuth 回调与连接器授权\
@@ -129,6 +218,90 @@ mod tests {
 
     fn address(raw: &str) -> DeploymentAddress {
         DeploymentAddress::parse(raw).expect("测试地址必须合法")
+    }
+
+    #[test]
+    fn proxy_configuration_requires_exact_secret_and_https_authority_without_leaking_values() {
+        let secret = "a".repeat(64);
+        let config = |url: Option<&str>, value: &str| {
+            let mut env = EnvMap::new();
+            if let Some(url) = url {
+                env.insert("OPENBOT_PUBLIC_URL".into(), url.into());
+            }
+            env.insert("OPENBOT_TLS_PROXY_SECRET".into(), value.into());
+            crate::config::ServerConfig::from_env_map(&env)
+        };
+        let valid = config(Some("https://example.test:443"), &secret).unwrap();
+        assert!(
+            matches!(valid.transport_policy(false).mode, TrustedTransportMode::LoopbackHttpsProxy { ref authority, .. } if authority == "example.test:443")
+        );
+        assert!(!format!("{valid:?}").contains(&secret));
+        for bad in [
+            "".to_owned(),
+            "a".repeat(63),
+            "A".repeat(64),
+            "g".repeat(64),
+            format!(" {secret}"),
+        ] {
+            assert!(config(Some("https://example.test"), &bad).is_err());
+        }
+        for bad in [
+            None,
+            Some("http://example.test"),
+            Some("https://user:password@example.test"),
+            Some("https://example.test?x=1"),
+            Some("https://example.test#x"),
+            Some("https://example.test:70000"),
+            Some("https://example.test\\other"),
+        ] {
+            let error = config(bad, &secret).unwrap_err();
+            assert!(!format!("{error:?} {error}").contains(&secret));
+        }
+    }
+
+    #[test]
+    fn missing_proxy_proof_never_falls_back_to_remote_plaintext() {
+        for url in [
+            None,
+            Some(address("https://example.test")),
+            Some(address("http://example.test")),
+        ] {
+            assert!(matches!(
+                TrustedTransportPolicy::from_configuration(url.as_ref(), None, false).mode,
+                TrustedTransportMode::Deny
+            ));
+        }
+        assert!(matches!(
+            TrustedTransportPolicy::from_configuration(None, None, true).mode,
+            TrustedTransportMode::LoopbackSingleUser
+        ));
+        assert!(matches!(
+            TrustedTransportPolicy::from_configuration(
+                Some(&address("http://localhost:3001")),
+                None,
+                true
+            )
+            .mode,
+            TrustedTransportMode::LoopbackSingleUser
+        ));
+        assert!(matches!(
+            TrustedTransportPolicy::from_configuration(
+                Some(&address("https://example.test")),
+                None,
+                true
+            )
+            .mode,
+            TrustedTransportMode::Deny
+        ));
+        assert!(matches!(
+            TrustedTransportPolicy::from_configuration(
+                Some(&address("http://example.test")),
+                None,
+                true
+            )
+            .mode,
+            TrustedTransportMode::Deny
+        ));
     }
 
     /// 任务点名的三种情形：https / loopback http / 非 loopback http。

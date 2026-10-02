@@ -465,6 +465,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     let mut builder = ServerBuilder::new(application, auth)
+        .with_transport_policy(server.transport_policy(single_user))
         .with_sensitive_write_security(sensitive)
         .with_metrics_handle(metrics)
         .with_insecure_transport(server.public_transport().insecure_transport())
@@ -494,11 +495,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )));
     }
 
-    let address = if single_user {
-        format!("127.0.0.1:{}", server.port)
-    } else {
-        format!("0.0.0.0:{}", server.port)
-    };
+    // R394 supports only a same-machine TLS proxy or the local single-user exception.
+    // A public URL and forwarded headers never authorize a public plaintext backend listener.
+    let address = format!("127.0.0.1:{}", server.port);
     let listener = tokio::net::TcpListener::bind(&address).await?;
     tracing::info!(bind = %address, single_user, "Wrok Bot Server 已启动");
     let serve_result = axum::serve(

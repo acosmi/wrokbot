@@ -66,6 +66,7 @@ pub mod screen;
 pub mod session;
 pub mod static_app;
 pub mod threads;
+mod transport_gate;
 pub mod ui_preferences;
 
 use std::sync::Arc;
@@ -86,6 +87,7 @@ use openbot_infra::auth::sso::DynamicSsoService;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::auth::{AuthResolver, ResolvedAuth, SensitiveWriteSecurity};
+use crate::config::transport::TrustedTransportPolicy;
 use crate::limits::REQUEST_BODY_LIMIT_BYTES;
 use crate::metrics::MetricsHandle;
 use crate::readiness::ReadinessProbe;
@@ -110,6 +112,7 @@ struct StateInner {
     metrics: Option<MetricsHandle>,
     sensitive_write: Option<SensitiveWriteSecurity>,
     insecure_transport: bool,
+    transport_policy: TrustedTransportPolicy,
     oidc: Option<Arc<OidcLoginCoordinator>>,
     preauth: PreAuthSurface,
     login_origins: Option<TrustedOrigins>,
@@ -278,6 +281,7 @@ pub struct ServerBuilder {
     metrics: Option<MetricsHandle>,
     sensitive_write: Option<SensitiveWriteSecurity>,
     insecure_transport: bool,
+    transport_policy: TrustedTransportPolicy,
     oidc: Option<Arc<OidcLoginCoordinator>>,
     preauth: PreAuthSurface,
     login_origins: Option<TrustedOrigins>,
@@ -301,6 +305,7 @@ impl ServerBuilder {
             metrics: None,
             sensitive_write: None,
             insecure_transport: false,
+            transport_policy: TrustedTransportPolicy::builder_default(),
             oidc: None,
             preauth: PreAuthSurface::default(),
             login_origins: None,
@@ -348,6 +353,14 @@ impl ServerBuilder {
     #[must_use]
     pub const fn with_insecure_transport(mut self, insecure: bool) -> Self {
         self.insecure_transport = insecure;
+        self
+    }
+
+    /// Require the explicit configuration-derived connection policy before any business route.
+    /// The production default denies; a declared HTTPS public URL alone grants no access.
+    #[must_use]
+    pub fn with_transport_policy(mut self, policy: TrustedTransportPolicy) -> Self {
+        self.transport_policy = policy;
         self
     }
 
@@ -434,6 +447,7 @@ impl ServerBuilder {
                 metrics: self.metrics,
                 sensitive_write: self.sensitive_write,
                 insecure_transport: self.insecure_transport,
+                transport_policy: self.transport_policy,
                 oidc: self.oidc,
                 preauth: self.preauth,
                 login_origins: self.login_origins,
@@ -485,6 +499,7 @@ async fn record_http_metrics(request: Request, next: Next) -> Response {
 /// 到"，也会让防枚举那条判据的含义变得含混。
 pub fn router(state: ServerState) -> Router {
     let static_app = state.static_app().cloned();
+    let transport_policy = state.inner.transport_policy.clone();
     let router = Router::new()
         .route("/health", get(health::health))
         .route("/readiness", get(health::readiness))
@@ -743,6 +758,10 @@ pub fn router(state: ServerState) -> Router {
         // `REQUEST_BODY_LIMIT_BYTES` 成为唯一真源 —— 两个上限就是两个答案。
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT_BYTES))
+        .layer(axum::middleware::from_fn_with_state(
+            transport_policy,
+            transport_gate::enforce,
+        ))
         .layer(axum::middleware::from_fn(record_http_metrics))
         .layer(axum::middleware::from_fn(trace_request))
 }

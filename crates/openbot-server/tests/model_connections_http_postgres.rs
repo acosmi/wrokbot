@@ -1,6 +1,9 @@
 //! Actual Axum framing → PostgreSQL session resolver → shared production assembly → model Vault.
 //! ServiceExt avoids opening an HTTP socket; PostgreSQL is a separately owned synthetic instance.
 
+#[path = "support/transport_fixture.rs"]
+mod transport_fixture;
+
 mod harness {
     include!("../../../test-support/postgres_harness.rs");
 }
@@ -31,7 +34,7 @@ use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::policy::PolicyStore;
 use openbot_infra::ui_preferences::PostgresUiPreferenceAdministration;
 use openbot_infra::vault::CredentialRecordVault;
-use openbot_server::{PostgresSessionAuthResolver, SensitiveWriteSecurity, ServerBuilder, router};
+use openbot_server::{PostgresSessionAuthResolver, SensitiveWriteSecurity, ServerBuilder};
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
 use tower::ServiceExt as _;
@@ -195,8 +198,9 @@ async fn assemble(
         default_session_lifetime(),
         TrustedOrigins::from_configured([ORIGIN]).map_err(|e| e.to_string())?,
     );
-    let router = router(
+    let router = transport_fixture::loopback_router(
         ServerBuilder::new(assembly.application.clone(), Arc::new(resolver))
+            .with_transport_policy(transport_fixture::loopback_policy())
             .with_sensitive_write_security(security)
             .build(),
     );

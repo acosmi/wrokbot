@@ -220,6 +220,8 @@ pub struct ServerConfig {
     ///
     /// 它同时是 [`ServerConfig::public_transport`] 的唯一输入。
     pub public_url: Option<DeploymentAddress>,
+    /// Secret shared only with the explicitly configured same-machine HTTPS terminator.
+    pub tls_proxy_secret: Option<Secret>,
     /// 浏览器端 App 的地址，无尾斜杠。
     ///
     /// 与 [`ServerConfig::public_url`] 是**两个**地址：本地开发时 App 由 Vite 托管在自己的
@@ -291,6 +293,8 @@ impl ServerConfig {
         };
 
         let public_url = parse_optional_address(env_map, "OPENBOT_PUBLIC_URL", &mut problems);
+        let tls_proxy_secret =
+            super::transport::parse_tls_proxy_secret(env_map, public_url.as_ref(), &mut problems);
         let audit_retention = parse_audit_retention(env_map, &mut problems);
         let computer = parse_computer(env_map, &mut problems);
         let (agent_budgets, package_openai_provider, managed_provider) =
@@ -320,6 +324,7 @@ impl ServerConfig {
             deployment_environment,
             deployment_id: env::optional(env_map, "DEPLOYMENT_ID").map(str::to_owned),
             public_url,
+            tls_proxy_secret,
             app_url,
             app_dist_dir: env::optional(env_map, "APP_DIST_DIR").map(str::to_owned),
             tenant_package_directory: env::optional(env_map, "TENANT_PACKAGE_DIR")
@@ -338,6 +343,17 @@ impl ServerConfig {
     #[must_use]
     pub fn public_transport(&self) -> PublicTransport {
         PublicTransport::classify(self.public_url.as_ref())
+    }
+
+    /// Produce the request gate from authenticated deployment mode and reviewed proxy inputs.
+    /// A public URL alone never proves that a request arrived over TLS.
+    #[must_use]
+    pub fn transport_policy(&self, single_user: bool) -> super::transport::TrustedTransportPolicy {
+        super::transport::TrustedTransportPolicy::from_configuration(
+            self.public_url.as_ref(),
+            self.tls_proxy_secret.clone(),
+            single_user,
+        )
     }
 }
 

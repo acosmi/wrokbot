@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # G4 Batch 12/102/103: MCP OAuth must stay on per-server SafeDialer authority, exact
-# issuer/resource, local-first revocation and retained admin-removal compensation.
+# issuer/resource, R395 durable send ownership, R397 one-POST refresh, local-first revocation
+# and retained compensation.
 set -euo pipefail
 
 fail() {
@@ -12,6 +13,9 @@ files=(
   crates/openbot-infra/src/mcp_oauth.rs
   crates/openbot-infra/src/mcp_connections.rs
   crates/openbot-infra/src/mcp_credentials.rs
+  crates/openbot-infra/src/google_drive_oauth.rs
+  crates/openbot-infra/src/store/plugin_user_credential.rs
+  crates/openbot-infra/src/store/plugin_user_credential/refresh_operation.rs
 )
 
 if rg -n 'reqwest|hyper::|TcpStream|lookup_host|Command::new|std::process' "${files[@]}"; then
@@ -43,8 +47,89 @@ grep -qF 'coalesce(s.egress_allow_cidrs,ARRAY[]::text[]) AS egress_allow_cidrs' 
 grep -qF "coalesce(s.transport,'mcp') AS server_transport" \
   crates/openbot-infra/src/store/plugin_user_credential.rs \
   || fail 'runtime credential selection no longer binds the closed vendor transport'
-grep -qF 'FOR SHARE OF s,d' crates/openbot-infra/src/store/plugin_user_credential.rs \
-  || fail 'post-token refresh rotation no longer locks current server/client authority'
+refresh_store=crates/openbot-infra/src/store/plugin_user_credential.rs
+refresh_operation=crates/openbot-infra/src/store/plugin_user_credential/refresh_operation.rs
+grep -qF 'FOR SHARE OF owner,s,d,uc FOR UPDATE OF c' "$refresh_operation" \
+  || fail 'refresh claim/admission/completion no longer lock actor/server/client/connection/credential authority'
+for anchor in \
+  'AND c.encrypted_value=$4 AND c.revoked_at IS NULL' \
+  'AND d.id=$5 AND d.encrypted_value=$6 AND d.revoked_at IS NULL' \
+  'coalesce(s.credential_generation,0)=$10 AND s.updated_at=$11 AND d.updated_at=$12' \
+  'coalesce(owner.auth_generation,0)=$13 AND uc.scope=$14' \
+  'EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=owner.id)' \
+  'NOT EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(owner.email))'; do
+  grep -qF "$anchor" "$refresh_operation" \
+    || fail "refresh operation lost a current authority binding: $anchor"
+done
+for anchor in \
+  'CREATE TABLE public.oauth_refresh_operations (' \
+  'UNIQUE (credential_id,generation)' \
+  "ON public.oauth_refresh_operations(credential_id) WHERE state <> 'committed'"; do
+  grep -qF "$anchor" crates/openbot-infra/sql/native_0034.sql \
+    || fail "durable OAuth send-ownership schema disappeared: $anchor"
+done
+grep -qF 'mod refresh_operation;' "$refresh_store" \
+  || fail 'durable OAuth refresh store is no longer assembled'
+grep -qF '.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)' "$refresh_operation" \
+  || fail 'private OAuth send admission is no longer single-use'
+grep -qF "AND state='pending' AND admitted_at IS NULL" "$refresh_operation" \
+  || fail 'token send admission lost its persistent one-use CAS'
+grep -qF "AND state='committed' AND admitted_at IS NOT NULL" "$refresh_operation" \
+  || fail 'uncertain COMMIT no longer reads the exact committed operation receipt'
+grep -qF "WHERE operation_id=\$1 AND state='pending' AND admitted_at IS NOT NULL" "$refresh_operation" \
+  || fail 'failed token exchange no longer retains its unresolved operation'
+grep -qF 'UserCredentialSelectionError::RotationPending' "$refresh_operation" \
+  || fail 'a pre-existing unresolved refresh operation is no longer refused'
+
+# These anchors complement the real PG race/lost-COMMIT tests: a helper existing in an unused
+# module must not satisfy the guard. Check its actual caller order and both token-send adapters.
+python3 - <<'PY' || fail 'OAuth claim/admission/completion caller ordering drifted'
+from pathlib import Path
+import re
+store = Path('crates/openbot-infra/src/store/plugin_user_credential.rs').read_text()
+operation = Path('crates/openbot-infra/src/store/plugin_user_credential/refresh_operation.rs').read_text()
+broker = Path('crates/openbot-infra/src/mcp_credentials.rs').read_text()
+fresh = store.split('pub async fn fresh_user_access_token', 1)[1].split('pub async fn connections_for', 1)[0]
+anchors = ['.claim_refresh(&prepared)', 'OperationSendFence::new',
+           'prepared.exchange_rotating(exchanger, &fence)', 'fence.admitted()',
+           '.finish_refresh(', 'Ok(VendorAccessToken(grant.access_token))']
+positions = [fresh.index(anchor) for anchor in anchors]
+assert positions == sorted(positions), 'access release moved before confirmed operation completion'
+assert operation.count('lock_binding(') == 5, 'claim/admission/complete/readback must each recheck current authority'
+for start, end in [('pub(super) async fn claim_refresh', 'async fn admit_refresh'),
+                   ('async fn admit_refresh', 'pub(super) async fn fail_refresh')]:
+    body = operation.split(start, 1)[1].split(end, 1)[0]
+    commit = re.search(r'tx\.commit\(\)\s*\.await', body)
+    assert commit is not None and body.index('lock_binding(') < commit.start(), start
+assert 'pub async fn exchange<' not in store, 'legacy prepared exchange can bypass durable ownership'
+refresh = broker.split('async fn refresh_actor_bearer', 1)[1].split('impl core::fmt::Debug', 1)[0]
+assert refresh.count('.fresh_user_access_token(') == 1, 'broker must invoke exactly one owned refresh'
+assert 'for attempt' not in refresh and 'continue;' not in refresh and 'loop {' not in refresh, 'broker retry can duplicate refresh sends'
+mcp_source = Path('crates/openbot-infra/src/mcp_oauth.rs').read_text()
+drive_source = Path('crates/openbot-infra/src/google_drive_oauth.rs').read_text()
+mcp = mcp_source.split('async fn refresh(', 1)[1].split('impl RotatingOAuthTokenExchanger', 1)[0]
+drive = drive_source.split('impl RotatingOAuthTokenExchanger', 1)[1].split('struct StoredGoogleClient', 1)[0]
+for label, source, body in [('MCP', mcp_source, mcp), ('Drive', drive_source, drive)]:
+    anchors = ['SafeHttpRequest::oauth_refresh_form(', '.admit_token_send()',
+               '.execute(plan)', 'if status.is_redirection()', 'if !status.is_success()']
+    positions = [body.index(anchor) for anchor in anchors]
+    assert positions == sorted(positions), f'{label} must fix no-redirect policy before admission and reject 3xx before token/error parsing'
+    assert body.count('.execute(plan)') == 1, f'{label} refresh must have exactly one owned execute'
+    assert source.count('SafeHttpRequest::oauth_refresh_form(') == 1, f'{label} no-redirect policy must stay scoped to refresh'
+    redirection = body.split('if status.is_redirection()', 1)[1].split('if !status.is_success()', 1)[0]
+    assert '::Unavailable)' in redirection, f'{label} redirect must retain unresolved state'
+assert 'self.token_request(body)' not in drive, 'Drive refresh must not use the redirect-enabled code exchange helper'
+safe = Path('crates/openbot-infra/src/net/safe_http.rs').read_text()
+refresh_plan = safe.split('pub(crate) fn oauth_refresh_form(', 1)[1].split('pub fn post_json(', 1)[0]
+assert 'Self::post_form_with_scheme(' in refresh_plan and 'request.follow_redirects = false;' in refresh_plan, 'dedicated refresh form must disable redirects'
+default_form = safe.split('pub(crate) fn post_form_with_scheme(', 1)[1].split('pub(crate) fn oauth_refresh_form(', 1)[0]
+assert 'follow_redirects: true' in default_form, 'unrelated form requests must retain their default redirect policy'
+assert '!request.follow_redirects || !is_redirect(raw.status)' in safe, 'transport must return the first refresh response without a second hop'
+tests = Path('crates/openbot-infra/tests/oauth_refresh_redirect.rs').read_text()
+for adapter in ('mcp', 'drive'):
+    for status in (303, 307, 308):
+        assert f'{adapter}_refresh_{status}_sends_once_and_stays_unknown' in tests, 'real adapter redirect regression matrix disappeared'
+PY
 grep -qF 'if request.transport() != "mcp"' crates/openbot-infra/src/mcp_oauth.rs \
   || fail 'generic MCP refresh accepted another vendor transport'
 grep -qF '|| request.transport() != "google_drive_rest"' \
@@ -75,7 +160,10 @@ grep -qF 'struct RemovedServerRevocationContext' crates/openbot-infra/src/mcp_co
   || fail 'versioned admin-removal revocation context disappeared'
 grep -qF 'removed_server_client_material' crates/openbot-infra/src/mcp_connections.rs \
   || fail 'admin removal no longer reloads its exact retained client/context'
-grep -qF 'match self.removed_server_client_material(&claim).await' \
+grep -qF 'let (refresh, material) = if removed_server || admin_retirement {' \
+  crates/openbot-infra/src/mcp_connections.rs \
+  || fail 'server removal and admin retirement no longer use their retained credential context'
+grep -qF '.removed_server_client_material(&claim, admin_retirement)' \
   crates/openbot-infra/src/mcp_connections.rs \
   || fail 'removed-server claim no longer routes through its retained context'
 if grep -qF 'let material = if removed_server' crates/openbot-infra/src/mcp_connections.rs; then
@@ -88,8 +176,10 @@ grep -qF "metadata=metadata-'server_removal_revocation'" \
   || fail 'successful user-token revoke no longer scrubs retained network context'
 grep -qF "split_part(g.ref,'/',1)=\$1" crates/openbot-infra/src/mcp_connections.rs \
   || fail 'admin removal no longer deletes stale/orphan grants by exact server prefix'
-test -f repository contract \
+grep -qF '### MCP credential revocation recovery' README.md \
   || fail 'admin-removal vendor compensation runbook disappeared'
+grep -qF 'operator_required' README.md \
+  || fail 'admin-removal compensation runbook lost its operator-required recovery boundary'
 
 grep -qF 'ADD COLUMN credential_generation bigint' crates/openbot-infra/sql/native_0018.sql \
   || fail 'credential generation migration disappeared'
@@ -105,4 +195,4 @@ fi
 grep -qF '.field("client_secret", &"[redacted]")' crates/openbot-contracts/src/mcp.rs \
   || fail 'admin OAuth client Debug redaction disappeared'
 
-printf 'MCP OAuth runtime guard: ok (per-server egress + rotation CAS; SafeDialer PRM/issuer/resource; HMAC+AEAD state v3; credential generation; local-first + admin-removal compensation)\n'
+printf 'MCP OAuth runtime guard: ok (per-server egress + durable claim/admission/receipt + no-redirect refresh; SafeDialer PRM/issuer/resource; HMAC+AEAD state v3; credential generation; local-first + admin-removal compensation)\n'

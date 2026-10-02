@@ -546,7 +546,7 @@ impl McpOAuthClient {
         let (body, authorization) = refresh_form(&client, &discovery, request)?;
         let budget = SafeHttpBudget::new(MAX_TOKEN_RESPONSE_BYTES, MCP_OAUTH_TOKEN_TIMEOUT)
             .map_err(|_| McpOAuthError::InvalidClient)?;
-        let plan = SafeHttpRequest::post_form_with_scheme(
+        let plan = SafeHttpRequest::oauth_refresh_form(
             discovery.token_endpoint,
             self.scheme_policy,
             body,
@@ -554,6 +554,10 @@ impl McpOAuthClient {
             budget,
         )
         .map_err(|_| McpOAuthError::InvalidClient)?;
+        request
+            .admit_token_send()
+            .await
+            .map_err(|_| McpOAuthError::Unavailable)?;
         let response = self
             .dialer
             .execute(plan)
@@ -561,6 +565,11 @@ impl McpOAuthClient {
             .map_err(|_| McpOAuthError::Unavailable)?;
         let (status, _, raw_body) = response.into_parts();
         let body = Zeroizing::new(raw_body);
+        // A redirect cannot prove whether the admitted refresh was consumed. Keep the durable
+        // operation unresolved; never interpret its body as a grant or terminal OAuth error.
+        if status.is_redirection() {
+            return Err(McpOAuthError::Unavailable);
+        }
         if !status.is_success() {
             return Err(classify_token_error(status, &body));
         }

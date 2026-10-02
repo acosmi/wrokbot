@@ -214,6 +214,16 @@ pub const SECRET_SCAN_EXEMPTIONS: &[(&str, &str, &str)] = &[
         "uuid：指向 credentials 表的外键，是指针不是凭据",
     ),
     (
+        "oauth_refresh_operations",
+        "credential_id",
+        "uuid：冻结该次 refresh 的个人凭据身份，不含 token 或密文，也不授予发送权限",
+    ),
+    (
+        "oauth_refresh_operations",
+        "client_credential_id",
+        "uuid：冻结 deployment OAuth client 的身份指针，不含 client secret 或密文",
+    ),
+    (
         "intelligence_import_cursors",
         "last_hash",
         "SHA-256 导入完整性摘要，不是 secret 或可用认证物",
@@ -677,6 +687,7 @@ pub const NATIVE_0028_TABLES: &[TableSpec] = &[TableSpec {
 
 pub mod model_connection_secrets;
 pub mod model_connections;
+pub mod oauth_refresh_operations;
 pub mod run_model_selections;
 pub mod sdk_gateway_connections;
 pub mod sdk_gateway_operations;
@@ -722,6 +733,13 @@ pub const NATIVE_0033_TABLES: &[TableSpec] = &[
     },
 ];
 
+/// Durable OAuth refresh-operation records (native 0034).
+pub const NATIVE_0034_TABLES: &[TableSpec] = &[TableSpec {
+    name: oauth_refresh_operations::TABLE_NAME,
+    columns: oauth_refresh_operations::COLUMNS,
+    column_specs: oauth_refresh_operations::COLUMN_SPECS,
+}];
+
 /// Complete current public-table registry: fixed upstream 0012 plus every Rust-owned native table.
 /// Historical callers that specifically compare the upstream boundary must continue using
 /// [`ALL_TABLES`] instead.
@@ -739,6 +757,7 @@ pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
         .chain(NATIVE_0030_TABLES.iter())
         .chain(NATIVE_0031_TABLES.iter())
         .chain(NATIVE_0033_TABLES.iter())
+        .chain(NATIVE_0034_TABLES.iter())
 }
 
 #[cfg(test)]
@@ -1103,7 +1122,7 @@ mod tests {
             .count();
         assert_eq!(hits, registered_root_hits + exemption_root_hits);
         assert_eq!(SECRET_COLUMNS.len(), 36);
-        assert_eq!(SECRET_SCAN_EXEMPTIONS.len(), 27);
+        assert_eq!(SECRET_SCAN_EXEMPTIONS.len(), 29);
     }
 
     /// 两张名单都必须指向真实存在的 `(表, 列)`，且互不重叠。

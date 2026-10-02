@@ -46,6 +46,7 @@ impl ProviderAdapter for RemoteAguiProvider {
         &self,
         request: ProviderRequest,
     ) -> Result<Box<dyn ProviderSession>, ProviderPortError> {
+        request.validate_business_content()?;
         let ProviderRoute::RemoteAgUi(route) = &request.route else {
             return Err(ProviderPortError::InvalidRequest {
                 field: "remote_route",
@@ -934,5 +935,101 @@ mod tests {
         );
         assert!(!local.contains("REMOTE_ERROR_SECRET_CANARY"));
         assert!(!local.contains("vendor-secret-code"));
+    }
+    #[tokio::test]
+    async fn business_route_ids_cannot_send_secrets_through_the_remote_auth_exemption() {
+        for field in [
+            "thread",
+            "run",
+            "bot",
+            "parent",
+            "resume_run",
+            "resume_value",
+        ] {
+            let transport = Arc::new(FakeTransport {
+                body: Mutex::new(None),
+                events: vec![],
+            });
+            let provider = RemoteAguiProvider::new(transport.clone());
+            let secret = "SECRET-CANARY-route-identity";
+            let mut route = RemoteAguiRoute::new(
+                "https://agent.example/run".into(),
+                if field == "thread" {
+                    secret
+                } else {
+                    "thread-1"
+                }
+                .into(),
+                if field == "run" { secret } else { "run-1" }.into(),
+                if field == "bot" { secret } else { "bot-1" }.into(),
+                Some("SECRET-CANARY-typed-assertion".into()),
+            )
+            .unwrap();
+            if matches!(field, "parent" | "resume_run" | "resume_value") {
+                let parent = if field == "parent" {
+                    secret
+                } else {
+                    "previous-run"
+                };
+                let resume = ProviderRemoteResume::new(
+                    parent.into(),
+                    if field == "resume_run" { secret } else { "resumed-run" }.into(),
+                    vec![ProviderRemoteResumeEntry::new(
+                        "interrupt-1".into(), ProviderRemoteResumeStatus::Resolved,
+                        Some(json!({"authorization": if field == "resume_value" { secret } else { "approved" }})),
+                    ).unwrap()],
+                ).unwrap();
+                route = route.with_fresh_resume(parent, resume).unwrap();
+            }
+            let mut input = request(vec![]);
+            input.route = ProviderRoute::RemoteAgUi(route);
+            assert!(
+                matches!(
+                    provider.start(input).await,
+                    Err(ProviderPortError::InvalidRequest {
+                        field: "content_secret"
+                    })
+                ),
+                "{field}"
+            );
+            assert!(transport.body.lock().unwrap().is_none(), "{field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn secret_business_input_is_refused_before_remote_transport_but_typed_assertion_is_sent()
+    {
+        let transport = Arc::new(FakeTransport {
+            body: Mutex::new(None),
+            events: vec![],
+        });
+        let provider = RemoteAguiProvider::new(transport.clone());
+        let mut blocked = request(vec![]);
+        blocked.messages[0].content = "SECRET-CANARY-business".into();
+        assert!(matches!(
+            provider.start(blocked).await,
+            Err(ProviderPortError::InvalidRequest {
+                field: "content_secret"
+            })
+        ));
+        assert!(transport.body.lock().unwrap().is_none());
+        let mut allowed = request(vec![]);
+        allowed.route = ProviderRoute::RemoteAgUi(
+            RemoteAguiRoute::new(
+                "https://agent.example/run".into(),
+                "thread-1".into(),
+                "run-1".into(),
+                "bot-1".into(),
+                Some("SECRET-CANARY-authentication-only".into()),
+            )
+            .unwrap(),
+        );
+        provider.start(allowed).await.unwrap();
+        let body = transport.body.lock().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(body.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            body["forwardedProps"]["openbotRun"],
+            "SECRET-CANARY-authentication-only"
+        );
     }
 }

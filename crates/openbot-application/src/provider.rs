@@ -1,5 +1,7 @@
 //! Provider-neutral streaming port；vendor DTO 不穿过此模块（v3 §7.3）。
 
+mod content;
+
 use async_trait::async_trait;
 use core::time::Duration;
 use openbot_contracts::auth::AuthContext;

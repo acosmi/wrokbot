@@ -1,14 +1,15 @@
 //! W-7b 动态 IdP 管理真 Axum 路由 + PG17 原子 store。
 
+#[path = "support/transport_fixture.rs"]
+mod transport_fixture;
+
 mod harness {
     include!("../../../test-support/postgres_harness.rs");
 }
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
-use axum::extract::ConnectInfo;
 use harness::{admin_config, with_temp_database};
 use http::{Request, StatusCode};
 use openbot_application::OpenBotApplication;
@@ -23,7 +24,7 @@ use openbot_infra::auth::sso::DynamicSsoService;
 use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::net::safe_http::{EgressPolicy, SafeDialer};
 use openbot_infra::repo::ChannelRepo;
-use openbot_server::{PostgresSessionAuthResolver, SensitiveWriteSecurity, ServerBuilder, router};
+use openbot_server::{PostgresSessionAuthResolver, SensitiveWriteSecurity, ServerBuilder};
 use time::{Duration, OffsetDateTime};
 use tower::ServiceExt as _;
 
@@ -154,18 +155,13 @@ fn request_for(
 }
 
 fn anonymous_route_request(email: &str) -> Request<Body> {
-    let mut request = request_for(
+    request_for(
         None,
         "POST",
         "/api/auth/sso/start",
         serde_json::json!({ "email": email }).to_string(),
         true,
-    );
-    request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
-        443,
-    )));
-    request
+    )
 }
 
 #[tokio::test]
@@ -206,8 +202,9 @@ async fn admin_routes_require_fresh_origin_and_never_project_saml_material() {
             )
             .map_err(|error| error.to_string())?;
             let app = Arc::new(OpenBotApplication::new(ChannelRepo::new(pool.clone())));
-            let router = router(
+            let router = transport_fixture::loopback_router(
                 ServerBuilder::new(app, Arc::new(resolver))
+                    .with_transport_policy(transport_fixture::loopback_policy())
                     .with_sensitive_write_security(SensitiveWriteSecurity::new(
                         default_session_lifetime(),
                         TrustedOrigins::from_configured(["https://app.example"]).unwrap(),

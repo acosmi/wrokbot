@@ -102,11 +102,17 @@ expected={
  "SPDXRef-Package-rmcp":("3.1.4","Apache-2.0"),
  "SPDXRef-Package-jsonschema":("0.51.0","MIT"),
  "SPDXRef-Package-openai-dotnet-recorded-trace":("19d0a3cb8e0cf0f3137a5c56c3c70a0c3f6c96f5","MIT"),
+ "SPDXRef-Package-ag-ui-core-schema-0-0-57":("0.0.57","MIT"),
+ "SPDXRef-Package-anthropic-go-recorded-trace":("e9c104e7e5fb80a26ff26e398c0e4e3fe1fe7f33","MIT"),
+ "SPDXRef-Package-anthropic-php-recorded-trace":("93aa419595dceeb7062292e09406b4e2a63b96e1","MIT"),
+ "SPDXRef-Package-acosmi-sdk-5-0-0":("5.0.0","MIT"),
+ "SPDXRef-Package-async-stream-0-3-6":("0.3.6","MIT"),
+ "SPDXRef-Package-async-stream-impl-0-3-6":("0.3.6","MIT"),
 }
 seen={p["SPDXID"]:(p.get("versionInfo"),p.get("licenseDeclared")) for p in d["packages"] if p["SPDXID"] in expected}
 assert seen==expected,(seen,expected)
 ids=[p["SPDXID"] for p in d["packages"]]
-assert len(d["packages"])==56 and len(ids)==len(set(ids)),(len(d["packages"]),len(set(ids)))
+assert len(d["packages"])==62 and len(ids)==len(set(ids)),(len(d["packages"]),len(set(ids)))
 ' || fail 'RMCP/schema SPDX identity, license declaration or package count drifted'
 
 printf 'RMCP dependency guard: ok (rmcp 3.1.4 commit 4a738b9d; protocol cancel/progress; no reqwest; 4 pinned build.rs; 32 explicit non-audit exemptions)\n'

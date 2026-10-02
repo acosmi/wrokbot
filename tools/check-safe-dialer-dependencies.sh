@@ -51,7 +51,7 @@ grep -qF 'openidconnect = { version = "4.0.1", default-features = false }' Cargo
   || fail 'openidconnect 必须继续关闭自带 reqwest/rustls'
 
 network_callers=$(rg -l 'TcpStream::connect|lookup_host\(|TlsConnector|http1::handshake|reqwest::|hyper::client|tokio_rustls' crates/*/src --glob '*.rs' | sort)
-expected_callers=$'crates/openbot-computer/src/engine/process.rs\ncrates/openbot-desktop/src/postgres_sidecar.rs\ncrates/openbot-infra/src/net/safe_http.rs\ncrates/openbot-server/src/http/approvals.rs\ncrates/openbot-server/src/http/channels.rs\ncrates/openbot-server/src/http/screen.rs\ncrates/openbot-server/src/http/threads.rs'
+expected_callers=$'crates/openbot-computer/src/engine/process.rs\ncrates/openbot-desktop/src/postgres_sidecar.rs\ncrates/openbot-infra/src/net/safe_http.rs\ncrates/openbot-server/src/http/approvals.rs\ncrates/openbot-server/src/http/channels.rs\ncrates/openbot-server/src/http/screen.rs\ncrates/openbot-server/src/http/threads.rs\ncrates/openbot-server/src/http/transport_gate.rs'
 [[ "$network_callers" == "$expected_callers" ]] \
   || fail "socket/DNS/TLS/HTTP client 调用面不再唯一：[$network_callers]"
 
@@ -62,9 +62,10 @@ expected_proxy_hop_callers=$'crates/openbot-infra/src/net/safe_http.rs\ncrates/o
 [[ "$proxy_hop_callers" == "$expected_proxy_hop_callers" ]] \
   || fail "scope proxy hop escaped its two owning modules: [$proxy_hop_callers]"
 
-# R67/R130/R146/R156/R188及macOS engine policy的六个socket harness各恰一个test-only client。
-# 逐文件锁唯一cfg(test) tests模块与唯一caller，并要求caller严格位于该模块标记之后；
-# Screen另有test-only fixture常量，不能把它的cfg误当作测试模块起点。实际六个tests模块均在文件末尾。
+# Seven test modules own these loopback probes. Desktop has two existing exit-observation
+# probes (unclean Drop and owned orphan shutdown); every other module has exactly one.
+# Pin each count and require every caller to remain after the unique cfg(test) module marker.
+# Screen另有test-only fixture常量，不能把它的cfg误当作测试模块起点。实际七个tests模块均在文件末尾。
 test_only_network_files=(
   crates/openbot-computer/src/engine/process.rs
   crates/openbot-desktop/src/postgres_sidecar.rs
@@ -72,14 +73,20 @@ test_only_network_files=(
   crates/openbot-server/src/http/channels.rs
   crates/openbot-server/src/http/screen.rs
   crates/openbot-server/src/http/threads.rs
+  crates/openbot-server/src/http/transport_gate.rs
 )
 for file in "${test_only_network_files[@]}"; do
   test_module_line=$(awk 'previous == "#[cfg(test)]" && $0 == "mod tests {" { print NR - 1 } { previous = $0 }' "$file")
-  client_line=$(rg -n 'TcpStream::connect|lookup_host\(|TlsConnector|http1::handshake|reqwest::|hyper::client|tokio_rustls' "$file" | cut -d: -f1)
-  [[ "$test_module_line" =~ ^[0-9]+$ && "$client_line" =~ ^[0-9]+$ ]] \
-    || fail "test-only loopback client 数量漂移：file=$file cfg=[$test_module_line] callers=[$client_line]"
-  (( client_line > test_module_line )) \
-    || fail "loopback client 越出 cfg(test)：file=$file cfg=$test_module_line caller=$client_line"
+  client_lines=$(rg -n 'TcpStream::connect|lookup_host\(|TlsConnector|http1::handshake|reqwest::|hyper::client|tokio_rustls' "$file" | cut -d: -f1)
+  expected_count=1
+  if [[ "$file" == crates/openbot-desktop/src/postgres_sidecar.rs ]]; then expected_count=2; fi
+  actual_count=$(wc -l <<< "$client_lines" | tr -d ' ')
+  [[ "$test_module_line" =~ ^[0-9]+$ && "$actual_count" -eq "$expected_count" ]] \
+    || fail "test-only loopback client 数量漂移：file=$file cfg=[$test_module_line] callers=[$client_lines]"
+  while IFS= read -r client_line; do
+    [[ "$client_line" =~ ^[0-9]+$ ]] && (( client_line > test_module_line )) \
+      || fail "loopback client 越出 cfg(test)：file=$file cfg=$test_module_line caller=$client_line"
+  done <<< "$client_lines"
 done
 
 metadata=$(cargo metadata --format-version 1 --locked)
