@@ -932,6 +932,8 @@ pub struct UpdateMemoryControlRequest {
 /// GUI remember 的权威 scope 请求。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RememberMemoryRequest {
+    /// Deployment resolved from the authenticated host, never accepted from memory input.
+    pub deployment: DeploymentId,
     /// Rust-resolved generation; checked before any memory mutation.
     pub auth_generation: AuthGeneration,
     /// Tenant。
@@ -960,6 +962,8 @@ pub struct MemoryPageRequest {
 /// Correct 请求。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorrectMemoryRequest {
+    /// Current deployment; only retention scope is revalidated, not an old source permission.
+    pub deployment: DeploymentId,
     /// Rust-resolved generation; checked before locking the old memory.
     pub auth_generation: AuthGeneration,
     /// Tenant。

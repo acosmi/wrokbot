@@ -47,6 +47,29 @@ async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
     Ok(())
 }
 
+// Owned ranking/expiry fixture setup: construct a historical row at INSERT time. This is
+// not an adapter history rewrite and does not disable any production provenance guard.
+async fn dated_fixture(
+    client: &deadpool_postgres::Client,
+    id: &str,
+    days: i32,
+    expired: bool,
+) -> Result<(), String> {
+    client.execute("WITH removed AS (DELETE FROM public.memories WHERE memory_id=$1 RETURNING *),
+        dated AS (SELECT *, clock_timestamp()-make_interval(days=>$2) AS fixture_time FROM removed)
+        INSERT INTO public.memories(memory_id,tenant_id,owner_user_id,scope_kind,scope_id,
+          memory_kind,content,tags,sensitivity,source_thread_id,source_message_id,origin,created_by,
+          supersedes_id,status,expires_at,created_at,updated_at,source_run_id,source_authorization_snapshot)
+        SELECT memory_id,tenant_id,owner_user_id,scope_kind,scope_id,memory_kind,content,tags,
+          sensitivity,source_thread_id,source_message_id,origin,created_by,supersedes_id,status,
+          CASE WHEN $3 THEN fixture_time+interval '1 day' ELSE expires_at END,fixture_time,updated_at,
+          source_run_id,CASE WHEN source_authorization_snapshot IS NULL THEN NULL ELSE
+          jsonb_set(source_authorization_snapshot,'{capturedAt}',to_jsonb(to_char(fixture_time AT TIME ZONE 'UTC',
+          'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'))) END FROM dated", &[&id,&days,&expired])
+        .await.map_err(|e|e.to_string())?;
+    Ok(())
+}
+
 fn preference(content: &str) -> RememberMemory {
     RememberMemory {
         memory_kind: MemoryKind::Preference,
@@ -67,6 +90,7 @@ async fn save(
 ) -> Result<MemoryRecord, String> {
     store
         .remember(RememberMemoryRequest {
+            deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
             auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
             tenant: TenantId::new(tenant),
             actor: ActorId::new(actor),
@@ -122,36 +146,76 @@ fn check(case: &str, actual: &[String], expected: &[&str]) -> Result<(), String>
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL via OPENBOT_TEST_DATABASE_URL"]
 async fn english_terms_tags_rank_and_recency_are_deterministic() {
-    with_temp_database(&admin_config("english recall baseline"), "recallenglish", |config| async move {
-        let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
-        let outcome = async {
-            provision(&pool).await?;
-            let store = PostgresMemoryAdministration::new(pool.clone());
-            let old = save(&store,"tenant-a","actor-a",preference("Prefer concise answers with oolong tea")).await?;
-            let mut tagged = preference("Prefer concise answers with oolong tea");
-            tagged.tags = vec!["style".to_owned(),"drink".to_owned()];
-            let new = save(&store,"tenant-a","actor-a",tagged).await?;
-            let rank = save(&store,"tenant-a","actor-a",preference("concise concise concise answers answers answers")).await?;
-            let client = pool.get().await.map_err(|e| e.to_string())?;
-            client.execute("UPDATE public.memories SET created_at=now()-interval '2 days' WHERE memory_id=$1", &[&old.memory_id]).await.map_err(|e| e.to_string())?;
-            client.execute("UPDATE public.memories SET created_at=now()-interval '3 days' WHERE memory_id=$1", &[&rank.memory_id]).await.map_err(|e| e.to_string())?;
-            drop(client);
-            for query in ["concise answers", "ANSWERS CONCISE", "concise answers concise"] {
-                check(query,&ids(&store,request(query)).await?,&[&rank.memory_id,&new.memory_id,&old.memory_id])?;
+    with_temp_database(
+        &admin_config("english recall baseline"),
+        "recallenglish",
+        |config| async move {
+            let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
+            let outcome = async {
+                provision(&pool).await?;
+                let store = PostgresMemoryAdministration::new(pool.clone());
+                let old = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("Prefer concise answers with oolong tea"),
+                )
+                .await?;
+                let mut tagged = preference("Prefer concise answers with oolong tea");
+                tagged.tags = vec!["style".to_owned(), "drink".to_owned()];
+                let new = save(&store, "tenant-a", "actor-a", tagged).await?;
+                let rank = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("concise concise concise answers answers answers"),
+                )
+                .await?;
+                let client = pool.get().await.map_err(|e| e.to_string())?;
+                dated_fixture(&client, &old.memory_id, 2, false).await?;
+                dated_fixture(&client, &rank.memory_id, 3, false).await?;
+                drop(client);
+                for query in [
+                    "concise answers",
+                    "ANSWERS CONCISE",
+                    "concise answers concise",
+                ] {
+                    check(
+                        query,
+                        &ids(&store, request(query)).await?,
+                        &[&rank.memory_id, &new.memory_id, &old.memory_id],
+                    )?;
+                }
+                check(
+                    "all query terms required",
+                    &ids(&store, request("concise unavailableword")).await?,
+                    &[],
+                )?;
+                check(
+                    "simple dictionary does not stem",
+                    &ids(&store, request("answer")).await?,
+                    &[],
+                )?;
+                let mut req = request("concise answers");
+                req.input.tags = vec!["style".to_owned(), "drink".to_owned()];
+                check(
+                    "tags AND",
+                    &ids(&store, req.clone()).await?,
+                    &[&new.memory_id],
+                )?;
+                req.input.tags.push("missing".to_owned());
+                check("missing tag", &ids(&store, req).await?, &[])?;
+                let mut req = request("concise answers");
+                req.input.limit = Some(1);
+                check("top one", &ids(&store, req).await?, &[&rank.memory_id])?;
+                Ok(())
             }
-            check("all query terms required",&ids(&store,request("concise unavailableword")).await?,&[])?;
-            check("simple dictionary does not stem",&ids(&store,request("answer")).await?,&[])?;
-            let mut req = request("concise answers");
-            req.input.tags = vec!["style".to_owned(),"drink".to_owned()];
-            check("tags AND",&ids(&store,req.clone()).await?,&[&new.memory_id])?;
-            req.input.tags.push("missing".to_owned());
-            check("missing tag",&ids(&store,req).await?,&[])?;
-            let mut req = request("concise answers"); req.input.limit = Some(1);
-            check("top one",&ids(&store,req).await?,&[&rank.memory_id])?;
-            Ok(())
-        }.await;
-        pool.close(); outcome
-    }).await;
+            .await;
+            pool.close();
+            outcome
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -180,83 +244,237 @@ async fn chinese_words_in_continuous_sentences_should_be_recalled() {
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL via OPENBOT_TEST_DATABASE_URL"]
 async fn mixed_han_queries_preserve_english_and_reject_symbol_widening() {
-    with_temp_database(&admin_config("mixed Han recall"), "recallmixed", |config| async move {
-        let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
-        let outcome = async {
-            provision(&pool).await?;
-            let store = PostgresMemoryAdministration::new(pool.clone());
-            let preferred = save(&store,"tenant-a","actor-a",preference("常喝乌龙茶并偏好简洁回答 Rust tea alpha beta")).await?;
-            let decoy = save(&store,"tenant-a","actor-a",preference("常喝乌龙茶并偏好简洁回答 Rust steak alphabet betamax")).await?;
-            let traditional = save(&store,"tenant-a","actor-a",preference("常喝烏龍茶 Rust tea")).await?;
-            let extension = save(&store,"tenant-a","actor-a",preference("这是𠀀扩展字以及㐀字和﨑字")).await?;
-            for query in ["Rust 乌龙茶 tea", "Rust乌龙茶 tea", "tea，乌龙茶；Rust", "乌龙茶 tea tea", "乌龙茶 alpha beta"] {
-                check(query,&ids(&store,request(query)).await?,&[&preferred.memory_id])?;
+    with_temp_database(
+        &admin_config("mixed Han recall"),
+        "recallmixed",
+        |config| async move {
+            let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
+            let outcome = async {
+                provision(&pool).await?;
+                let store = PostgresMemoryAdministration::new(pool.clone());
+                let preferred = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("常喝乌龙茶并偏好简洁回答 Rust tea alpha beta"),
+                )
+                .await?;
+                let decoy = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("常喝乌龙茶并偏好简洁回答 Rust steak alphabet betamax"),
+                )
+                .await?;
+                let traditional = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("常喝烏龍茶 Rust tea"),
+                )
+                .await?;
+                let extension = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("这是𠀀扩展字以及㐀字和﨑字"),
+                )
+                .await?;
+                for query in [
+                    "Rust 乌龙茶 tea",
+                    "Rust乌龙茶 tea",
+                    "tea，乌龙茶；Rust",
+                    "乌龙茶 tea tea",
+                    "乌龙茶 alpha beta",
+                ] {
+                    check(
+                        query,
+                        &ids(&store, request(query)).await?,
+                        &[&preferred.memory_id],
+                    )?;
+                }
+                for query in ["乌龙茶%简洁_回答", "回答，简洁。乌龙茶"] {
+                    let found = ids(&store, request(query)).await?;
+                    if found.len() != 2
+                        || !found.contains(&preferred.memory_id)
+                        || !found.contains(&decoy.memory_id)
+                    {
+                        return Err(format!("Han punctuation AND mismatch: {query}"));
+                    }
+                }
+                for query in [
+                    "乌龙茶%不存在",
+                    "乌龙茶' OR 'x'='x",
+                    "乌龙茶 tea unavailableword",
+                    "乌龙茶 alpha bet",
+                    " %_，。 ",
+                    "   ",
+                ] {
+                    check(query, &ids(&store, request(query)).await?, &[])?;
+                }
+                check(
+                    "no simplified/traditional conversion",
+                    &ids(&store, request("烏龍茶")).await?,
+                    &[&traditional.memory_id],
+                )?;
+                for query in ["𠀀", "㐀", "﨑"] {
+                    check(
+                        query,
+                        &ids(&store, request(query)).await?,
+                        &[&extension.memory_id],
+                    )?;
+                }
+                // Force the fallback candidate to be newer than an exact FTS match; original rank wins.
+                let exact = save(&store, "tenant-a", "actor-a", preference("乌龙茶")).await?;
+                dated_fixture(
+                    &pool.get().await.map_err(|e| e.to_string())?,
+                    &exact.memory_id,
+                    1,
+                    false,
+                )
+                .await?;
+                let mut limited = request("乌龙茶");
+                limited.input.limit = Some(1);
+                check(
+                    "original rank before fallback recency",
+                    &ids(&store, limited).await?,
+                    &[&exact.memory_id],
+                )?;
+                Ok(())
             }
-            for query in ["乌龙茶%简洁_回答", "回答，简洁。乌龙茶"] {
-                let found = ids(&store,request(query)).await?;
-                if found.len()!=2 || !found.contains(&preferred.memory_id) || !found.contains(&decoy.memory_id) { return Err(format!("Han punctuation AND mismatch: {query}")); }
-            }
-            for query in ["乌龙茶%不存在", "乌龙茶' OR 'x'='x", "乌龙茶 tea unavailableword", "乌龙茶 alpha bet", " %_，。 ", "   "] {
-                check(query,&ids(&store,request(query)).await?,&[])?;
-            }
-            check("no simplified/traditional conversion",&ids(&store,request("烏龍茶")).await?,&[&traditional.memory_id])?;
-            for query in ["𠀀", "㐀", "﨑"] { check(query,&ids(&store,request(query)).await?,&[&extension.memory_id])?; }
-            // Force the fallback candidate to be newer than an exact FTS match; original rank wins.
-            let exact = save(&store,"tenant-a","actor-a",preference("乌龙茶")).await?;
-            pool.get().await.map_err(|e|e.to_string())?.execute("UPDATE public.memories SET created_at=now()-interval '1 day' WHERE memory_id=$1", &[&exact.memory_id]).await.map_err(|e|e.to_string())?;
-            let mut limited = request("乌龙茶"); limited.input.limit=Some(1);
-            check("original rank before fallback recency",&ids(&store,limited).await?,&[&exact.memory_id])?;
-            Ok(())
-        }.await;
-        pool.close(); outcome
-    }).await;
+            .await;
+            pool.close();
+            outcome
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL via OPENBOT_TEST_DATABASE_URL"]
 async fn han_fallback_keeps_authority_tags_and_lifecycle_filters() {
-    with_temp_database(&admin_config("Han fallback authority"), "recallhanauth", |config| async move {
-        let pool=pool::connect(&config).await.map_err(|e|e.to_string())?;
-        let outcome=async {
-            provision(&pool).await?;
-            let store=PostgresMemoryAdministration::new(pool.clone());
-            let mut tagged=preference("我喜欢乌龙茶"); tagged.tags=vec!["drink".to_owned()];
-            let own=save(&store,"tenant-a","actor-a",tagged).await?;
-            let foreign_actor=save(&store,"tenant-a","actor-b",preference("我喜欢乌龙茶")).await?;
-            let foreign_tenant=save(&store,"tenant-b","actor-a",preference("我喜欢乌龙茶")).await?;
-            let mut scoped=preference("我喜欢乌龙茶"); scoped.scope=MemoryScope::Thread{thread_id:ThreadId::new(THREAD_A)};
-            let thread=save(&store,"tenant-a","actor-a",scoped).await?;
-            check("fallback owner",&ids(&store,request("乌龙茶")).await?,&[&own.memory_id])?;
-            let mut req=request("乌龙茶"); req.actor=ActorId::new("actor-b");
-            check("fallback actor positive",&ids(&store,req).await?,&[&foreign_actor.memory_id])?;
-            let mut req=request("乌龙茶"); req.tenant=TenantId::new("tenant-b");
-            check("fallback tenant positive",&ids(&store,req).await?,&[&foreign_tenant.memory_id])?;
-            let mut req=request("乌龙茶"); req.input.thread_id=Some(ThreadId::new(THREAD_A));
-            let found=ids(&store,req.clone()).await?;
-            if found.len()!=2 || !found.contains(&thread.memory_id) || !found.contains(&own.memory_id) { return Err("fallback thread scope mismatch".to_owned()); }
-            req.input.tags=vec!["drink".to_owned()];
-            check("fallback tag",&ids(&store,req.clone()).await?,&[&own.memory_id])?;
-            req.input.tags.push("missing".to_owned());
-            check("fallback tag AND",&ids(&store,req).await?,&[])?;
-            for status in ["deleted", "forbidden", "expired", "superseded"] {
-                let record=save(&store,"tenant-a","actor-a",preference("我喜欢乌龙茶")).await?;
-                match status {
-                    "deleted"|"forbidden" => {
-                        store.mutate(MutateMemoryRequest{auth_generation:openbot_contracts::auth::AuthGeneration::new(0),tenant:TenantId::new("tenant-a"),actor:ActorId::new("actor-a"),memory_id:record.memory_id,mutation:if status=="deleted"{MemoryMutation::Delete}else{MemoryMutation::Forbid}}).await.map_err(|e|e.to_string())?;
-                    }
-                    "expired" => {
-                        pool.get().await.map_err(|e|e.to_string())?.execute("UPDATE public.memories SET created_at=now()-interval '2 days',expires_at=now()-interval '1 day' WHERE memory_id=$1", &[&record.memory_id]).await.map_err(|e|e.to_string())?;
-                    }
-                    _ => {
-                        store.correct(CorrectMemoryRequest{auth_generation:openbot_contracts::auth::AuthGeneration::new(0),tenant:TenantId::new("tenant-a"),actor:ActorId::new("actor-a"),memory_id:record.memory_id,correction:CorrectMemory{content:"改喝白水".to_owned(),tags:Vec::new(),sensitivity:MemorySensitivity::Normal,expires_at:None}}).await.map_err(|e|e.to_string())?;
-                    }
+    with_temp_database(
+        &admin_config("Han fallback authority"),
+        "recallhanauth",
+        |config| async move {
+            let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
+            let outcome = async {
+                provision(&pool).await?;
+                let store = PostgresMemoryAdministration::new(pool.clone());
+                let mut tagged = preference("我喜欢乌龙茶");
+                tagged.tags = vec!["drink".to_owned()];
+                let own = save(&store, "tenant-a", "actor-a", tagged).await?;
+                let foreign_actor =
+                    save(&store, "tenant-a", "actor-b", preference("我喜欢乌龙茶")).await?;
+                let foreign_tenant =
+                    save(&store, "tenant-b", "actor-a", preference("我喜欢乌龙茶")).await?;
+                let mut scoped = preference("我喜欢乌龙茶");
+                scoped.scope = MemoryScope::Thread {
+                    thread_id: ThreadId::new(THREAD_A),
+                };
+                let thread = save(&store, "tenant-a", "actor-a", scoped).await?;
+                check(
+                    "fallback owner",
+                    &ids(&store, request("乌龙茶")).await?,
+                    &[&own.memory_id],
+                )?;
+                let mut req = request("乌龙茶");
+                req.actor = ActorId::new("actor-b");
+                check(
+                    "fallback actor positive",
+                    &ids(&store, req).await?,
+                    &[&foreign_actor.memory_id],
+                )?;
+                let mut req = request("乌龙茶");
+                req.tenant = TenantId::new("tenant-b");
+                check(
+                    "fallback tenant positive",
+                    &ids(&store, req).await?,
+                    &[&foreign_tenant.memory_id],
+                )?;
+                let mut req = request("乌龙茶");
+                req.input.thread_id = Some(ThreadId::new(THREAD_A));
+                let found = ids(&store, req.clone()).await?;
+                if found.len() != 2
+                    || !found.contains(&thread.memory_id)
+                    || !found.contains(&own.memory_id)
+                {
+                    return Err("fallback thread scope mismatch".to_owned());
                 }
-                check(status,&ids(&store,request("乌龙茶")).await?,&[&own.memory_id])?;
+                req.input.tags = vec!["drink".to_owned()];
+                check(
+                    "fallback tag",
+                    &ids(&store, req.clone()).await?,
+                    &[&own.memory_id],
+                )?;
+                req.input.tags.push("missing".to_owned());
+                check("fallback tag AND", &ids(&store, req).await?, &[])?;
+                for status in ["deleted", "forbidden", "expired", "superseded"] {
+                    let record =
+                        save(&store, "tenant-a", "actor-a", preference("我喜欢乌龙茶")).await?;
+                    match status {
+                        "deleted" | "forbidden" => {
+                            store
+                                .mutate(MutateMemoryRequest {
+                                    auth_generation: openbot_contracts::auth::AuthGeneration::new(
+                                        0,
+                                    ),
+                                    tenant: TenantId::new("tenant-a"),
+                                    actor: ActorId::new("actor-a"),
+                                    memory_id: record.memory_id,
+                                    mutation: if status == "deleted" {
+                                        MemoryMutation::Delete
+                                    } else {
+                                        MemoryMutation::Forbid
+                                    },
+                                })
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        }
+                        "expired" => {
+                            dated_fixture(
+                                &pool.get().await.map_err(|e| e.to_string())?,
+                                &record.memory_id,
+                                2,
+                                true,
+                            )
+                            .await?;
+                        }
+                        _ => {
+                            store
+                                .correct(CorrectMemoryRequest {
+                                    deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
+                                    auth_generation: openbot_contracts::auth::AuthGeneration::new(
+                                        0,
+                                    ),
+                                    tenant: TenantId::new("tenant-a"),
+                                    actor: ActorId::new("actor-a"),
+                                    memory_id: record.memory_id,
+                                    correction: CorrectMemory {
+                                        content: "改喝白水".to_owned(),
+                                        tags: Vec::new(),
+                                        sensitivity: MemorySensitivity::Normal,
+                                        expires_at: None,
+                                    },
+                                })
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        }
+                    }
+                    check(
+                        status,
+                        &ids(&store, request("乌龙茶")).await?,
+                        &[&own.memory_id],
+                    )?;
+                }
+                Ok(())
             }
-            Ok(())
-        }.await;
-        pool.close(); outcome
-    }).await;
+            .await;
+            pool.close();
+            outcome
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -318,32 +536,100 @@ async fn direct_adapter_rejects_malformed_and_excessive_han_queries() {
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL via OPENBOT_TEST_DATABASE_URL"]
 async fn expiration_delete_forbid_and_correction_do_not_resurrect() {
-    with_temp_database(&admin_config("memory lifecycle recall baseline"), "recalllifecycle", |config| async move {
-        let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
-        let outcome = async {
-            provision(&pool).await?;
-            let store = PostgresMemoryAdministration::new(pool.clone());
-            let expired = save(&store,"tenant-a","actor-a",preference("lifecycle expired")).await?;
-            let deleted = save(&store,"tenant-a","actor-a",preference("lifecycle deleted")).await?;
-            let forbidden = save(&store,"tenant-a","actor-a",preference("lifecycle forbidden")).await?;
-            let old = save(&store,"tenant-a","actor-a",preference("lifecycle old")).await?;
-            let before = ids(&store,request("lifecycle")).await?;
-            if before.len()!=4 { return Err("lifecycle positive control did not return all four".to_owned()); }
-            // Fixture clock-state injection only; expiry filtering itself still runs production recall.
-            pool.get().await.map_err(|e| e.to_string())?.execute(
-                "UPDATE public.memories SET created_at=now()-interval '2 days',expires_at=now()-interval '1 day' WHERE memory_id=$1", &[&expired.memory_id]
-            ).await.map_err(|e| e.to_string())?;
-            for (record,mutation) in [(deleted,MemoryMutation::Delete),(forbidden,MemoryMutation::Forbid)] {
-                let erased=store.mutate(MutateMemoryRequest { auth_generation: openbot_contracts::auth::AuthGeneration::new(0),tenant:TenantId::new("tenant-a"),actor:ActorId::new("actor-a"),memory_id:record.memory_id,mutation}).await.map_err(|e| e.to_string())?;
-                if erased.content.is_some() { return Err("erasure retained content".to_owned()); }
+    with_temp_database(
+        &admin_config("memory lifecycle recall baseline"),
+        "recalllifecycle",
+        |config| async move {
+            let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
+            let outcome = async {
+                provision(&pool).await?;
+                let store = PostgresMemoryAdministration::new(pool.clone());
+                let expired = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("lifecycle expired"),
+                )
+                .await?;
+                let deleted = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("lifecycle deleted"),
+                )
+                .await?;
+                let forbidden = save(
+                    &store,
+                    "tenant-a",
+                    "actor-a",
+                    preference("lifecycle forbidden"),
+                )
+                .await?;
+                let old = save(&store, "tenant-a", "actor-a", preference("lifecycle old")).await?;
+                let before = ids(&store, request("lifecycle")).await?;
+                if before.len() != 4 {
+                    return Err("lifecycle positive control did not return all four".to_owned());
+                }
+                // Fixture clock-state injection only; expiry filtering itself still runs production recall.
+                dated_fixture(
+                    &pool.get().await.map_err(|e| e.to_string())?,
+                    &expired.memory_id,
+                    2,
+                    true,
+                )
+                .await?;
+                for (record, mutation) in [
+                    (deleted, MemoryMutation::Delete),
+                    (forbidden, MemoryMutation::Forbid),
+                ] {
+                    let erased = store
+                        .mutate(MutateMemoryRequest {
+                            auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
+                            tenant: TenantId::new("tenant-a"),
+                            actor: ActorId::new("actor-a"),
+                            memory_id: record.memory_id,
+                            mutation,
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    if erased.content.is_some() {
+                        return Err("erasure retained content".to_owned());
+                    }
+                }
+                let new = store
+                    .correct(CorrectMemoryRequest {
+                        deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
+                        auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
+                        tenant: TenantId::new("tenant-a"),
+                        actor: ActorId::new("actor-a"),
+                        memory_id: old.memory_id.clone(),
+                        correction: CorrectMemory {
+                            content: "lifecycle corrected".to_owned(),
+                            tags: Vec::new(),
+                            sensitivity: MemorySensitivity::Normal,
+                            expires_at: None,
+                        },
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if new.supersedes_id.as_deref() != Some(old.memory_id.as_str()) {
+                    return Err("correction lost lineage".to_owned());
+                }
+                for _ in 0..3 {
+                    check(
+                        "active replacement only",
+                        &ids(&store, request("lifecycle")).await?,
+                        &[&new.memory_id],
+                    )?;
+                }
+                Ok(())
             }
-            let new=store.correct(CorrectMemoryRequest { auth_generation: openbot_contracts::auth::AuthGeneration::new(0), tenant:TenantId::new("tenant-a"),actor:ActorId::new("actor-a"),memory_id:old.memory_id.clone(),correction:CorrectMemory {content:"lifecycle corrected".to_owned(),tags:Vec::new(),sensitivity:MemorySensitivity::Normal,expires_at:None} }).await.map_err(|e| e.to_string())?;
-            if new.supersedes_id.as_deref()!=Some(old.memory_id.as_str()) { return Err("correction lost lineage".to_owned()); }
-            for _ in 0..3 { check("active replacement only",&ids(&store,request("lifecycle")).await?,&[&new.memory_id])?; }
-            Ok(())
-        }.await;
-        pool.close(); outcome
-    }).await;
+            .await;
+            pool.close();
+            outcome
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -428,6 +714,7 @@ async fn owner_tenant_context_and_source_writes_are_isolated() {
                 });
                 if store
                     .remember(RememberMemoryRequest {
+                        deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                         auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                         tenant: TenantId::new("tenant-a"),
                         actor: ActorId::new("actor-a"),

@@ -452,6 +452,8 @@ async fn native_constraints_and_repositories_enforce_fencing_replay_outbox_and_m
                     content: Some("The office is closed Friday".to_owned()),
                     tags: vec![Some("schedule".to_owned())],
                     sensitivity: "normal".to_owned(),
+                    source_run_id: None,
+                    source_authorization_snapshot: None,
                     source_thread_id: Some("thread-1".to_owned()),
                     source_message_id: Some("message-1".to_owned()),
                     origin: "user_action".to_owned(),

@@ -11,10 +11,12 @@ use openbot_application::{
     MemoryPageRequest, MutateMemoryRequest, RecallMemoriesRequest, RememberMemoryRequest,
     RememberToolMemory, RememberToolMemoryRequest, RememberToolScope, UpdateMemoryControlRequest,
 };
-use openbot_contracts::ids::{ActorId, BotId, TenantId, ThreadId};
+use openbot_contracts::auth::{AuthGeneration, Role};
+use openbot_contracts::ids::{ActorId, BotId, DeploymentId, RunId, TenantId, ThreadId};
 use openbot_contracts::memory::{
     MemoryControl, MemoryKind, MemoryMutation, MemoryOrigin, MemoryPage, MemoryRecall,
-    MemoryRecord, MemoryScope, MemorySensitivity, MemorySource, MemoryStatus, RememberMemory,
+    MemoryRecord, MemoryScope, MemorySensitivity, MemorySource, MemorySourceAuthorization,
+    MemoryStatus, RememberMemory,
 };
 use openbot_domain::memory::{
     Memory as DomainMemory, MemoryId as DomainMemoryId, MemoryKind as DomainMemoryKind,
@@ -114,7 +116,12 @@ impl MemoryAdministration for PostgresMemoryAdministration {
             .start()
             .await
             .map_err(|_| MemoryAdministrationError::Unavailable)?;
-        actor_authority::lock_actor(&transaction, &request.actor, request.auth_generation).await?;
+        actor_authority::lock_actor_for_control(
+            &transaction,
+            &request.actor,
+            request.auth_generation,
+        )
+        .await?;
         let row = transaction
             .query_one(
                 "INSERT INTO public.user_memory_controls( \
@@ -163,11 +170,22 @@ impl MemoryAdministration for PostgresMemoryAdministration {
                 .await?;
             ensure_writes_enabled(&transaction, &request.tenant, &request.actor).await?;
             let now = database_now(&transaction).await?;
-            validate_memory_targets(
+            let source_run_id = validate_memory_targets(
                 &transaction,
                 &request.tenant,
                 &request.actor,
+                &request.deployment,
                 &request.input,
+            )
+            .await?;
+            let authorization = capture_authorization(
+                &transaction,
+                &request.actor,
+                request.auth_generation,
+                &request.tenant,
+                &request.deployment,
+                &request.input.scope,
+                now,
             )
             .await?;
             let record = insert_memory(
@@ -175,9 +193,13 @@ impl MemoryAdministration for PostgresMemoryAdministration {
                 &request.tenant,
                 &request.actor,
                 &request.input,
-                DomainMemoryOrigin::UserAction,
-                None,
-                now,
+                MemoryCreation {
+                    origin: DomainMemoryOrigin::UserAction,
+                    supersedes: None,
+                    now,
+                    source_run_id,
+                    source_authorization_snapshot: Some(authorization),
+                },
             )
             .await?;
             insert_event(
@@ -323,6 +345,20 @@ impl MemoryAdministration for PostgresMemoryAdministration {
                 source: old_record.source.clone(),
                 expires_at: request.correction.expires_at,
             };
+            // A saved copy keeps its original provenance, even after source access is revoked.
+            // Only the chosen retention scope and the current correction actor are reauthorized.
+            let scope_only = RememberMemory {
+                source: None,
+                ..input.clone()
+            };
+            validate_memory_targets(
+                &transaction,
+                &request.tenant,
+                &request.actor,
+                &request.deployment,
+                &scope_only,
+            )
+            .await?;
             let updated = transaction
                 .execute(
                     "UPDATE public.memories SET status='superseded',updated_at=$4 \
@@ -344,9 +380,13 @@ impl MemoryAdministration for PostgresMemoryAdministration {
                 &request.tenant,
                 &request.actor,
                 &input,
-                DomainMemoryOrigin::UserAction,
-                Some(request.memory_id.clone()),
-                now,
+                MemoryCreation {
+                    origin: DomainMemoryOrigin::UserAction,
+                    supersedes: Some(request.memory_id.clone()),
+                    now,
+                    source_run_id: old.source_run_id,
+                    source_authorization_snapshot: old.source_authorization_snapshot,
+                },
             )
             .await?;
             let old_seq = next_event_sequence(&transaction, &request.memory_id).await?;
@@ -359,13 +399,24 @@ impl MemoryAdministration for PostgresMemoryAdministration {
                 now,
             )
             .await?;
-            insert_event(
+            let action_authorization = capture_authorization(
+                &transaction,
+                &request.actor,
+                request.auth_generation,
+                &request.tenant,
+                &request.deployment,
+                &input.scope,
+                now,
+            )
+            .await?;
+            insert_event_with_metadata(
                 &transaction,
                 &record.memory_id,
                 0,
                 "create",
                 &request.actor,
                 now,
+                &serde_json::json!({"actionAuthorization":action_authorization}),
             )
             .await?;
             Ok(record)
@@ -571,7 +622,9 @@ impl RememberToolMemory for PostgresMemoryAdministration {
             }
             locked.require_fresh()?;
             ensure_writes_enabled(&transaction, request.tenant(), request.actor()).await?;
-            let source = if request.arguments().memory_kind() == MemoryKind::Fact {
+            // All new tool memories have the exact admitted run's user message as provenance.
+            // This does not change or backfill historical preference memories without a source.
+            let source = {
                 let row = transaction
                     .query_opt(
                         "SELECT message_id FROM public.messages \
@@ -593,8 +646,6 @@ impl RememberToolMemory for PostgresMemoryAdministration {
                     thread_id: request.thread().clone(),
                     message_id,
                 })
-            } else {
-                None
             };
             let scope = match request.arguments().scope() {
                 RememberToolScope::User => MemoryScope::User,
@@ -614,17 +665,42 @@ impl RememberToolMemory for PostgresMemoryAdministration {
                 source,
                 expires_at: None,
             };
-            validate_memory_targets(&transaction, request.tenant(), request.actor(), &input)
-                .await?;
+            let source_run_id = validate_memory_targets(
+                &transaction,
+                request.tenant(),
+                request.actor(),
+                request.deployment(),
+                &input,
+            )
+            .await?;
+            if source_run_id.as_deref() != Some(request.run().as_str()) {
+                return Err(MemoryAdministrationError::Corrupt {
+                    field: "remember_source_run",
+                });
+            }
             let now = database_now(&transaction).await?;
+            let authorization = capture_authorization(
+                &transaction,
+                request.actor(),
+                request.auth_generation(),
+                request.tenant(),
+                request.deployment(),
+                &input.scope,
+                now,
+            )
+            .await?;
             let record = insert_memory(
                 &transaction,
                 request.tenant(),
                 request.actor(),
                 &input,
-                DomainMemoryOrigin::RememberTool,
-                None,
-                now,
+                MemoryCreation {
+                    origin: DomainMemoryOrigin::RememberTool,
+                    supersedes: None,
+                    now,
+                    source_run_id,
+                    source_authorization_snapshot: Some(authorization),
+                },
             )
             .await?;
             insert_event(
@@ -669,90 +745,142 @@ async fn ensure_writes_enabled(
     }
 }
 
+// Uses the same current context policy as recall. The source message and its exact nullable
+// run binding are read in that SQL snapshot; a later binding never changes this captured fact.
 async fn validate_memory_targets(
     transaction: &Transaction<'_>,
     tenant: &TenantId,
     actor: &ActorId,
+    deployment: &DeploymentId,
     input: &RememberMemory,
-) -> Result<(), MemoryAdministrationError> {
-    if let MemoryScope::Thread { thread_id } = &input.scope {
-        if input
+) -> Result<Option<String>, MemoryAdministrationError> {
+    let bot = match &input.scope {
+        MemoryScope::Bot { bot_id } => Some(bot_id.as_str()),
+        _ => None,
+    };
+    let thread = match &input.scope {
+        MemoryScope::Thread { thread_id } => {
+            if input
+                .source
+                .as_ref()
+                .is_some_and(|source| source.thread_id != *thread_id)
+            {
+                return Err(MemoryAdministrationError::InvalidInput { field: "scope" });
+            }
+            Some(thread_id.as_str())
+        }
+        _ => input
             .source
             .as_ref()
-            .is_some_and(|source| source.thread_id != *thread_id)
-        {
-            return Err(MemoryAdministrationError::InvalidInput { field: "scope" });
-        }
-        if !thread_visible(transaction, tenant, actor, thread_id).await? {
-            return Err(MemoryAdministrationError::NotVisible);
-        }
-    }
-    if let MemoryScope::Bot { bot_id } = &input.scope {
-        let visible: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM public.agent_profiles \
-                 WHERE agent_id=$1 AND deleted_at IS NULL \
-                   AND (visibility='public' OR owner_user_id=$2))",
-                &[&bot_id.as_str(), &actor.as_str()],
-            )
-            .await
-            .map_err(|error| unavailable("验证 memory bot scope 失败", error))?
-            .try_get(0)
-            .map_err(|_| MemoryAdministrationError::Corrupt {
-                field: "bot_visible",
-            })?;
-        if !visible {
-            return Err(MemoryAdministrationError::NotVisible);
-        }
-    }
-    if let Some(source) = &input.source {
-        let visible: bool = transaction
-            .query_one(
-                "SELECT EXISTS( \
-                   SELECT 1 FROM public.messages m \
-                   JOIN public.threads t ON t.thread_id=m.thread_id \
-                   JOIN public.thread_memberships tm ON tm.thread_id=t.thread_id \
-                   WHERE m.thread_id=$1 AND m.message_id=$2 AND t.tenant_id=$3 \
-                     AND tm.user_id=$4 AND t.status<>'deleted')",
-                &[
-                    &source.thread_id.as_str(),
-                    &source.message_id,
-                    &tenant.as_str(),
-                    &actor.as_str(),
-                ],
-            )
-            .await
-            .map_err(|error| unavailable("验证 memory provenance 失败", error))?
-            .try_get(0)
-            .map_err(|_| MemoryAdministrationError::Corrupt {
-                field: "source_visible",
-            })?;
-        if !visible {
-            return Err(MemoryAdministrationError::NotVisible);
-        }
-    }
-    Ok(())
-}
-
-async fn thread_visible(
-    transaction: &Transaction<'_>,
-    tenant: &TenantId,
-    actor: &ActorId,
-    thread: &ThreadId,
-) -> Result<bool, MemoryAdministrationError> {
-    transaction
+            .map(|source| source.thread_id.as_str()),
+    };
+    let message = input
+        .source
+        .as_ref()
+        .map(|source| source.message_id.as_str());
+    let sql = format!(
+        "{} SELECT authority.authorized, m.message_id, m.run_id,
+        (m.run_id IS NULL OR r.thread_id=m.thread_id) AS run_matches
+        FROM recall_authority authority
+        LEFT JOIN public.messages m ON m.thread_id=$4 AND m.message_id=$6
+        LEFT JOIN public.runs r ON r.run_id=m.run_id",
+        recall_authority::CONTEXT_CTE.replace("$11", "$5")
+    );
+    let row = transaction
         .query_one(
-            "SELECT EXISTS(SELECT 1 FROM public.threads t \
-             JOIN public.thread_memberships tm ON tm.thread_id=t.thread_id \
-             WHERE t.thread_id=$1 AND t.tenant_id=$2 AND tm.user_id=$3 AND t.status<>'deleted')",
-            &[&thread.as_str(), &tenant.as_str(), &actor.as_str()],
+            &sql,
+            &[
+                &tenant.as_str(),
+                &actor.as_str(),
+                &bot,
+                &thread,
+                &deployment.as_str(),
+                &message,
+            ],
         )
         .await
-        .map_err(|error| unavailable("验证 memory thread scope 失败", error))?
-        .try_get(0)
+        .map_err(|error| unavailable("验证 memory scope/source 失败", error))?;
+    let authorized: bool =
+        row.try_get("authorized")
+            .map_err(|_| MemoryAdministrationError::Corrupt {
+                field: "source_authority",
+            })?;
+    let found: Option<String> =
+        row.try_get("message_id")
+            .map_err(|_| MemoryAdministrationError::Corrupt {
+                field: "source_message",
+            })?;
+    if !authorized || (message.is_some() && found.is_none()) {
+        return Err(MemoryAdministrationError::NotVisible);
+    }
+    let run_matches: Option<bool> =
+        row.try_get("run_matches")
+            .map_err(|_| MemoryAdministrationError::Corrupt {
+                field: "source_run",
+            })?;
+    if message.is_some() && run_matches != Some(true) {
+        return Err(MemoryAdministrationError::Corrupt {
+            field: "source_run",
+        });
+    }
+    row.try_get("run_id")
         .map_err(|_| MemoryAdministrationError::Corrupt {
-            field: "thread_visible",
+            field: "source_run",
         })
+}
+
+async fn capture_authorization(
+    transaction: &Transaction<'_>,
+    actor: &ActorId,
+    generation: AuthGeneration,
+    tenant: &TenantId,
+    deployment: &DeploymentId,
+    scope: &MemoryScope,
+    now: OffsetDateTime,
+) -> Result<serde_json::Value, MemoryAdministrationError> {
+    // The actor row is already held until commit; People changes use that same row/generation.
+    let rows = transaction
+        .query(
+            "SELECT role::text AS role FROM public.user_roles WHERE user_id=$1 ORDER BY role::text",
+            &[&actor.as_str()],
+        )
+        .await
+        .map_err(|error| unavailable("读取 memory provenance roles 失败", error))?;
+    let roles = rows
+        .iter()
+        .map(|row| match row.try_get::<_, &str>("role") {
+            Ok("admin") => Ok(Role::Admin),
+            Ok("user") => Ok(Role::User),
+            _ => Err(MemoryAdministrationError::Corrupt {
+                field: "source_roles",
+            }),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if roles.is_empty() || generation.get() > i64::MAX as u64 {
+        return Err(MemoryAdministrationError::Corrupt {
+            field: "source_authorization",
+        });
+    }
+    serde_json::to_value(MemorySourceAuthorization {
+        actor_id: actor.clone(),
+        tenant_id: tenant.clone(),
+        deployment_id: deployment.clone(),
+        auth_generation: generation.get(),
+        roles,
+        scope: scope.clone(),
+        captured_at: now,
+    })
+    .map_err(|_| MemoryAdministrationError::Corrupt {
+        field: "source_authorization",
+    })
+}
+
+struct MemoryCreation {
+    origin: DomainMemoryOrigin,
+    supersedes: Option<String>,
+    now: OffsetDateTime,
+    source_run_id: Option<String>,
+    source_authorization_snapshot: Option<serde_json::Value>,
 }
 
 async fn insert_memory(
@@ -760,10 +888,15 @@ async fn insert_memory(
     tenant: &TenantId,
     actor: &ActorId,
     input: &RememberMemory,
-    origin: DomainMemoryOrigin,
-    supersedes: Option<String>,
-    now: OffsetDateTime,
+    creation: MemoryCreation,
 ) -> Result<MemoryRecord, MemoryAdministrationError> {
+    let MemoryCreation {
+        origin,
+        supersedes,
+        now,
+        source_run_id,
+        source_authorization_snapshot,
+    } = creation;
     let id = DomainMemoryId::new(uuid::Uuid::now_v7().to_string());
     let source = input.source.as_ref().map(|source| {
         DomainMemorySource::new(source.thread_id.clone(), MessageId::new(&source.message_id))
@@ -810,8 +943,8 @@ async fn insert_memory(
             "INSERT INTO public.memories( \
                memory_id,tenant_id,owner_user_id,scope_kind,scope_id,memory_kind,content,tags, \
                sensitivity,source_thread_id,source_message_id,origin,created_by,supersedes_id, \
-               status,expires_at,created_at,updated_at \
-             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) \
+               status,expires_at,created_at,updated_at,source_run_id,source_authorization_snapshot \
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17,$18,$19) \
              RETURNING *",
             &[
                 &memory.id().as_str(),
@@ -831,6 +964,8 @@ async fn insert_memory(
                 &memory.status().as_str(),
                 &memory.expires_at(),
                 &memory.created_at(),
+                &source_run_id,
+                &source_authorization_snapshot,
             ],
         )
         .await
@@ -889,11 +1024,32 @@ async fn insert_event(
     actor: &ActorId,
     now: OffsetDateTime,
 ) -> Result<(), MemoryAdministrationError> {
+    insert_event_with_metadata(
+        transaction,
+        memory_id,
+        sequence,
+        event_type,
+        actor,
+        now,
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+async fn insert_event_with_metadata(
+    transaction: &Transaction<'_>,
+    memory_id: &str,
+    sequence: i64,
+    event_type: &str,
+    actor: &ActorId,
+    now: OffsetDateTime,
+    metadata: &serde_json::Value,
+) -> Result<(), MemoryAdministrationError> {
     transaction
         .execute(
             "INSERT INTO public.memory_events(memory_id,seq,event_type,actor_id,metadata,created_at) \
-             VALUES($1,$2,$3,$4,'{}'::jsonb,$5)",
-            &[&memory_id, &sequence, &event_type, &actor.as_str(), &now],
+             VALUES($1,$2,$3,$4,$6,$5)",
+            &[&memory_id, &sequence, &event_type, &actor.as_str(), &now, &metadata],
         )
         .await
         .map(|_| ())
@@ -955,6 +1111,41 @@ fn record_from_row(row: memories::Row) -> Result<MemoryRecord, MemoryAdministrat
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or(MemoryAdministrationError::Corrupt { field: "tags" })?;
+    let source_run_id = row.source_run_id.map(RunId::new);
+    if source_run_id
+        .as_ref()
+        .is_some_and(|run| run.as_str().is_empty() || source.is_none())
+    {
+        return Err(MemoryAdministrationError::Corrupt {
+            field: "source_run",
+        });
+    }
+    let source_authorization_snapshot = row
+        .source_authorization_snapshot
+        .map(serde_json::from_value::<MemorySourceAuthorization>)
+        .transpose()
+        .map_err(|_| MemoryAdministrationError::Corrupt {
+            field: "source_authorization",
+        })?;
+    if source_authorization_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| {
+            snapshot.actor_id.as_str() != row.owner_user_id
+                || snapshot.tenant_id.as_str() != row.tenant_id
+                || snapshot.deployment_id.as_str().is_empty()
+                || snapshot.scope != scope
+                || snapshot.auth_generation > i64::MAX as u64
+                || snapshot.captured_at > row.created_at
+                || !matches!(
+                    snapshot.roles.as_slice(),
+                    [Role::User] | [Role::Admin] | [Role::Admin, Role::User]
+                )
+        })
+    {
+        return Err(MemoryAdministrationError::Corrupt {
+            field: "source_authorization",
+        });
+    }
     if (matches!(status, MemoryStatus::Forbidden | MemoryStatus::Deleted) && row.content.is_some())
         || (matches!(status, MemoryStatus::Active | MemoryStatus::Superseded)
             && row.content.is_none())
@@ -970,6 +1161,8 @@ fn record_from_row(row: memories::Row) -> Result<MemoryRecord, MemoryAdministrat
         tags,
         sensitivity,
         source,
+        source_run_id,
+        source_authorization_snapshot,
         origin,
         created_by: row.created_by,
         supersedes_id: row.supersedes_id,

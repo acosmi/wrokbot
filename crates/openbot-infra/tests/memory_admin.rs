@@ -92,7 +92,7 @@ async fn write_control_blocks_gui_tool_and_correction_but_never_erasure() {
                 return Err("absent control must default enabled".to_owned());
             }
             let existing = store
-                .remember(RememberMemoryRequest {
+                .remember(RememberMemoryRequest { deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: actor.clone(),
@@ -129,7 +129,7 @@ async fn write_control_blocks_gui_tool_and_correction_but_never_erasure() {
                 return Err("disabled control did not persist".to_owned());
             }
             if store
-                .remember(RememberMemoryRequest {
+                .remember(RememberMemoryRequest { deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: actor.clone(),
@@ -141,7 +141,7 @@ async fn write_control_blocks_gui_tool_and_correction_but_never_erasure() {
                 return Err("disabled GUI remember must fail before insert".to_owned());
             }
             if store
-                .correct(CorrectMemoryRequest {
+                .correct(CorrectMemoryRequest { deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: actor.clone(),
@@ -199,7 +199,7 @@ async fn write_control_blocks_gui_tool_and_correction_but_never_erasure() {
                 .await
                 .map_err(|error| error.to_string())?;
             store
-                .remember(RememberMemoryRequest {
+                .remember(RememberMemoryRequest { deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: actor.clone(),
@@ -278,6 +278,7 @@ async fn explicit_journey_binds_scope_pages_corrects_and_erases_content() {
 
             let created = store
                 .remember(RememberMemoryRequest {
+                    deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: actor.clone(),
@@ -297,6 +298,7 @@ async fn explicit_journey_binds_scope_pages_corrects_and_erases_content() {
             stolen.source.as_mut().unwrap().message_id = "missing".to_owned();
             if store
                 .remember(RememberMemoryRequest {
+                    deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: other.clone(),
@@ -310,6 +312,7 @@ async fn explicit_journey_binds_scope_pages_corrects_and_erases_content() {
 
             let preference = store
                 .remember(RememberMemoryRequest {
+                    deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: actor.clone(),
@@ -468,6 +471,7 @@ async fn explicit_journey_binds_scope_pages_corrects_and_erases_content() {
 
             let corrected = store
                 .correct(CorrectMemoryRequest {
+                    deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: actor.clone(),
@@ -488,6 +492,7 @@ async fn explicit_journey_binds_scope_pages_corrects_and_erases_content() {
             }
             if store
                 .correct(CorrectMemoryRequest {
+                    deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                     auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: tenant.clone(),
                     actor: actor.clone(),
@@ -620,7 +625,7 @@ async fn memory_event_failure_rolls_back_the_memory_row() {
             drop(client);
             let store = PostgresMemoryAdministration::new(pool.clone());
             if store
-                .remember(RememberMemoryRequest { auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
+                .remember(RememberMemoryRequest { deployment: openbot_contracts::ids::DeploymentId::new("dep-a"), auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                     tenant: TenantId::new("tenant-a"),
                     actor: ActorId::new("actor-a"),
                     input: fact(),

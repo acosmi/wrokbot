@@ -303,6 +303,41 @@ fn zero_checksum() -> IntelligenceThreadChecksum {
 }
 
 #[tokio::test]
+#[ignore = "requires owned isolated PostgreSQL"]
+async fn import_keeps_original_unknown_provenance_and_completed_or_resumed_observation_rejects_enrichment()
+ {
+    for column in ["source_run_id", "source_authorization_snapshot"] {
+        with_temp_database(&admin_config(column),column,|config| async move {
+            let p=pool::connect(&config).await.map_err(|e|e.to_string())?;
+            provision(&p).await?;
+            let (bundle,mapping,ids)=fixture();
+            let store=PostgresIntelligenceImportStore::new(p.clone());
+            let original=import_intelligence_bundle(&store,bundle.clone(),mapping.clone()).await.unwrap();
+            let c=p.get().await.unwrap();
+            assert!(c.query_one("SELECT bool_and(source_run_id IS NULL AND source_authorization_snapshot IS NULL) FROM public.memories",&[]).await.unwrap().get::<_,bool>(0));
+            assert_eq!(import_intelligence_bundle(&store,bundle.clone(),mapping.clone()).await.unwrap(),original);
+            // Construct a conflicting row in this owned negative fixture, without disabling the guard.
+            // An initial INSERT can carry provenance absent from the old signed format; replay must notice it.
+            let enrichment=if column=="source_run_id" {"'run-1'::text,NULL::jsonb"} else {
+                "NULL::text,jsonb_build_object('actorId',owner_user_id,'tenantId',tenant_id,'deploymentId','target-deployment','authGeneration',0,'roles',jsonb_build_array('user'),
+                 'scope',jsonb_build_object('kind','user'),'capturedAt','2020-01-01T00:00:00Z')"
+            };
+            c.batch_execute(&format!("WITH removed AS (DELETE FROM public.memories WHERE memory_id='memory-2' RETURNING *)
+                INSERT INTO public.memories(memory_id,tenant_id,owner_user_id,scope_kind,scope_id,memory_kind,
+                  content,tags,sensitivity,source_thread_id,source_message_id,origin,created_by,supersedes_id,
+                  status,expires_at,created_at,updated_at,source_run_id,source_authorization_snapshot)
+                SELECT memory_id,tenant_id,owner_user_id,scope_kind,scope_id,memory_kind,content,tags,sensitivity,
+                  source_thread_id,source_message_id,origin,created_by,supersedes_id,status,expires_at,created_at,
+                  updated_at,{enrichment} FROM removed")).await.unwrap();
+            // Both direct resumed-page verification and Application completed replay use real adapters.
+            assert_eq!(store.verify_thread(&ids[0]).await,Err(IntelligenceImportError::Corrupt {field:"memory_source_provenance"}));
+            assert_eq!(import_intelligence_bundle(&store,bundle,mapping).await,Err(IntelligenceImportError::Corrupt {field:"memory_source_provenance"}));
+            drop(c);p.close();Ok(())
+        }).await;
+    }
+}
+
+#[tokio::test]
 #[ignore = "需要真实 PostgreSQL：设 OPENBOT_TEST_DATABASE_URL 后加 --include-ignored 运行"]
 async fn per_thread_failure_marks_cursor_and_resume_finishes_with_database_rechecksum() {
     let admin = admin_config(

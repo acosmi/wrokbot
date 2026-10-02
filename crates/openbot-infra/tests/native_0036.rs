@@ -56,7 +56,7 @@ async fn terminal(c: &Client, run: &str, status: &str) {
 
 #[tokio::test]
 #[ignore = "requires owned isolated PostgreSQL 17"]
-async fn upgrade_backfills_every_state_and_fresh_matches_actual_0036_schema() {
+async fn upgrade_backfills_every_state_at_0036_and_latest_fresh_matches_registered_schema() {
     fixture("occupancy36schema", |p| async move {
         through35(&p).await;
         let mut c = p.get().await.unwrap();
@@ -76,7 +76,9 @@ async fn upgrade_backfills_every_state_and_fresh_matches_actual_0036_schema() {
             seed(&c, &format!("background-{state}"), state, false).await;
         }
         assert_eq!(
-            native::apply(&mut c).await.unwrap(),
+            native::apply_through(&mut c, native::NATIVE_0036_VERSION)
+                .await
+                .unwrap(),
             native::ApplyOutcome::Applied
         );
         assert_eq!(
@@ -103,12 +105,14 @@ async fn upgrade_backfills_every_state_and_fresh_matches_actual_0036_schema() {
         }
         let before_pairs = pairs(&c).await;
         assert_eq!(
-            native::apply(&mut c).await.unwrap(),
+            native::apply_through(&mut c, native::NATIVE_0036_VERSION)
+                .await
+                .unwrap(),
             native::ApplyOutcome::AlreadyApplied
         );
         assert_eq!(pairs(&c).await, before_pairs);
         drop(c);
-        desktop_vault_canary::verify_current_layout(&p)
+        desktop_vault_canary::verify_pre_upgrade_layout(&p)
             .await
             .unwrap();
         Ok(())
@@ -124,7 +128,7 @@ async fn upgrade_backfills_every_state_and_fresh_matches_actual_0036_schema() {
         assert_eq!(fresh::apply(&mut c).await.unwrap(),fresh::FreshApplyOutcome::Applied(native::ApplyOutcome::Applied));
         c.batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED; DROP EVENT TRIGGER require_fresh_rc; DROP FUNCTION public.require_fresh_rc(); COMMIT").await.unwrap();
         let actual=schema_facts::fetch(&c).await.unwrap();
-        let expected=serde_json::from_str(include_str!("../../../fixtures/db/schema-0036.json")).unwrap();
+        let expected=serde_json::from_str(include_str!("../../../fixtures/db/schema-0037.json")).unwrap();
         assert_eq!(actual,expected);
         assert_eq!(fresh::apply(&mut c).await.unwrap(),fresh::FreshApplyOutcome::AlreadyInitialized);
         assert!(pairs(&c).await.is_empty());
