@@ -66,7 +66,7 @@
 | V6-PR-052 | Desktop ScreenSessionService 局部装配 | 主控返修已验且已合，仅backend局部端口 | [#67](https://github.com/acosmi/wrokbot/pull/67) | [82db75413b](https://github.com/acosmi/wrokbot/commit/82db75413bd7ba7639abae2238a7d5ee722a0e0e) |
 | V6-PR-053 | transport_parity 的 ModelConnection 变体分类 | 主控已验且已合 | [#68](https://github.com/acosmi/wrokbot/pull/68) | [e7098b56fa](https://github.com/acosmi/wrokbot/commit/e7098b56fa58370811057b14d4715c642c4bc13b) |
 | V6-PR-054 | skip-link 键盘焦点修复 | 阻塞：UI原件与真实焦点验收输入缺失 | [#70](https://github.com/acosmi/wrokbot/pull/70) | 未合入 |
-| V6-PR-055 | UI wasm32 Clippy 修复 | 本轮独立本地检查通过；待主控发布及正常集成 | [#71](https://github.com/acosmi/wrokbot/pull/71) | 未合入 |
+| V6-PR-055 | UI wasm32 Clippy 修复 | 本轮独立本地检查通过；已正常合入 | [#71](https://github.com/acosmi/wrokbot/pull/71) | [8f7f75f4fa](https://github.com/acosmi/wrokbot/commit/8f7f75f4faa549472e0fcb343278ed343554712d) |
 | V6-PR-056 | Desktop Clippy 修复 | 主控返修已验且已合 | [#72](https://github.com/acosmi/wrokbot/pull/72) | [9bae520869](https://github.com/acosmi/wrokbot/commit/9bae520869f8dc2fb9833fae4b946cd99c3aa64a) |
 | V6-PR-057 | 既有格式差异修复 | 主控已验且已合 | [#74](https://github.com/acosmi/wrokbot/pull/74) | [acf1a26f15](https://github.com/acosmi/wrokbot/commit/acf1a26f15c5ef19f437ec77d56e7c51af0857fe) |
 | V6-PR-058 | AG-UI fixture README provenance 修复 | 主控已验且已合 | [#76](https://github.com/acosmi/wrokbot/pull/76) | [9a3b5c7234](https://github.com/acosmi/wrokbot/commit/9a3b5c7234b8362e4765726c52a6db1c73e08a36) |
@@ -83,6 +83,7 @@
 | V6-PR-069 | helper PG_VERSION的16字节规则在读取中执行，复核已打开句柄与路径 | 主控定向及严格Clippy已验；最终组合验收与集成事实见PR | [#87](https://github.com/acosmi/wrokbot/pull/87) | [PR合并记录](https://github.com/acosmi/wrokbot/pull/87) |
 | V6-PR-070 | 真实PG审批组合测试夹具的单语句时间 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#88](https://github.com/acosmi/wrokbot/pull/88) | 以PR实际合并状态为准 |
 | V6-PR-071 | 取消测试的启动阶段观察预算 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#89](https://github.com/acosmi/wrokbot/pull/89) | 以PR实际合并状态为准 |
+| V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 当前055主线整合后默认lib86/86、严格Clippy与fmt实测通过；待主控发布合入 | 无 | 未合入 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -275,6 +276,20 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 
 068 最终候选由start-lock封闭格式推导最大合法233字节，首次读取最多234字节并拒绝空或越界；合法最小/最大PID记录长度为224/233。保留严格grammar、owner/文件证据复核及065/066/067顺序，边界和打开后增长的局部读数/拒绝/保全由同候选回执记录。长度检查不替代格式核验，局部growth测试不宣称穷举生产竞争。
 
+## Desktop UI preference 读取预算候选准备
+
+2026-10-01：保持既有 256-byte 文件限制，改在已打开的普通文件上核对形态并最多消费 257 bytes，超限仍报既有 file corruption；解析、主题/语言合并及原子写入规则保持。此前独立源码快照的默认 Desktop lib 86 项、默认全目标严格 Clippy 和全仓 fmt 已实际通过，属于准备记录；正式 Git 候选的完整结果以本 PR 最终 HEAD 的验收为准，不继承旧基线检查。此项不分配新的正式任务编号，不代表 A0–A7 或 M0 完成；主线集成仍等待既有 065–068 正式交接与最新基线的受影响闭包核对。
+
+## Desktop UI preference 最终交接基底整合
+
+2026-10-01：065–068 正式 READY 已由主控接收后，在既有 `codex/m0-preferences-read-budget` 隔离分支正常合入固定主线 `b3f1dc9f7923b2fb650f8e589f046f099f69b290`，保留主线全部台账历史及上述 preference 原条目。preference 源码保持旧正式候选的 `34bce60879ff3fbd90a3f52c306a6a566893ad49d25f421e1e84f6be47c90192`；无新增预算、测试或产品合同变更。最终冻结 HEAD 的默认 lib、默认全目标严格 Clippy 与 fmt 状态只以本次独立私有回执和交付 manifest 为准；此处不把旧候选检查标为新候选通过，不重复既有 065–068 的 PG 套件，也不宣称 A1、M0 或 full_v6 完成。
+
+## V6-PR-072 Desktop UI preference 正式编号与局部验证引用
+
+2026-10-01：主控正式分配 V6-PR-072；上述未编号准备与交接记录作为历史保留。本地候选已通过，尚未发布、无 PR、未合入。实际运行候选 `60ba855390d57f6e8ec625d50d85f1e71354e81c`（tree `833df1b45167d18a7f2d3ece191a70004d2f76a2`，固定主线基底 `b3f1dc9f7923b2fb650f8e589f046f099f69b290`）的默认 Desktop lib 为 86 passed、0 failed、0 ignored、0 filtered；默认 all-targets Clippy `-D warnings` 与全仓 fmt 检查退出均为 0。原始命令、日志及 SHA 由该候选不可变私有交付回执记录，主控已核对接受。
+
+本次只增加任务表编号和本段事实，产品源码、测试、预算、合同及 Rust/build/lock/UI 输入不变。依唯一规范 §24.3，完整 tracked 产品 manifest、全仓除台账 manifest 和工作树一致性核对后，按 manifest 精确引用 `60ba855` 的上述局部证据；不是本次编号提交的新 HEAD 实测，本次未重跑产品检查。引用边界仅为这些原默认 lib/Clippy/fmt 检查，不把局部结果记为 A1、A0–A7、M0 或 full_v6 通过；发布仍等待既有直接人类授权问题的回答。
+
 ## 055 本轮独立本地候选验证（2026-10-01）
 
 原 PR head `86d261c10c13dce9b377ea635a85d8afcb574404` 正常合入精确已验 main `b3f1dc9f7923b2fb650f8e589f046f099f69b290`；仅本台账冲突，当前其他任务、历次失败和原 055 作者历史均保留。三个产品文件与原 PR head 逐字节相同：Request 私有构造方法改名为 builder，五调用同步；StartFailure 五构造装箱、两消费解构。五种失败分类、原 attempt 恢复、Conflict 目录重载、submitting 收尾及请求身份均保持。没有命名身份、schema、route、CSS、Engine 或 native 权限变化。
@@ -282,3 +297,9 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 干净检查候选 `acb12126ca22cf94e585f323c8785b63d77a481a` 在固定 Rust 1.98.0、独立 target 下实际完成 UI wasm32 offline/locked check、wasm32 与 native all-targets offline/locked 严格 Clippy（-D warnings）、crate fmt check 和既有 crate 单测：216 通过、0 失败、0 忽略、0 过滤；bin 与 doc 各零项不计为通过。此 216 来自本轮原始运行日志，不继承旧作者计数。Cargo 仍报告锁定 proc-macro-error2 的未来 Rust 兼容性提示，未放宽 lint。
 
 初次 Cargo PATH 启动失败、wasm 离线缺锁定缓存、单测编译磁盘不足及清缓存被目录保护拒绝均保留，不记为测试执行或删除成功。定向 locked 缓存准备完成后重跑受阻离线检查；实际可用空间恢复后，同原环境单测重新完成。最终登记仅改台账；全部产品及构建输入字节核同上述已检查候选，明确继承这些局部检查，不冒充在登记后的 head 重跑。055 是既有私有代码 lint 维护，本轮未执行 GUI 焦点、PG、厂商旅程或 A0–A7 验收；当前仍为本地候选，未写入远端。
+
+## V6-PR-072 整合当前已合主线
+
+2026-10-02：正常合入已发布并合并的055主线 `8f7f75f4faa549472e0fcb343278ed343554712d`；仅解本台账冲突，保留055、065–068状态及原失败历史。三个UI文件属于已合主线基线；072产品差量仍只为既有preferences有界读取，源码与原交付逐字节一致。以上旧候选和发布等待记录保留为历史；当前发布授权已由主控接收，远端动作由主控统一完成。新基线受影响检查以本轮真实回执为准，不能将旧计数直接继承为新HEAD实测。
+
+2026-10-02 本轮实测：干净检查候选 `44f2ece2080ac146f04ab18f187ad8884247a139`（tree `476507cef65142ee0db62cae2ba367a689a65bad`，基底 `8f7f75f4faa549472e0fcb343278ed343554712d`）在固定Rust 1.98.0、独立target、offline/locked下，实际执行默认 `openbot-desktop --lib`：86 passed、0 failed、0 ignored、0 measured、0 filtered；默认all-targets严格Clippy（`-D warnings`）与workspace fmt check均退出0。未开启额外feature、未运行PG、Keychain、native probe、TTY或全仓测试。最终登记仅改台账；完整tracked树除台账与已检查候选逐字节一致，故精确引用以上本轮回执，不冒充在登记后HEAD重新运行。上述局部开发检查不代表A1、A0–A7、M0或full_v6通过。

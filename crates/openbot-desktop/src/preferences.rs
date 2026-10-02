@@ -1,9 +1,7 @@
 //! Desktop-local, bounded and atomically replaced UI preference file.
 
-#[cfg(unix)]
-use std::fs::File;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write as _};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -99,9 +97,31 @@ fn read_file(path: &Path) -> Result<UiPreferences, UiPreferenceAdministrationErr
     if !metadata.is_file() || metadata.len() > FILE_MAX_BYTES {
         return Err(UiPreferenceAdministrationError::Corrupt { field: "file" });
     }
-    let raw = fs::read_to_string(path)
+    let file =
+        File::open(path).map_err(|_| UiPreferenceAdministrationError::Corrupt { field: "file" })?;
+    let opened = file
+        .metadata()
         .map_err(|_| UiPreferenceAdministrationError::Corrupt { field: "file" })?;
-    parse(&raw)
+    if !opened.is_file() || opened.len() > FILE_MAX_BYTES {
+        return Err(UiPreferenceAdministrationError::Corrupt { field: "file" });
+    }
+    read_preferences(file)
+}
+
+fn read_preferences(
+    reader: impl io::Read,
+) -> Result<UiPreferences, UiPreferenceAdministrationError> {
+    let mut bytes = Vec::new();
+    reader
+        .take(FILE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| UiPreferenceAdministrationError::Corrupt { field: "file" })?;
+    if bytes.len() as u64 > FILE_MAX_BYTES {
+        return Err(UiPreferenceAdministrationError::Corrupt { field: "file" });
+    }
+    let raw = std::str::from_utf8(&bytes)
+        .map_err(|_| UiPreferenceAdministrationError::Corrupt { field: "file" })?;
+    parse(raw)
 }
 
 fn parse(raw: &str) -> Result<UiPreferences, UiPreferenceAdministrationError> {
@@ -205,6 +225,179 @@ mod tests {
         assert_eq!(parse(&render(preferences)).unwrap(), preferences);
         assert!(parse("openbot-ui-preferences-v1\ntheme=sepia\nlocale=en\n").is_err());
         assert!(parse("openbot-ui-preferences-v1\ntheme=dark\nlocale=en\nextra=x\n").is_err());
+    }
+
+    struct GrowingInput {
+        initial: Vec<u8>,
+        supplied: usize,
+        available: usize,
+    }
+
+    impl io::Read for GrowingInput {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            let remaining = self.available - self.supplied;
+            let count = if self.supplied < self.initial.len() {
+                output.len().min(self.initial.len() - self.supplied)
+            } else {
+                output.len().min(remaining)
+            };
+            for (index, byte) in output[..count].iter_mut().enumerate() {
+                *byte = self
+                    .initial
+                    .get(self.supplied + index)
+                    .copied()
+                    .unwrap_or(b'x');
+            }
+            self.supplied += count;
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn read_budget_stops_a_growing_source_after_one_excess_byte() {
+        let initial = render(UiPreferences::default()).into_bytes();
+        assert!(initial.len() < FILE_MAX_BYTES as usize);
+        let mut growing = GrowingInput {
+            initial,
+            supplied: 0,
+            available: 1024 * 1024,
+        };
+        assert_eq!(
+            read_preferences(&mut growing),
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+        assert_eq!(growing.supplied, FILE_MAX_BYTES as usize + 1);
+        assert!(growing.available > growing.supplied);
+    }
+
+    #[test]
+    fn read_boundary_checks_length_before_decoding_and_preserves_parser_errors() {
+        assert_eq!(
+            read_preferences(&b"x".repeat(256)[..]),
+            Err(UiPreferenceAdministrationError::Corrupt { field: "version" })
+        );
+        assert_eq!(
+            read_preferences(&b"x".repeat(257)[..]),
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+        assert_eq!(
+            read_preferences(&[0xff][..]),
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+        for (input, field) in [
+            ("bad-version\ntheme=dark\nlocale=en\n", "version"),
+            (
+                "openbot-ui-preferences-v1\ntheme=sepia\nlocale=en\n",
+                "theme",
+            ),
+            (
+                "openbot-ui-preferences-v1\ntheme=dark\nlocale=bad\n",
+                "locale",
+            ),
+            (
+                "openbot-ui-preferences-v1\ntheme=dark\nlocale=en\nextra=x\n",
+                "file",
+            ),
+        ] {
+            assert_eq!(
+                read_preferences(input.as_bytes()),
+                Err(UiPreferenceAdministrationError::Corrupt { field })
+            );
+        }
+        let preferences = UiPreferences {
+            theme: Some(UiTheme::System),
+            locale: Some(UiLocale::En),
+        };
+        assert_eq!(
+            read_preferences(render(preferences).as_bytes()),
+            Ok(preferences)
+        );
+    }
+
+    #[test]
+    fn read_failure_keeps_the_file_corruption_class() {
+        struct BrokenInput;
+        impl io::Read for BrokenInput {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("owned test input failure"))
+            }
+        }
+        assert_eq!(
+            read_preferences(BrokenInput),
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_reads_keep_missing_directory_and_link_semantics() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "openbot-desktop-ui-preferences-reading-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("ui-preferences-v1");
+        assert_eq!(read_file(&path), Ok(UiPreferences::default()));
+        assert_eq!(
+            read_file(&root),
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+        let preferences = UiPreferences {
+            theme: Some(UiTheme::Light),
+            locale: Some(UiLocale::ZhCn),
+        };
+        fs::write(&path, render(preferences)).unwrap();
+        assert_eq!(read_file(&path), Ok(preferences));
+        symlink("ui-preferences-v1", root.join("soft-link")).unwrap();
+        fs::hard_link(&path, root.join("hard-link")).unwrap();
+        assert_eq!(read_file(&root.join("soft-link")), Ok(preferences));
+        assert_eq!(read_file(&root.join("hard-link")), Ok(preferences));
+        fs::write(&path, [0xff]).unwrap();
+        assert_eq!(
+            read_file(&path),
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+        fs::write(&path, b"x".repeat(257)).unwrap();
+        assert_eq!(
+            read_file(&path),
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejected_file_update_preserves_original_bytes_and_no_temporary_output() {
+        let root = std::env::temp_dir().join(format!(
+            "openbot-desktop-ui-preferences-rejected-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("ui-preferences-v1");
+        let original = b"x".repeat(257);
+        fs::write(&path, &original).unwrap();
+        let store = DesktopUiPreferenceStore::new(&path);
+        assert_eq!(
+            store.get(&auth()).await,
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+        assert_eq!(
+            store
+                .update(
+                    &auth(),
+                    UpdateUiPreferences {
+                        theme: Some(UiTheme::Dark),
+                        locale: None,
+                    },
+                )
+                .await,
+            Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
