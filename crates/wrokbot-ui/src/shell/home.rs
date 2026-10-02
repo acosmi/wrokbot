@@ -14,7 +14,9 @@ use crate::features::channels::composer::models::{ModelComposer, ModelPicker};
 use crate::features::channels::composer::skills::{SkillComposer, SkillPicker};
 use crate::features::channels::new::{StartAttempt, SubmissionNotice, model_notice};
 #[cfg(target_arch = "wasm32")]
-use crate::features::channels::new::{StartFailureKind, definite_notice, execute_start_attempt};
+use crate::features::channels::new::{
+    StartFailure, StartFailureKind, definite_notice, execute_start_attempt,
+};
 use crate::features::layout::{PageShell, PageWidth};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
@@ -293,21 +295,26 @@ pub fn HomePage() -> impl IntoView {
                         }
                     }
                     Err(failure) => {
-                        match failure.kind {
+                        let StartFailure {
+                            attempt,
+                            kind,
+                            error,
+                        } = *failure;
+                        match kind {
                             StartFailureKind::CreateUncertain => {
                                 uncertain_create.set(true);
-                                resumable.set(Some(failure.attempt));
+                                resumable.set(Some(attempt));
                                 notice.set(None);
                             }
                             StartFailureKind::BeginUnknown => {
-                                resumable.set(Some(failure.attempt));
+                                resumable.set(Some(attempt));
                                 begin_unknown.set(true);
                                 notice.set(None);
                             }
                             StartFailureKind::CreateDefinite | StartFailureKind::BeginDefinite => {
                                 resumable.set(None);
                                 frozen_model_agent.set(None);
-                                let rejected = definite_notice(failure.error);
+                                let rejected = definite_notice(error);
                                 if rejected == SubmissionNotice::Conflict {
                                     model_composer.directory_reload();
                                 }

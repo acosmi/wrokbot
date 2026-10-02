@@ -99,7 +99,7 @@ pub(crate) struct StartedChannel {
 pub(crate) async fn execute_start_attempt(
     mut attempt: StartAttempt,
     retry_unknown: bool,
-) -> Result<StartedChannel, StartFailure> {
+) -> Result<StartedChannel, Box<StartFailure>> {
     let submissions = expect_context::<RunSubmissionActions>();
     let channel = match attempt.channel.clone() {
         Some(channel) => channel,
@@ -113,11 +113,11 @@ pub(crate) async fn execute_start_attempt(
                 model_selection: attempt.model_selection.clone(),
             };
             let Some(ticket) = submissions.start_create(&create_intent) else {
-                return Err(StartFailure {
+                return Err(Box::new(StartFailure {
                     attempt,
                     kind: StartFailureKind::Blocked,
                     error: None,
-                });
+                }));
             };
             match create_channel(&attempt.agent_id).await {
                 Ok(channel) => {
@@ -127,7 +127,7 @@ pub(crate) async fn execute_start_attempt(
                 }
                 Err(error) => {
                     ticket.failed(error);
-                    return Err(StartFailure {
+                    return Err(Box::new(StartFailure {
                         attempt,
                         kind: if is_definite_rejection(error) {
                             StartFailureKind::CreateDefinite
@@ -135,17 +135,17 @@ pub(crate) async fn execute_start_attempt(
                             StartFailureKind::CreateUncertain
                         },
                         error: Some(error),
-                    });
+                    }));
                 }
             }
         }
     };
     let Some(thread_id) = channel.thread_id.as_ref() else {
-        return Err(StartFailure {
+        return Err(Box::new(StartFailure {
             attempt,
             kind: StartFailureKind::BeginDefinite,
             error: None,
-        });
+        }));
     };
     let anchor = openbot_contracts::command::ThreadRunAnchor::Channel {
         channel_id: channel.id.clone(),
@@ -165,11 +165,11 @@ pub(crate) async fn execute_start_attempt(
         channel: Some(channel.clone()),
     };
     let Some(ticket) = submissions.start_run(&recovery, retry_unknown) else {
-        return Err(StartFailure {
+        return Err(Box::new(StartFailure {
             attempt,
             kind: StartFailureKind::Blocked,
             error: None,
-        });
+        }));
     };
     match begin_thread_run_with_skills_and_model(
         thread_id,
@@ -185,7 +185,7 @@ pub(crate) async fn execute_start_attempt(
         Ok(_) => ticket.accepted(),
         Err(error) => {
             ticket.failed(error);
-            return Err(StartFailure {
+            return Err(Box::new(StartFailure {
                 attempt,
                 kind: if is_definite_rejection(error) {
                     StartFailureKind::BeginDefinite
@@ -193,7 +193,7 @@ pub(crate) async fn execute_start_attempt(
                     StartFailureKind::BeginUnknown
                 },
                 error: Some(error),
-            });
+            }));
         }
     }
     Ok(StartedChannel { attempt, channel })
@@ -428,27 +428,34 @@ pub fn ChannelNewPage() -> impl IntoView {
                         Err(_) => notice.set(Some(SubmissionNotice::NavigationFailed)),
                     }
                 }
-                Err(failure) => match failure.kind {
-                    StartFailureKind::CreateUncertain => {
-                        uncertain_create.set(true);
-                        notice.set(None);
-                    }
-                    StartFailureKind::CreateDefinite | StartFailureKind::BeginDefinite => {
-                        resumable.set(None);
-                        frozen_model_agent.set(None);
-                        let rejected = definite_notice(failure.error);
-                        if rejected == SubmissionNotice::Conflict {
-                            model_composer.directory_reload();
+                Err(failure) => {
+                    let StartFailure {
+                        attempt,
+                        kind,
+                        error,
+                    } = *failure;
+                    match kind {
+                        StartFailureKind::CreateUncertain => {
+                            uncertain_create.set(true);
+                            notice.set(None);
                         }
-                        notice.set(Some(rejected));
+                        StartFailureKind::CreateDefinite | StartFailureKind::BeginDefinite => {
+                            resumable.set(None);
+                            frozen_model_agent.set(None);
+                            let rejected = definite_notice(error);
+                            if rejected == SubmissionNotice::Conflict {
+                                model_composer.directory_reload();
+                            }
+                            notice.set(Some(rejected));
+                        }
+                        StartFailureKind::BeginUnknown => {
+                            resumable.set(Some(attempt));
+                            begin_unknown.set(true);
+                            notice.set(None);
+                        }
+                        StartFailureKind::Blocked => submission_blocked.set(true),
                     }
-                    StartFailureKind::BeginUnknown => {
-                        resumable.set(Some(failure.attempt));
-                        begin_unknown.set(true);
-                        notice.set(None);
-                    }
-                    StartFailureKind::Blocked => submission_blocked.set(true),
-                },
+                }
             }
             submitting.set(false);
         });
