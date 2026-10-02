@@ -399,3 +399,14 @@ begin、conversation、RunRepo active及074/075两个只读页共用同一静态
 本轮固定Rust1.98.0、locked/offline新证据：旧实现新增反例实际失败；修复候选Agent lib62/62通过，零failed/ignored；Agent all-targets严格Clippy和fmt/diff通过。新增测试覆盖历史回答、reasoning、空/空白文本、上一sampling已有文本与tool效果后为空/报错，以及新文本成功。外部vendor和完整M0旅程不在这组单测证明范围。独立复核、精确源码提交、PR及admin正常合并事实随本任务登记，不提前宣称完成。
 
 精确源码候选`7188fcbff23bded79ec2376be7eda753f9970815`（tree`91a8b969e25f92a9ea6b84d74343aa08b01d85a3`，base`8fabc9f634c2f8c640373bf96d2bca8b80559726`）已获独立GO：三份新通过记录、原失败、1133个产品输入及日志摘要核同，独立定向4/4通过，后者不新增不同用例计数。此后登记只改公开台账，产品输入不变；[PR #99](https://github.com/acosmi/wrokbot/pull/99)正常admin合并事实以实际远端记录为准，不提前宣称已合入。本任务只完成当前轮结果补全，其余并发、来源与链验证仍在本轮开放范围。
+
+
+## V7-COMP-002 模型配置受权并发快照
+
+2026-10-02：承接已合[PR #99](https://github.com/acosmi/wrokbot/pull/99)，其实际merge为`303f48319f2882fc5f96fc8951cbce25ef6bad83`。本项只补既有个人模型配置的后端并发冲突：同事务验证当前actor和owner、锁定对象、比较expectedRevision；陈旧更新/删除经Server和Desktop返回同一闭合的当前revision、公共表示SHA-256和RFC3339时间，附no-store。摘要递归排序，秘密不进入摘要输入；成功写入仍原子推进revision并写audit，失败请求不轮换key或追加成功审计。写事务显式Read Committed，不依赖连接池默认隔离级别。
+
+本轮固定Rust1.98.0/offline/locked新验：Contracts121/Application180；隔离PG5（第三自有连接锁行、实际观察两个writer等待后释放、RR默认仍一胜一陈旧快照）；真实会话/HTTP/PG/Vault旅程1（当前revision4下他人stale写仍仅404、更新/删除stale同快照且全表/审计不变）；Server错误13与Desktop投影1。摘要两用例另在preserve_order feature重验，属于重复验证不叠加不同通过数。WASM、核心all-targets/Infra精确lib+model目标/Server all-targets/Desktop launcher all-targets四组严格Clippy、fmt通过。12份最终记录1134个产品输入逐项核同。早期稳定码碰撞、测试编译、lint及不适用SSO feature组合失败完整保留；没有删除断言、lint豁免或修改历史QA。两个自有PG实例实际stop成功、无postmaster残留。
+
+精确源码候选`1f81292d23857732ec19d0db48b8eeb87941f15a`（tree`0dc68be3da9489962766d0b1a4ccb0b2c4804c62`）已获独立GO，无阻断项。此后台账增量只登记事实，产品输入保持；[PR #100](https://github.com/acosmi/wrokbot/pull/100)按定向验证、源码与台账独立复核通过后正常admin合并，实际最终HEAD及合并状态取远端记录，不提前宣称合入。
+
+仅此后端对象补全，不关闭整个R415；其他对象分独立任务，UI在独立轨道消费实际已合合同，未以本项证明UI编辑状态机或视觉验收。无DDL/依赖/lockfile/前端变更，无全量CI或手动Actions；新能力仍登记，不启动078。
