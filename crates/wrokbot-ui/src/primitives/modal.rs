@@ -102,6 +102,7 @@ pub(crate) fn modal_root_with_inline(
         inline,
     };
     install_modal_lifecycle(context.clone());
+    install_outside_focus_keys(context.clone());
     view! { <Provider value=context>{children()}</Provider> }
 }
 
@@ -344,6 +345,68 @@ fn close(context: ModalContext) {
             callback.run(());
         }
     }
+}
+
+// A focused submit button may become disabled and send focus to body. Keep modal keyboard
+// handling reachable in that case without handling keys twice inside the visible panel.
+fn install_outside_focus_keys(context: ModalContext) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::{JsCast, closure::Closure};
+
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+            return;
+        };
+        let key_document = document.clone();
+        let callback = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+            if event.default_prevented()
+                || !matches!(event.key().as_str(), "Escape" | "Tab")
+                || context.open.try_get_untracked() != Some(true)
+                || context.inline.try_get_untracked() != Some(false)
+            {
+                return;
+            }
+            let Some(panel) = context.panel_ref.get() else {
+                return;
+            };
+            if !visible_focus_target(&panel)
+                || key_document
+                    .active_element()
+                    .is_some_and(|active| web_sys::Node::contains(&panel, Some(active.as_ref())))
+            {
+                return;
+            }
+            event.prevent_default();
+            if event.key() == "Escape" {
+                close(context.clone());
+            } else if event.shift_key()
+                && let Some(last) = focusables(context.panel_ref).last()
+            {
+                _ = last.focus();
+            } else {
+                focus_first_or_panel(context.panel_ref);
+            }
+        });
+        if document
+            .add_event_listener_with_callback("keydown", callback.as_ref().unchecked_ref())
+            .is_err()
+        {
+            return;
+        }
+        let listener = StoredValue::new_local(Some((document, callback)));
+        on_cleanup(move || {
+            listener.update_value(|listener| {
+                if let Some((document, callback)) = listener.take() {
+                    _ = document.remove_event_listener_with_callback(
+                        "keydown",
+                        callback.as_ref().unchecked_ref(),
+                    );
+                }
+            });
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = context;
 }
 
 fn handle_panel_key(event: KeyboardEvent, context: ModalContext) {

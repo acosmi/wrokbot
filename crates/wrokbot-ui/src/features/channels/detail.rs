@@ -6,8 +6,8 @@ use openbot_contracts::command::ChannelDetail;
 
 #[cfg(target_arch = "wasm32")]
 use crate::api::load_channel;
-use crate::features::layout::{PageBackLink, PageHeader, PageShell, PageTopbar, PageWidth};
-use crate::i18n::{t, t_string, use_i18n};
+use crate::features::layout::{PageShell, PageWidth};
+use crate::i18n::{t, use_i18n};
 
 use super::ChannelConversation;
 
@@ -23,9 +23,8 @@ pub fn ChannelDetailPage() -> impl IntoView {
 
     view! {
         <PageShell width=PageWidth::Chat>
-            <PageTopbar>
-                <PageBackLink href="/".to_owned() label=move || t_string!(i18n, common.back).to_owned() />
-            </PageTopbar>
+            <div class="ob-channel-page">
+            <a class="ob-conversation-back" href="/">{move || t!(i18n, common.back)}</a>
             <Show when=move || loading.get()>
                 <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
@@ -34,18 +33,11 @@ pub fn ChannelDetailPage() -> impl IntoView {
             </Show>
             <Show when=move || channel.get().is_some()>
                 {move || channel.get().map(|detail| view! {
-                    <PageHeader
-                        heading_id="channel-detail-title".to_owned()
-                        title=detail.name.clone()
-                        description=if detail.active {
-                            String::new()
-                        } else {
-                            t_string!(i18n, channels.detail_inactive).to_owned()
-                        }
-                    />
+                    <p class="ob-conversation-context" role="note">{detail.name.clone()}</p>
                     <ChannelConversation channel=detail />
                 })}
             </Show>
+            </div>
         </PageShell>
     }
 }

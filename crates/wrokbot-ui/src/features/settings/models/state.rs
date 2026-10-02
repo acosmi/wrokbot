@@ -35,16 +35,22 @@ impl ModelActions {
         self.status.set(Status::Pending);
         leptos::task::spawn_local(async move {
             let result = api::write(input).await;
-            self.status.try_set(match result {
-                Ok(()) => Status::Saved,
-                Err(e) => Status::Failed(e),
-            });
-            finished(result.is_ok());
-            // Only acknowledged mutations trigger a fresh read. Unknown never clears on list refresh.
-            if result.is_ok() {
-                self.revision.try_update(|v| *v = v.saturating_add(1));
-            }
+            self.complete(result, finished);
         });
+    }
+    fn complete(self, result: Result<(), WriteError>, finished: impl FnOnce(bool)) {
+        if self.status.try_get_untracked().is_none() {
+            return;
+        }
+        self.status.try_set(match result {
+            Ok(()) => Status::Saved,
+            Err(e) => Status::Failed(e),
+        });
+        finished(result.is_ok());
+        // Only acknowledged mutations trigger a fresh read. Unknown never clears on list refresh.
+        if result.is_ok() {
+            self.revision.try_update(|v| *v = v.saturating_add(1));
+        }
     }
 }
 
@@ -57,5 +63,23 @@ mod tests {
         assert!(Status::Failed(WriteError::Unknown).locked());
         assert!(!Status::Saved.locked());
         assert!(!Status::Failed(WriteError::InvalidInput).locked());
+    }
+    #[test]
+    fn late_write_after_sign_out_cannot_finish_a_new_account_dialog() {
+        for result in [Ok(()), Err(WriteError::Unknown)] {
+            let old_owner = Owner::new();
+            let old = old_owner.with(ModelActions::new);
+            old.status.set(Status::Pending);
+            old_owner.cleanup();
+            let new_owner = Owner::new();
+            new_owner.with(|| {
+                let new = ModelActions::new();
+                let invoked = std::cell::Cell::new(false);
+                old.complete(result, |_| invoked.set(true));
+                assert!(!invoked.get());
+                assert_eq!(new.status.get_untracked(), Status::Idle);
+                assert_eq!(new.revision.get_untracked(), 0);
+            });
+        }
     }
 }

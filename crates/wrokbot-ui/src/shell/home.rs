@@ -1,16 +1,23 @@
-//! Root Home Composer: structured mention, routing fallback, and durable first message.
+//! Root Home Composer: structured mention, confirmed routing, and durable first message.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
-use openbot_contracts::agent::{AgentProfile, AgentVisibility};
+use openbot_contracts::agent::AgentProfile;
+#[cfg(test)]
+use openbot_contracts::agent::AgentVisibility;
 use openbot_contracts::ids::BotId;
 use openbot_contracts::text::trim_ecmascript;
 
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::api::ApiError;
 use crate::api::channel_new_href;
 #[cfg(target_arch = "wasm32")]
 use crate::api::{channel_route_href, list_agents, mint_run_id, route_channel_message};
 use crate::features::channels::composer::model_intents::{RunSubmissionActions, SubmissionSource};
 use crate::features::channels::composer::models::{ModelComposer, ModelPicker};
+use crate::features::channels::composer::presentation::{
+    AssistantIdentity, ComposerFrame, DraftSuggestions,
+};
 use crate::features::channels::composer::skills::{SkillComposer, SkillPicker};
 use crate::features::channels::new::{StartAttempt, SubmissionNotice, model_notice};
 #[cfg(target_arch = "wasm32")]
@@ -21,7 +28,8 @@ use crate::features::layout::{PageShell, PageWidth};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
 use crate::primitives::{
-    Avatar, AvatarSize, Button, ButtonSize, ButtonVariant, IconSize, IconView, Textarea,
+    Avatar, AvatarSize, Button, ButtonSize, ButtonVariant, IconSize, IconView, Select,
+    SelectContent, SelectItem, SelectTrigger, Textarea,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,7 +44,7 @@ struct ActiveMention {
     query: String,
 }
 
-/// First-message Home route with fixed-upstream automatic routing and explicit `@` choice.
+/// First-message Home route with confirmed automatic routing and explicit `@` choice.
 #[component]
 pub fn HomePage() -> impl IntoView {
     let i18n = use_i18n();
@@ -146,7 +154,7 @@ pub fn HomePage() -> impl IntoView {
         submission_blocked.set(!owns_barrier && submissions.has_barrier());
     });
 
-    let fallback = Memo::new(move |_| fallback_agent(&agents.get()));
+    let has_agents = Memo::new(move |_| agents.get().iter().any(valid_home_agent));
     let active =
         Memo::new(move |_| unselected_mention(&draft.get(), selected_mention.get().as_ref()));
     let suggestions = Memo::new(move |_| {
@@ -165,7 +173,16 @@ pub fn HomePage() -> impl IntoView {
         }
     });
 
+    let inputs_locked = Signal::derive(move || {
+        submitting.get()
+            || resumable.get().is_some()
+            || uncertain_create.get()
+            || submission_blocked.get()
+    });
     let choose_mention = UnsyncCallback::new(move |agent: AgentProfile| {
+        if inputs_locked.get_untracked() {
+            return;
+        }
         let current = draft.get_untracked();
         let previous = selected_mention.get_untracked();
         if let Some(updated) = insert_mention(&current, previous.as_ref(), &agent) {
@@ -177,18 +194,40 @@ pub fn HomePage() -> impl IntoView {
         }
     });
 
-    let inputs_locked = Signal::derive(move || {
-        submitting.get()
-            || resumable.get().is_some()
-            || uncertain_create.get()
-            || submission_blocked.get()
+    let assistant_picker_value = RwSignal::new(None::<String>);
+    Effect::new(move |_| {
+        assistant_picker_value.set(
+            selected_mention
+                .get()
+                .map(|selected| selected.agent_id.as_str().to_owned()),
+        );
+        if inputs_locked.get() {
+            agent_picker_open.set(false);
+        }
+    });
+    let choose_assistant = UnsyncCallback::new(move |value: Option<String>| {
+        if inputs_locked.get_untracked() {
+            return;
+        }
+        if let Some(agent) = value.and_then(|id| {
+            agents
+                .get_untracked()
+                .into_iter()
+                .find(|agent| agent.id.as_str() == id && valid_home_agent(agent))
+        }) {
+            let text = draft.get_untracked();
+            if active_mention(&text).is_none() {
+                draft.set(format!("{text} @"));
+            }
+            choose_mention.run(agent);
+        }
     });
     let send_disabled = Signal::derive(move || {
         submitting.get()
             || uncertain_create.get()
             || submission_blocked.get()
             || (resumable.get().is_none()
-                && (fallback.get().is_none()
+                && (!has_agents.get()
                     || trim_ecmascript(&draft.get()).is_empty()
                     || skill_composer.invalid.get()))
     });
@@ -207,9 +246,9 @@ pub fn HomePage() -> impl IntoView {
             frozen_model_agent.set(None);
         }
         let fresh = if prior_attempt.is_none() {
-            let Some(default_agent) = fallback.get_untracked() else {
+            if !has_agents.get_untracked() {
                 return;
-            };
+            }
             let message = draft.get_untracked();
             if message.is_empty() {
                 return;
@@ -227,7 +266,6 @@ pub fn HomePage() -> impl IntoView {
             };
             let explicit = selected_agent_id(&message, selected_mention.get_untracked().as_ref());
             Some((
-                default_agent,
                 message,
                 skill_composer.selected.get_untracked(),
                 model_selection,
@@ -249,21 +287,18 @@ pub fn HomePage() -> impl IntoView {
                 let attempt = match prior_attempt {
                     Some(attempt) => attempt,
                     None => {
-                        let (
-                            default_agent,
-                            message,
-                            selected_skill_slugs,
-                            model_selection,
-                            explicit,
-                            roster,
-                        ) = fresh.expect("fresh attempt");
-                        let agent_id = resolve_home_recipient(
-                            &message,
-                            explicit.as_ref(),
-                            &default_agent,
-                            &roster,
-                        )
-                        .await;
+                        let (message, selected_skill_slugs, model_selection, explicit, roster) =
+                            fresh.expect("fresh attempt");
+                        let recipient =
+                            resolve_home_recipient(&message, explicit.as_ref(), &roster).await;
+                        let agent_id = match recipient {
+                            Ok(id) => id,
+                            Err(_) => {
+                                notice.set(Some(SubmissionNotice::RoutingFailed));
+                                submitting.set(false);
+                                return;
+                            }
+                        };
                         if model_selection.is_some() && !supports_explicit_model(&roster, &agent_id)
                         {
                             notice.set(Some(SubmissionNotice::ModelAgentConflict));
@@ -351,13 +386,27 @@ pub fn HomePage() -> impl IntoView {
         }
     };
 
+    let identity = Signal::derive(move || {
+        let selected = frozen_model_agent
+            .get()
+            .or_else(|| selected_mention.get().map(|mention| mention.agent_id));
+        selected.and_then(|id| agents.get().into_iter().find(|agent| agent.id == id))
+    });
+    let suggest = UnsyncCallback::new(move |text: String| {
+        if !inputs_locked.get_untracked() {
+            let prefix = selected_mention
+                .get_untracked()
+                .map_or_else(String::new, |selected| {
+                    format!("@{} ", selected.display_text)
+                });
+            draft.set(format!("{prefix}{text}"));
+        }
+    });
+
     view! {
         <PageShell width=PageWidth::Chat>
             <div class="ob-home">
-                <header class="ob-home-header">
-
-                    <h1>{move || t!(i18n, home.title)}</h1>
-                </header>
+                <AssistantIdentity profile=identity title=move || t_string!(i18n, home.auto_assistant).to_owned() description=move || t_string!(i18n, home.auto_description).to_owned()/>
                 <Show when=move || loading.get()>
                     <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
                 </Show>
@@ -373,7 +422,8 @@ pub fn HomePage() -> impl IntoView {
                         </Button>
                     </div>
                 </Show>
-                <div class="ob-home-composer" aria-busy=move || submitting.get().to_string()>
+                <div class="ob-home-footer">
+                <ComposerFrame busy=Signal::derive(move || submitting.get())>
                     <Textarea
                         value=draft
                         id="home-message"
@@ -436,35 +486,24 @@ pub fn HomePage() -> impl IntoView {
                             </Show>
                         </div>
                     </Show>
-                    <ModelPicker state=model_composer disabled=inputs_locked/>
-                    <SkillPicker state=skill_composer disabled=inputs_locked/>
-                    <div class="ob-home-composer-actions">
-                        <details class="ob-composer-options" on:keydown=crate::primitives::dismiss_disclosure on:click=crate::primitives::dismiss_disclosure_link>
-                            <summary aria-label=move || t_string!(i18n, home.actions).to_owned()>
-                                <IconView icon=Icon::Plus size=IconSize::Navigation />
-                            </summary>
-                            <div class="ob-composer-options-panel">
-                                <a href="/channel/new"><IconView icon=Icon::Pencil size=IconSize::Inline />{move || t!(i18n, shell.new_channel)}</a>
-                                <a href="/settings/components-gallery"><IconView icon=Icon::Archive size=IconSize::Inline />{move || t!(i18n, shell.nav_library)}</a>
-                            </div>
-                        </details>
-                        <div class="ob-composer-spacer"></div>
-                        <button class="ob-composer-mode" type="button"
-                            disabled=inputs_locked
-                            aria-label=move || t_string!(i18n, home.choose_agent).to_owned()
-                            aria-expanded=move || agent_picker_open.get().to_string()
-                            aria-controls="home-agent-picker"
-                            on:click=move |_| agent_picker_open.update(|open| *open = !*open)>
-                            <span>{move || {
-                                let frozen = resumable.get().map(|attempt| attempt.agent_id).or_else(|| submissions.create_unknown(SubmissionSource::Home).map(|intent| intent.agent_id));
-                                frozen.map_or_else(
-                                    || selected_mention.get().map_or_else(|| t_string!(i18n, home.auto).to_owned(), |selected| selected.display_text),
-                                    |id| agents.get().into_iter().find(|agent| agent.id == id).map_or_else(|| id.as_str().to_owned(), |agent| agent.name),
-                                )
-                            }}</span>
-                            <IconView icon=Icon::Brain size=IconSize::Inline />
-                            <IconView icon=Icon::ChevronDown size=IconSize::Inline />
-                        </button>
+                    <div class="ob-chat-controls">
+                        <Select id="home-agent-picker" open=agent_picker_open value=assistant_picker_value disabled=inputs_locked on_value_change=choose_assistant>
+                            <SelectTrigger aria_label=move || t_string!(i18n, home.choose_agent).to_owned() placeholder=move || t_string!(i18n, home.auto_assistant).to_owned()/>
+                            <SelectContent>
+                                <For each=move || { agents.get().into_iter().filter(valid_home_agent).collect::<Vec<_>>() } key=|agent| agent.id.clone() children=move |agent| {
+                                    let id = agent.id.as_str().to_owned();
+                                    let label = agent.name.clone();
+                                    view! { <SelectItem id=format!("home-assistant-{id}") value=id label=label disabled=inputs_locked>
+                                        <strong>{agent.name}</strong><small>{agent.role_description}</small>
+                                        {agent.endpoint.is_some().then(|| view! { <small>{move || t!(i18n, shell.remote_agent)}</small> })}
+                                    </SelectItem> }
+                                }/>
+                                <a class="ob-home-agent-manage-link" href="/agents">{move || t!(i18n, home.explore_agents)}</a>
+                            </SelectContent>
+                        </Select>
+                        <ModelPicker state=model_composer disabled=inputs_locked/>
+                        <SkillPicker state=skill_composer disabled=inputs_locked/>
+                        <span class="ob-chat-send">
                         <Button
                             id="home-send"
                             variant=ButtonVariant::Primary
@@ -475,15 +514,17 @@ pub fn HomePage() -> impl IntoView {
                         >
                             <IconView icon=Icon::ArrowUp size=IconSize::Navigation />
                             <span class="ob-visually-hidden">{move || if begin_unknown.get() {
-                                t_string!(i18n, common.retry).to_owned()
+                                t_string!(i18n, channels.retry_original).to_owned()
                             } else {
                                 t_string!(i18n, channels.composer_send).to_owned()
                             }}</span>
                         </Button>
+                        </span>
                     </div>
-                </div>
+                </ComposerFrame>
+                <DraftSuggestions on_choose=suggest disabled=inputs_locked/>
                 <p class="ob-home-model-preset-note" role="note">{move || t!(i18n, home.model_preset_note)}</p>
-                <Show when=move || !loading.get() && !load_error.get() && fallback.get().is_none()>
+                <Show when=move || !loading.get() && !load_error.get() && !has_agents.get()>
                     <p class="ob-home-routing-hint" role="status">
                         <a href="/agents">{move || t!(i18n, home.no_agents)}</a>
                     </p>
@@ -493,6 +534,7 @@ pub fn HomePage() -> impl IntoView {
                 <Show when=move || notice.get()==Some(SubmissionNotice::Conflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_conflict)}</p></Show>
                 <Show when=move || notice.get()==Some(SubmissionNotice::Rejected)><p class="ob-alert" role="alert">{move || t!(i18n, channels.submit_rejected)}</p></Show>
                 <Show when=move || notice.get()==Some(SubmissionNotice::NavigationFailed)><p class="ob-alert" role="alert">{move || t!(i18n, channels.navigation_failed)}</p></Show>
+                <Show when=move || notice.get()==Some(SubmissionNotice::RoutingFailed)><p class="ob-alert" role="alert">{move || t!(i18n, home.routing_failed)}</p></Show>
                 <Show when=move || uncertain_create.get()>
                     <div class="ob-alert" role="alert">
                         <p>{move || t!(i18n, channels.create_uncertain)}</p>
@@ -507,32 +549,8 @@ pub fn HomePage() -> impl IntoView {
                         {move || t!(i18n, channels.submission_blocked)}
                     </a>
                 </Show>
-                <section id="home-agent-picker" class="ob-home-explore" hidden=move || !agent_picker_open.get() aria-labelledby="home-explore-title">
-                    <h2 id="home-explore-title">{move || t!(i18n, home.choose_agent)}</h2>
-                    <p class="ob-home-routing-hint">{move || t!(i18n, home.routing_hint)}</p>
-                    <div class="ob-home-agent-list">
-                        <For each=move || { agents.get().into_iter().filter(valid_home_agent).collect::<Vec<_>>() } key=|agent| agent.id.clone()
-                            children=move |agent| {
-                                let selected_agent = agent.clone();
-                                view! {
-                                    <button type="button" disabled=inputs_locked
-                                        on:click=move |_| {
-                                            let text = draft.get_untracked();
-                                            if active_mention(&text).is_none() {
-                                                draft.set(format!("{text} @"));
-                                            }
-                                            choose_mention.run(selected_agent.clone());
-                                            agent_picker_open.set(false);
-                                        }>
-                                        <Avatar principal_id=agent.avatar_seed name=agent.name.clone() size=AvatarSize::Small />
-                                        <span><strong>{agent.name}</strong><small>{agent.role_description}</small></span>
-                                    </button>
-                                }
-                            } />
-                    </div>
-                    <Show when=move || agents.get().is_empty()><p class="ob-page-empty">{move || t!(i18n, home.explore_empty)}</p></Show>
-                    <a class="ob-home-agent-manage" href="/agents">{move || t!(i18n, home.explore_agents)}<IconView icon=Icon::ArrowUpRight size=IconSize::Inline /></a>
-                </section>
+
+                </div>
             </div>
         </PageShell>
     }
@@ -569,21 +587,27 @@ fn install_home_agent_loader(
 async fn resolve_home_recipient(
     message: &str,
     explicit: Option<&BotId>,
-    fallback: &AgentProfile,
     roster: &[AgentProfile],
-) -> BotId {
+) -> Result<BotId, ApiError> {
     if let Some(explicit) = explicit {
         // The person already chose. The request exists only to record that fact; fixed-upstream
         // behavior does not let an audit transport failure overturn their recipient choice.
         _ = route_channel_message(message, Some(explicit)).await;
-        return explicit.clone();
+        return confirmed_home_recipient(roster, explicit.clone());
     }
     match route_channel_message(message, None).await {
-        Ok(decision) if roster.iter().any(|agent| agent.id == decision.agent_id) => {
-            decision.agent_id
-        }
-        _ => fallback.id.clone(),
+        Ok(decision) => confirmed_home_recipient(roster, decision.agent_id),
+        Err(error) => Err(error),
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn confirmed_home_recipient(roster: &[AgentProfile], id: BotId) -> Result<BotId, ApiError> {
+    roster
+        .iter()
+        .any(|agent| agent.id == id && valid_home_agent(agent))
+        .then_some(id)
+        .ok_or(ApiError::InvalidResponse)
 }
 
 fn supports_explicit_model(agents: &[AgentProfile], agent_id: &BotId) -> bool {
@@ -600,6 +624,7 @@ fn valid_home_agent(agent: &AgentProfile) -> bool {
         && channel_new_href(agent.id.as_str()).is_ok()
 }
 
+#[cfg(test)]
 fn explore_agents(agents: &[AgentProfile]) -> Vec<AgentProfile> {
     agents
         .iter()
@@ -610,6 +635,7 @@ fn explore_agents(agents: &[AgentProfile]) -> Vec<AgentProfile> {
         .collect()
 }
 
+#[cfg(test)]
 fn fallback_agent(agents: &[AgentProfile]) -> Option<AgentProfile> {
     explore_agents(agents)
         .into_iter()
@@ -734,6 +760,25 @@ mod tests {
         assert!(supports_explicit_model(&roster, &builtin.id));
         assert!(!supports_explicit_model(&roster, &remote.id));
         assert!(!supports_explicit_model(&roster, &BotId::new("missing")));
+    }
+
+    #[test]
+    fn routing_result_never_substitutes_the_first_visible_agent() {
+        let first = agent("first", "First", true, AgentVisibility::Public);
+        let chosen = agent("chosen", "Chosen", false, AgentVisibility::Public);
+        let roster = [first.clone(), chosen.clone()];
+        assert!(matches!(
+            confirmed_home_recipient(&roster, BotId::new("missing")),
+            Err(ApiError::InvalidResponse)
+        ));
+        assert_eq!(
+            confirmed_home_recipient(&roster, chosen.id.clone()).unwrap(),
+            chosen.id
+        );
+        assert!(matches!(
+            confirmed_home_recipient(&[], first.id),
+            Err(ApiError::InvalidResponse)
+        ));
     }
 
     #[test]

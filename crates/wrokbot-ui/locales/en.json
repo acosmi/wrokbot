@@ -129,7 +129,14 @@
     "actions": "Conversation options",
     "choose_agent": "Choose coworker",
     "no_agents": "Add a coworker to start your first conversation.",
-    "model_preset_note": "Model managed by assistant preset"
+    "model_preset_note": "Model managed by assistant preset",
+    "auto_assistant": "Choose an assistant automatically",
+    "auto_description": "Describe your task. Your assistant is selected when you send.",
+    "suggestions_label": "Draft ideas",
+    "suggestion_examine": "Clarify a problem",
+    "suggestion_plan": "Make an actionable plan",
+    "suggestion_review": "Review some material",
+    "routing_failed": "The assistant could not be confirmed. Retry or choose an assistant explicitly."
   },
   "bot_chat": {
     "title": "Browser Bot",
@@ -201,7 +208,7 @@
     "cancelling": "Stopping…",
     "cancel_error": "The stop request was not confirmed. Refresh before trying again.",
     "queued_message_label": "Queued message",
-    "queued_status": "Queued",
+    "queued_status": "Waiting to send",
     "queued_remove": "Remove",
     "queued_remove_label": "Remove queued message: {{ message }}",
     "composer_attach": "Attach a file",
@@ -239,7 +246,11 @@
     "md_image_blocked": "Unverified image: ",
     "md_copied": "Copied",
     "md_copy": "Copy code",
-    "md_copy_error": "Clipboard access was unavailable. Select the code to copy it manually."
+    "md_copy_error": "Clipboard access was unavailable. Select the code to copy it manually.",
+    "reread": "Read again",
+    "retry_original": "Retry the original submission",
+    "queued_model_snapshot": "Custom API · {{ connection }} · revision {{ revision }}",
+    "queued_intent_snapshot": "Assistant {{ assistant }} · {{ model }}"
   },
   "agents": {
     "title": "Coworkers",
@@ -1012,7 +1023,8 @@
     "personal_connect": "Connect your account",
     "connect_error": "Could not start your account connection. Check the OAuth client and callback configuration.",
     "auth_method": "Client authentication method",
-    "auth_post": "Request body"
+    "auth_post": "Request body",
+    "write_unknown": "Result unconfirmed; further writes are paused. Refreshing the list only reads current records and cannot confirm this operation."
   },
   "credentials": {
     "title": "Credentials",
@@ -1108,6 +1120,9 @@
     "choose_for_next": "Choose a model for the next message",
     "none_available": "No enabled custom model with a stored key is available.",
     "selection_unavailable": "The selected model changed or is unavailable. Clear it or choose the current version.",
-    "enable_connection": "Enable this connection"
+    "enable_connection": "Enable this connection",
+    "custom_source": "Custom API",
+    "custom_setup_note": "No custom model connection is available. Authorized history remains readable; the assistant model depends on its actual runtime capabilities.",
+    "custom_setup_action": "Configure a custom model"
   }
 }

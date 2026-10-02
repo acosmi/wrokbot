@@ -129,7 +129,14 @@
     "actions": "对话选项",
     "choose_agent": "选择协作助手",
     "no_agents": "添加一位协作助手，开始第一段对话。",
-    "model_preset_note": "模型由助手预设管理"
+    "model_preset_note": "模型由助手预设管理",
+    "auto_assistant": "自动选择助手",
+    "auto_description": "描述你的任务，发送时确认处理本次任务的助手。",
+    "suggestions_label": "草稿建议",
+    "suggestion_examine": "梳理一个问题",
+    "suggestion_plan": "制定可执行计划",
+    "suggestion_review": "检查一段材料",
+    "routing_failed": "暂时无法确认助手。请重试或明确选择助手。"
   },
   "bot_chat": {
     "title": "浏览器机器人",
@@ -201,7 +208,7 @@
     "cancelling": "正在停止…",
     "cancel_error": "停止请求尚未确认；刷新后再重试。",
     "queued_message_label": "排队中的消息",
-    "queued_status": "已排队",
+    "queued_status": "待发送",
     "queued_remove": "移除",
     "queued_remove_label": "移除排队消息：{{ message }}",
     "composer_attach": "添加附件",
@@ -239,7 +246,11 @@
     "md_image_blocked": "未验证图片：",
     "md_copied": "已复制",
     "md_copy": "复制代码",
-    "md_copy_error": "剪贴板暂不可用，可选中代码手动复制。"
+    "md_copy_error": "剪贴板暂不可用，可选中代码手动复制。",
+    "reread": "重新读取",
+    "retry_original": "重试原提交",
+    "queued_model_snapshot": "自定义 API · {{ connection }} · 版本 {{ revision }}",
+    "queued_intent_snapshot": "助手 {{ assistant }} · {{ model }}"
   },
   "agents": {
     "title": "同事",
@@ -1012,7 +1023,8 @@
     "personal_connect": "连接个人账户",
     "connect_error": "无法发起个人账户连接，请检查 OAuth 客户端与回调配置。",
     "auth_method": "客户端认证方式",
-    "auth_post": "请求正文"
+    "auth_post": "请求正文",
+    "write_unknown": "结果待核对；后续写入已暂停。列表刷新只能查看当前记录，不能确认这次操作是否提交。"
   },
   "credentials": {
     "title": "凭据",
@@ -1108,6 +1120,9 @@
     "choose_for_next": "选择下一条消息使用的模型",
     "none_available": "没有已启用且保存了密钥的自定义模型。",
     "selection_unavailable": "所选模型已变化或不可用，请清除选择或选择当前版本。",
-    "enable_connection": "启用此连接"
+    "enable_connection": "启用此连接",
+    "custom_source": "自定义 API",
+    "custom_setup_note": "当前没有可用的自定义模型连接；仍可读取获准历史，助手配置的模型需按实际运行能力确认。",
+    "custom_setup_action": "配置自定义模型"
   }
 }

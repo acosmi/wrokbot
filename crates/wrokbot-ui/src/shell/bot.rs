@@ -21,7 +21,7 @@ use crate::api::bot_chat_href;
 use crate::api::{list_agents, load_agent, load_thread_status, mint_thread_id};
 use crate::features::channels::RecipientField;
 use crate::features::channels::conversation::DirectBotConversation;
-use crate::features::layout::{PageBackLink, PageHeader, PageShell, PageTopbar, PageWidth};
+use crate::features::layout::{PageShell, PageWidth};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
 use crate::primitives::{Button, ButtonSize, ButtonVariant, IconSize, IconView};
@@ -64,14 +64,8 @@ pub fn BotChatPage() -> impl IntoView {
 
     view! {
         <PageShell width=PageWidth::Chat>
-            <PageTopbar>
-                <PageBackLink href="/agents".to_owned() label=move || t_string!(i18n, common.back).to_owned() />
-            </PageTopbar>
-            <PageHeader
-                heading_id="bot-chat-title"
-                title=move || t_string!(i18n, bot_chat.title).to_owned()
-                description=move || t_string!(i18n, bot_chat.intro).to_owned()
-            />
+            <div class="ob-bot-chat">
+            <a class="ob-conversation-back" href="/agents">{move || t!(i18n, common.back)}</a>
             <Show when=move || loading.get()>
                 <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
@@ -103,6 +97,7 @@ pub fn BotChatPage() -> impl IntoView {
                     children=move |agent| view! { <BotThreadPane agent /> }
                 />
             </Show>
+            </div>
         </PageShell>
     }
 }

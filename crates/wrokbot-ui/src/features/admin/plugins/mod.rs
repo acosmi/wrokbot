@@ -54,8 +54,9 @@ pub fn AdminPluginsPage() -> impl IntoView {
                     <PageHeader heading_id="plugins-title" title=heading description=move || t_string!(i18n, plugins.intro).to_owned() />
                 }
             }}
-            <Show when=move || actions.busy.get()><p class="ob-loading" role="status">{move || t!(i18n, plugins.saving)}</p></Show>
-            <Show when=move || actions.failed.get() && scope.get().0.is_none_or(|id| actions.target.get().as_deref() == Some(&id))>
+            <Show when=move || actions.busy.get() && !actions.unknown.get()><p class="ob-loading" role="status">{move || t!(i18n, plugins.saving)}</p></Show>
+            <Show when=move || actions.unknown.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.write_unknown)}</p></Show>
+            <Show when=move || actions.failed.get() && !actions.unknown.get() && scope.get().0.is_none_or(|id| actions.target.get().as_deref() == Some(&id))>
                 <p class="ob-alert" role="alert">{move || t!(i18n, plugins.write_error)}</p>
             </Show>
             <Show when=move || state.loading.get()><p class="ob-loading" role="status">{move || t!(i18n, common.loading)}</p></Show>

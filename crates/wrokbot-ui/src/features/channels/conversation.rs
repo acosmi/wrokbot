@@ -559,6 +559,7 @@ fn ConversationSurface(
     agent_profile: Option<AgentProfile>,
 ) -> impl IntoView {
     let i18n = use_i18n();
+    let identity_profile = RwSignal::new(agent_profile.clone());
     let run_anchor = StoredValue::new(anchor);
     #[cfg(not(target_arch = "wasm32"))]
     let _ = run_anchor;
@@ -577,7 +578,9 @@ fn ConversationSurface(
             if model_agent_epoch.try_get_untracked() != Some(epoch) {
                 return;
             }
-            model_support.set(result.ok().map(|agent| agent.endpoint.is_none()));
+            let profile = result.ok();
+            model_support.set(profile.as_ref().map(|agent| agent.endpoint.is_none()));
+            identity_profile.set(profile);
         });
     }
     let streaming_agent_seed = StoredValue::new(agent_seed.clone());
@@ -1176,6 +1179,12 @@ fn ConversationSurface(
 
     view! {
         <div class="ob-channel-conversation">
+            <super::composer::presentation::AssistantIdentity
+                profile=Signal::derive(move || identity_profile.get())
+                title=agent_name.clone()
+                compact=Signal::derive(move || !state.get().messages.is_empty() || !state.get().streaming_text.is_empty())
+                description=move || if busy.get() { t_string!(i18n, channels.tool_running).to_owned() } else { t_string!(i18n, home.model_preset_note).to_owned() }
+            />
             <Show when=move || loading.get()>
                 <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
             </Show>
@@ -1190,7 +1199,10 @@ fn ConversationSurface(
                 </div>
             </Show>
             <Show when=move || stream_error.get() && !snapshot_error.get()>
-                <p class="ob-alert" role="status">{move || t!(i18n, channels.conversation_stream_error)}</p>
+                <div class="ob-alert" role="status">
+                    <span>{move || t!(i18n, channels.conversation_stream_error)}</span>
+                    <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry_snapshot>{move || t!(i18n, channels.reread)}</Button>
+                </div>
             </Show>
             <Show when=move || human_decision_load_error.get() && state.get().active_run_id.is_some()>
                 <p class="ob-alert" role="status">{move || t!(i18n, gallery.decision_load_error)}</p>
@@ -1326,6 +1338,7 @@ fn ConversationSurface(
                         <Show when=move || state.get().terminal_notice.is_some()>
                             <p class="ob-alert" role="status">{move || terminal_text(i18n, state.get().terminal_notice)}</p>
                         </Show>
+                        <Show when=move || !queued.get().is_empty()><h2 class="ob-queue-heading">{move || t!(i18n, channels.queued_status)}</h2></Show>
                         <For
                             each=move || queued.get()
                             key=|message| message.id.clone()
@@ -1333,6 +1346,12 @@ fn ConversationSurface(
                                 let queue_id = message.id.clone();
                                 let text = message.intent.message.clone();
                                 let visible_text = text.clone();
+                                let assistant = message.intent.agent_id.as_str().to_owned();
+                                let model = message.intent.model_selection.as_ref().map_or_else(
+                                    || t_string!(i18n, models.use_agent_default).to_owned(),
+                                    |selection| t_string!(i18n, channels.queued_model_snapshot, connection=selection.connection_id.clone(), revision=selection.expected_revision).to_owned(),
+                                );
+                                let intent_summary = t_string!(i18n, channels.queued_intent_snapshot, assistant=assistant, model=model).to_owned();
                                 let remove_label = t_string!(
                                     i18n,
                                     channels.queued_remove_label,
@@ -1355,6 +1374,7 @@ fn ConversationSurface(
                                                     </Bubble>
                                                     <MessageFooter>
                                                         <span role="status">{move || t!(i18n, channels.queued_status)}</span>
+                                                        <span class="ob-queue-snapshot">{intent_summary}</span>
                                                         <Button
                                                             variant=ButtonVariant::Ghost
                                                             size=ButtonSize::Small
@@ -1390,10 +1410,9 @@ fn ConversationSurface(
                 }).collect()
             }) running=Signal::derive(move || state.get().active_run_id.is_some())/>
             <RememberDialog review=remember_review/>
-            <div class="ob-channel-composer">
-                <div class="ob-skill-editor">
-                <ModelPicker state=model_composer disabled=textarea_disabled/>
-                <SkillPicker state=skill_composer disabled=textarea_disabled/>
+            <div class="ob-conversation-input">
+                <super::composer::presentation::ComposerFrame active=true busy=Signal::derive(move || submitting.get())>
+                <div class="ob-chat-draft">
                 <Textarea
                     value=draft
                     id="channel-message"
@@ -1411,6 +1430,10 @@ fn ConversationSurface(
                 </Show>
                 <Show when=move || queue_skills_invalid.get()><p class="ob-alert" role="alert">{move || t!(i18n, skills.selection_limit)}</p></Show>
                 </div>
+                <div class="ob-chat-controls">
+                <ModelPicker state=model_composer disabled=textarea_disabled/>
+                <SkillPicker state=skill_composer disabled=textarea_disabled/>
+                <span class="ob-chat-send">
                 <Show
                     when=move || show_stop.get()
                     fallback=move || view! {
@@ -1421,8 +1444,8 @@ fn ConversationSurface(
                             loading=submitting
                             on_activate=submit
                         >
-                            <IconView icon=Icon::Send size=IconSize::Inline />
-                            <span>{move || if begin_unknown.get() {
+                            <IconView icon=Icon::ArrowUp size=IconSize::Navigation />
+                            <span class="ob-visually-hidden">{move || if begin_unknown.get() {
                                 t_string!(i18n, common.retry).to_owned()
                             } else if busy.get() {
                                 t_string!(i18n, channels.composer_queue).to_owned()
@@ -1441,7 +1464,7 @@ fn ConversationSurface(
                         on_activate=stop
                     >
                         <IconView icon=Icon::CircleStop size=IconSize::Inline />
-                        <span>{move || if cancelling_request.get()
+                        <span class="ob-visually-hidden">{move || if cancelling_request.get()
                             || matches!(
                                 state.get().active_run_state,
                                 Some(ThreadForegroundRunState::Cancelling)
@@ -1451,6 +1474,12 @@ fn ConversationSurface(
                                 t_string!(i18n, channels.composer_stop).to_owned()
                             }}</span>
                     </Button>
+                </Show>
+                </span>
+                </div>
+                </super::composer::presentation::ComposerFrame>
+                <Show when=move || !loading.get() && state.get().messages.is_empty()>
+                    <super::composer::presentation::DraftSuggestions disabled=textarea_disabled on_choose=UnsyncCallback::new(move |text| { if !textarea_disabled.get_untracked() { draft.set(text); } })/>
                 </Show>
             </div>
             <Show when=move || send_notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
@@ -1848,6 +1877,17 @@ struct EventConnection {
 #[cfg(target_arch = "wasm32")]
 impl Drop for EventConnection {
     fn drop(&mut self) {
+        for event in ["thread_run_event", "thread_stream_error"] {
+            let _ = self
+                .source
+                .remove_event_listener_with_callback(event, self._message.as_ref().unchecked_ref());
+        }
+        let _ = self
+            .source
+            .remove_event_listener_with_callback("open", self._open.as_ref().unchecked_ref());
+        let _ = self
+            .source
+            .remove_event_listener_with_callback("error", self._error.as_ref().unchecked_ref());
         self.source.close();
     }
 }
@@ -2035,8 +2075,12 @@ fn open_event_source(
     let path = thread_event_stream_path(thread, cursor).map_err(|_| ())?;
     let source = EventSource::new(&path).map_err(|_| ())?;
     let expected_thread = thread.clone();
+    let subscribed_generation = generation.get_untracked();
     let event_source = source.clone();
     let message = Closure::<dyn FnMut(MessageEvent)>::new(move |message: MessageEvent| {
+        if generation.try_get_untracked() != Some(subscribed_generation) {
+            return;
+        }
         let Some(text) = message.data().as_string() else {
             stream_error.set(true);
             event_source.close();
@@ -2064,11 +2108,19 @@ fn open_event_source(
     source
         .add_event_listener_with_callback("thread_stream_error", message.as_ref().unchecked_ref())
         .map_err(|_| ())?;
-    let open = Closure::<dyn FnMut(Event)>::new(move |_| stream_error.set(false));
+    let open = Closure::<dyn FnMut(Event)>::new(move |_| {
+        if generation.try_get_untracked() == Some(subscribed_generation) {
+            stream_error.try_set(false);
+        }
+    });
     source
         .add_event_listener_with_callback("open", open.as_ref().unchecked_ref())
         .map_err(|_| ())?;
-    let error = Closure::<dyn FnMut(Event)>::new(move |_| stream_error.set(true));
+    let error = Closure::<dyn FnMut(Event)>::new(move |_| {
+        if generation.try_get_untracked() == Some(subscribed_generation) {
+            stream_error.try_set(true);
+        }
+    });
     source
         .add_event_listener_with_callback("error", error.as_ref().unchecked_ref())
         .map_err(|_| ())?;

@@ -459,3 +459,15 @@ P1 首个源码提交为`835743a088260ace2804097e57c25cd3be9046c1`；该精确�
 独立第二轮复核取得仅P1 Web实现及P2入场L1的有限GO，报告摘要`ab4f881326733365a5de1fe7e77005fd1bbb5ded1cb146f9efdc1810935a92f4`；第一轮NO-GO及旧失败证据永久保留。CSS126134/131072字节（预警保留）、WASM gzip3521635/3670016、fonts740216/819200、1 external script/0 inline。13文件范围为11个UI源码/样式、公开台账及上述None夹具适配；生产后端、移动、依赖、lock、hooks及预算守卫保持主线。独立[PR #103](https://github.com/acosmi/wrokbot/pull/103)仍待本次仅台账增量精确复核及正常合并，最终HEAD/实际merge取远端事实。本增量不改产品和构建输入，不重复未变检查。
 
 oracle=missing；原应用像素门、真正macOS系统按钮/拖动、OS读屏与真实浏览器200%缩放保持未通过/未观察，P1只退出可独立实现范围，不称所有平台验收完成。P2–P4全页迁移及P5–P9后端/SYNC与整体验收欠项继续开放。没有运行全量CI、手动Actions、付费调用或发行；私有规范/QA不上传，持续目标未完成。按授权本包正常合并后立即推进P2，不逐PR再问许可。
+
+## UI5-P1 实际合并与 UI5-P2 入场
+
+2026-10-02：P1最终发布head`12e44c2976eace87cafdd38df3b0c7f9423f1cba`经仅台账精确独立GO（摘要`8119fe69073ee5a21754fd1260e188e4806746c0394565e9ced507ee50820040`）后，[PR #103](https://github.com/acosmi/wrokbot/pull/103)已正常合并，实际merge`16dcfbd8b2ff12a969909643420b7323ff758f50`、tree`a58e7822fce51099fddd4a767cbf53e215b8c3aa`，远端API与实际Git父提交/树核同。未强推、绕hooks或变更保护。仅P1 Web实现与P2入场L1关闭，平台/像素及整体验收欠项沿用上文。
+
+P2从该实际合并基底独立入场，重建首页、新频道、已有频道及直接助手会话的新视图、身份、Composer/助手模型技能条和待发送摘要。沿现有StartAttempt/RunIntent/CreateIntent/RunSubmissionActions及FIFO/Unknown身份关系；缺真实模型总能力合同仍登记，不能从空custom目录推断所有默认模型缺失。正在复核旧首页自动路由失败隐式取首助手以及Plugin/Remember在认证外层的owner边界；需要的客户端安全修复纳入P2实测，不改后端。移动和生产数据保持；尚无P2最终候选、产品通过、PR或合并。
+
+## UI5-P2 新会话与发送候选准备
+
+四入口已改用共同助手身份、底部Composer与仅填草稿的建议，原请求身份/FIFO reducer/路由与后端合同保持。自动路由失败在创建前拒绝；Begin未知先按原身份回读，精确重试保留整份意图；队列显示当时助手及模型版本。插件未知回执继续锁写，Model/Plugin/Remember操作归认证挂载，晚响应不进入下一owner；流监听卸载、消息滚动延迟回调和禁用后弹窗/菜单键盘边界已修复。
+
+本段为源码候选准备，最终定向检查、扩展Web负向旅程和精确独立GO尚待本候选核验；没有P2 PR或合并。早期编译、CSS漏类、QA菜单/模型预期错误及真实WASM/弹窗失败保留。现有合成宿主不提供生产模型服务或第二真实账号/scope切换，模型目录/保存以具名DTO transport fixture观察；native/真实账号及scope/独立像素和后续工作包验收仍开放，不能从本候选推导全量完成。

@@ -15,9 +15,10 @@ use crate::api::channel_new_href;
 use crate::api::channel_route_href;
 #[cfg(target_arch = "wasm32")]
 use crate::api::{
-    begin_thread_run_with_skills_and_model, create_channel, list_agents, load_agent, mint_run_id,
+    begin_thread_run_with_skills_and_model, create_channel, list_agents, load_agent,
+    load_thread_conversation, mint_run_id,
 };
-use crate::features::layout::{PageBackLink, PageHeader, PageShell, PageTopbar, PageWidth};
+use crate::features::layout::{PageShell, PageWidth};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
 use crate::primitives::{Button, ButtonSize, ButtonVariant, IconSize, IconView, Textarea};
@@ -27,6 +28,7 @@ use super::RecipientField;
 use super::composer::model_intents::{CreateIntent, RunIntent, RunRecovery, is_definite_rejection};
 use super::composer::model_intents::{RunSubmissionActions, SubmissionSource};
 use super::composer::models::{ModelComposer, ModelPicker, ModelSelectionStatus};
+use super::composer::presentation::{AssistantIdentity, ComposerFrame, DraftSuggestions};
 use super::composer::skills::{SkillComposer, SkillPicker};
 
 /// One recipient/message/run identity retained across a recoverable first-message retry.
@@ -48,6 +50,7 @@ pub(crate) enum SubmissionNotice {
     Conflict,
     Rejected,
     NavigationFailed,
+    RoutingFailed,
 }
 
 pub(crate) const fn model_notice(status: ModelSelectionStatus) -> Option<SubmissionNotice> {
@@ -164,6 +167,51 @@ pub(crate) async fn execute_start_attempt(
         intent,
         channel: Some(channel.clone()),
     };
+    if let Some(original) = submissions.run_unknown_for_source(attempt.source) {
+        if original != recovery || !retry_unknown {
+            return Err(Box::new(StartFailure {
+                attempt,
+                kind: StartFailureKind::Blocked,
+                error: None,
+            }));
+        }
+        // Read the original authorized thread before an explicit exact retry. History text is
+        // not an acknowledgement; this DTO only lets us observe the exact active run id.
+        let snapshot = match load_thread_conversation(thread_id).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return Err(Box::new(StartFailure {
+                    attempt,
+                    kind: StartFailureKind::BeginUnknown,
+                    error: Some(error),
+                }));
+            }
+        };
+        if snapshot.active_run_id.as_ref() == Some(&attempt.run_id) {
+            if submissions.acknowledge_observed(
+                thread_id,
+                &anchor,
+                &attempt.agent_id,
+                &attempt.run_id,
+            ) {
+                return Ok(StartedChannel { attempt, channel });
+            }
+            return Err(Box::new(StartFailure {
+                attempt,
+                kind: StartFailureKind::Blocked,
+                error: None,
+            }));
+        }
+        if snapshot.active_run_id.is_some() {
+            return Err(Box::new(StartFailure {
+                attempt,
+                kind: StartFailureKind::BeginUnknown,
+                error: Some(ApiError::Conflict),
+            }));
+        }
+        // No active run is not proof of non-commit. Only the same retained idempotent intent
+        // may now be retried by this explicit user action; the barrier remains until its ack.
+    }
     let Some(ticket) = submissions.start_run(&recovery, retry_unknown) else {
         return Err(Box::new(StartFailure {
             attempt,
@@ -362,7 +410,7 @@ pub fn ChannelNewPage() -> impl IntoView {
     let send_navigate = navigate;
     #[cfg(not(target_arch = "wasm32"))]
     let _ = navigate;
-    let send = move |_| {
+    let send = UnsyncCallback::new(move |()| {
         if send_disabled.get_untracked() {
             return;
         }
@@ -465,27 +513,35 @@ pub fn ChannelNewPage() -> impl IntoView {
             submitting.set(false);
             notice.set(Some(SubmissionNotice::Rejected));
         }
-    };
+    });
 
     view! {
         <PageShell width=PageWidth::Chat>
-            <PageTopbar>
-                <PageBackLink href="/agents".to_owned() label=move || t_string!(i18n, common.back).to_owned() />
-            </PageTopbar>
             <div class="ob-channel-new">
-                <PageHeader
-                    heading_id="channel-new-title"
-                    title=move || t_string!(i18n, channels.new_channel).to_owned()
-                    description=move || t_string!(i18n, channels.new_intro).to_owned()
-                />
+                <a class="ob-conversation-back" href="/agents">{move || t!(i18n, common.back)}</a>
+                <AssistantIdentity profile=Signal::derive(move || selected_profile.get()) title=move || t_string!(i18n, channels.recipient_placeholder).to_owned() description=move || t_string!(i18n, channels.new_intro).to_owned()/>
                 <Show when=move || loading.get()>
                     <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
                 </Show>
                 <Show when=move || load_error.get() || recipient_restore_missing.get()>
                     <p class="ob-alert" role="alert">{move || t!(i18n, channels.recipient_load_error)}</p>
                 </Show>
+                <div class="ob-home-footer">
+                <ComposerFrame busy=Signal::derive(move || submitting.get())>
+                    <Textarea
+                        value=draft
+                        id="channel-new-message"
+                        aria_label=move || t_string!(i18n, channels.composer_placeholder).to_owned()
+                        placeholder=move || t_string!(i18n, channels.composer_placeholder).to_owned()
+                        disabled=inputs_locked
+                        combobox_controls="channel-skill-results"
+                        combobox_open=skill_composer.open
+                        active_descendant=skill_composer.active_descendant
+                        on_keydown=UnsyncCallback::new(move |event| skill_composer.keyboard(event))
+                        on_submit=send
+                    />
+                <div class="ob-chat-controls">
                 <div class="ob-channel-new-recipient">
-                    <label for="channel-new-recipient">{move || t!(i18n, channels.recipient_label)}</label>
                     <RecipientField
                         agents=Signal::derive(move || {
                             let restoring = resumable.get().is_some() || uncertain_create.get();
@@ -515,36 +571,27 @@ pub fn ChannelNewPage() -> impl IntoView {
                         </p>
                     </Show>
                 </div>
-                <div class="ob-first-message-composer">
                     <ModelPicker state=model_composer disabled=inputs_locked/>
                     <SkillPicker state=skill_composer disabled=inputs_locked/>
-                    <Textarea
-                        value=draft
-                        id="channel-new-message"
-                        aria_label=move || t_string!(i18n, channels.composer_placeholder).to_owned()
-                        placeholder=move || t_string!(i18n, channels.composer_placeholder).to_owned()
-                        disabled=inputs_locked
-                        combobox_controls="channel-skill-results"
-                        combobox_open=skill_composer.open
-                        active_descendant=skill_composer.active_descendant
-                        on_keydown=UnsyncCallback::new(move |event| skill_composer.keyboard(event))
-                    />
-                    <div class="ob-first-message-actions">
+                    <span class="ob-chat-send">
                         <Button
                             variant=ButtonVariant::Primary
                             size=ButtonSize::Medium
                             disabled=send_disabled
                             loading=submitting
-                            on_activate=send
+                            on_activate=move |_| send.run(())
                         >
-                            <IconView icon=Icon::Send size=IconSize::Inline />
-                            <span>{move || if begin_unknown.get() {
-                                t_string!(i18n, common.retry).to_owned()
+                            <IconView icon=Icon::ArrowUp size=IconSize::Navigation />
+                            <span class="ob-visually-hidden">{move || if begin_unknown.get() {
+                                t_string!(i18n, channels.retry_original).to_owned()
                             } else {
                                 t_string!(i18n, channels.composer_send).to_owned()
                             }}</span>
                         </Button>
-                    </div>
+                    </span>
+                </div>
+                </ComposerFrame>
+                <DraftSuggestions on_choose=UnsyncCallback::new(move |text| { if !inputs_locked.get_untracked() { draft.set(text); } }) disabled=inputs_locked/>
                 </div>
                 <Show when=move || notice.get()==Some(SubmissionNotice::ModelAgentConflict) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelAgentConflict)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_agent_conflict)}</p></Show>
                 <Show when=move || notice.get()==Some(SubmissionNotice::ModelSelectionUnavailable) && model_notice(model_composer.selection_status())==Some(SubmissionNotice::ModelSelectionUnavailable)><p class="ob-alert" role="alert">{move || t!(i18n, channels.model_selection_unavailable)}</p></Show>
