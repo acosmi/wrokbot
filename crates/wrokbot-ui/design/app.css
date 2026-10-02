@@ -4719,9 +4719,10 @@ html[data-window-chrome="macos-overlay"] .ob-shell-topbar > .ob-sidebar-trigger 
   flex-direction: column; align-items: stretch; gap: 3px;
   padding: 7px 26px 7px 8px; font-size: 13px; line-height: 1.5;
 }
-.ob-chat-controls .ob-listbox-option > :is(strong, small) { min-width: 0; overflow-wrap: anywhere; }
-.ob-chat-controls .ob-listbox-option > strong { font-weight: 550; }
-.ob-chat-controls .ob-listbox-option > small { color: var(--fg-muted); font-size: 11px; }
+.ob-chat-controls .ob-listbox-option-content { display: grid; gap: 3px; min-width: 0; }
+.ob-chat-controls .ob-listbox-option-content > :is(strong, small) { overflow-wrap: anywhere; }
+.ob-chat-controls .ob-listbox-option-content > strong { font-weight: 550; }
+.ob-chat-controls .ob-listbox-option-content > small { color: var(--fg-muted); font-size: 11px; }
 .ob-chat-controls .ob-recipient-field .ob-listbox-option { flex-direction: row; align-items: center; }
 .ob-chat-controls .ob-skill-picker, .ob-chat-draft { position: relative; }
 .ob-chat-composer .ob-home-mention-results {
