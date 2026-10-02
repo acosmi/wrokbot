@@ -777,13 +777,13 @@ fn drain_fixture_codesign_pipes(
             // error path. Only read returning zero establishes EOF.
             [!fds[0].revents().is_empty(), !fds[1].revents().is_empty()]
         };
-        if ready[0] && drain_fixture_codesign_reader(out, stdout, out_limit)? {
+        if ready[0] && drain_fixture_codesign_reader(out, stdout, out_limit, true)? {
             set_fixture_pipe_nonblocking(&*err, false)?;
-            return drain_fixture_codesign_reader(err, stderr, err_limit).map(|_| ());
+            return drain_fixture_codesign_reader(err, stderr, err_limit, false).map(|_| ());
         }
-        if ready[1] && drain_fixture_codesign_reader(err, stderr, err_limit)? {
+        if ready[1] && drain_fixture_codesign_reader(err, stderr, err_limit, true)? {
             set_fixture_pipe_nonblocking(&*out, false)?;
-            return drain_fixture_codesign_reader(out, stdout, out_limit).map(|_| ());
+            return drain_fixture_codesign_reader(out, stdout, out_limit, false).map(|_| ());
         }
     }
 }
@@ -809,6 +809,7 @@ fn drain_fixture_codesign_reader(
     reader: &mut impl io::Read,
     retained: &mut Vec<u8>,
     keep: usize,
+    nonblocking: bool,
 ) -> io::Result<bool> {
     let mut buffer = [0_u8; 8 * 1024];
     loop {
@@ -819,7 +820,9 @@ fn drain_fixture_codesign_reader(
                 retained.extend_from_slice(&buffer[..count.min(available)]);
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+            Err(error) if nonblocking && error.kind() == io::ErrorKind::WouldBlock => {
+                return Ok(false);
+            }
             Err(error) => return Err(error),
         }
     }
@@ -1293,7 +1296,8 @@ mod tests {
                 };
                 let mut retained = Vec::with_capacity(limit + 1);
                 assert!(
-                    drain_fixture_codesign_reader(&mut reader, &mut retained, limit + 1).unwrap()
+                    drain_fixture_codesign_reader(&mut reader, &mut retained, limit + 1, false)
+                        .unwrap()
                 );
                 assert_eq!(retained.len(), limit + 1);
                 assert_eq!(retained.capacity(), limit + 1);
@@ -1307,7 +1311,7 @@ mod tests {
         fn ignored_stream_keeps_no_bytes_but_reaches_eof() {
             let mut reader = Cursor::new(vec![b'x'; 1024 * 1024]);
             let mut retained = Vec::new();
-            assert!(drain_fixture_codesign_reader(&mut reader, &mut retained, 0).unwrap());
+            assert!(drain_fixture_codesign_reader(&mut reader, &mut retained, 0, false).unwrap());
             assert_eq!(reader.position(), 1024 * 1024);
             assert_eq!(retained.len(), 0);
             assert_eq!(retained.capacity(), 0);
@@ -1340,12 +1344,37 @@ mod tests {
             };
             let mut retained = Vec::with_capacity(keep);
             let error =
-                drain_fixture_codesign_reader(&mut reader, &mut retained, keep).unwrap_err();
+                drain_fixture_codesign_reader(&mut reader, &mut retained, keep, false).unwrap_err();
             assert!(reader.interrupted);
             assert_eq!(reader.cursor.position(), (2 * keep) as u64);
             assert_eq!(retained.len(), keep);
             assert_eq!(retained.capacity(), keep);
             assert_eq!(error.to_string(), "late read fault");
+        }
+
+        #[test]
+        fn would_block_is_pending_only_while_pipe_is_nonblocking() {
+            struct WouldBlockReader;
+            impl Read for WouldBlockReader {
+                fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                    Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "read would block",
+                    ))
+                }
+            }
+
+            let mut retained = Vec::new();
+            assert!(
+                !drain_fixture_codesign_reader(&mut WouldBlockReader, &mut retained, 0, true)
+                    .unwrap()
+            );
+            let error =
+                drain_fixture_codesign_reader(&mut WouldBlockReader, &mut retained, 0, false)
+                    .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(error.to_string(), "read would block");
+            assert!(retained.is_empty());
         }
 
         #[test]
