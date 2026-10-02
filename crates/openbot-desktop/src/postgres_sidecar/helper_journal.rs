@@ -7,7 +7,7 @@ mod record;
 
 pub(crate) use self::record::HelperKind;
 use self::record::{HelperJournalPhase, HelperJournalRecord};
-use super::{encode_hex, PostgresStartLock};
+use super::{PostgresStartLock, encode_hex};
 use sha2::{Digest as _, Sha256};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -18,6 +18,7 @@ use wrok_bot_macos_process::ProcessIdentity;
 const JOURNAL_SCHEMA: &str = "openbot-postgres-helper";
 const JOURNAL_SCHEMA_VERSION: u64 = 1;
 const JOURNAL_MAX_BYTES: usize = 2048;
+const PG_VERSION_MAX_BYTES: usize = 16;
 const RANDOM_ID_BYTES: usize = 16;
 const OBSERVATION_BYTES: usize = 32;
 const OBSERVATION_HEX_BYTES: usize = OBSERVATION_BYTES * 2;
@@ -43,7 +44,7 @@ enum PreviousJournal {
     Retired {
         file: File,
         bytes: Vec<u8>,
-        record: HelperJournalRecord,
+        record: Box<HelperJournalRecord>,
     },
 }
 
@@ -143,7 +144,7 @@ impl HelperJournalPreparation {
                 PreviousJournal::Retired {
                     file,
                     bytes,
-                    record,
+                    record: Box::new(record),
                 }
             }
             Err(_) => return Err(HelperJournalError::ReconciliationRequired),
@@ -169,11 +170,13 @@ impl HelperJournalPreparation {
         validate_owner_and_directory(
             owner,
             &self.root,
-            &self.data_dir_path,
-            &self.data_dir_file,
-            self.data_dir_device,
-            self.data_dir_inode,
-            self.root_uid,
+            DirectoryObservation {
+                path: &self.data_dir_path,
+                file: &self.data_dir_file,
+                device: self.data_dir_device,
+                inode: self.data_dir_inode,
+                root_uid: self.root_uid,
+            },
             &self.owner_identity,
             &self.owner_observation,
         )?;
@@ -287,11 +290,13 @@ impl HelperJournal {
         validate_owner_and_directory(
             owner,
             &self.root,
-            &self.data_dir_path,
-            &self.data_dir_file,
-            self.data_dir_device,
-            self.data_dir_inode,
-            self.root_uid,
+            DirectoryObservation {
+                path: &self.data_dir_path,
+                file: &self.data_dir_file,
+                device: self.data_dir_device,
+                inode: self.data_dir_inode,
+                root_uid: self.root_uid,
+            },
             &self.owner_identity,
             &self.owner_observation,
         )?;
@@ -440,11 +445,13 @@ impl HelperJournal {
             || validate_owner_and_directory(
                 owner,
                 &self.root,
-                &self.data_dir_path,
-                &self.data_dir_file,
-                self.data_dir_device,
-                self.data_dir_inode,
-                self.root_uid,
+                DirectoryObservation {
+                    path: &self.data_dir_path,
+                    file: &self.data_dir_file,
+                    device: self.data_dir_device,
+                    inode: self.data_dir_inode,
+                    root_uid: self.root_uid,
+                },
                 &self.owner_identity,
                 &self.owner_observation,
             )
@@ -518,11 +525,13 @@ fn publish_absent(
         || validate_owner_and_directory(
             owner,
             &preparation.root,
-            &preparation.data_dir_path,
-            &preparation.data_dir_file,
-            preparation.data_dir_device,
-            preparation.data_dir_inode,
-            preparation.root_uid,
+            DirectoryObservation {
+                path: &preparation.data_dir_path,
+                file: &preparation.data_dir_file,
+                device: preparation.data_dir_device,
+                inode: preparation.data_dir_inode,
+                root_uid: preparation.root_uid,
+            },
             &preparation.owner_identity,
             &preparation.owner_observation,
         )
@@ -586,11 +595,13 @@ fn replace_exact(
         || validate_owner_and_directory(
             owner,
             &preparation.root,
-            &preparation.data_dir_path,
-            &preparation.data_dir_file,
-            preparation.data_dir_device,
-            preparation.data_dir_inode,
-            preparation.root_uid,
+            DirectoryObservation {
+                path: &preparation.data_dir_path,
+                file: &preparation.data_dir_file,
+                device: preparation.data_dir_device,
+                inode: preparation.data_dir_inode,
+                root_uid: preparation.root_uid,
+            },
             &preparation.owner_identity,
             &preparation.owner_observation,
         )
@@ -662,17 +673,29 @@ fn open_data_directory(
     Ok(binding)
 }
 
+/// Borrowed directory identity; validation still rechecks every component against the owner.
+struct DirectoryObservation<'a> {
+    path: &'a Path,
+    file: &'a File,
+    device: u64,
+    inode: u64,
+    root_uid: u32,
+}
+
 fn validate_owner_and_directory(
     owner: &PostgresStartLock,
     root: &Path,
-    data_dir_path: &Path,
-    data_dir_file: &File,
-    data_dir_device: u64,
-    data_dir_inode: u64,
-    root_uid: u32,
+    directory: DirectoryObservation<'_>,
     owner_identity: &ProcessIdentity,
     owner_observation: &[u8; OBSERVATION_BYTES],
 ) -> Result<(), HelperJournalError> {
+    let DirectoryObservation {
+        path: data_dir_path,
+        file: data_dir_file,
+        device: data_dir_device,
+        inode: data_dir_inode,
+        root_uid,
+    } = directory;
     if owner.path.parent() != Some(root)
         || !owner.ownership_is_current()
         || data_dir_path != root.join(data_dir_name(&owner.instance_id))
@@ -869,7 +892,7 @@ fn decode_observation_hex(value: &str) -> Option<DecodedObservation> {
         return None;
     }
     let mut bytes = [0_u8; OBSERVATION_BYTES];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = (lower_hex_nibble(pair[0])? << 4) | lower_hex_nibble(pair[1])?;
     }
     decode_observation(&bytes)
@@ -1149,7 +1172,7 @@ pub(super) fn recover_mid_phase(
             if !owner.is_current() {
                 return Err(HelperJournalError::Invalid);
             }
-            return Ok(());
+            Ok(())
         }
         Ok(metadata) => {
             if !valid_journal_metadata(&metadata, root_uid, None) {
@@ -1177,12 +1200,14 @@ pub(super) fn recover_mid_phase(
                         app_data_root,
                         instance_id,
                         data_dir,
-                        &path,
-                        &file,
-                        &bytes,
+                        JournalFileObservation {
+                            path: &path,
+                            file: &file,
+                            bytes: &bytes,
+                            root_uid,
+                        },
                         &record,
                         child_hex,
-                        root_uid,
                     )
                 }
                 (HelperJournalPhase::SpawnEntered, None) => {
@@ -1207,12 +1232,14 @@ pub(super) fn recover_mid_phase(
                         owner,
                         app_data_root,
                         instance_id,
-                        &path,
-                        &file,
-                        &bytes,
+                        JournalFileObservation {
+                            path: &path,
+                            file: &file,
+                            bytes: &bytes,
+                            root_uid,
+                        },
                         &next,
                         next_bytes,
-                        root_uid,
                     )?;
                     Ok(())
                 }
@@ -1251,20 +1278,63 @@ enum DataDirOrigin {
     Existing,
 }
 
+fn pg_version_metadata_matches(metadata: &fs::Metadata, observed: &fs::Metadata) -> bool {
+    metadata.file_type().is_file()
+        && !metadata.file_type().is_symlink()
+        && metadata.len() <= PG_VERSION_MAX_BYTES as u64
+        && metadata.len() == observed.len()
+        && same_file(metadata, observed)
+}
+
+fn read_pg_version_probe(file: &File) -> Result<Vec<u8>, HelperJournalError> {
+    let mut buffer = [0_u8; PG_VERSION_MAX_BYTES + 1];
+    let read = positioned_read(file, &mut buffer).map_err(|_| HelperJournalError::Invalid)?;
+    if read > PG_VERSION_MAX_BYTES {
+        return Err(HelperJournalError::Invalid);
+    }
+    Ok(buffer[..read].to_vec())
+}
+
+fn read_pg_version_bytes(
+    path: &Path,
+    file: &File,
+    observed: &fs::Metadata,
+) -> Result<Vec<u8>, HelperJournalError> {
+    let path_before = fs::symlink_metadata(path).map_err(|_| HelperJournalError::Invalid)?;
+    let file_before = file.metadata().map_err(|_| HelperJournalError::Invalid)?;
+    if !pg_version_metadata_matches(observed, observed)
+        || !pg_version_metadata_matches(&path_before, observed)
+        || !pg_version_metadata_matches(&file_before, observed)
+    {
+        return Err(HelperJournalError::Invalid);
+    }
+    let bytes = read_pg_version_probe(file)?;
+    if bytes.len() as u64 != observed.len() || !positioned_equal(file, &bytes) {
+        return Err(HelperJournalError::Invalid);
+    }
+    // Final path/handle checks follow the second bounded byte observation.
+    let path_after = fs::symlink_metadata(path).map_err(|_| HelperJournalError::Invalid)?;
+    let file_after = file.metadata().map_err(|_| HelperJournalError::Invalid)?;
+    if !pg_version_metadata_matches(&path_after, observed)
+        || !pg_version_metadata_matches(&file_after, observed)
+    {
+        return Err(HelperJournalError::Invalid);
+    }
+    Ok(bytes)
+}
+
 fn read_data_directory_origin(data_dir: &Path) -> Result<DataDirOrigin, HelperJournalError> {
     let version = data_dir.join("PG_VERSION");
     match fs::symlink_metadata(&version) {
         Ok(metadata) => {
             if !metadata.file_type().is_file()
                 || metadata.file_type().is_symlink()
-                || metadata.len() > 16
+                || metadata.len() > PG_VERSION_MAX_BYTES as u64
             {
                 return Err(HelperJournalError::Invalid);
             }
-            let bytes = fs::read(&version).map_err(|_| HelperJournalError::Invalid)?;
-            if bytes.len() as u64 != metadata.len() {
-                return Err(HelperJournalError::Invalid);
-            }
+            let file = secure_open_file(&version).map_err(|_| HelperJournalError::Invalid)?;
+            let bytes = read_pg_version_bytes(&version, &file, &metadata)?;
             let text = std::str::from_utf8(&bytes).map_err(|_| HelperJournalError::Invalid)?;
             if text.trim() != "17" {
                 return Err(HelperJournalError::Invalid);
@@ -1287,12 +1357,9 @@ fn maybe_complete_helpers(
     app_data_root: &Path,
     instance_id: &str,
     data_dir: &Path,
-    path: &Path,
-    file: &File,
-    bytes: &[u8],
+    previous: JournalFileObservation<'_>,
     record: &HelperJournalRecord,
     child_hex: &str,
-    root_uid: u32,
 ) -> Result<(), HelperJournalError> {
     let allowed = helpers_complete_allowed(record.helper_kind, data_dir)?;
     if !allowed {
@@ -1310,12 +1377,9 @@ fn maybe_complete_helpers(
         owner,
         app_data_root,
         instance_id,
-        path,
-        file,
-        bytes,
+        previous,
         &next,
         next_bytes,
-        root_uid,
     )?;
     Ok(())
 }
@@ -1325,7 +1389,7 @@ fn decode_evidence_hex(value: &str) -> Option<[u8; OBSERVATION_BYTES]> {
         return None;
     }
     let mut bytes = [0_u8; OBSERVATION_BYTES];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = (lower_hex_nibble(pair[0])? << 4) | lower_hex_nibble(pair[1])?;
     }
     let _ = decode_observation(&bytes)?;
@@ -1350,17 +1414,28 @@ fn delete_exact_journal(
     Ok(())
 }
 
+/// Exact prior file observation, borrowed without granting replacement authority.
+struct JournalFileObservation<'a> {
+    path: &'a Path,
+    file: &'a File,
+    bytes: &'a [u8],
+    root_uid: u32,
+}
+
 fn replace_exact_mid_phase(
     owner: &super::kernel_start_lock::KernelStartLock,
     root: &Path,
     instance_id: &str,
-    path: &Path,
-    old_file: &File,
-    old_bytes: &[u8],
+    previous: JournalFileObservation<'_>,
     record: &HelperJournalRecord,
     bytes: Vec<u8>,
-    root_uid: u32,
 ) -> Result<(), HelperJournalError> {
+    let JournalFileObservation {
+        path,
+        file: old_file,
+        bytes: old_bytes,
+        root_uid,
+    } = previous;
     validate_record(record, instance_id, data_dir_name(instance_id).as_str())?;
     if !owner.is_current() {
         return Err(HelperJournalError::Invalid);
