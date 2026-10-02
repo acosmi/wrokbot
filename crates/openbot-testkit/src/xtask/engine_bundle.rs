@@ -1275,10 +1275,10 @@ mod tests {
 
         impl Read for GrowingReader {
             fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-                if self.cursor.position() == self.cursor.get_ref().len() as u64 {
-                    if let Some(growth) = self.growth.take() {
-                        self.cursor.get_mut().extend_from_slice(&growth);
-                    }
+                if self.cursor.position() == self.cursor.get_ref().len() as u64
+                    && let Some(growth) = self.growth.take()
+                {
+                    self.cursor.get_mut().extend_from_slice(&growth);
                 }
                 self.cursor.read(buffer)
             }
