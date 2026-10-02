@@ -86,7 +86,7 @@
 | V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 已正常合入；原局部默认lib86/86、严格Clippy与fmt实测记录保留 | [#92](https://github.com/acosmi/wrokbot/pull/92) | [b62f3ae4e8](https://github.com/acosmi/wrokbot/commit/b62f3ae4e84d8998703113ab62363d5d3eb59c0c) |
 | V6-PR-073 | Unix诊断fixture codesign输出有界保留 | 已正常合入；原局部16/16、xtask严格Clippy及fmt实测记录保留 | [#93](https://github.com/acosmi/wrokbot/pull/93) | [09df8854e0](https://github.com/acosmi/wrokbot/commit/09df8854e06e6b145de16454fd684a670d766e85) |
 | 原任务审计修复 | OAuth单次刷新、Provider内容检查、TLS准入、最终帧与验收工具 | 具体修复已完成定向验证与独立复核；集成状态以PR记录为准，未新增任务编号 | [#94](https://github.com/acosmi/wrokbot/pull/94) | 见PR合并记录 |
-| V6-PR-074 | Unknown原run的受权持久事实只读分页；Server/Desktop接入 | 本地局部验证通过，待最终候选独立复核与正常集成 | 待创建 | 未合入 |
+| V6-PR-074 | Unknown原run的受权持久事实只读分页；Server/Desktop接入 | 本地局部验证及独立复核通过；集成状态以PR记录为准 | [#95](https://github.com/acosmi/wrokbot/pull/95) | 见PR合并记录 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -337,3 +337,5 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 Contracts WASM检查、核心all-targets严格Clippy、Infra/Server/Agent及Desktop launcher all-targets严格Clippy与全仓fmt通过。每次运行前后保存相应输入摘要；最终候选按未变的实际依赖输入核同引用，未声称全部检查都在同一个已提交HEAD重新执行。最初Agent及Server漏增应答变体导致的两次编译失败保留；补齐既有拒绝分支后重跑通过，不放宽lint或扫描规则。
 
 本项不修改原terminal、attempt、foreground、lease、outbox或audit，不提供查证、裁决、重放或继续入口；没有迁移、依赖、lock、历史SQL或前端变更。Unknown完整处置与安全续作、profile/lease及其余全量范围继续开放，A0–A7仍无完整通过证据。此处为提交前验证记录，集成状态以本项PR实际记录为准，未执行完整CI或Actions。
+
+最终源码候选 `590466357b58f6043b55de1f3b6baecbc5fbbdcd`（tree `77e0af61e85c2fed669a5396ddb79b3edd531e1f`）已完成独立源码与原始证据复核；另确认Standalone Desktop launcher编译检查通过。本次登记仅更新公开台账，产品与构建输入保持，引用以上精确依赖范围内的真实结果；最终HEAD与合并事实见[PR #95](https://github.com/acosmi/wrokbot/pull/95)。
