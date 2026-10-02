@@ -57,6 +57,8 @@ pub mod memories;
 pub mod metrics;
 pub mod model_connections;
 pub mod plugins;
+#[cfg(test)]
+mod reconciliation_tests;
 pub mod remote_interrupts;
 pub mod routing;
 pub mod run_cost_budget;
@@ -676,6 +678,11 @@ pub fn router(state: ServerState) -> Router {
             "/api/threads/{thread_id}/runs/{run_id}/cancel",
             post(threads::cancel_run),
         )
+        .route(
+            "/api/threads/{thread_id}/runs/{run_id}/reconciliation",
+            get(threads::reconciliation)
+                .head(|| async { axum::http::StatusCode::METHOD_NOT_ALLOWED }),
+        )
         .route("/api/threads/{thread_id}/ws", get(threads::websocket))
         .route("/api/threads/{thread_id}/events", get(threads::events))
         .route("/api/threads/{thread_id}", get(threads::status))
@@ -761,6 +768,9 @@ pub fn router(state: ServerState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             transport_policy,
             transport_gate::enforce,
+        ))
+        .layer(axum::middleware::from_fn(
+            threads::reconciliation_response_policy,
         ))
         .layer(axum::middleware::from_fn(record_http_metrics))
         .layer(axum::middleware::from_fn(trace_request))

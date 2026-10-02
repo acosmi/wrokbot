@@ -1,6 +1,6 @@
 # Wrok Bot 后端实施台账
 
-更新时间：2026-10-02。补充原任务审计修复的局部验证与PR记录，核对055、072、073的实际集成事实；其余检查点及历次实施、实测记录保留为历史记录。
+更新时间：2026-10-02。补充074的Unknown持久事实只读查询与局部验证；此前审计修复及055、072、073集成事实、历次实施和实测记录保留。
 
 001–047 已核实为 main 祖先。换机主控已亲读、实测并正常合入049、050、051、052、053、056、057、058及重建060/061、新增必要维护063/064；055、072、073也已按PR及main祖先事实核实合入。048、054保留开放候选，059/062未完成，不能继续用旧待批准记录替代当前合同及实际检查状态。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。下方历次检查点是历史记录，当前状态以任务表及本轮最终结论为准。
 
@@ -86,6 +86,7 @@
 | V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 已正常合入；原局部默认lib86/86、严格Clippy与fmt实测记录保留 | [#92](https://github.com/acosmi/wrokbot/pull/92) | [b62f3ae4e8](https://github.com/acosmi/wrokbot/commit/b62f3ae4e84d8998703113ab62363d5d3eb59c0c) |
 | V6-PR-073 | Unix诊断fixture codesign输出有界保留 | 已正常合入；原局部16/16、xtask严格Clippy及fmt实测记录保留 | [#93](https://github.com/acosmi/wrokbot/pull/93) | [09df8854e0](https://github.com/acosmi/wrokbot/commit/09df8854e06e6b145de16454fd684a670d766e85) |
 | 原任务审计修复 | OAuth单次刷新、Provider内容检查、TLS准入、最终帧与验收工具 | 具体修复已完成定向验证与独立复核；集成状态以PR记录为准，未新增任务编号 | [#94](https://github.com/acosmi/wrokbot/pull/94) | 见PR合并记录 |
+| V6-PR-074 | Unknown原run的受权持久事实只读分页；Server/Desktop接入 | 本地局部验证通过，待最终候选独立复核与正常集成 | 待创建 | 未合入 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -326,3 +327,13 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 完整parity/recount因缺九份台账与overlay退出1，不能计为产品通过；fixtures-only的六项复算通过。Unknown安全续作、profile迁移、HumanLease清理以及生产装配、完整恢复、签名与其余产品阶段仍未闭合；A0–A7仍无完整通过证据，不因本PR计为M0完成。未运行完整CI或触发Actions。
 
 本次后续登记仅修改公开台账；产品与构建输入逐字节沿用上述已复核源码提交。PR合并状态和最终提交以链接中的实际记录为准，台账不提前冒称合并。
+
+## V6-PR-074 Unknown持久事实只读查询
+
+2026-10-02：从已合主线 `eebd7c1fe88f9ab342d483e394a0856c64219687` 新增原run的受权事实分页，Server与Desktop沿同一Application命令读取。每页在单条PG语句中重核当前用户、认证代次、run归属和当前thread/Bot可见性，保留无attempt的合法Unknown记录；原terminal绑定或call归属损坏时拒绝。返回有界的内部身份、原状态、原提交记录和时间；两端处理严格query、一次路径解码及no-store，Desktop在异步读取前后核原窗口绑定。
+
+固定Rust1.98.0、offline/locked的实际局部检查：Contracts lib118项、Application lib175项；新建隔离PG17.11/SCRAM实例上的6项实际数据库测试；两宿主10项定向测试（新增7项及既有3项）；既有channel transport parity8项。各组全部通过、零ignored；后者验证既有channel矩阵与封闭命令分类，不冒充Unknown的完整跨宿主旅程。真实PG覆盖当前权限、零attempt、状态/null、双坐标分页、损坏绑定与读取不变性，并验证原Unknown仍阻止begin；实例stop等待退出0。
+
+Contracts WASM检查、核心all-targets严格Clippy、Infra/Server/Agent及Desktop launcher all-targets严格Clippy与全仓fmt通过。每次运行前后保存相应输入摘要；最终候选按未变的实际依赖输入核同引用，未声称全部检查都在同一个已提交HEAD重新执行。最初Agent及Server漏增应答变体导致的两次编译失败保留；补齐既有拒绝分支后重跑通过，不放宽lint或扫描规则。
+
+本项不修改原terminal、attempt、foreground、lease、outbox或audit，不提供查证、裁决、重放或继续入口；没有迁移、依赖、lock、历史SQL或前端变更。Unknown完整处置与安全续作、profile/lease及其余全量范围继续开放，A0–A7仍无完整通过证据。此处为提交前验证记录，集成状态以本项PR实际记录为准，未执行完整CI或Actions。

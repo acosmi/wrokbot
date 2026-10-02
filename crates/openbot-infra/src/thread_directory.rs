@@ -30,6 +30,7 @@ use crate::run_runtime::{RUN_CANCEL_DESTINATION, RUN_CONTROL_TOPIC, run_cancel_o
 use crate::thread_id::mint_thread_id;
 use crate::thread_listener::ThreadListenerDatabase;
 
+mod reconciliation;
 mod skills;
 
 /// foreground writer lease 的新增默认值；每 30 秒失效，后续 runtime 必须在 10 秒内续租。
@@ -96,6 +97,14 @@ impl PostgresThreadDirectory {
 
 #[async_trait]
 impl ThreadDirectory for PostgresThreadDirectory {
+    async fn run_reconciliation(
+        &self,
+        request: openbot_application::RunReconciliationRequest,
+    ) -> Result<openbot_contracts::reconciliation::RunReconciliationSnapshot, ThreadDirectoryError>
+    {
+        reconciliation::read(&self.pool, request).await
+    }
+
     async fn mint_thread_id(
         &self,
         deployment: &DeploymentId,

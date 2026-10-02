@@ -12,7 +12,7 @@ use std::future::poll_fn;
 use axum::Json;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive};
@@ -26,6 +26,9 @@ use openbot_contracts::command::{
 };
 use openbot_contracts::error::AppError;
 use openbot_contracts::ids::{RunId, ThreadId};
+use openbot_contracts::reconciliation::{
+    MAX_RUN_RECONCILIATION_RESPONSE_BYTES, RunReconciliationQuery,
+};
 use serde::Deserialize;
 
 use crate::auth::{Authenticated, OriginAuthenticated};
@@ -34,6 +37,116 @@ use crate::http::ServerState;
 
 const THREAD_EVENTS_WS_PROTOCOL: &str = "openbot.thread-events.v1";
 const THREAD_EVENTS_WS_INPUT_LIMIT: usize = 1024;
+
+/// Apply the read-only endpoint's cache policy even to extractor, method and outer body-limit
+/// rejections. The transport admission middleware remains responsible for TLS/peer authority.
+pub(super) async fn reconciliation_response_policy(
+    request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let reconciliation_path = request
+        .uri()
+        .path()
+        .strip_prefix("/api/threads/")
+        .is_some_and(|suffix| {
+            let parts = suffix.split('/').collect::<Vec<_>>();
+            matches!(parts.as_slice(), [thread, "runs", run, "reconciliation"] if !thread.is_empty() && !run.is_empty())
+        });
+    let get = request.method() == axum::http::Method::GET;
+    let mut response = next.run(request).await;
+    if reconciliation_path {
+        // A nonempty GET body is malformed regardless of whether the shared body cap caught it
+        // before the handler. This does not change any other route's 413 contract.
+        if get && response.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            response =
+                HttpError::from(AppError::MalformedPayload { field: "body" }).into_response();
+        }
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
+/// Read the current persisted Unknown facts through the one Application entry point (R398).
+pub async fn reconciliation(
+    State(state): State<ServerState>,
+    Authenticated(auth): Authenticated,
+    path: Result<Path<(String, String)>, axum::extract::rejection::PathRejection>,
+    query: Result<Query<RunReconciliationQuery>, QueryRejection>,
+    request: Request,
+) -> Result<Response, HttpError> {
+    // Axum performs the one actual path decode. Its percent decoder preserves malformed
+    // escapes, so reject those raw triplets here to match the controlled Desktop protocol.
+    if !valid_reconciliation_percent_escapes(request.uri().path()) {
+        return Err(AppError::MalformedPayload { field: "path" }.into());
+    }
+    if request
+        .uri()
+        .query()
+        .is_some_and(|raw| !valid_reconciliation_percent_escapes(raw))
+    {
+        return Err(AppError::MalformedPayload { field: "query" }.into());
+    }
+    let Path((thread_id, run_id)) =
+        path.map_err(|_| AppError::MalformedPayload { field: "path" })?;
+    let Query(query) = query.map_err(|_| AppError::MalformedPayload { field: "query" })?;
+    let (after, limit) = query.into_parts()?;
+    let body = axum::body::to_bytes(request.into_body(), 1)
+        .await
+        .map_err(|_| AppError::MalformedPayload { field: "body" })?;
+    if !body.is_empty() {
+        return Err(AppError::MalformedPayload { field: "body" }.into());
+    }
+    match state
+        .application()
+        .execute(
+            auth,
+            AppCommand::GetRunReconciliation {
+                thread_id: ThreadId::new(thread_id),
+                run_id: RunId::new(run_id),
+                after,
+                limit,
+            },
+        )
+        .await?
+    {
+        AppReply::RunReconciliation(snapshot) => {
+            let body = serde_json::to_vec(&snapshot).map_err(|_| application_contract_error())?;
+            if body.len() > MAX_RUN_RECONCILIATION_RESPONSE_BYTES {
+                return Err(application_contract_error());
+            }
+            Ok((
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/json"),
+                    (CACHE_CONTROL, "no-store"),
+                ],
+                body,
+            )
+                .into_response())
+        }
+        _ => Err(application_contract_error()),
+    }
+}
+
+fn valid_reconciliation_percent_escapes(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return false;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    true
+}
 
 /// `POST /api/threads/mint`：为已认证 actor 铸造当前 deployment 的 UUIDv8。
 pub async fn mint(

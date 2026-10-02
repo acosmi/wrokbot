@@ -208,6 +208,81 @@ pub async fn get_thread_conversation<D: ThreadDirectory>(
 }
 
 #[cfg(test)]
+#[path = "run_reconciliation_tests.rs"]
+mod reconciliation_tests;
+
+/// Read current actor-owned durable Unknown facts without authorizing any follow-up effect.
+pub async fn get_run_reconciliation<D: ThreadDirectory>(
+    directory: &D,
+    auth: &AuthContext,
+    thread: ThreadId,
+    run: openbot_contracts::ids::RunId,
+    after: Option<openbot_contracts::reconciliation::RunReconciliationCursor>,
+    limit: Option<u32>,
+) -> Result<openbot_contracts::reconciliation::RunReconciliationSnapshot, AppError> {
+    use openbot_contracts::reconciliation::{
+        MAX_RUN_RECONCILIATION_RESPONSE_BYTES, RunReconciliationCursor, valid_reconciliation_id,
+        validate_page,
+    };
+    if !ThreadIdentity::is_plausible(&thread) {
+        return Err(AppError::MalformedPayload { field: "thread_id" });
+    }
+    if !valid_reconciliation_id(run.as_str()) {
+        return Err(AppError::MalformedPayload { field: "run_id" });
+    }
+    let limit = validate_page(after, limit)?;
+    let snapshot = directory
+        .run_reconciliation(crate::ports::RunReconciliationRequest {
+            deployment: auth.deployment().clone(),
+            tenant: auth.tenant().clone(),
+            actor: auth.actor().clone(),
+            auth_generation: auth.auth_generation(),
+            thread: thread.clone(),
+            run: run.clone(),
+            after,
+            limit,
+        })
+        .await
+        .map_err(|error| error.into_app_error())?;
+    let unavailable = || AppError::DependencyUnavailable {
+        dependency: "thread_directory",
+    };
+    if snapshot.thread_id != thread
+        || snapshot.run_id != run
+        || snapshot.terminal_event_sequence > i64::MAX as u64
+        || snapshot.attempts.len() > limit as usize
+    {
+        return Err(unavailable());
+    }
+    let mut previous = after;
+    for attempt in &snapshot.attempts {
+        let cursor = RunReconciliationCursor {
+            call_sequence: attempt.call_sequence,
+            attempt_sequence: attempt.attempt_sequence,
+        };
+        if !cursor.is_valid()
+            || previous.is_some_and(|value| cursor <= value)
+            || !valid_reconciliation_id(&attempt.tool_call_id)
+            || !valid_reconciliation_id(&attempt.attempt_id)
+        {
+            return Err(unavailable());
+        }
+        previous = Some(cursor);
+    }
+    if snapshot.next.is_some()
+        && (snapshot.attempts.len() != limit as usize || snapshot.next != previous)
+    {
+        return Err(unavailable());
+    }
+    // Strings and collection lengths were checked before allocating serialized bytes.
+    let bytes = serde_json::to_vec(&snapshot).map_err(|_| unavailable())?;
+    if bytes.len() > MAX_RUN_RECONCILIATION_RESPONSE_BYTES {
+        return Err(unavailable());
+    }
+    Ok(snapshot)
+}
+
+#[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 

@@ -143,6 +143,7 @@ pub const fn command_kind(command: &AppCommand) -> &'static str {
         AppCommand::CancelThreadRun(_) => "cancel_thread_run",
         AppCommand::GetThreadHistory { .. } => "get_thread_history",
         AppCommand::GetThreadConversation { .. } => "get_thread_conversation",
+        AppCommand::GetRunReconciliation { .. } => "get_run_reconciliation",
         AppCommand::ListPendingRemoteInterrupts => "list_pending_remote_interrupts",
         AppCommand::ResolveRemoteInterrupt { .. } => "resolve_remote_interrupt",
         AppCommand::RememberMemory(_) => "remember_memory",

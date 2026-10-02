@@ -715,6 +715,27 @@ pub struct ThreadConversationRequest {
     pub thread: ThreadId,
 }
 
+/// Unknown 原运行事实的只读请求；权限由 Application 从当前 AuthContext 注入。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunReconciliationRequest {
+    /// 当前可信部署。
+    pub deployment: DeploymentId,
+    /// 当前可信租户。
+    pub tenant: TenantId,
+    /// 当前可信用户，必须仍是原 run owner。
+    pub actor: ActorId,
+    /// 当前可信认证代次，由PG重核。
+    pub auth_generation: AuthGeneration,
+    /// 原 thread。
+    pub thread: ThreadId,
+    /// 原 run。
+    pub run: openbot_contracts::ids::RunId,
+    /// 已通过非负边界检查的分页位置。
+    pub after: Option<openbot_contracts::reconciliation::RunReconciliationCursor>,
+    /// 已通过1–100边界检查的页大小。
+    pub limit: u32,
+}
+
 /// Native thread ID 铸造与 scope-aware 可见性查询。
 ///
 /// 查询同时接收 deployment、tenant 与 actor，三者都来自权威 [`AuthContext`](openbot_contracts::auth::AuthContext)，
@@ -783,6 +804,15 @@ pub trait ThreadDirectory: Send + Sync {
         &self,
         _request: ThreadConversationRequest,
     ) -> Result<openbot_contracts::command::ThreadConversationSnapshot, ThreadDirectoryError> {
+        Err(ThreadDirectoryError::Unavailable)
+    }
+
+    /// 一条PG快照读取Unknown事实，当前权限每页重核；不改变占用或审计。
+    async fn run_reconciliation(
+        &self,
+        _request: RunReconciliationRequest,
+    ) -> Result<openbot_contracts::reconciliation::RunReconciliationSnapshot, ThreadDirectoryError>
+    {
         Err(ThreadDirectoryError::Unavailable)
     }
 }

@@ -52,6 +52,9 @@ use openbot_contracts::mcp::{
     PluginSkillMutation,
 };
 use openbot_contracts::people::CurrentUserResponse;
+use openbot_contracts::reconciliation::{
+    MAX_RUN_RECONCILIATION_RESPONSE_BYTES, RunReconciliationQuery,
+};
 use openbot_contracts::remote_interrupt::{RemoteInterruptAnswer, RemoteInterruptResolved};
 use openbot_contracts::sandboxed::SaveSandboxedComponentRequest;
 use openbot_contracts::tool::ToolApprovalDecision;
@@ -228,6 +231,10 @@ enum ThreadRoute<'a> {
         raw_thread_id: &'a str,
         raw_run_id: &'a str,
     },
+    Reconciliation {
+        raw_thread_id: &'a str,
+        raw_run_id: &'a str,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -274,7 +281,8 @@ impl<'a> ThreadRoute<'a> {
             Self::Status { raw_thread_id }
             | Self::Conversation { raw_thread_id }
             | Self::Runs { raw_thread_id }
-            | Self::Cancel { raw_thread_id, .. } => raw_thread_id,
+            | Self::Cancel { raw_thread_id, .. }
+            | Self::Reconciliation { raw_thread_id, .. } => raw_thread_id,
         }
     }
 }
@@ -298,6 +306,14 @@ fn thread_route(path: &str) -> Option<ThreadRoute<'_>> {
             if !raw_thread_id.is_empty() && !raw_run_id.is_empty() =>
         {
             Some(ThreadRoute::Cancel {
+                raw_thread_id,
+                raw_run_id,
+            })
+        }
+        [raw_thread_id, "runs", raw_run_id, "reconciliation"]
+            if !raw_thread_id.is_empty() && !raw_run_id.is_empty() =>
+        {
+            Some(ThreadRoute::Reconciliation {
                 raw_thread_id,
                 raw_run_id,
             })
@@ -741,6 +757,15 @@ impl DesktopTauriProtocol {
             return self.thread_mint(request, authority).await;
         }
         if let Some(route) = thread_route(&path) {
+            if let ThreadRoute::Reconciliation {
+                raw_thread_id,
+                raw_run_id,
+            } = route
+            {
+                return self
+                    .run_reconciliation(label, request, authority, raw_thread_id, raw_run_id)
+                    .await;
+            }
             return self.thread_unary(request, authority, route).await;
         }
         if path == "/api/agents/test-connection" {
@@ -1540,6 +1565,85 @@ impl DesktopTauriProtocol {
             Ok(AppReply::ThreadMinted(minted)) => json_response(&minted),
             Ok(_) => dependency_response(),
             Err(error) => error_response(error),
+        }
+    }
+
+    async fn run_reconciliation(
+        &self,
+        label: &str,
+        mut request: Request<Vec<u8>>,
+        authority: WindowAuthority,
+        raw_thread_id: &str,
+        raw_run_id: &str,
+    ) -> Response<Vec<u8>> {
+        if request.method() != Method::GET {
+            request.body_mut().fill(0);
+            return empty_response(StatusCode::METHOD_NOT_ALLOWED);
+        }
+        if !request.body().is_empty() {
+            request.body_mut().fill(0);
+            return error_response(AppError::MalformedPayload { field: "body" });
+        }
+        let Some(thread_id) = percent_decode_segment(raw_thread_id) else {
+            return error_response(AppError::MalformedPayload { field: "thread_id" });
+        };
+        let Some(run_id) = percent_decode_segment(raw_run_id) else {
+            return error_response(AppError::MalformedPayload { field: "run_id" });
+        };
+        let Some(query) = run_reconciliation_query(request.uri().query()) else {
+            return error_response(AppError::MalformedPayload { field: "query" });
+        };
+        let (after, limit) = match query.into_parts() {
+            Ok(parts) => parts,
+            Err(error) => return error_response(error),
+        };
+        if let Err(error) = self.reconciliation_binding_current(label, &authority) {
+            return error_response(error);
+        }
+        let outcome = self
+            .transport
+            .execute(
+                authority.auth.clone(),
+                AppCommand::GetRunReconciliation {
+                    thread_id: ThreadId::new(thread_id),
+                    run_id: RunId::new(run_id),
+                    after,
+                    limit,
+                },
+            )
+            .await;
+        // A label can be closed and recreated while the shared Application is reading.
+        // Never deliver the old authority's snapshot (or error) to its replacement.
+        if let Err(error) = self.reconciliation_binding_current(label, &authority) {
+            return error_response(error);
+        }
+        match outcome {
+            Ok(AppReply::RunReconciliation(snapshot)) => match serde_json::to_vec(&snapshot) {
+                Ok(body) if body.len() <= MAX_RUN_RECONCILIATION_RESPONSE_BYTES => {
+                    response(StatusCode::OK, "application/json", body, true)
+                }
+                _ => dependency_response(),
+            },
+            Ok(_) => dependency_response(),
+            Err(error) => error_response(error),
+        }
+    }
+
+    fn reconciliation_binding_current(
+        &self,
+        label: &str,
+        admitted: &WindowAuthority,
+    ) -> Result<(), AppError> {
+        match self.authority(label) {
+            Ok(Some(current))
+                if current.binding_id == admitted.binding_id && !admitted.closed.is_cancelled() =>
+            {
+                Ok(())
+            }
+            Ok(_) => Err(AppError::Unauthenticated),
+            Err(_) => Err(AppError::DependencyUnavailable {
+                dependency: "desktop_window_authority",
+            }),
         }
     }
 
@@ -2813,6 +2917,30 @@ pub(crate) fn valid_scheme(scheme: &str) -> bool {
         && !matches!(scheme, "http" | "https" | "tauri" | "asset")
 }
 
+fn run_reconciliation_query(raw: Option<&str>) -> Option<RunReconciliationQuery> {
+    let mut query = RunReconciliationQuery::default();
+    for pair in raw
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+    {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = percent_decode_query_component(key)?;
+        let value = percent_decode_query_component(value)?;
+        match key.as_str() {
+            "afterCallSequence" if query.after_call_sequence.is_none() => {
+                query.after_call_sequence = Some(value.parse().ok()?);
+            }
+            "afterAttemptSequence" if query.after_attempt_sequence.is_none() => {
+                query.after_attempt_sequence = Some(value.parse().ok()?);
+            }
+            "limit" if query.limit.is_none() => query.limit = Some(value.parse().ok()?),
+            _ => return None,
+        }
+    }
+    Some(query)
+}
+
 fn agent_hidden_query(query: Option<&str>) -> Option<bool> {
     match query {
         None | Some("") | Some("hidden=false") => Some(false),
@@ -2989,6 +3117,10 @@ mod tests {
         PluginGrantMutation, PluginMutationAcknowledged, PluginSkillMutation, PluginSkills,
     };
     use openbot_contracts::people::{CurrentUser, PeoplePage, Person};
+    use openbot_contracts::reconciliation::{
+        RunReconciliationAttempt, RunReconciliationAttemptStatus, RunReconciliationCursor,
+        RunReconciliationSnapshot, RunReconciliationStatus,
+    };
     use openbot_contracts::remote_interrupt::{
         PendingRemoteInterrupts, RemoteInterruptAnswerStatus, RemoteInterruptResolved,
     };
@@ -3043,6 +3175,342 @@ mod tests {
             self.entered.notify_one();
             self.release.notified().await;
             Ok(Box::pin(NeverAppStream))
+        }
+    }
+
+    #[derive(Default)]
+    struct ReconciliationService {
+        calls: Mutex<Vec<(AuthContext, AppCommand)>>,
+        error: Option<AppError>,
+        wrong_reply: bool,
+        oversized: bool,
+        barrier: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    }
+
+    #[async_trait]
+    impl openbot_application::ApplicationService for ReconciliationService {
+        async fn execute(
+            &self,
+            auth: AuthContext,
+            command: AppCommand,
+        ) -> Result<AppReply, AppError> {
+            self.calls.lock().unwrap().push((auth, command.clone()));
+            if let Some((entered, release)) = &self.barrier {
+                entered.notify_one();
+                release.notified().await;
+            }
+            if let Some(error) = &self.error {
+                return Err(error.clone());
+            }
+            if self.wrong_reply {
+                return Ok(AppReply::Health(openbot_contracts::command::HealthReport {
+                    ok: true,
+                }));
+            }
+            let AppCommand::GetRunReconciliation {
+                thread_id, run_id, ..
+            } = command
+            else {
+                panic!("reconciliation must use its closed Application command");
+            };
+            let attempt = RunReconciliationAttempt {
+                tool_call_id: "internal-call".into(),
+                call_sequence: 7,
+                attempt_id: "internal-attempt".into(),
+                attempt_sequence: 2,
+                status: RunReconciliationAttemptStatus::Executing,
+                recorded_commit_state: None,
+                created_at: time::OffsetDateTime::UNIX_EPOCH,
+                started_at: None,
+                finished_at: None,
+            };
+            Ok(AppReply::RunReconciliation(RunReconciliationSnapshot {
+                thread_id,
+                run_id,
+                status: RunReconciliationStatus::ReconciliationRequired,
+                terminal_event_sequence: 12,
+                observed_at: time::OffsetDateTime::UNIX_EPOCH,
+                foreground_blocked: true,
+                attempts: vec![attempt; if self.oversized { 2000 } else { 1 }],
+                next: None,
+                available_actions: [],
+            }))
+        }
+
+        async fn subscribe(
+            &self,
+            _: AuthContext,
+            _: SubscriptionRequest,
+        ) -> Result<openbot_application::AppEventStream, AppError> {
+            panic!("reconciliation is unary");
+        }
+    }
+
+    fn reconciliation_protocol(
+        service: Arc<ReconciliationService>,
+    ) -> (Arc<DesktopTauriProtocol>, PathBuf) {
+        let root = protocol_root();
+        let protocol = Arc::new(
+            DesktopTauriProtocol::open(&root, Arc::new(InProcessTransport::new(service))).unwrap(),
+        );
+        protocol.bind_window("main", auth(), None).unwrap();
+        (protocol, root)
+    }
+
+    fn reconciliation_request(run: &str, query: &str) -> Request<Vec<u8>> {
+        Request::builder()
+            .uri(format!(
+                "/api/threads/550e8400-e29b-81d4-a716-446655440001/runs/{run}/reconciliation{query}"
+            ))
+            .body(Vec::new())
+            .unwrap()
+    }
+
+    fn reconciliation_body(response: &Response<Vec<u8>>) -> serde_json::Value {
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        if response.body().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(response.body()).unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn reconciliation_maps_shared_command_and_decodes_opaque_run_exactly_once() {
+        let service = Arc::new(ReconciliationService::default());
+        let (protocol, root) = reconciliation_protocol(service.clone());
+        for (encoded, decoded) in [
+            ("legacy%2Frun", "legacy/run"),
+            ("legacy%252Frun", "legacy%2Frun"),
+            ("%E8%BF%90%E8%A1%8C%25", "运行%"),
+        ] {
+            let response = protocol
+                .handle(
+                    "main",
+                    reconciliation_request(
+                        encoded,
+                        "?afterCallSequence=7&afterAttemptSequence=2&limit=100",
+                    ),
+                )
+                .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = reconciliation_body(&response);
+            assert_eq!(body["runId"], decoded);
+            assert_eq!(body["status"], "reconciliation_required");
+            assert_eq!(body["availableActions"], json!([]));
+            assert_eq!(
+                body["attempts"][0]["recordedCommitState"],
+                serde_json::Value::Null
+            );
+            assert_eq!(body["attempts"][0]["startedAt"], serde_json::Value::Null);
+            assert_eq!(body["attempts"][0]["finishedAt"], serde_json::Value::Null);
+            assert_eq!(body.as_object().unwrap().len(), 9);
+            assert_eq!(body["attempts"][0].as_object().unwrap().len(), 9);
+            let calls = service.calls.lock().unwrap();
+            let (observed_auth, command) = calls.last().unwrap();
+            assert_eq!(observed_auth, &auth());
+            assert_eq!(
+                command,
+                &AppCommand::GetRunReconciliation {
+                    thread_id: ThreadId::new("550e8400-e29b-81d4-a716-446655440001"),
+                    run_id: RunId::new(decoded),
+                    after: Some(RunReconciliationCursor {
+                        call_sequence: 7,
+                        attempt_sequence: 2
+                    }),
+                    limit: Some(100),
+                }
+            );
+        }
+        let response = protocol
+            .handle("main", reconciliation_request("opaque", ""))
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        reconciliation_body(&response);
+        assert!(matches!(
+            service.calls.lock().unwrap().last().unwrap().1,
+            AppCommand::GetRunReconciliation {
+                after: None,
+                limit: None,
+                ..
+            }
+        ));
+        protocol.unbind_window("main").unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconciliation_rejects_malformed_query_path_and_any_get_body_before_dispatch() {
+        let service = Arc::new(ReconciliationService::default());
+        let (protocol, root) = reconciliation_protocol(service.clone());
+        for query in [
+            "?actor=secret-sentinel",
+            "?limit=1&limit=2",
+            "?limit=1&%6cimit=2",
+            "?afterCallSequence=0",
+            "?afterAttemptSequence=0",
+            "?limit=0",
+            "?limit=101",
+            "?limit=4294967296",
+            "?afterCallSequence=9223372036854775808&afterAttemptSequence=0",
+            "?afterCallSequence=-1&afterAttemptSequence=0",
+            "?limit=1.0",
+            "?limit=",
+            "?limit=1%",
+            "?limit=%2",
+            "?limit=%GG",
+            "?limit=%FF",
+            "?%FF=1",
+        ] {
+            let response = protocol
+                .handle("main", reconciliation_request("opaque", query))
+                .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+            assert_eq!(
+                reconciliation_body(&response),
+                json!({"code":"malformed_payload"})
+            );
+        }
+        for run in ["%FF", "%", "%2", "%GG"] {
+            let response = protocol
+                .handle("main", reconciliation_request(run, ""))
+                .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                reconciliation_body(&response),
+                json!({"code":"malformed_payload"})
+            );
+        }
+        for length in [1, CHANNEL_THREAD_BODY_MAX_BYTES + 1] {
+            let mut request = reconciliation_request("opaque", "");
+            *request.body_mut() = vec![b'x'; length];
+            let response = protocol.handle("main", request).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                reconciliation_body(&response),
+                json!({"code":"malformed_payload"})
+            );
+        }
+        for method in [Method::POST, Method::HEAD] {
+            let mut request = reconciliation_request("opaque", "");
+            *request.method_mut() = method;
+            let response = protocol.handle("main", request).await;
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+            reconciliation_body(&response);
+        }
+        assert!(service.calls.lock().unwrap().is_empty());
+        protocol.unbind_window("main").unwrap();
+        let response = protocol
+            .handle("main", reconciliation_request("opaque", ""))
+            .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            reconciliation_body(&response),
+            json!({"code":"unauthenticated"})
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconciliation_errors_are_redacted_and_responses_are_bounded() {
+        for service in [
+            ReconciliationService {
+                error: Some(AppError::NotVisible),
+                ..Default::default()
+            },
+            ReconciliationService {
+                error: Some(AppError::RequestConflict { resource: "run" }),
+                ..Default::default()
+            },
+            ReconciliationService {
+                error: Some(AppError::DependencyUnavailable {
+                    dependency: "secret-sentinel",
+                }),
+                ..Default::default()
+            },
+            ReconciliationService {
+                wrong_reply: true,
+                ..Default::default()
+            },
+            ReconciliationService {
+                oversized: true,
+                ..Default::default()
+            },
+        ] {
+            let (status, code) = service
+                .error
+                .as_ref()
+                .map_or((503, "dependency_unavailable"), |error| {
+                    (error.http_status(), error.code().as_str())
+                });
+            let (protocol, root) = reconciliation_protocol(Arc::new(service));
+            let response = protocol
+                .handle("main", reconciliation_request("opaque", ""))
+                .await;
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(reconciliation_body(&response), json!({"code":code}));
+            protocol.unbind_window("main").unwrap();
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn reconciliation_rechecks_original_binding_before_and_after_application_await() {
+        for rebind in [false, true] {
+            for application_error in [false, true] {
+                let entered = Arc::new(tokio::sync::Notify::new());
+                let release = Arc::new(tokio::sync::Notify::new());
+                let service = Arc::new(ReconciliationService {
+                    barrier: Some((entered.clone(), release.clone())),
+                    error: application_error.then_some(AppError::NotVisible),
+                    ..Default::default()
+                });
+                let (protocol, root) = reconciliation_protocol(service.clone());
+                let old_authority = protocol.authority("main").unwrap().unwrap();
+                let reading = protocol.clone();
+                let task = tokio::spawn(async move {
+                    reading
+                        .handle("main", reconciliation_request("opaque", ""))
+                        .await
+                });
+                tokio::time::timeout(Duration::from_secs(2), entered.notified())
+                    .await
+                    .unwrap();
+                protocol.unbind_window("main").unwrap();
+                if rebind {
+                    protocol.bind_window("main", admin_auth(), None).unwrap();
+                }
+                release.notify_one();
+                let response = tokio::time::timeout(Duration::from_secs(2), task)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                assert_eq!(
+                    reconciliation_body(&response),
+                    json!({"code":"unauthenticated"})
+                );
+                // A previously captured authority cannot dispatch after its binding was removed.
+                let response = protocol
+                    .run_reconciliation(
+                        "main",
+                        reconciliation_request("opaque", ""),
+                        old_authority,
+                        "550e8400-e29b-81d4-a716-446655440001",
+                        "opaque",
+                    )
+                    .await;
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                assert_eq!(
+                    reconciliation_body(&response),
+                    json!({"code":"unauthenticated"})
+                );
+                assert_eq!(service.calls.lock().unwrap().len(), 1);
+                if rebind {
+                    protocol.unbind_window("main").unwrap();
+                }
+                fs::remove_dir_all(root).unwrap();
+            }
         }
     }
 

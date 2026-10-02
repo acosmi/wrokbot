@@ -519,6 +519,7 @@ fn http_route_of(command: &AppCommand) -> Option<String> {
         | AppCommand::CancelThreadRun(_)
         | AppCommand::GetThreadHistory { .. }
         | AppCommand::GetThreadConversation { .. }
+        | AppCommand::GetRunReconciliation { .. }
         | AppCommand::RememberMemory(_)
         | AppCommand::GetMemoryControl
         | AppCommand::UpdateMemoryControl(_)
