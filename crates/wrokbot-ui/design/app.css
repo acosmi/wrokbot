@@ -4724,6 +4724,8 @@ html[data-window-chrome="macos-overlay"] .ob-shell-topbar > .ob-sidebar-trigger 
 .ob-chat-controls .ob-listbox-option-content > strong { font-weight: 550; }
 .ob-chat-controls .ob-listbox-option-content > small { color: var(--fg-muted); font-size: 11px; }
 .ob-chat-controls .ob-recipient-field .ob-listbox-option { flex-direction: row; align-items: center; }
+.ob-chat-controls .ob-recipient-field .ob-listbox-option-content { display: flex; align-items: center; gap: 8px; }
+.ob-chat-controls .ob-recipient-option-copy > :is(span, small) { white-space: normal; overflow-wrap: anywhere; }
 .ob-chat-controls .ob-skill-picker, .ob-chat-draft { position: relative; }
 .ob-chat-composer .ob-home-mention-results {
   position: absolute; inset-block-start: auto; inset-block-end: calc(100% + 4px);
