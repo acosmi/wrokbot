@@ -397,3 +397,5 @@ begin、conversation、RunRepo active及074/075两个只读页共用同一静态
 修复Agent将仅有旧上下文、reasoning或空白当前响应记为completed的问题。每次provider invocation单独观察当前非空文本，空text delta不再提前无终态退出；provider错误仍按原失败码处理。已提交tool exchange保持，不由后续空响应或错误伪造未执行，也不重跑工具。正常工具和remote resume测试现在提供真实本次答复。
 
 本轮固定Rust1.98.0、locked/offline新证据：旧实现新增反例实际失败；修复候选Agent lib62/62通过，零failed/ignored；Agent all-targets严格Clippy和fmt/diff通过。新增测试覆盖历史回答、reasoning、空/空白文本、上一sampling已有文本与tool效果后为空/报错，以及新文本成功。外部vendor和完整M0旅程不在这组单测证明范围。独立复核、精确源码提交、PR及admin正常合并事实随本任务登记，不提前宣称完成。
+
+精确源码候选`7188fcbff23bded79ec2376be7eda753f9970815`（tree`91a8b969e25f92a9ea6b84d74343aa08b01d85a3`，base`8fabc9f634c2f8c640373bf96d2bca8b80559726`）已获独立GO：三份新通过记录、原失败、1133个产品输入及日志摘要核同，独立定向4/4通过，后者不新增不同用例计数。此后登记只改公开台账，产品输入不变；[PR #99](https://github.com/acosmi/wrokbot/pull/99)正常admin合并事实以实际远端记录为准，不提前宣称已合入。本任务只完成当前轮结果补全，其余并发、来源与链验证仍在本轮开放范围。
