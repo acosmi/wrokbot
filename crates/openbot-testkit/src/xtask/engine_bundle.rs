@@ -2,9 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,8 @@ const PRODUCT_NAME: &str = "Acosmi Engine Fixture";
 const PRODUCT_SLUG: &str = "AcosmiEngine";
 const BUNDLE_ID: &str = "com.acosmi.engine.fixture";
 const ASAR_BLOCK_SIZE: usize = 4 * 1024 * 1024;
+const CODESIGN_METADATA_LIMIT: usize = 64 * 1024;
+const CODESIGN_ENTITLEMENTS_LIMIT: usize = 16 * 1024;
 const FUSE_SENTINEL: &[u8] = b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX";
 const FUSE_VERSION: u8 = 1;
 const FUSE_WIRE: &[u8; 9] = b"000011001";
@@ -621,38 +623,209 @@ fn verify_fixture_signing(app: &Path) -> Result<()> {
     }
     let main = app.join(format!("Contents/MacOS/{PRODUCT_SLUG}"));
     for executable in std::iter::once(main).chain(macos_helpers(app)) {
-        let information = Command::new("/usr/bin/codesign")
-            .args(["-dv", "--verbose=4"])
-            .arg(&executable)
-            .output()?;
-        if !information.status.success() || information.stderr.len() > 64 * 1024 {
-            bail!("bounded codesign metadata failed");
-        }
-        let text = std::str::from_utf8(&information.stderr)?;
-        let flags = text
-            .lines()
-            .find(|line| line.starts_with("CodeDirectory "))
-            .and_then(|line| line.split_once("flags=0x"))
-            .and_then(|(_, rest)| rest.split_once('('))
-            .and_then(|(digits, _)| u64::from_str_radix(digits, 16).ok())
-            .context("CodeDirectory flags missing")?;
-        if flags & 0x10002 != 0x10002 {
-            bail!("fixture must be ad-hoc and hardened runtime");
-        }
-        let entitlements = Command::new("/usr/bin/codesign")
-            .args(["-d", "--entitlements", "-", "--xml"])
-            .arg(&executable)
-            .output()?;
-        if !entitlements.status.success() || entitlements.stdout.len() > 16 * 1024 {
-            bail!("bounded entitlement inspection failed");
-        }
-        let actual = plist::Value::from_reader_xml(entitlements.stdout.as_slice())
-            .context("parse fixture entitlements")?;
-        if actual != fixture_entitlements() {
-            bail!("fixture entitlement set differs from reviewed JIT/library-validation profile");
-        }
+        let information = fixture_codesign_output(
+            Command::new("/usr/bin/codesign")
+                .args(["-dv", "--verbose=4"])
+                .arg(&executable),
+            false,
+            CODESIGN_METADATA_LIMIT,
+        )?;
+        verify_fixture_metadata(&information)?;
+        let entitlements = fixture_codesign_output(
+            Command::new("/usr/bin/codesign")
+                .args(["-d", "--entitlements", "-", "--xml"])
+                .arg(&executable),
+            true,
+            CODESIGN_ENTITLEMENTS_LIMIT,
+        )?;
+        verify_fixture_entitlements(&entitlements)?;
     }
     Ok(())
+}
+
+fn verify_fixture_metadata(information: &Output) -> Result<()> {
+    if !information.status.success() || information.stderr.len() > CODESIGN_METADATA_LIMIT {
+        bail!("bounded codesign metadata failed");
+    }
+    let text = std::str::from_utf8(&information.stderr)?;
+    let flags = text
+        .lines()
+        .find(|line| line.starts_with("CodeDirectory "))
+        .and_then(|line| line.split_once("flags=0x"))
+        .and_then(|(_, rest)| rest.split_once('('))
+        .and_then(|(digits, _)| u64::from_str_radix(digits, 16).ok())
+        .context("CodeDirectory flags missing")?;
+    if flags & 0x10002 != 0x10002 {
+        bail!("fixture must be ad-hoc and hardened runtime");
+    }
+    Ok(())
+}
+
+fn verify_fixture_entitlements(entitlements: &Output) -> Result<()> {
+    if !entitlements.status.success() || entitlements.stdout.len() > CODESIGN_ENTITLEMENTS_LIMIT {
+        bail!("bounded entitlement inspection failed");
+    }
+    let actual = plist::Value::from_reader_xml(entitlements.stdout.as_slice())
+        .context("parse fixture entitlements")?;
+    if actual != fixture_entitlements() {
+        bail!("fixture entitlement set differs from reviewed JIT/library-validation profile");
+    }
+    Ok(())
+}
+
+// Fixture signing runs on macOS. The Unix collector mirrors Rust 1.98's stdout-first poll and
+// hard-read-error panic before wait, but retains only the parsed stream's existing limit + 1.
+#[cfg(unix)]
+fn fixture_codesign_output(
+    command: &mut Command,
+    retain_stdout: bool,
+    limit: usize,
+) -> io::Result<Output> {
+    use std::process::Stdio;
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().expect("requested stdout pipe");
+    let stderr = child.stderr.take().expect("requested stderr pipe");
+    collect_fixture_codesign_output(&mut child, stdout, stderr, retain_stdout, limit)
+}
+
+// No codesign maintenance is claimed for non-Unix hosts; their existing path stays unchanged.
+#[cfg(not(unix))]
+fn fixture_codesign_output(
+    command: &mut Command,
+    _retain_stdout: bool,
+    _limit: usize,
+) -> io::Result<Output> {
+    command.output()
+}
+
+#[cfg(unix)]
+fn collect_fixture_codesign_output(
+    child: &mut std::process::Child,
+    mut out: impl io::Read + std::os::fd::AsFd,
+    mut err: impl io::Read + std::os::fd::AsFd,
+    retain_stdout: bool,
+    limit: usize,
+) -> io::Result<Output> {
+    let (out_limit, err_limit) = if retain_stdout {
+        (limit + 1, 0)
+    } else {
+        (0, limit + 1)
+    };
+    let mut stdout = Vec::with_capacity(out_limit);
+    let mut stderr = Vec::with_capacity(err_limit);
+    let read_result = drain_fixture_codesign_pipes(
+        &mut out,
+        &mut stdout,
+        out_limit,
+        &mut err,
+        &mut stderr,
+        err_limit,
+    );
+    drop((out, err));
+    finish_fixture_codesign_output(read_result, stdout, stderr, || child.wait())
+}
+
+#[cfg(unix)]
+fn finish_fixture_codesign_output(
+    read_result: io::Result<()>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    wait: impl FnOnce() -> io::Result<std::process::ExitStatus>,
+) -> io::Result<Output> {
+    // Match Rust 1.98 Command::output: a hard read error panics and does not wait. A budget
+    // overflow is not a read error: both streams reach EOF before this exact Child is waited.
+    read_result.unwrap();
+    let status = wait()?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+#[cfg(unix)]
+fn drain_fixture_codesign_pipes(
+    out: &mut (impl io::Read + std::os::fd::AsFd),
+    stdout: &mut Vec<u8>,
+    out_limit: usize,
+    err: &mut (impl io::Read + std::os::fd::AsFd),
+    stderr: &mut Vec<u8>,
+    err_limit: usize,
+) -> io::Result<()> {
+    use rustix::event::{PollFd, PollFlags, poll};
+    set_fixture_pipe_nonblocking(&*out, true)?;
+    set_fixture_pipe_nonblocking(&*err, true)?;
+    loop {
+        let ready = {
+            let mut fds = [
+                PollFd::new(out, PollFlags::IN),
+                PollFd::new(err, PollFlags::IN),
+            ];
+            loop {
+                match poll(&mut fds, None) {
+                    Ok(_) => break,
+                    Err(rustix::io::Errno::INTR) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            // HUP can accompany buffered bytes; ERR/NVAL must reach read and its original
+            // error path. Only read returning zero establishes EOF.
+            [!fds[0].revents().is_empty(), !fds[1].revents().is_empty()]
+        };
+        if ready[0] && drain_fixture_codesign_reader(out, stdout, out_limit, true)? {
+            set_fixture_pipe_nonblocking(&*err, false)?;
+            return drain_fixture_codesign_reader(err, stderr, err_limit, false).map(|_| ());
+        }
+        if ready[1] && drain_fixture_codesign_reader(err, stderr, err_limit, true)? {
+            set_fixture_pipe_nonblocking(&*out, false)?;
+            return drain_fixture_codesign_reader(out, stdout, out_limit, false).map(|_| ());
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_fixture_pipe_nonblocking(pipe: &impl std::os::fd::AsFd, enabled: bool) -> io::Result<()> {
+    use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+
+    let old = fcntl_getfl(pipe)?;
+    let new = if enabled {
+        old | OFlags::NONBLOCK
+    } else {
+        old & !OFlags::NONBLOCK
+    };
+    if new != old {
+        fcntl_setfl(pipe, new)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn drain_fixture_codesign_reader(
+    reader: &mut impl io::Read,
+    retained: &mut Vec<u8>,
+    keep: usize,
+    nonblocking: bool,
+) -> io::Result<bool> {
+    let mut buffer = [0_u8; 8 * 1024];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => return Ok(true),
+            Ok(count) => {
+                let available = keep.saturating_sub(retained.len());
+                retained.extend_from_slice(&buffer[..count.min(available)]);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if nonblocking && error.kind() == io::ErrorKind::WouldBlock => {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn manifest(
@@ -994,6 +1167,403 @@ mod tests {
         FUSE_SENTINEL, FUSE_WIRE, WindowsAsarIntegrity, find_subslice, integrity, pickle_string,
         pickle_u32, windows_integrity_payload,
     };
+
+    #[cfg(unix)]
+    mod codesign_capture {
+        use std::io::{self, Cursor, Read, Write};
+        use std::os::fd::{AsFd, BorrowedFd};
+        use std::os::unix::process::ExitStatusExt as _;
+        use std::process::{Command, ExitStatus, Output, Stdio};
+
+        use super::super::{
+            CODESIGN_ENTITLEMENTS_LIMIT, CODESIGN_METADATA_LIMIT, collect_fixture_codesign_output,
+            drain_fixture_codesign_reader, finish_fixture_codesign_output, fixture_codesign_output,
+            fixture_entitlements, verify_fixture_entitlements, verify_fixture_metadata,
+        };
+
+        fn shell(script: &str) -> Command {
+            let mut command = Command::new("/bin/sh");
+            command
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .args(["-c", script]);
+            command
+        }
+
+        fn output(status: i32, stdout: Vec<u8>, stderr: Vec<u8>) -> Output {
+            Output {
+                status: ExitStatus::from_raw(status << 8),
+                stdout,
+                stderr,
+            }
+        }
+
+        #[test]
+        fn existing_metadata_boundary_and_rejections_precede_utf8_and_flags() {
+            let mut bytes = b"CodeDirectory flags=0x10002(adhoc,runtime)\n".to_vec();
+            bytes.resize(CODESIGN_METADATA_LIMIT, b' ');
+            verify_fixture_metadata(&output(0, vec![], bytes.clone())).expect("exact 64 KiB");
+            bytes.push(0xff);
+            assert_eq!(
+                verify_fixture_metadata(&output(0, vec![], bytes))
+                    .unwrap_err()
+                    .to_string(),
+                "bounded codesign metadata failed"
+            );
+            assert_eq!(
+                verify_fixture_metadata(&output(1, vec![], vec![0xff]))
+                    .unwrap_err()
+                    .to_string(),
+                "bounded codesign metadata failed"
+            );
+            assert!(verify_fixture_metadata(&output(0, vec![], vec![0xff])).is_err());
+            assert_eq!(
+                verify_fixture_metadata(&output(0, vec![], b"invalid".to_vec()))
+                    .unwrap_err()
+                    .to_string(),
+                "CodeDirectory flags missing"
+            );
+            assert_eq!(
+                verify_fixture_metadata(&output(
+                    0,
+                    vec![],
+                    b"CodeDirectory flags=0x2(adhoc)".to_vec()
+                ))
+                .unwrap_err()
+                .to_string(),
+                "fixture must be ad-hoc and hardened runtime"
+            );
+        }
+
+        #[test]
+        fn existing_entitlement_boundary_and_rejections_precede_plist() {
+            let mut bytes = Vec::new();
+            fixture_entitlements()
+                .to_writer_xml(&mut bytes)
+                .expect("fixture XML");
+            bytes.resize(CODESIGN_ENTITLEMENTS_LIMIT, b' ');
+            verify_fixture_entitlements(&output(0, bytes.clone(), vec![])).expect("exact 16 KiB");
+            bytes.push(0xff);
+            assert_eq!(
+                verify_fixture_entitlements(&output(0, bytes, vec![]))
+                    .unwrap_err()
+                    .to_string(),
+                "bounded entitlement inspection failed"
+            );
+            assert_eq!(
+                verify_fixture_entitlements(&output(1, vec![0xff], vec![]))
+                    .unwrap_err()
+                    .to_string(),
+                "bounded entitlement inspection failed"
+            );
+            assert_eq!(
+                verify_fixture_entitlements(&output(0, vec![0xff], vec![]))
+                    .unwrap_err()
+                    .to_string(),
+                "parse fixture entitlements"
+            );
+            let wrong = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict/></plist>";
+            assert_eq!(
+                verify_fixture_entitlements(&output(0, wrong.to_vec(), vec![]))
+                    .unwrap_err()
+                    .to_string(),
+                "fixture entitlement set differs from reviewed JIT/library-validation profile"
+            );
+        }
+
+        struct GrowingReader {
+            cursor: Cursor<Vec<u8>>,
+            growth: Option<Vec<u8>>,
+        }
+
+        impl Read for GrowingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if self.cursor.position() == self.cursor.get_ref().len() as u64
+                    && let Some(growth) = self.growth.take()
+                {
+                    self.cursor.get_mut().extend_from_slice(&growth);
+                }
+                self.cursor.read(buffer)
+            }
+        }
+
+        #[test]
+        fn retention_stops_at_existing_limit_plus_sentinel_while_growth_is_drained() {
+            for limit in [CODESIGN_METADATA_LIMIT, CODESIGN_ENTITLEMENTS_LIMIT] {
+                let mut reader = GrowingReader {
+                    cursor: Cursor::new(vec![b'a'; limit]),
+                    growth: Some(vec![b'b'; 1024 * 1024]),
+                };
+                let mut retained = Vec::with_capacity(limit + 1);
+                assert!(
+                    drain_fixture_codesign_reader(&mut reader, &mut retained, limit + 1, false)
+                        .unwrap()
+                );
+                assert_eq!(retained.len(), limit + 1);
+                assert_eq!(retained.capacity(), limit + 1);
+                assert_eq!(retained[limit], b'b');
+                assert_eq!(reader.cursor.position(), (limit + 1024 * 1024) as u64);
+                assert!(reader.growth.is_none());
+            }
+        }
+
+        #[test]
+        fn ignored_stream_keeps_no_bytes_but_reaches_eof() {
+            let mut reader = Cursor::new(vec![b'x'; 1024 * 1024]);
+            let mut retained = Vec::new();
+            assert!(drain_fixture_codesign_reader(&mut reader, &mut retained, 0, false).unwrap());
+            assert_eq!(reader.position(), 1024 * 1024);
+            assert_eq!(retained.len(), 0);
+            assert_eq!(retained.capacity(), 0);
+        }
+
+        struct InterruptedThenError {
+            interrupted: bool,
+            cursor: Cursor<Vec<u8>>,
+        }
+
+        impl Read for InterruptedThenError {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                if self.cursor.position() == self.cursor.get_ref().len() as u64 {
+                    return Err(io::Error::other("late read fault"));
+                }
+                self.cursor.read(buffer)
+            }
+        }
+
+        #[test]
+        fn interrupted_reads_retry_and_late_faults_are_preserved_after_overflow() {
+            let keep = CODESIGN_ENTITLEMENTS_LIMIT + 1;
+            let mut reader = InterruptedThenError {
+                interrupted: false,
+                cursor: Cursor::new(vec![b'x'; 2 * keep]),
+            };
+            let mut retained = Vec::with_capacity(keep);
+            let error =
+                drain_fixture_codesign_reader(&mut reader, &mut retained, keep, false).unwrap_err();
+            assert!(reader.interrupted);
+            assert_eq!(reader.cursor.position(), (2 * keep) as u64);
+            assert_eq!(retained.len(), keep);
+            assert_eq!(retained.capacity(), keep);
+            assert_eq!(error.to_string(), "late read fault");
+        }
+
+        #[test]
+        fn would_block_is_pending_only_while_pipe_is_nonblocking() {
+            struct WouldBlockReader;
+            impl Read for WouldBlockReader {
+                fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                    Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "read would block",
+                    ))
+                }
+            }
+
+            let mut retained = Vec::new();
+            assert!(
+                !drain_fixture_codesign_reader(&mut WouldBlockReader, &mut retained, 0, true)
+                    .unwrap()
+            );
+            let error =
+                drain_fixture_codesign_reader(&mut WouldBlockReader, &mut retained, 0, false)
+                    .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(error.to_string(), "read would block");
+            assert!(retained.is_empty());
+            let waited = std::cell::Cell::new(false);
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                finish_fixture_codesign_output(Err(error), vec![], vec![], || {
+                    waited.set(true);
+                    Ok(ExitStatus::from_raw(0))
+                })
+            }));
+            assert!(panic.is_err());
+            assert!(!waited.get());
+        }
+
+        #[test]
+        fn both_large_pipe_orders_are_drained_with_only_the_selected_prefix_retained() {
+            let first = "x".repeat(1024);
+            let second = "y".repeat(1024);
+            for stdout_first in [true, false] {
+                let redirections = if stdout_first {
+                    ["", " >&2"]
+                } else {
+                    [" >&2", ""]
+                };
+                let script = format!(
+                    "set -e; i=0; while [ \"$i\" -lt 2048 ]; do printf '%s' '{first}'{}; i=$((i + 1)); done; i=0; while [ \"$i\" -lt 2048 ]; do printf '%s' '{second}'{}; i=$((i + 1)); done; exit 23",
+                    redirections[0], redirections[1],
+                );
+                for retain_stdout in [true, false] {
+                    let limit = if retain_stdout {
+                        CODESIGN_ENTITLEMENTS_LIMIT
+                    } else {
+                        CODESIGN_METADATA_LIMIT
+                    };
+                    let captured =
+                        fixture_codesign_output(&mut shell(&script), retain_stdout, limit)
+                            .expect("both pipes drain without deadlock");
+                    assert_eq!(captured.status.code(), Some(23));
+                    let (retained, discarded) = if retain_stdout {
+                        (&captured.stdout, &captured.stderr)
+                    } else {
+                        (&captured.stderr, &captured.stdout)
+                    };
+                    assert_eq!(retained.len(), limit + 1);
+                    assert_eq!(retained.capacity(), limit + 1);
+                    let expected = if retain_stdout == stdout_first {
+                        b'x'
+                    } else {
+                        b'y'
+                    };
+                    assert!(retained.iter().all(|byte| *byte == expected));
+                    assert_eq!(discarded.len(), 0);
+                    assert_eq!(discarded.capacity(), 0);
+                }
+            }
+        }
+
+        #[test]
+        fn overflow_waits_original_child_even_when_both_pipes_close_before_exit() {
+            let script = "printf '%s' overflow; printf '%s' discarded >&2; exec 1>&- 2>&-; sleep 0.05; exit 29";
+            let mut child = shell(script)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("owned child");
+            let pid = child.id();
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let captured = collect_fixture_codesign_output(&mut child, stdout, stderr, true, 3)
+                .expect("wait original child after both EOFs");
+            assert_eq!(captured.stdout, b"over");
+            assert!(captured.stderr.is_empty());
+            assert_eq!(captured.status.code(), Some(29));
+            assert_eq!(child.id(), pid);
+            assert_eq!(child.try_wait().unwrap(), Some(captured.status));
+            assert_eq!(child.wait().unwrap(), captured.status);
+        }
+
+        #[test]
+        fn hup_with_buffered_bytes_is_read_before_eof_and_wait() {
+            for retain_stdout in [true, false] {
+                let mut child = shell("exit 0")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("owned child");
+                let (stdout, mut stdout_writer) = io::pipe().unwrap();
+                let (stderr, mut stderr_writer) = io::pipe().unwrap();
+                stdout_writer.write_all(b"stdout tail").unwrap();
+                stderr_writer.write_all(b"stderr tail").unwrap();
+                drop((stdout_writer, stderr_writer));
+                let captured =
+                    collect_fixture_codesign_output(&mut child, stdout, stderr, retain_stdout, 64)
+                        .expect("read buffered data even with writers closed");
+                assert!(captured.status.success());
+                if retain_stdout {
+                    assert_eq!(captured.stdout, b"stdout tail");
+                    assert!(captured.stderr.is_empty());
+                } else {
+                    assert_eq!(captured.stderr, b"stderr tail");
+                    assert!(captured.stdout.is_empty());
+                }
+            }
+        }
+
+        struct ReadFault<R> {
+            reader: R,
+            message: &'static str,
+        }
+
+        impl<R: AsFd> AsFd for ReadFault<R> {
+            fn as_fd(&self) -> BorrowedFd<'_> {
+                self.reader.as_fd()
+            }
+        }
+
+        impl<R> Read for ReadFault<R> {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other(self.message))
+            }
+        }
+
+        #[test]
+        fn hard_read_fault_panics_stdout_first_before_wait_without_retry() {
+            let mut child = shell("read ignored; exit 27")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("owned child");
+            let (stdout, mut stdout_writer) = io::pipe().unwrap();
+            let (stderr, mut stderr_writer) = io::pipe().unwrap();
+            stdout_writer.write_all(b"out").unwrap();
+            stderr_writer.write_all(b"err").unwrap();
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                collect_fixture_codesign_output(
+                    &mut child,
+                    ReadFault {
+                        reader: stdout,
+                        message: "stdout read fault",
+                    },
+                    ReadFault {
+                        reader: stderr,
+                        message: "stderr read fault",
+                    },
+                    false,
+                    CODESIGN_METADATA_LIMIT,
+                )
+            }));
+            let before_wait = child.try_wait().unwrap();
+            drop(child.stdin.take());
+            let cleaned = child.wait().expect("clean up original owned child");
+            let payload = panic.expect_err("original hard-read panic");
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap();
+            assert!(message.contains("stdout read fault"), "{message}");
+            assert_eq!(before_wait, None);
+            assert_eq!(cleaned.code(), Some(27));
+        }
+
+        #[test]
+        fn successful_reads_preserve_wait_error_and_read_fault_precedes_wait_error() {
+            let wait_error = finish_fixture_codesign_output(Ok(()), vec![], vec![], || {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "wait fault",
+                ))
+            })
+            .unwrap_err();
+            assert_eq!(wait_error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(wait_error.to_string(), "wait fault");
+            let called = std::cell::Cell::new(false);
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                finish_fixture_codesign_output(
+                    Err(io::Error::other("read fault")),
+                    vec![],
+                    vec![],
+                    || {
+                        called.set(true);
+                        Err(io::Error::other("wait fault"))
+                    },
+                )
+            }));
+            assert!(panic.is_err());
+            assert!(!called.get());
+        }
+    }
 
     #[test]
     fn manifest_inventory_requires_helpers_and_fixed_launch_paths_before_file_reads() {

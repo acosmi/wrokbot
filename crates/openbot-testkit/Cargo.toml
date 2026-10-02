@@ -69,7 +69,7 @@ image = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # Only repository review commands; no product runtime dependency is introduced.
-rustix = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true, features = ["event"] }
 
 [target.'cfg(windows)'.dependencies]
 # `engine bundle` writes and re-reads the official ElectronAsar/Integrity PE resource through the
