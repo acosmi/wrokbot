@@ -83,7 +83,7 @@
 | V6-PR-069 | helper PG_VERSION的16字节规则在读取中执行，复核已打开句柄与路径 | 主控定向及严格Clippy已验；最终组合验收与集成事实见PR | [#87](https://github.com/acosmi/wrokbot/pull/87) | [PR合并记录](https://github.com/acosmi/wrokbot/pull/87) |
 | V6-PR-070 | 真实PG审批组合测试夹具的单语句时间 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#88](https://github.com/acosmi/wrokbot/pull/88) | 以PR实际合并状态为准 |
 | V6-PR-071 | 取消测试的启动阶段观察预算 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#89](https://github.com/acosmi/wrokbot/pull/89) | 以PR实际合并状态为准 |
-| V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 本地通过；未发布 | 无 | 未合入 |
+| V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 当前055主线整合后默认lib86/86、严格Clippy与fmt实测通过；待主控发布合入 | 无 | 未合入 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -301,3 +301,5 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 ## V6-PR-072 整合当前已合主线
 
 2026-10-02：正常合入已发布并合并的055主线 `8f7f75f4faa549472e0fcb343278ed343554712d`；仅解本台账冲突，保留055、065–068状态及原失败历史。三个UI文件属于已合主线基线；072产品差量仍只为既有preferences有界读取，源码与原交付逐字节一致。以上旧候选和发布等待记录保留为历史；当前发布授权已由主控接收，远端动作由主控统一完成。新基线受影响检查以本轮真实回执为准，不能将旧计数直接继承为新HEAD实测。
+
+2026-10-02 本轮实测：干净检查候选 `44f2ece2080ac146f04ab18f187ad8884247a139`（tree `476507cef65142ee0db62cae2ba367a689a65bad`，基底 `8f7f75f4faa549472e0fcb343278ed343554712d`）在固定Rust 1.98.0、独立target、offline/locked下，实际执行默认 `openbot-desktop --lib`：86 passed、0 failed、0 ignored、0 measured、0 filtered；默认all-targets严格Clippy（`-D warnings`）与workspace fmt check均退出0。未开启额外feature、未运行PG、Keychain、native probe、TTY或全仓测试。最终登记仅改台账；完整tracked树除台账与已检查候选逐字节一致，故精确引用以上本轮回执，不冒充在登记后HEAD重新运行。上述局部开发检查不代表A1、A0–A7、M0或full_v6通过。
