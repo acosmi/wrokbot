@@ -9,7 +9,7 @@
 use core::time::Duration;
 
 use async_trait::async_trait;
-use deadpool_postgres::{GenericClient, Pool};
+use deadpool_postgres::Pool;
 use openbot_application::{
     ToolDecisionDraft, ToolJournal, ToolOutcomeDraft, ToolPortError, ToolRefusalDraft,
 };
@@ -25,6 +25,8 @@ use crate::db::InfraError;
 use crate::db::tables::{tool_attempts, tool_calls};
 use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 use crate::repo::common::{RepoCore, columns_sql, insert_sql};
+
+mod fence;
 
 /// 首次 decision 事务的两行输入。
 #[derive(Clone, Debug, PartialEq)]
@@ -82,9 +84,13 @@ impl ToolCallRepo {
             InfraError::connect("为 ToolCallRepo 获取 decision 事务连接", source)
         })?;
         let transaction = client
-            .transaction()
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
             .await
             .map_err(|source| InfraError::query("开始 durable tool decision 事务", source))?;
+        fence::initialize(&transaction).await?;
+        fence::decision(&transaction, &decision.call).await?;
 
         let call_params = decision.call.as_sql_params();
         transaction
@@ -171,7 +177,28 @@ impl ToolAttemptRepo {
         attempt: &tool_attempts::Row,
     ) -> Result<tool_attempts::Row, InfraError> {
         validate_pristine_attempt(attempt)?;
-        self.core.insert(attempt).await
+        let mut client = self.core.pool().get().await.map_err(|source| {
+            InfraError::connect("为 ToolAttemptRepo 写 retry 获取连接", source)
+        })?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| InfraError::query("开始 tool retry 事务", error))?;
+        fence::initialize(&transaction).await?;
+        fence::call(&transaction, &attempt.tool_call_id).await?;
+        let params = attempt.as_sql_params();
+        let row = transaction
+            .query_one(&insert_sql::<tool_attempts::Row>(), &params)
+            .await
+            .map_err(|error| InfraError::query("写 durable retry attempt", error))?;
+        let row = tool_attempts::Row::try_from(&row)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| InfraError::query("提交 tool retry 事务", error))?;
+        Ok(row)
     }
 
     /// 按复合主键读取。
@@ -212,20 +239,36 @@ impl ToolAttemptRepo {
              RETURNING {}",
             columns_sql::<tool_attempts::Row>(),
         );
-        let client = self.core.pool().get().await.map_err(|source| {
+        let mut client = self.core.pool().get().await.map_err(|source| {
             InfraError::connect("为 ToolAttemptRepo 绑定 capability 获取连接", source)
         })?;
-        let row = client
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| InfraError::query("开始 tool capability 事务", error))?;
+        fence::initialize(&transaction).await?;
+        fence::call(&transaction, tool_call_id).await?;
+        if fence::attempt_sequence(&transaction, tool_call_id, attempt_seq)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let row = transaction
             .query_opt(
                 &sql,
                 &[&tool_call_id, &attempt_seq, &capability_id, &started_at],
             )
             .await
             .map_err(|source| InfraError::query("绑定 tool capability", source))?;
-        row.as_ref()
-            .map(tool_attempts::Row::try_from)
-            .transpose()
-            .map_err(Into::into)
+        let result = row.as_ref().map(tool_attempts::Row::try_from).transpose()?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| InfraError::query("提交 tool capability 事务", error))?;
+        Ok(result)
     }
 
     /// 记录执行 outcome；capability 必须与 executing 行逐字相等。
@@ -236,10 +279,39 @@ impl ToolAttemptRepo {
         capability_id: &str,
         outcome: &PersistedToolOutcome,
     ) -> Result<Option<tool_attempts::Row>, InfraError> {
-        let client = self.core.pool().get().await.map_err(|source| {
+        let mut client = self.core.pool().get().await.map_err(|source| {
             InfraError::connect("为 ToolAttemptRepo 写 outcome 获取连接", source)
         })?;
-        record_outcome_on(&client, tool_call_id, attempt_seq, capability_id, outcome).await
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| InfraError::query("开始低层 tool outcome 事务", error))?;
+        fence::initialize(&transaction).await?;
+        let call = fence::call(&transaction, tool_call_id).await?;
+        if call.call.tool_name == "remember" {
+            return Err(fence::conflict());
+        }
+        if fence::attempt_sequence(&transaction, tool_call_id, attempt_seq)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let result = record_outcome_on(
+            &transaction,
+            tool_call_id,
+            attempt_seq,
+            capability_id,
+            outcome,
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| InfraError::query("提交低层 tool outcome 事务", error))?;
+        Ok(result)
     }
 }
 
@@ -318,7 +390,12 @@ impl ToolJournal for PostgresToolJournal {
         ToolCallRepo::new(self.pool.clone())
             .record_first_decision(&decision)
             .await
-            .map_err(infra_port_error)
+            .map_err(|error| match error {
+                InfraError::RepositoryInvariant {
+                    code: "tool_approval_binding_not_current",
+                } => ToolPortError::Conflict,
+                error => journal_write_error(error),
+            })
     }
 
     async fn attach_capability(
@@ -334,7 +411,7 @@ impl ToolJournal for PostgresToolJournal {
                 OffsetDateTime::now_utc(),
             )
             .await
-            .map_err(infra_port_error)?;
+            .map_err(journal_write_error)?;
         row.map(|_| ()).ok_or(ToolPortError::Conflict)
     }
 
@@ -350,24 +427,31 @@ impl ToolJournal for PostgresToolJournal {
             finished_at: OffsetDateTime::now_utc(),
         };
         let mut client = self.pool.get().await.map_err(pool_port_error)?;
-        let transaction = if draft.decision.metadata.name.as_str() == "remember" {
-            // A producer may commit while the first actor lock waits. The following receipt
-            // statement must see that commit even when the pool session defaults to RR.
-            client
-                .build_transaction()
-                .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
-                .start()
-                .await
-        } else {
-            client.transaction().await
-        }
-        .map_err(|error| {
-            infra_port_error(InfraError::query("开始 tool outcome/audit 事务", error))
-        })?;
-        let attempt_seq = if draft.decision.metadata.name.as_str() == "remember" {
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| {
+                infra_port_error(InfraError::query("开始 tool outcome/audit 事务", error))
+            })?;
+        let remember = draft.decision.metadata.name.as_str() == "remember";
+        let attempt_seq = if remember {
+            // This guard's first statement sets lock_timeout. Never acquire a run lock before
+            // entering its actor-first producer-compatible lock order.
             crate::memory_admin::remember_effect::guard_outcome(&transaction, draft).await?
         } else {
-            0
+            fence::initialize(&transaction)
+                .await
+                .map_err(journal_write_error)?;
+            fence::outcome(&transaction, draft)
+                .await
+                .map_err(journal_write_error)?
+        };
+        let map_write_error: fn(InfraError) -> ToolPortError = if remember {
+            infra_port_error
+        } else {
+            journal_write_error
         };
         let row = record_outcome_on(
             &transaction,
@@ -377,7 +461,7 @@ impl ToolJournal for PostgresToolJournal {
             &persisted,
         )
         .await
-        .map_err(infra_port_error)?;
+        .map_err(map_write_error)?;
         if row.is_none() {
             return Err(ToolPortError::Conflict);
         }
@@ -389,7 +473,16 @@ impl ToolJournal for PostgresToolJournal {
             &self.checkpoint_key,
         )
         .await
-        .map_err(infra_port_error)?;
+        .map_err(|error| {
+            if remember {
+                infra_port_error(error)
+            } else {
+                tracing::error!(error = %error, "generic tool outcome audit 失败");
+                ToolPortError::Unavailable {
+                    dependency: "database",
+                }
+            }
+        })?;
         transaction
             .commit()
             .await
@@ -446,8 +539,8 @@ fn first_decision_rows(draft: &ToolDecisionDraft) -> Result<FirstDurableDecision
     })
 }
 
-async fn record_outcome_on<C: GenericClient + Sync>(
-    client: &C,
+async fn record_outcome_on(
+    client: &tokio_postgres::Transaction<'_>,
     tool_call_id: &str,
     attempt_seq: i64,
     capability_id: &str,
@@ -569,6 +662,34 @@ fn infra_port_error(error: InfraError) -> ToolPortError {
         | InfraError::NativeMigration(_) => ToolPortError::Unavailable {
             dependency: "database",
         },
+    }
+}
+
+// Only these write-site conflicts are expected. Audit errors continue through infra_port_error;
+// sharing this mapper with audit would incorrectly classify an unrelated unique violation.
+fn journal_write_error(error: InfraError) -> ToolPortError {
+    let expected = match &error {
+        InfraError::RepositoryInvariant { code } => *code == fence::CONFLICT,
+        InfraError::Query { source, .. } => {
+            source.sqlstate() == Some("23505")
+                && matches!(
+                    source.constraint(),
+                    Some(
+                        "tool_calls_pkey"
+                            | "tool_calls_run_call_seq_key"
+                            | "tool_calls_decision_id_key"
+                            | "tool_attempts_pkey"
+                            | "tool_attempts_attempt_id_key"
+                            | "tool_attempts_capability_id_key"
+                    )
+                )
+        }
+        _ => false,
+    };
+    if expected {
+        ToolPortError::Conflict
+    } else {
+        infra_port_error(error)
     }
 }
 
