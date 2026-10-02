@@ -241,7 +241,7 @@ async fn send(
             no_secret(value)?;
         }
     }
-    if status.is_success() {
+    if status.is_success() || status == StatusCode::CONFLICT {
         require(
             response
                 .headers()
@@ -635,7 +635,28 @@ async fn journey(
     require(third != second, "key-only rotation reused envelope")?;
     replacement["apiKey"] = json!(KEY_REJECTED);
     let before = snapshot(pool).await?;
-    send(
+    for method in [Method::PUT, Method::DELETE] {
+        let body = if method == Method::PUT {
+            update_body(&created)
+        } else {
+            json!({"expectedRevision":1})
+        };
+        let denied = send(
+            router,
+            method,
+            &path,
+            BOB_COOKIE,
+            Some(ORIGIN),
+            Some(body.to_string()),
+            StatusCode::NOT_FOUND,
+        )
+        .await?;
+        require(
+            denied == json!({"code":"not_visible"}),
+            "another actor received current revision metadata",
+        )?;
+    }
+    let stale_update = send(
         router,
         Method::PUT,
         &path,
@@ -645,7 +666,7 @@ async fn journey(
         StatusCode::CONFLICT,
     )
     .await?;
-    send(
+    let stale_delete = send(
         router,
         Method::DELETE,
         &path,
@@ -655,6 +676,24 @@ async fn journey(
         StatusCode::CONFLICT,
     )
     .await?;
+    let expected_snapshot = openbot_contracts::revision::RevisionSnapshot::from_public(
+        4,
+        serde_json::from_value::<openbot_contracts::model_connections::ModelConnection>(
+            key_only.clone(),
+        )
+        .map_err(|e| e.to_string())?
+        .updated_at,
+        &key_only,
+    )
+    .map_err(|e| e.to_string())?;
+    require(
+        stale_update == serde_json::to_value(expected_snapshot).map_err(|e| e.to_string())?,
+        "stale update did not return the exact closed current snapshot",
+    )?;
+    require(
+        stale_delete == stale_update,
+        "stale delete returned a different current snapshot",
+    )?;
     require(
         snapshot(pool).await? == before,
         "stale CAS left a metadata/key/audit effect",
