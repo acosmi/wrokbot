@@ -1526,6 +1526,8 @@ impl FixtureMemory {
                 };
                 MemoryRecord {
                     memory_id: format!("memory-{index:02}"),
+                    source_run_id: None,
+                    source_authorization_snapshot: None,
                     owner_user_id: actor.as_str().to_owned(),
                     scope,
                     memory_kind,
