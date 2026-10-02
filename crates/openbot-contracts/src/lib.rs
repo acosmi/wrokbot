@@ -90,6 +90,7 @@ pub mod memory;
 pub mod model_connections;
 pub mod people;
 pub mod policy;
+pub mod reconciliation;
 pub mod remote_interrupt;
 pub mod sandboxed;
 pub mod screen;

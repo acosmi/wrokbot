@@ -152,9 +152,9 @@ pub use ports::{
     NoPeopleAdministration, NoPolicyAdministration, NoThreadDirectory,
     OwnedCredentialRetirementError, OwnedCredentialRetirer, PeopleAdministration,
     PeoplePageRequest, PeoplePortError, PolicyAdministration, PolicyAdministrationError, PortError,
-    RecallMemoriesRequest, RememberMemoryRequest, RoutingAuditRecord, ThreadConversationRequest,
-    ThreadDirectory, ThreadDirectoryError, ThreadEventSubscription, ThreadHistoryRequest,
-    UpdateMemoryControlRequest,
+    RecallMemoriesRequest, RememberMemoryRequest, RoutingAuditRecord, RunReconciliationRequest,
+    ThreadConversationRequest, ThreadDirectory, ThreadDirectoryError, ThreadEventSubscription,
+    ThreadHistoryRequest, UpdateMemoryControlRequest,
 };
 pub use provider::{
     AgentAudit, AgentAuditError, AgentAuditKind, AgentAuthorizationError, AgentAuthorizationSource,

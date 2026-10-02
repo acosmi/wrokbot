@@ -776,6 +776,22 @@ where
             AppCommand::GetThreadConversation { thread_id } => Ok(AppReply::ThreadConversation(
                 get_thread_conversation(&self.threads, auth, thread_id).await?,
             )),
+            AppCommand::GetRunReconciliation {
+                thread_id,
+                run_id,
+                after,
+                limit,
+            } => Ok(AppReply::RunReconciliation(
+                crate::use_cases::thread::get_run_reconciliation(
+                    &self.threads,
+                    auth,
+                    thread_id,
+                    run_id,
+                    after,
+                    limit,
+                )
+                .await?,
+            )),
             AppCommand::ListPendingRemoteInterrupts => Ok(AppReply::PendingRemoteInterrupts(
                 list_pending_remote_interrupts(self.remote_interrupts.as_ref(), auth).await?,
             )),

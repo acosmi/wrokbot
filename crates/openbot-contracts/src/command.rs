@@ -400,6 +400,18 @@ pub enum AppCommand {
         thread_id: ThreadId,
     },
 
+    /// 读取当前 actor 拥有的 Unknown run 的持久事实；不解除占用或重试效果。
+    GetRunReconciliation {
+        /// 原 thread 身份。
+        thread_id: ThreadId,
+        /// 原 opaque run 身份。
+        run_id: RunId,
+        /// 原 run 内的分页位置，不携带权限。
+        after: Option<crate::reconciliation::RunReconciliationCursor>,
+        /// 省略为50，显式1–100。
+        limit: Option<u32>,
+    },
+
     /// List current-actor pending remote AG-UI interrupts.
     ListPendingRemoteInterrupts,
 
@@ -646,6 +658,8 @@ pub enum AppReply {
     ThreadRunCancellation(ThreadRunCancellation),
     /// [`AppCommand::GetThreadHistory`] 的应答。
     ThreadHistory(ThreadHistory),
+    /// Unknown run 的受权只读事实页。
+    RunReconciliation(crate::reconciliation::RunReconciliationSnapshot),
     /// [`AppCommand::GetThreadConversation`] response.
     ThreadConversation(ThreadConversationSnapshot),
     /// [`AppCommand::ListPendingRemoteInterrupts`] response.
