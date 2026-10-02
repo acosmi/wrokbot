@@ -1,6 +1,6 @@
 # Wrok Bot 后端实施台账
 
-更新时间：2026-10-02。补充075的remember同事务业务回执、受权读取与局部验证；074已正常合入，此前集成事实、历次实施和实测记录保留。
+更新时间：2026-10-02。075的remember同事务业务回执、受权读取已通过精确候选独立复核并提交PR #96；074已正常合入，此前集成事实、历次实施和实测记录保留。
 
 001–047 已核实为 main 祖先。换机主控已亲读、实测并正常合入049、050、051、052、053、056、057、058及重建060/061、新增必要维护063/064；055、072、073也已按PR及main祖先事实核实合入。048、054保留开放候选，059/062未完成，不能继续用旧待批准记录替代当前合同及实际检查状态。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。下方历次检查点是历史记录，当前状态以任务表及本轮最终结论为准。
 
@@ -87,7 +87,7 @@
 | V6-PR-073 | Unix诊断fixture codesign输出有界保留 | 已正常合入；原局部16/16、xtask严格Clippy及fmt实测记录保留 | [#93](https://github.com/acosmi/wrokbot/pull/93) | [09df8854e0](https://github.com/acosmi/wrokbot/commit/09df8854e06e6b145de16454fd684a670d766e85) |
 | 原任务审计修复 | OAuth单次刷新、Provider内容检查、TLS准入、最终帧与验收工具 | 具体修复已完成定向验证与独立复核；集成状态以PR记录为准，未新增任务编号 | [#94](https://github.com/acosmi/wrokbot/pull/94) | 见PR合并记录 |
 | V6-PR-074 | Unknown原run的受权持久事实只读分页；Server/Desktop接入 | 已正常合入；原局部验证和独立复核记录保留 | [#95](https://github.com/acosmi/wrokbot/pull/95) | [8ef3188bfb](https://github.com/acosmi/wrokbot/commit/8ef3188bfb2b789d8a5f4a670fda574ab7c57154) |
-| V6-PR-075 | remember同事务业务回执、后置结果防矛盾及受权只读页 | 本地定向验证通过；最终候选独立复核及PR待完成 | 待登记 | 待合入 |
+| V6-PR-075 | remember同事务业务回执、后置结果防矛盾及受权只读页 | 精确源码候选独立复核通过；集成状态以PR实际记录为准 | [#96](https://github.com/acosmi/wrokbot/pull/96) | 见PR合并记录 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -352,4 +352,6 @@ Contracts WASM检查、核心all-targets严格Clippy、Infra/Server/Agent及Desk
 
 核心及受影响目标严格Clippy、Contracts WASM、Standalone Desktop launcher、全仓fmt和两项既有装配守卫通过。每项保存原始输出、输入清单和工具链/feature边界；早期输入遗漏已以完整工作树清单复验，lib结果只按未变实际编译依赖引用。测试类型、无效lease/异run夹具、锁等待链、敏感列漏登记及Clippy诊断的失败原记录保留，修正后重验，不把旧失败改写成通过。所有自有PG实例均实际stop等待成功；只用合成数据，不涉及用户数据库、备份、Keychain或TTY。
 
-当前为提交前局部验证事实，最终独立复核及集成状态待本项PR登记。未运行完整CI或手动派发Actions。处置/CAS、解除Unknown占用、安全后续run、通用vendor事实、完整恢复/A6及其余全量范围仍未完成，A0–A7没有因本项新增完整通过声明。
+最终源码候选 `6d12684d8ffe430b4bfc2b5ee0f878f0b0464c9c`（tree `af9a3ead09e27a9f0f2d5dd573d5d2e7fa60b88b`，base `8ef3188bfb2b789d8a5f4a670fda574ab7c57154`）已完成独立实施与原始证据复核，13项最终记录、1162个不同通过用例及44项验收矩阵核同，无阻断项。此后仅登记公开台账，产品与构建输入保持；最终HEAD和实际集成事实见[PR #96](https://github.com/acosmi/wrokbot/pull/96)。
+
+未运行完整CI或手动派发Actions；正常合并可能触发现有自动通知工作流，通知不是产品验证。处置/CAS、解除Unknown占用、安全后续run、通用vendor事实、完整恢复/A6及其余全量范围仍未完成，A0–A7没有因本项新增完整通过声明。
