@@ -234,7 +234,14 @@ enum ThreadRoute<'a> {
     Reconciliation {
         raw_thread_id: &'a str,
         raw_run_id: &'a str,
+        kind: ReconciliationRead,
     },
+}
+
+#[derive(Clone, Copy)]
+enum ReconciliationRead {
+    Attempts,
+    Receipts,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,6 +323,20 @@ fn thread_route(path: &str) -> Option<ThreadRoute<'_>> {
             Some(ThreadRoute::Reconciliation {
                 raw_thread_id,
                 raw_run_id,
+                kind: ReconciliationRead::Attempts,
+            })
+        }
+        [
+            raw_thread_id,
+            "runs",
+            raw_run_id,
+            "reconciliation",
+            "receipts",
+        ] if !raw_thread_id.is_empty() && !raw_run_id.is_empty() => {
+            Some(ThreadRoute::Reconciliation {
+                raw_thread_id,
+                raw_run_id,
+                kind: ReconciliationRead::Receipts,
             })
         }
         _ => None,
@@ -760,10 +781,11 @@ impl DesktopTauriProtocol {
             if let ThreadRoute::Reconciliation {
                 raw_thread_id,
                 raw_run_id,
+                kind,
             } = route
             {
                 return self
-                    .run_reconciliation(label, request, authority, raw_thread_id, raw_run_id)
+                    .run_reconciliation(label, request, authority, raw_thread_id, raw_run_id, kind)
                     .await;
             }
             return self.thread_unary(request, authority, route).await;
@@ -1575,6 +1597,7 @@ impl DesktopTauriProtocol {
         authority: WindowAuthority,
         raw_thread_id: &str,
         raw_run_id: &str,
+        kind: ReconciliationRead,
     ) -> Response<Vec<u8>> {
         if request.method() != Method::GET {
             request.body_mut().fill(0);
@@ -1600,32 +1623,46 @@ impl DesktopTauriProtocol {
         if let Err(error) = self.reconciliation_binding_current(label, &authority) {
             return error_response(error);
         }
+        let thread_id = ThreadId::new(thread_id);
+        let run_id = RunId::new(run_id);
+        let command = match kind {
+            ReconciliationRead::Attempts => AppCommand::GetRunReconciliation {
+                thread_id,
+                run_id,
+                after,
+                limit,
+            },
+            ReconciliationRead::Receipts => AppCommand::GetRunEffectReceipts {
+                thread_id,
+                run_id,
+                after,
+                limit,
+            },
+        };
         let outcome = self
             .transport
-            .execute(
-                authority.auth.clone(),
-                AppCommand::GetRunReconciliation {
-                    thread_id: ThreadId::new(thread_id),
-                    run_id: RunId::new(run_id),
-                    after,
-                    limit,
-                },
-            )
+            .execute(authority.auth.clone(), command)
             .await;
         // A label can be closed and recreated while the shared Application is reading.
         // Never deliver the old authority's snapshot (or error) to its replacement.
         if let Err(error) = self.reconciliation_binding_current(label, &authority) {
             return error_response(error);
         }
-        match outcome {
-            Ok(AppReply::RunReconciliation(snapshot)) => match serde_json::to_vec(&snapshot) {
-                Ok(body) if body.len() <= MAX_RUN_RECONCILIATION_RESPONSE_BYTES => {
-                    response(StatusCode::OK, "application/json", body, true)
-                }
-                _ => dependency_response(),
-            },
-            Ok(_) => dependency_response(),
-            Err(error) => error_response(error),
+        let body = match (kind, outcome) {
+            (ReconciliationRead::Attempts, Ok(AppReply::RunReconciliation(snapshot))) => {
+                serde_json::to_vec(&snapshot)
+            }
+            (ReconciliationRead::Receipts, Ok(AppReply::RunEffectReceipts(snapshot))) => {
+                serde_json::to_vec(&snapshot)
+            }
+            (_, Ok(_)) => return dependency_response(),
+            (_, Err(error)) => return error_response(error),
+        };
+        match body {
+            Ok(body) if body.len() <= MAX_RUN_RECONCILIATION_RESPONSE_BYTES => {
+                response(StatusCode::OK, "application/json", body, true)
+            }
+            _ => dependency_response(),
         }
     }
 
@@ -3118,6 +3155,7 @@ mod tests {
     };
     use openbot_contracts::people::{CurrentUser, PeoplePage, Person};
     use openbot_contracts::reconciliation::{
+        RunEffectReceipt, RunEffectReceiptFact, RunEffectReceiptsSnapshot,
         RunReconciliationAttempt, RunReconciliationAttemptStatus, RunReconciliationCursor,
         RunReconciliationSnapshot, RunReconciliationStatus,
     };
@@ -3202,9 +3240,64 @@ mod tests {
             if let Some(error) = &self.error {
                 return Err(error.clone());
             }
-            if self.wrong_reply {
-                return Ok(AppReply::Health(openbot_contracts::command::HealthReport {
-                    ok: true,
+            // Similar snapshot envelopes do not make the sibling read reply interchangeable.
+            let command = if self.wrong_reply {
+                match command {
+                    AppCommand::GetRunReconciliation {
+                        thread_id,
+                        run_id,
+                        after,
+                        limit,
+                    } => AppCommand::GetRunEffectReceipts {
+                        thread_id,
+                        run_id,
+                        after,
+                        limit,
+                    },
+                    AppCommand::GetRunEffectReceipts {
+                        thread_id,
+                        run_id,
+                        after,
+                        limit,
+                    } => AppCommand::GetRunReconciliation {
+                        thread_id,
+                        run_id,
+                        after,
+                        limit,
+                    },
+                    _ => panic!("only closed reconciliation reads are admitted"),
+                }
+            } else {
+                command
+            };
+            if let AppCommand::GetRunEffectReceipts {
+                thread_id, run_id, ..
+            } = &command
+            {
+                return Ok(AppReply::RunEffectReceipts(RunEffectReceiptsSnapshot {
+                    thread_id: thread_id.clone(),
+                    run_id: run_id.clone(),
+                    status: RunReconciliationStatus::ReconciliationRequired,
+                    terminal_event_sequence: 12,
+                    observed_at: time::OffsetDateTime::UNIX_EPOCH,
+                    foreground_blocked: true,
+                    receipts: vec![
+                        RunEffectReceipt {
+                            receipt_id: "550e8400-e29b-41d4-a716-446655440077".into(),
+                            tool_call_id: "internal-call".into(),
+                            call_sequence: 7,
+                            attempt_id: "internal-attempt".into(),
+                            attempt_sequence: 2,
+                            fact: RunEffectReceiptFact::MemoryCreated,
+                            recorded_at: time::OffsetDateTime::UNIX_EPOCH,
+                        };
+                        if self.oversized { 2000 } else { 1 }
+                    ],
+                    next: Some(RunReconciliationCursor {
+                        call_sequence: 7,
+                        attempt_sequence: 2,
+                    }),
+                    available_actions: [],
                 }));
             }
             let AppCommand::GetRunReconciliation {
@@ -3257,10 +3350,11 @@ mod tests {
         (protocol, root)
     }
 
-    fn reconciliation_request(run: &str, query: &str) -> Request<Vec<u8>> {
+    fn reconciliation_request(receipts: bool, run: &str, query: &str) -> Request<Vec<u8>> {
+        let suffix = if receipts { "/receipts" } else { "" };
         Request::builder()
             .uri(format!(
-                "/api/threads/550e8400-e29b-81d4-a716-446655440001/runs/{run}/reconciliation{query}"
+                "/api/threads/550e8400-e29b-81d4-a716-446655440001/runs/{run}/reconciliation{suffix}{query}"
             ))
             .body(Vec::new())
             .unwrap()
@@ -3277,239 +3371,284 @@ mod tests {
 
     #[tokio::test]
     async fn reconciliation_maps_shared_command_and_decodes_opaque_run_exactly_once() {
-        let service = Arc::new(ReconciliationService::default());
-        let (protocol, root) = reconciliation_protocol(service.clone());
-        for (encoded, decoded) in [
-            ("legacy%2Frun", "legacy/run"),
-            ("legacy%252Frun", "legacy%2Frun"),
-            ("%E8%BF%90%E8%A1%8C%25", "运行%"),
-        ] {
+        for receipts in [false, true] {
+            let service = Arc::new(ReconciliationService::default());
+            let (protocol, root) = reconciliation_protocol(service.clone());
+            for (encoded, decoded) in [
+                ("legacy%2Frun", "legacy/run"),
+                ("legacy%252Frun", "legacy%2Frun"),
+                ("%E8%BF%90%E8%A1%8C%25", "运行%"),
+            ] {
+                let response = protocol
+                    .handle(
+                        "main",
+                        reconciliation_request(
+                            receipts,
+                            encoded,
+                            "?afterCallSequence=7&afterAttemptSequence=2&limit=100",
+                        ),
+                    )
+                    .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = reconciliation_body(&response);
+                assert_eq!(body["runId"], decoded);
+                assert_eq!(body["status"], "reconciliation_required");
+                assert_eq!(body["availableActions"], json!([]));
+                assert_eq!(body.as_object().unwrap().len(), 9);
+                if receipts {
+                    assert_eq!(
+                        body["receipts"],
+                        json!([{
+                            "receiptId":"550e8400-e29b-41d4-a716-446655440077",
+                            "toolCallId":"internal-call","callSequence":7,
+                            "attemptId":"internal-attempt","attemptSequence":2,
+                            "fact":"memory_created","recordedAt":"1970-01-01T00:00:00Z"
+                        }])
+                    );
+                    assert_eq!(body["next"], json!({"callSequence":7,"attemptSequence":2}));
+                    assert!(body.get("attempts").is_none());
+                } else {
+                    assert_eq!(
+                        body["attempts"][0]["recordedCommitState"],
+                        serde_json::Value::Null
+                    );
+                    assert_eq!(body["attempts"][0]["startedAt"], serde_json::Value::Null);
+                    assert_eq!(body["attempts"][0]["finishedAt"], serde_json::Value::Null);
+                    assert_eq!(body["attempts"][0].as_object().unwrap().len(), 9);
+                    assert!(body.get("receipts").is_none());
+                }
+                let calls = service.calls.lock().unwrap();
+                let (observed_auth, command) = calls.last().unwrap();
+                assert_eq!(observed_auth, &auth());
+                assert_eq!(
+                    command,
+                    &if receipts {
+                        AppCommand::GetRunEffectReceipts {
+                            thread_id: ThreadId::new("550e8400-e29b-81d4-a716-446655440001"),
+                            run_id: RunId::new(decoded),
+                            after: Some(RunReconciliationCursor {
+                                call_sequence: 7,
+                                attempt_sequence: 2,
+                            }),
+                            limit: Some(100),
+                        }
+                    } else {
+                        AppCommand::GetRunReconciliation {
+                            thread_id: ThreadId::new("550e8400-e29b-81d4-a716-446655440001"),
+                            run_id: RunId::new(decoded),
+                            after: Some(RunReconciliationCursor {
+                                call_sequence: 7,
+                                attempt_sequence: 2,
+                            }),
+                            limit: Some(100),
+                        }
+                    }
+                );
+            }
             let response = protocol
-                .handle(
-                    "main",
-                    reconciliation_request(
-                        encoded,
-                        "?afterCallSequence=7&afterAttemptSequence=2&limit=100",
-                    ),
-                )
+                .handle("main", reconciliation_request(receipts, "opaque", ""))
                 .await;
             assert_eq!(response.status(), StatusCode::OK);
-            let body = reconciliation_body(&response);
-            assert_eq!(body["runId"], decoded);
-            assert_eq!(body["status"], "reconciliation_required");
-            assert_eq!(body["availableActions"], json!([]));
-            assert_eq!(
-                body["attempts"][0]["recordedCommitState"],
-                serde_json::Value::Null
-            );
-            assert_eq!(body["attempts"][0]["startedAt"], serde_json::Value::Null);
-            assert_eq!(body["attempts"][0]["finishedAt"], serde_json::Value::Null);
-            assert_eq!(body.as_object().unwrap().len(), 9);
-            assert_eq!(body["attempts"][0].as_object().unwrap().len(), 9);
-            let calls = service.calls.lock().unwrap();
-            let (observed_auth, command) = calls.last().unwrap();
-            assert_eq!(observed_auth, &auth());
-            assert_eq!(
-                command,
-                &AppCommand::GetRunReconciliation {
-                    thread_id: ThreadId::new("550e8400-e29b-81d4-a716-446655440001"),
-                    run_id: RunId::new(decoded),
-                    after: Some(RunReconciliationCursor {
-                        call_sequence: 7,
-                        attempt_sequence: 2
-                    }),
-                    limit: Some(100),
-                }
-            );
-        }
-        let response = protocol
-            .handle("main", reconciliation_request("opaque", ""))
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        reconciliation_body(&response);
-        assert!(matches!(
-            service.calls.lock().unwrap().last().unwrap().1,
-            AppCommand::GetRunReconciliation {
-                after: None,
-                limit: None,
-                ..
-            }
-        ));
-        protocol.unbind_window("main").unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn reconciliation_rejects_malformed_query_path_and_any_get_body_before_dispatch() {
-        let service = Arc::new(ReconciliationService::default());
-        let (protocol, root) = reconciliation_protocol(service.clone());
-        for query in [
-            "?actor=secret-sentinel",
-            "?limit=1&limit=2",
-            "?limit=1&%6cimit=2",
-            "?afterCallSequence=0",
-            "?afterAttemptSequence=0",
-            "?limit=0",
-            "?limit=101",
-            "?limit=4294967296",
-            "?afterCallSequence=9223372036854775808&afterAttemptSequence=0",
-            "?afterCallSequence=-1&afterAttemptSequence=0",
-            "?limit=1.0",
-            "?limit=",
-            "?limit=1%",
-            "?limit=%2",
-            "?limit=%GG",
-            "?limit=%FF",
-            "?%FF=1",
-        ] {
-            let response = protocol
-                .handle("main", reconciliation_request("opaque", query))
-                .await;
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
-            assert_eq!(
-                reconciliation_body(&response),
-                json!({"code":"malformed_payload"})
-            );
-        }
-        for run in ["%FF", "%", "%2", "%GG"] {
-            let response = protocol
-                .handle("main", reconciliation_request(run, ""))
-                .await;
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-            assert_eq!(
-                reconciliation_body(&response),
-                json!({"code":"malformed_payload"})
-            );
-        }
-        for length in [1, CHANNEL_THREAD_BODY_MAX_BYTES + 1] {
-            let mut request = reconciliation_request("opaque", "");
-            *request.body_mut() = vec![b'x'; length];
-            let response = protocol.handle("main", request).await;
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-            assert_eq!(
-                reconciliation_body(&response),
-                json!({"code":"malformed_payload"})
-            );
-        }
-        for method in [Method::POST, Method::HEAD] {
-            let mut request = reconciliation_request("opaque", "");
-            *request.method_mut() = method;
-            let response = protocol.handle("main", request).await;
-            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
             reconciliation_body(&response);
-        }
-        assert!(service.calls.lock().unwrap().is_empty());
-        protocol.unbind_window("main").unwrap();
-        let response = protocol
-            .handle("main", reconciliation_request("opaque", ""))
-            .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            reconciliation_body(&response),
-            json!({"code":"unauthenticated"})
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn reconciliation_errors_are_redacted_and_responses_are_bounded() {
-        for service in [
-            ReconciliationService {
-                error: Some(AppError::NotVisible),
-                ..Default::default()
-            },
-            ReconciliationService {
-                error: Some(AppError::RequestConflict { resource: "run" }),
-                ..Default::default()
-            },
-            ReconciliationService {
-                error: Some(AppError::DependencyUnavailable {
-                    dependency: "secret-sentinel",
-                }),
-                ..Default::default()
-            },
-            ReconciliationService {
-                wrong_reply: true,
-                ..Default::default()
-            },
-            ReconciliationService {
-                oversized: true,
-                ..Default::default()
-            },
-        ] {
-            let (status, code) = service
-                .error
-                .as_ref()
-                .map_or((503, "dependency_unavailable"), |error| {
-                    (error.http_status(), error.code().as_str())
-                });
-            let (protocol, root) = reconciliation_protocol(Arc::new(service));
-            let response = protocol
-                .handle("main", reconciliation_request("opaque", ""))
-                .await;
-            assert_eq!(response.status().as_u16(), status);
-            assert_eq!(reconciliation_body(&response), json!({"code":code}));
+            assert!(matches!(
+                service.calls.lock().unwrap().last().unwrap().1,
+                AppCommand::GetRunReconciliation {
+                    after: None,
+                    limit: None,
+                    ..
+                } | AppCommand::GetRunEffectReceipts {
+                    after: None,
+                    limit: None,
+                    ..
+                }
+            ));
             protocol.unbind_window("main").unwrap();
             fs::remove_dir_all(root).unwrap();
         }
     }
 
     #[tokio::test]
-    async fn reconciliation_rechecks_original_binding_before_and_after_application_await() {
-        for rebind in [false, true] {
-            for application_error in [false, true] {
-                let entered = Arc::new(tokio::sync::Notify::new());
-                let release = Arc::new(tokio::sync::Notify::new());
-                let service = Arc::new(ReconciliationService {
-                    barrier: Some((entered.clone(), release.clone())),
-                    error: application_error.then_some(AppError::NotVisible),
-                    ..Default::default()
-                });
-                let (protocol, root) = reconciliation_protocol(service.clone());
-                let old_authority = protocol.authority("main").unwrap().unwrap();
-                let reading = protocol.clone();
-                let task = tokio::spawn(async move {
-                    reading
-                        .handle("main", reconciliation_request("opaque", ""))
-                        .await
-                });
-                tokio::time::timeout(Duration::from_secs(2), entered.notified())
-                    .await
-                    .unwrap();
-                protocol.unbind_window("main").unwrap();
-                if rebind {
-                    protocol.bind_window("main", admin_auth(), None).unwrap();
-                }
-                release.notify_one();
-                let response = tokio::time::timeout(Duration::from_secs(2), task)
-                    .await
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-                assert_eq!(
-                    reconciliation_body(&response),
-                    json!({"code":"unauthenticated"})
-                );
-                // A previously captured authority cannot dispatch after its binding was removed.
+    async fn reconciliation_rejects_malformed_query_path_and_any_get_body_before_dispatch() {
+        for receipts in [false, true] {
+            let service = Arc::new(ReconciliationService::default());
+            let (protocol, root) = reconciliation_protocol(service.clone());
+            for query in [
+                "?actor=secret-sentinel",
+                "?limit=1&limit=2",
+                "?limit=1&%6cimit=2",
+                "?afterCallSequence=0",
+                "?afterAttemptSequence=0",
+                "?limit=0",
+                "?limit=101",
+                "?limit=4294967296",
+                "?afterCallSequence=9223372036854775808&afterAttemptSequence=0",
+                "?afterCallSequence=-1&afterAttemptSequence=0",
+                "?limit=1.0",
+                "?limit=",
+                "?limit=1%",
+                "?limit=%2",
+                "?limit=%GG",
+                "?limit=%FF",
+                "?%FF=1",
+            ] {
                 let response = protocol
-                    .run_reconciliation(
-                        "main",
-                        reconciliation_request("opaque", ""),
-                        old_authority,
-                        "550e8400-e29b-81d4-a716-446655440001",
-                        "opaque",
-                    )
+                    .handle("main", reconciliation_request(receipts, "opaque", query))
                     .await;
-                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
                 assert_eq!(
                     reconciliation_body(&response),
-                    json!({"code":"unauthenticated"})
+                    json!({"code":"malformed_payload"})
                 );
-                assert_eq!(service.calls.lock().unwrap().len(), 1);
-                if rebind {
-                    protocol.unbind_window("main").unwrap();
-                }
+            }
+            for run in ["%FF", "%", "%2", "%GG"] {
+                let response = protocol
+                    .handle("main", reconciliation_request(receipts, run, ""))
+                    .await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                assert_eq!(
+                    reconciliation_body(&response),
+                    json!({"code":"malformed_payload"})
+                );
+            }
+            for length in [1, CHANNEL_THREAD_BODY_MAX_BYTES + 1] {
+                let mut request = reconciliation_request(receipts, "opaque", "");
+                *request.body_mut() = vec![b'x'; length];
+                let response = protocol.handle("main", request).await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                assert_eq!(
+                    reconciliation_body(&response),
+                    json!({"code":"malformed_payload"})
+                );
+            }
+            for method in [Method::POST, Method::HEAD] {
+                let mut request = reconciliation_request(receipts, "opaque", "");
+                *request.method_mut() = method;
+                let response = protocol.handle("main", request).await;
+                assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+                reconciliation_body(&response);
+            }
+            assert!(service.calls.lock().unwrap().is_empty());
+            protocol.unbind_window("main").unwrap();
+            let response = protocol
+                .handle("main", reconciliation_request(receipts, "opaque", ""))
+                .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                reconciliation_body(&response),
+                json!({"code":"unauthenticated"})
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn reconciliation_errors_are_redacted_and_responses_are_bounded() {
+        for receipts in [false, true] {
+            for service in [
+                ReconciliationService {
+                    error: Some(AppError::NotVisible),
+                    ..Default::default()
+                },
+                ReconciliationService {
+                    error: Some(AppError::RequestConflict { resource: "run" }),
+                    ..Default::default()
+                },
+                ReconciliationService {
+                    error: Some(AppError::DependencyUnavailable {
+                        dependency: "secret-sentinel",
+                    }),
+                    ..Default::default()
+                },
+                ReconciliationService {
+                    wrong_reply: true,
+                    ..Default::default()
+                },
+                ReconciliationService {
+                    oversized: true,
+                    ..Default::default()
+                },
+            ] {
+                let (status, code) = service
+                    .error
+                    .as_ref()
+                    .map_or((503, "dependency_unavailable"), |error| {
+                        (error.http_status(), error.code().as_str())
+                    });
+                let (protocol, root) = reconciliation_protocol(Arc::new(service));
+                let response = protocol
+                    .handle("main", reconciliation_request(receipts, "opaque", ""))
+                    .await;
+                assert_eq!(response.status().as_u16(), status);
+                assert_eq!(reconciliation_body(&response), json!({"code":code}));
+                protocol.unbind_window("main").unwrap();
                 fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reconciliation_rechecks_original_binding_before_and_after_application_await() {
+        for receipts in [false, true] {
+            for rebind in [false, true] {
+                for application_error in [false, true] {
+                    let entered = Arc::new(tokio::sync::Notify::new());
+                    let release = Arc::new(tokio::sync::Notify::new());
+                    let service = Arc::new(ReconciliationService {
+                        barrier: Some((entered.clone(), release.clone())),
+                        error: application_error.then_some(AppError::NotVisible),
+                        ..Default::default()
+                    });
+                    let (protocol, root) = reconciliation_protocol(service.clone());
+                    let old_authority = protocol.authority("main").unwrap().unwrap();
+                    let reading = protocol.clone();
+                    let task = tokio::spawn(async move {
+                        reading
+                            .handle("main", reconciliation_request(receipts, "opaque", ""))
+                            .await
+                    });
+                    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+                        .await
+                        .unwrap();
+                    protocol.unbind_window("main").unwrap();
+                    if rebind {
+                        protocol.bind_window("main", admin_auth(), None).unwrap();
+                    }
+                    release.notify_one();
+                    let response = tokio::time::timeout(Duration::from_secs(2), task)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                    assert_eq!(
+                        reconciliation_body(&response),
+                        json!({"code":"unauthenticated"})
+                    );
+                    // A previously captured authority cannot dispatch after its binding was removed.
+                    let response = protocol
+                        .run_reconciliation(
+                            "main",
+                            reconciliation_request(receipts, "opaque", ""),
+                            old_authority,
+                            "550e8400-e29b-81d4-a716-446655440001",
+                            "opaque",
+                            if receipts {
+                                ReconciliationRead::Receipts
+                            } else {
+                                ReconciliationRead::Attempts
+                            },
+                        )
+                        .await;
+                    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                    assert_eq!(
+                        reconciliation_body(&response),
+                        json!({"code":"unauthenticated"})
+                    );
+                    assert_eq!(service.calls.lock().unwrap().len(), 1);
+                    if rebind {
+                        protocol.unbind_window("main").unwrap();
+                    }
+                    fs::remove_dir_all(root).unwrap();
+                }
             }
         }
     }

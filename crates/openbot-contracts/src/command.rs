@@ -412,6 +412,18 @@ pub enum AppCommand {
         limit: Option<u32>,
     },
 
+    /// 读取当前 owner 的原 Unknown run 正向业务提交回执。
+    GetRunEffectReceipts {
+        /// 原 thread 身份。
+        thread_id: ThreadId,
+        /// 原 opaque run 身份。
+        run_id: RunId,
+        /// 同一原 run 内的二元分页位置。
+        after: Option<crate::reconciliation::RunReconciliationCursor>,
+        /// 省略为50，显式1–100。
+        limit: Option<u32>,
+    },
+
     /// List current-actor pending remote AG-UI interrupts.
     ListPendingRemoteInterrupts,
 
@@ -660,6 +672,8 @@ pub enum AppReply {
     ThreadHistory(ThreadHistory),
     /// Unknown run 的受权只读事实页。
     RunReconciliation(crate::reconciliation::RunReconciliationSnapshot),
+    /// 原 Unknown run 的受权历史业务回执页。
+    RunEffectReceipts(crate::reconciliation::RunEffectReceiptsSnapshot),
     /// [`AppCommand::GetThreadConversation`] response.
     ThreadConversation(ThreadConversationSnapshot),
     /// [`AppCommand::ListPendingRemoteInterrupts`] response.

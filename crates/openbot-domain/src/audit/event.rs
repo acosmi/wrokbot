@@ -94,6 +94,8 @@ impl AuditEventType {
     pub const MEMORY_REMEMBER_REFUSED: Self = Self("memory.remember_refused");
     /// Explicit remember tool committed a memory record.
     pub const MEMORY_REMEMBER_SUCCEEDED: Self = Self("memory.remember_succeeded");
+    /// A remember business mutation and its immutable receipt committed together.
+    pub const MEMORY_EFFECT_COMMITTED: Self = Self("memory.effect_committed");
     /// Explicit remember tool finished with a definite non-success outcome.
     pub const MEMORY_REMEMBER_FAILED: Self = Self("memory.remember_failed");
     /// Human proof-of-intent request became durable.
@@ -164,7 +166,7 @@ impl fmt::Display for AuditEventType {
     }
 }
 
-/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt 20 项。
+/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt 21 项。
 ///
 /// 顺序也照抄上游，方便逐行对拍。
 pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
@@ -186,6 +188,7 @@ pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
     AuditEventType("agent.remote_interrupt_expired"),
     AuditEventType("memory.remember_refused"),
     AuditEventType("memory.remember_succeeded"),
+    AuditEventType("memory.effect_committed"),
     AuditEventType("memory.remember_failed"),
     AuditEventType("tool.approval_requested"),
     AuditEventType("tool.approval_granted"),
@@ -306,9 +309,9 @@ mod tests {
 
     #[test]
     fn catalog_is_upstream_fifty_seven_plus_twenty_new_and_has_no_duplicates() {
-        assert_eq!(AUDIT_EVENT_TYPES.len(), 77);
+        assert_eq!(AUDIT_EVENT_TYPES.len(), 78);
         let unique: BTreeSet<&str> = AUDIT_EVENT_TYPES.iter().map(|t| t.0).collect();
-        assert_eq!(unique.len(), 77, "目录里有重复的事件类型");
+        assert_eq!(unique.len(), 78, "目录里有重复的事件类型");
     }
 
     #[test]
@@ -336,6 +339,7 @@ mod tests {
             AuditEventType::AGENT_RUN_COST_BUDGET_REFUSED,
             AuditEventType::MEMORY_REMEMBER_REFUSED,
             AuditEventType::MEMORY_REMEMBER_SUCCEEDED,
+            AuditEventType::MEMORY_EFFECT_COMMITTED,
             AuditEventType::MEMORY_REMEMBER_FAILED,
             AuditEventType::COMPONENT_HUMAN_REQUESTED,
             AuditEventType::COMPONENT_HUMAN_ANSWERED,

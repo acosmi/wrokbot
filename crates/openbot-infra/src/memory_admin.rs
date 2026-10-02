@@ -3,6 +3,7 @@
 mod actor_authority;
 mod recall_authority;
 mod recall_query;
+pub(crate) mod remember_effect;
 
 use async_trait::async_trait;
 use openbot_application::{
@@ -32,13 +33,29 @@ use crate::repo::common::columns_sql;
 #[derive(Clone)]
 pub struct PostgresMemoryAdministration {
     pool: deadpool_postgres::Pool,
+    effect_audit_key: Option<std::sync::Arc<[u8]>>,
 }
 
 impl PostgresMemoryAdministration {
     /// 用共享池构造。
     #[must_use]
     pub fn new(pool: deadpool_postgres::Pool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            effect_audit_key: None,
+        }
+    }
+
+    /// Enable the real tool producer with the assembly's existing audit key.
+    pub fn with_effect_audit_key(
+        mut self,
+        key: Vec<u8>,
+    ) -> Result<Self, MemoryAdministrationError> {
+        if key.is_empty() {
+            return Err(MemoryAdministrationError::Unavailable);
+        }
+        self.effect_audit_key = Some(key.into());
+        Ok(self)
     }
 }
 
@@ -529,7 +546,11 @@ impl RememberToolMemory for PostgresMemoryAdministration {
     async fn remember_from_tool(
         &self,
         request: RememberToolMemoryRequest,
-    ) -> Result<MemoryRecord, MemoryAdministrationError> {
+    ) -> Result<openbot_application::CommittedMemoryEffect, MemoryAdministrationError> {
+        let key = self
+            .effect_audit_key
+            .as_deref()
+            .ok_or(MemoryAdministrationError::Unavailable)?;
         let mut client = self
             .pool
             .get()
@@ -542,55 +563,21 @@ impl RememberToolMemory for PostgresMemoryAdministration {
             .await
             .map_err(|_| MemoryAdministrationError::Unavailable)?;
         let result = async {
-            actor_authority::lock_actor(&transaction, &request.actor, request.auth_generation)
-                .await?;
-            let auth_generation = i64::try_from(request.auth_generation.get()).map_err(|_| {
-                MemoryAdministrationError::Corrupt {
-                    field: "auth_generation",
-                }
-            })?;
-            let bound: bool = transaction
-                .query_one(
-                    "SELECT EXISTS( \
-                       SELECT 1 FROM public.runs r \
-                       JOIN public.threads t ON t.thread_id=r.thread_id \
-                       JOIN public.thread_memberships tm ON tm.thread_id=t.thread_id \
-                       JOIN public.agent_profiles ap ON ap.agent_id=r.bot_id \
-                       JOIN public.users u ON u.id=r.actor_id \
-                       WHERE r.run_id=$1 AND r.thread_id=$2 AND r.bot_id=$3 AND r.actor_id=$4 \
-                         AND r.status='running' AND t.tenant_id=$5 AND t.status<>'deleted' \
-                         AND tm.user_id=$4 AND ap.deleted_at IS NULL \
-                         AND (ap.visibility='public' OR ap.owner_user_id=$4) \
-                         AND coalesce(u.auth_generation,0)=$6 \
-                         AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra \
-                                        WHERE ra.email=lower(u.email)) \
-                         AND EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=u.id))",
-                    &[
-                        &request.run.as_str(),
-                        &request.thread.as_str(),
-                        &request.bot.as_str(),
-                        &request.actor.as_str(),
-                        &request.tenant.as_str(),
-                        &auth_generation,
-                    ],
-                )
-                .await
-                .map_err(|error| unavailable("验证 remember tool run scope 失败", error))?
-                .try_get(0)
-                .map_err(|_| MemoryAdministrationError::Corrupt {
-                    field: "remember_run_scope",
-                })?;
-            if !bound {
-                return Err(MemoryAdministrationError::NotVisible);
+            let locked = remember_effect::admit(&transaction, &request).await?;
+            if let Some(receipt) =
+                remember_effect::existing(&transaction, &request, &locked).await?
+            {
+                return Ok(receipt);
             }
-            ensure_writes_enabled(&transaction, &request.tenant, &request.actor).await?;
-            let source = if request.arguments.memory_kind() == MemoryKind::Fact {
+            locked.require_fresh()?;
+            ensure_writes_enabled(&transaction, request.tenant(), request.actor()).await?;
+            let source = if request.arguments().memory_kind() == MemoryKind::Fact {
                 let row = transaction
                     .query_opt(
                         "SELECT message_id FROM public.messages \
                          WHERE run_id=$1 AND thread_id=$2 AND role='user' \
                          ORDER BY seq DESC LIMIT 1",
-                        &[&request.run.as_str(), &request.thread.as_str()],
+                        &[&request.run().as_str(), &request.thread().as_str()],
                     )
                     .await
                     .map_err(|error| unavailable("读取 remember tool provenance 失败", error))?
@@ -603,36 +590,37 @@ impl RememberToolMemory for PostgresMemoryAdministration {
                             field: "remember_source_message",
                         })?;
                 Some(MemorySource {
-                    thread_id: request.thread.clone(),
+                    thread_id: request.thread().clone(),
                     message_id,
                 })
             } else {
                 None
             };
-            let scope = match request.arguments.scope() {
+            let scope = match request.arguments().scope() {
                 RememberToolScope::User => MemoryScope::User,
                 RememberToolScope::Bot => MemoryScope::Bot {
-                    bot_id: request.bot.clone(),
+                    bot_id: request.bot().clone(),
                 },
                 RememberToolScope::Thread => MemoryScope::Thread {
-                    thread_id: request.thread.clone(),
+                    thread_id: request.thread().clone(),
                 },
             };
             let input = RememberMemory {
-                memory_kind: request.arguments.memory_kind(),
+                memory_kind: request.arguments().memory_kind(),
                 scope,
-                content: request.arguments.content().to_owned(),
-                tags: request.arguments.tags().to_vec(),
-                sensitivity: request.arguments.sensitivity(),
+                content: request.arguments().content().to_owned(),
+                tags: request.arguments().tags().to_vec(),
+                sensitivity: request.arguments().sensitivity(),
                 source,
                 expires_at: None,
             };
-            validate_memory_targets(&transaction, &request.tenant, &request.actor, &input).await?;
+            validate_memory_targets(&transaction, request.tenant(), request.actor(), &input)
+                .await?;
             let now = database_now(&transaction).await?;
             let record = insert_memory(
                 &transaction,
-                &request.tenant,
-                &request.actor,
+                request.tenant(),
+                request.actor(),
                 &input,
                 DomainMemoryOrigin::RememberTool,
                 None,
@@ -644,11 +632,11 @@ impl RememberToolMemory for PostgresMemoryAdministration {
                 &record.memory_id,
                 0,
                 "create",
-                &request.actor,
+                request.actor(),
                 now,
             )
             .await?;
-            Ok(record)
+            remember_effect::append(&transaction, &request, &locked, &record.memory_id, key).await
         }
         .await;
         finish_transaction(transaction, result).await

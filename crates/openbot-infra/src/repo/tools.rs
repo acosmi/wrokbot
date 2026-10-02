@@ -350,13 +350,29 @@ impl ToolJournal for PostgresToolJournal {
             finished_at: OffsetDateTime::now_utc(),
         };
         let mut client = self.pool.get().await.map_err(pool_port_error)?;
-        let transaction = client.transaction().await.map_err(|error| {
+        let transaction = if draft.decision.metadata.name.as_str() == "remember" {
+            // A producer may commit while the first actor lock waits. The following receipt
+            // statement must see that commit even when the pool session defaults to RR.
+            client
+                .build_transaction()
+                .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+                .start()
+                .await
+        } else {
+            client.transaction().await
+        }
+        .map_err(|error| {
             infra_port_error(InfraError::query("开始 tool outcome/audit 事务", error))
         })?;
+        let attempt_seq = if draft.decision.metadata.name.as_str() == "remember" {
+            crate::memory_admin::remember_effect::guard_outcome(&transaction, draft).await?
+        } else {
+            0
+        };
         let row = record_outcome_on(
             &transaction,
             draft.decision.call_id.as_str(),
-            0,
+            attempt_seq,
             draft.capability_id.as_str(),
             &persisted,
         )

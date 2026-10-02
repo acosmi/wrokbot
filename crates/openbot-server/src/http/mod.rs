@@ -683,6 +683,11 @@ pub fn router(state: ServerState) -> Router {
             get(threads::reconciliation)
                 .head(|| async { axum::http::StatusCode::METHOD_NOT_ALLOWED }),
         )
+        .route(
+            "/api/threads/{thread_id}/runs/{run_id}/reconciliation/receipts",
+            get(threads::effect_receipts)
+                .head(|| async { axum::http::StatusCode::METHOD_NOT_ALLOWED }),
+        )
         .route("/api/threads/{thread_id}/ws", get(threads::websocket))
         .route("/api/threads/{thread_id}/events", get(threads::events))
         .route("/api/threads/{thread_id}", get(threads::status))

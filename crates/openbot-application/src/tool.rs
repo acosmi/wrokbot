@@ -628,10 +628,16 @@ impl AuthorizedToolCall {
     /// 消费单次 capability，得到 executor 可读参数与必须交回的 redeemed proof。
     #[must_use]
     pub fn redeem(self) -> (ExecutableToolCall, RedeemedCapability) {
+        let attempt_id = self.capability.attempt().clone();
+        let decision_id = self.capability.decision().clone();
+        let capability_id = self.capability.id().clone();
         let redeemed = self.capability.redeem();
         (
             ExecutableToolCall {
                 call_id: self.call_id,
+                attempt_id,
+                decision_id,
+                capability_id,
                 metadata: self.metadata,
                 arguments: self.arguments,
                 tenant: self.tenant,
@@ -649,6 +655,9 @@ impl AuthorizedToolCall {
 /// 已兑券、只能由 executor 按值消费的具体调用。
 pub struct ExecutableToolCall {
     call_id: ToolCallId,
+    attempt_id: openbot_contracts::ids::AttemptId,
+    decision_id: openbot_contracts::ids::PolicyDecisionId,
+    capability_id: CapabilityId,
     metadata: ToolMetadata,
     arguments: ToolArguments,
     tenant: TenantId,
@@ -664,6 +673,24 @@ impl ExecutableToolCall {
     #[must_use]
     pub const fn call_id(&self) -> &ToolCallId {
         &self.call_id
+    }
+
+    /// Original durable attempt bound into the redeemed capability.
+    #[must_use]
+    pub const fn attempt_id(&self) -> &openbot_contracts::ids::AttemptId {
+        &self.attempt_id
+    }
+
+    /// Original durable decision, not a newly minted authority.
+    #[must_use]
+    pub const fn decision_id(&self) -> &openbot_contracts::ids::PolicyDecisionId {
+        &self.decision_id
+    }
+
+    /// Identity retained only for matching the separately consumed proof.
+    #[must_use]
+    pub const fn capability_id(&self) -> &CapabilityId {
+        &self.capability_id
     }
 
     /// metadata。

@@ -110,9 +110,9 @@ pub use approval_admin::{
     decide_tool_approval, list_pending_tool_approvals, subscribe_tool_approval_activity,
 };
 pub use builtin_tools::{
-    BUILTIN_TOOL_CATALOG_GENERATION, REMEMBER_TOOL_NAME, RememberToolArguments, RememberToolMemory,
-    RememberToolMemoryRequest, RememberToolScope, parse_remember_tool_arguments,
-    remember_provider_tool, remember_tool_metadata,
+    BUILTIN_TOOL_CATALOG_GENERATION, CommittedMemoryEffect, REMEMBER_TOOL_NAME,
+    RememberToolArguments, RememberToolMemory, RememberToolMemoryRequest, RememberToolScope,
+    parse_remember_tool_arguments, remember_provider_tool, remember_tool_metadata,
 };
 pub use chunk::{SEMANTIC_CHUNK_MAX_BYTES, SEMANTIC_CHUNK_MAX_DELAY, SemanticChunkAccumulator};
 pub use components::{
@@ -152,9 +152,9 @@ pub use ports::{
     NoPeopleAdministration, NoPolicyAdministration, NoThreadDirectory,
     OwnedCredentialRetirementError, OwnedCredentialRetirer, PeopleAdministration,
     PeoplePageRequest, PeoplePortError, PolicyAdministration, PolicyAdministrationError, PortError,
-    RecallMemoriesRequest, RememberMemoryRequest, RoutingAuditRecord, RunReconciliationRequest,
-    ThreadConversationRequest, ThreadDirectory, ThreadDirectoryError, ThreadEventSubscription,
-    ThreadHistoryRequest, UpdateMemoryControlRequest,
+    RecallMemoriesRequest, RememberMemoryRequest, RoutingAuditRecord, RunEffectReceiptsRequest,
+    RunReconciliationRequest, ThreadConversationRequest, ThreadDirectory, ThreadDirectoryError,
+    ThreadEventSubscription, ThreadHistoryRequest, UpdateMemoryControlRequest,
 };
 pub use provider::{
     AgentAudit, AgentAuditError, AgentAuditKind, AgentAuthorizationError, AgentAuthorizationSource,

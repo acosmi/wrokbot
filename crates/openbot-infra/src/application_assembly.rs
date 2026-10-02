@@ -263,7 +263,9 @@ pub async fn assemble_postgres_application(
         DEFAULT_THREAD_LEASE_DURATION,
     )
     .map_err(|_| fail("thread_directory"))?;
-    let memory = PostgresMemoryAdministration::new(pool.clone());
+    let memory = PostgresMemoryAdministration::new(pool.clone())
+        .with_effect_audit_key(audit_key.to_vec())
+        .map_err(|_| fail("memory_effect_audit"))?;
 
     let mcp_client = SafeRmcpClient::new(
         SafeDialer::new(EgressPolicy::default()),

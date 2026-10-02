@@ -1,5 +1,6 @@
 //! Current-actor Memory management fencing, proved on an isolated synthetic PostgreSQL instance.
-//! Table locks below are test barriers only; production acquires user SHARE, then data/event locks.
+//! GUI table locks below are test barriers only. Tool authority now has a private capability-bound
+//! request; its UPDATE lock/race matrix lives in remember_effect_receipts.rs using real requests.
 
 mod harness;
 
@@ -10,14 +11,13 @@ use std::time::Duration;
 use deadpool_postgres::Pool;
 use harness::{admin_config, with_temp_database};
 use openbot_application::{
-    ApplicationService, MemoryAdministration, MemoryAdministrationError, OpenBotApplication,
-    PeopleAdministration, RememberMemoryRequest, RememberToolMemory, RememberToolMemoryRequest,
-    parse_remember_tool_arguments,
+    ApplicationService, MemoryAdministration, OpenBotApplication, PeopleAdministration,
+    RememberMemoryRequest,
 };
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::command::{AppCommand, AppReply};
 use openbot_contracts::error::AppError;
-use openbot_contracts::ids::{ActorId, BotId, DeploymentId, RunId, TenantId, ThreadId};
+use openbot_contracts::ids::{ActorId, DeploymentId, TenantId, ThreadId};
 use openbot_contracts::memory::{
     CorrectMemory, MemoryKind, MemoryMutation, MemoryScope, MemorySensitivity, MemorySource,
     RememberMemory, UpdateMemoryControl,
@@ -41,10 +41,9 @@ enum Operation {
     Correct,
     Forbid,
     Delete,
-    Tool,
 }
 
-const OPERATIONS: [Operation; 8] = [
+const OPERATIONS: [Operation; 7] = [
     Operation::Control,
     Operation::UpdateControl,
     Operation::List,
@@ -52,7 +51,6 @@ const OPERATIONS: [Operation; 8] = [
     Operation::Correct,
     Operation::Forbid,
     Operation::Delete,
-    Operation::Tool,
 ];
 
 fn auth(actor: &str, generation: u64) -> AuthContext {
@@ -82,22 +80,6 @@ fn input() -> RememberMemory {
     }
 }
 
-fn tool_request(actor: &str, generation: u64) -> RememberToolMemoryRequest {
-    RememberToolMemoryRequest {
-        tenant: TenantId::new("tenant-a"),
-        actor: ActorId::new(actor),
-        auth_generation: AuthGeneration::new(generation),
-        run: RunId::new("run-memory-authority"),
-        bot: BotId::new("bot-a"),
-        thread: ThreadId::new(THREAD),
-        arguments: parse_remember_tool_arguments(&serde_json::json!({
-            "memoryKind":"preference", "scope":"user", "content":"synthetic tool preference",
-            "tags":[], "sensitivity":"normal"
-        }))
-        .expect("closed synthetic remember arguments"),
-    }
-}
-
 async fn execute(
     pool: &Pool,
     operation: Operation,
@@ -106,13 +88,6 @@ async fn execute(
     memory_id: &str,
 ) -> Result<(), AppError> {
     let store = PostgresMemoryAdministration::new(pool.clone());
-    if matches!(operation, Operation::Tool) {
-        return store
-            .remember_from_tool(tool_request(actor, generation))
-            .await
-            .map(|_| ())
-            .map_err(MemoryAdministrationError::into_app_error);
-    }
     let application: Arc<dyn ApplicationService> =
         Arc::new(OpenBotApplication::new(ChannelRepo::new(pool.clone())).with_memory(store));
     let command = match operation {
@@ -142,7 +117,6 @@ async fn execute(
                 MemoryMutation::Delete
             },
         },
-        Operation::Tool => unreachable!("tool dispatched through its existing authorized port"),
     };
     let reply = application
         .execute(auth(actor, generation), command)

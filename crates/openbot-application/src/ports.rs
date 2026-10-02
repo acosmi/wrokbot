@@ -736,6 +736,9 @@ pub struct RunReconciliationRequest {
     pub limit: u32,
 }
 
+/// 正向回执与原运行事实共享当前权限和分页输入；各自的 port 决定只读投影。
+pub type RunEffectReceiptsRequest = RunReconciliationRequest;
+
 /// Native thread ID 铸造与 scope-aware 可见性查询。
 ///
 /// 查询同时接收 deployment、tenant 与 actor，三者都来自权威 [`AuthContext`](openbot_contracts::auth::AuthContext)，
@@ -812,6 +815,15 @@ pub trait ThreadDirectory: Send + Sync {
         &self,
         _request: RunReconciliationRequest,
     ) -> Result<openbot_contracts::reconciliation::RunReconciliationSnapshot, ThreadDirectoryError>
+    {
+        Err(ThreadDirectoryError::Unavailable)
+    }
+
+    /// 同一PG statement核当前权限、全部原绑定和有界正向回执，不解锁Unknown。
+    async fn run_effect_receipts(
+        &self,
+        _request: RunEffectReceiptsRequest,
+    ) -> Result<openbot_contracts::reconciliation::RunEffectReceiptsSnapshot, ThreadDirectoryError>
     {
         Err(ThreadDirectoryError::Unavailable)
     }

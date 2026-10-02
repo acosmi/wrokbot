@@ -5,7 +5,7 @@ mod harness;
 use openbot_infra::db::native::{self, ApplyOutcome};
 use openbot_infra::db::schema_facts::SchemaFacts;
 use openbot_infra::db::tables::{NATIVE_0034_TABLES, oauth_refresh_operations};
-use openbot_infra::db::{baseline, fresh, pool, schema_facts};
+use openbot_infra::db::{baseline, pool, schema_facts};
 use time::OffsetDateTime;
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
@@ -20,7 +20,7 @@ fn expected() -> SchemaFacts {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 17; explicit include-ignored only"]
-async fn upgrade_is_additive_once_and_fresh_matches_owned_fixture() {
+async fn upgrade_is_additive_once_and_0034_prefix_matches_owned_fixture() {
     let admin = harness::admin_config("native0034_schema");
     harness::with_temp_database(&admin, "oauth34upgrade", |config| async move {
         let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
@@ -34,7 +34,9 @@ async fn upgrade_is_additive_once_and_fresh_matches_owned_fixture() {
             serde_json::from_str(include_str!("../../../fixtures/db/schema-0033.json")).unwrap();
         assert_eq!(before, old);
         assert_eq!(
-            native::apply(&mut client).await.unwrap(),
+            native::apply_through(&mut client, native::NATIVE_0034_VERSION)
+                .await
+                .unwrap(),
             ApplyOutcome::Applied
         );
         let after = schema_facts::fetch(&client).await.unwrap();
@@ -89,7 +91,9 @@ async fn upgrade_is_additive_once_and_fresh_matches_owned_fixture() {
             native::native_0034_checksum()
         );
         assert_eq!(
-            native::apply(&mut client).await.unwrap(),
+            native::apply_through(&mut client, native::NATIVE_0034_VERSION)
+                .await
+                .unwrap(),
             ApplyOutcome::AlreadyApplied
         );
         drop(client);
@@ -100,12 +104,21 @@ async fn upgrade_is_additive_once_and_fresh_matches_owned_fixture() {
     harness::with_temp_database(&admin, "oauth34fresh", |config| async move {
         let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
         let mut client = pool.get().await.map_err(|e| e.to_string())?;
-        fresh::apply(&mut client).await.unwrap();
-        assert_eq!(schema_facts::fetch(&client).await.unwrap(), expected());
-        drop(client);
-        openbot_infra::db::desktop_vault_canary::verify_current_layout(&pool)
+        baseline::apply(&client).await.unwrap();
+        native::apply_through(&mut client, native::NATIVE_0034_VERSION)
             .await
             .unwrap();
+        assert_eq!(schema_facts::fetch(&client).await.unwrap(), expected());
+        drop(client);
+        let layout = openbot_infra::db::desktop_vault_canary::verify_pre_upgrade_layout(&pool)
+            .await
+            .unwrap();
+        assert_eq!(layout.native_version(), native::NATIVE_0034_VERSION);
+        assert!(
+            openbot_infra::db::desktop_vault_canary::verify_current_layout(&pool)
+                .await
+                .is_err()
+        );
         pool.close();
         Ok(())
     })
@@ -119,7 +132,8 @@ async fn typed_rows_allow_sequential_commit_but_keep_unresolved_exclusive() {
     harness::with_temp_database(&admin, "oauth34rows", |config| async move {
         let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
         let mut client = pool.get().await.map_err(|e| e.to_string())?;
-        fresh::apply(&mut client).await.unwrap();
+        baseline::apply(&client).await.unwrap();
+        native::apply_through(&mut client, native::NATIVE_0034_VERSION).await.unwrap();
         let now = OffsetDateTime::UNIX_EPOCH;
         // No authority FK: removal/reconnect must not erase an already consumed token's receipt.
         let row = oauth_refresh_operations::Row {
