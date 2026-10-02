@@ -1375,6 +1375,15 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
             assert_eq!(error.to_string(), "read would block");
             assert!(retained.is_empty());
+            let waited = std::cell::Cell::new(false);
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                finish_fixture_codesign_output(Err(error), vec![], vec![], || {
+                    waited.set(true);
+                    Ok(ExitStatus::from_raw(0))
+                })
+            }));
+            assert!(panic.is_err());
+            assert!(!waited.get());
         }
 
         #[test]
