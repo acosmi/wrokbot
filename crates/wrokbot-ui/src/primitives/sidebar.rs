@@ -6,22 +6,23 @@ use leptos::prelude::*;
 
 use crate::icons::Icon;
 
-use super::{DialogContent, IconSize, IconView, Sheet, SheetSide};
+use super::modal::{ModalPresentation, modal_root_with_inline};
+use super::{DialogContent, IconSize, IconView, SheetSide};
 
 /// First-source breakpoint where the full desktop layout begins.
-pub const SIDEBAR_LARGE_BREAKPOINT_PX: u32 = 1024;
-/// First-source breakpoint where the automatic rail begins.
-pub const SIDEBAR_MEDIUM_BREAKPOINT_PX: u32 = 768;
+pub const SIDEBAR_LARGE_BREAKPOINT_PX: u32 = 1101;
+/// First-source breakpoint above the narrow Web navigation Sheet.
+pub const SIDEBAR_MEDIUM_BREAKPOINT_PX: u32 = 701;
 
 /// Responsive presentation selected from the real viewport width.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SidebarViewport {
-    /// 1024px and wider: user-controlled expanded/rail state.
+    /// Above 1100px: user-controlled content sidebar beside the separate 48px rail.
     #[default]
     Large,
-    /// 768–1023px: forced 64px rail.
+    /// 701–1100px: the same user-controlled sidebar; no automatic collapse.
     Medium,
-    /// Below 768px: navigation moves into the shared Sheet modal.
+    /// At most 700px: navigation moves into the shared Sheet modal.
     Compact,
 }
 
@@ -65,6 +66,7 @@ struct SidebarContext {
     mobile_description: TextProp,
     on_collapsed_change: Option<UnsyncCallback<bool>>,
     trigger_ref: NodeRef<html::Button>,
+    rail_trigger_ref: NodeRef<html::Button>,
 }
 
 /// Read-only/control handle for shell composition below [`SidebarProvider`].
@@ -74,6 +76,10 @@ pub struct SidebarController {
 }
 
 impl SidebarController {
+    /// The separately mounted desktop rail toggle is a visible return-focus target.
+    pub fn rail_trigger_ref(&self) -> NodeRef<html::Button> {
+        self.context.rail_trigger_ref
+    }
     /// Current responsive presentation.
     pub fn viewport(&self) -> SidebarViewport {
         self.context.viewport.get()
@@ -87,6 +93,30 @@ impl SidebarController {
     /// Toggle the allowed state for the current viewport.
     pub fn toggle(&self) {
         toggle_sidebar(self.context.clone());
+    }
+
+    /// Open the navigation and focus its actual loaded-channel history region.
+    pub fn show_history(&self) {
+        if self.context.viewport.get_untracked() == SidebarViewport::Compact {
+            self.context.mobile_open.set(true);
+        } else {
+            self.context.collapsed.set(false);
+            if let Some(callback) = self.context.on_collapsed_change {
+                callback.run(false);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        leptos::task::spawn_local_scoped_with_cancellation(async move {
+            use wasm_bindgen::JsCast as _;
+            leptos::task::tick().await;
+            if let Some(history) = web_sys::window()
+                .and_then(|window| window.document())
+                .and_then(|document| document.get_element_by_id("sidebar-history"))
+                .and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok())
+            {
+                _ = history.focus();
+            }
+        });
     }
 }
 
@@ -127,6 +157,7 @@ pub fn SidebarProvider(
         mobile_description,
         on_collapsed_change,
         trigger_ref: NodeRef::new(),
+        rail_trigger_ref: NodeRef::new(),
     };
     install_viewport_observer(context.clone());
     install_shortcut(context.clone());
@@ -146,73 +177,51 @@ pub fn SidebarProvider(
 
 /// Render one nav tree as an aside on desktop/rail or inside the shared Sheet on compact widths.
 #[component]
-pub fn Sidebar(children: ChildrenFn) -> impl IntoView {
+pub fn Sidebar(children: Children) -> impl IntoView {
     let context = sidebar_context();
-    let desktop_context = StoredValue::new(context.clone());
-    let desktop_children = StoredValue::new(children.clone());
-    let mobile_context = StoredValue::new(context.clone());
-    let mobile_children = StoredValue::new(children);
-    view! {
-        <Show
-            when=move || context.viewport.get() == SidebarViewport::Compact
-            fallback=move || desktop_sidebar_view(
-                desktop_context.get_value(),
-                desktop_children.get_value(),
-            )
-        >
-            {move || mobile_sidebar_view(
-                mobile_context.get_value(),
-                mobile_children.get_value(),
-            )}
-        </Show>
-    }
-}
-
-fn desktop_sidebar_view(context: SidebarContext, children: ChildrenFn) -> impl IntoView {
-    let aside_id = format!("{}-desktop", context.id);
     let state_context = context.clone();
-    let aria_label = context.aria_label;
-    view! {
-        <aside
-            id=aside_id
-            class="ob-sidebar"
-            data-state=move || effective_state(&state_context).as_str()
-        >
-            <nav class="ob-sidebar-nav" aria-label=move || aria_label.get()>
-                {children()}
-            </nav>
-        </aside>
-    }
-}
-
-fn mobile_sidebar_view(context: SidebarContext, children: ChildrenFn) -> impl IntoView {
+    let viewport = context.viewport;
+    let inline = Signal::derive(move || viewport.get() != SidebarViewport::Compact);
     let close_context = context.clone();
-    let sheet_id = format!("{}-mobile", context.id);
+    let sheet_id = context.id;
     let mobile_open = context.mobile_open;
     let title = context.mobile_title;
     let description = context.mobile_description;
     let aria_label = context.aria_label;
-    view! {
-        <Sheet
-            id=sheet_id
-            open=mobile_open
-            side=SheetSide::Left
-            on_close=UnsyncCallback::new(move |_| focus_sidebar_trigger_later(close_context.clone()))
-        >
-            <DialogContent
-                title=move || title.get()
-                description=move || description.get()
-            >
-                <nav
-                    class="ob-sidebar-nav ob-sidebar-mobile-nav"
-                    data-mobile="true"
-                    on:click=move |event| close_mobile_on_navigation(event, mobile_open)
-                    aria-label=move || aria_label.get()
+    let content: Children = Box::new(move || {
+        view! {
+                <DialogContent
+                    title=move || title.get()
+                    description=move || description.get()
                 >
-                    {children()}
-                </nav>
-            </DialogContent>
-        </Sheet>
+                    <nav
+                        class="ob-sidebar-nav"
+                        data-mobile=move || (!inline.get()).then_some("true")
+                        on:click=move |event| close_mobile_on_navigation(event, mobile_open)
+                        aria-label=move || aria_label.get()
+                    >
+                        {children()}
+                    </nav>
+                </DialogContent>
+        }
+        .into_any()
+    });
+    let modal = modal_root_with_inline(
+        mobile_open,
+        ModalPresentation::Sheet(SheetSide::Left),
+        Some(UnsyncCallback::new(move |_| {
+            focus_sidebar_trigger_later(close_context.clone())
+        })),
+        sheet_id,
+        inline,
+        content,
+    );
+    view! {
+        <aside class="ob-sidebar"
+            data-inline=move || inline.get().to_string()
+            data-state=move || effective_state(&state_context).as_str()>
+            {modal}
+        </aside>
     }
 }
 
@@ -242,7 +251,7 @@ fn close_mobile_on_navigation(event: leptos::ev::MouseEvent, open: RwSignal<bool
     let _ = (event, open);
 }
 
-/// Toggle button intended for the topbar. Medium mode hides/disables it because rail is automatic.
+/// Toggle button for the shell, also the mobile Sheet's return-focus target.
 #[component]
 pub fn SidebarTrigger(
     #[prop(optional, into)] id: Option<String>,
@@ -258,7 +267,6 @@ pub fn SidebarTrigger(
     let context = sidebar_context();
     let controls_context = context.clone();
     let expanded_context = context.clone();
-    let disabled_context = context.clone();
     let click_context = context.clone();
     let trigger_node = context.trigger_ref;
     view! {
@@ -270,8 +278,6 @@ pub fn SidebarTrigger(
             aria-label=move || aria_label.get()
             aria-controls=move || controls_id(&controls_context)
             aria-expanded=move || explicit_bool(sidebar_expanded(&expanded_context))
-            aria-disabled=move || explicit_bool(disabled_context.viewport.get() == SidebarViewport::Medium)
-            disabled=move || disabled_context.viewport.get() == SidebarViewport::Medium
             node_ref=trigger_node
             on:click=move |_| toggle_sidebar(click_context.clone())
         >
@@ -368,9 +374,10 @@ fn sidebar_context() -> SidebarContext {
 
 fn effective_state(context: &SidebarContext) -> SidebarState {
     match context.viewport.get() {
-        SidebarViewport::Large if context.collapsed.get() => SidebarState::Rail,
-        SidebarViewport::Large => SidebarState::Expanded,
-        SidebarViewport::Medium => SidebarState::Rail,
+        SidebarViewport::Large | SidebarViewport::Medium if context.collapsed.get() => {
+            SidebarState::Rail
+        }
+        SidebarViewport::Large | SidebarViewport::Medium => SidebarState::Expanded,
         SidebarViewport::Compact if context.mobile_open.get() => SidebarState::MobileOpen,
         SidebarViewport::Compact => SidebarState::MobileClosed,
     }
@@ -384,22 +391,18 @@ fn sidebar_expanded(context: &SidebarContext) -> bool {
 }
 
 fn controls_id(context: &SidebarContext) -> String {
-    match context.viewport.get() {
-        SidebarViewport::Compact => format!("{}-mobile-panel", context.id),
-        SidebarViewport::Large | SidebarViewport::Medium => format!("{}-desktop", context.id),
-    }
+    format!("{}-panel", context.id)
 }
 
 fn toggle_sidebar(context: SidebarContext) {
     match context.viewport.get_untracked() {
-        SidebarViewport::Large => {
+        SidebarViewport::Large | SidebarViewport::Medium => {
             let collapsed = !context.collapsed.get_untracked();
             context.collapsed.set(collapsed);
             if let Some(callback) = context.on_collapsed_change {
                 callback.run(collapsed);
             }
         }
-        SidebarViewport::Medium => {}
         SidebarViewport::Compact => {
             let closing = context.mobile_open.get_untracked();
             context.mobile_open.set(!closing);
@@ -482,7 +485,12 @@ fn focus_sidebar_trigger_later(context: SidebarContext) {
     #[cfg(target_arch = "wasm32")]
     leptos::task::spawn_local_scoped_with_cancellation(async move {
         leptos::task::tick().await;
-        if let Some(trigger) = context.trigger_ref.get() {
+        let target = if context.viewport.get_untracked() == SidebarViewport::Compact {
+            context.trigger_ref
+        } else {
+            context.rail_trigger_ref
+        };
+        if let Some(trigger) = target.get() {
             _ = web_sys::HtmlElement::focus(&trigger);
         }
     });
@@ -509,9 +517,7 @@ fn install_shortcut(context: SidebarContext) {
                     let shortcut = event.key().eq_ignore_ascii_case("b")
                         && (event.meta_key() || event.ctrl_key())
                         && !event.alt_key();
-                    if shortcut
-                        && shortcut_context.viewport.get_untracked() != SidebarViewport::Medium
-                    {
+                    if shortcut {
                         event.prevent_default();
                         toggle_sidebar(shortcut_context.clone());
                     }
@@ -581,9 +587,11 @@ mod tests {
 
     #[test]
     fn sidebar_breakpoints_states_and_links_are_closed() {
-        assert_eq!(viewport_for_width(1024.0), SidebarViewport::Large);
-        assert_eq!(viewport_for_width(768.0), SidebarViewport::Medium);
-        assert_eq!(viewport_for_width(767.0), SidebarViewport::Compact);
+        assert_eq!(viewport_for_width(1440.0), SidebarViewport::Large);
+        assert_eq!(viewport_for_width(1101.0), SidebarViewport::Large);
+        assert_eq!(viewport_for_width(1100.0), SidebarViewport::Medium);
+        assert_eq!(viewport_for_width(701.0), SidebarViewport::Medium);
+        assert_eq!(viewport_for_width(700.0), SidebarViewport::Compact);
         assert_eq!(SidebarViewport::Large.as_str(), "large");
         assert_eq!(SidebarState::Expanded.as_str(), "expanded");
         assert_dom_id("app-sidebar");

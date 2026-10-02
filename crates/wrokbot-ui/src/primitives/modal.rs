@@ -62,6 +62,7 @@ struct ModalContext {
     panel_ref: NodeRef<html::Div>,
     presentation: ModalPresentation,
     on_close: Option<UnsyncCallback<()>>,
+    inline: Signal<bool>,
 }
 
 pub(crate) fn modal_root(
@@ -69,6 +70,25 @@ pub(crate) fn modal_root(
     presentation: ModalPresentation,
     on_close: Option<UnsyncCallback<()>>,
     id: String,
+    children: Children,
+) -> impl IntoView {
+    modal_root_with_inline(
+        open,
+        presentation,
+        on_close,
+        id,
+        Signal::derive(|| false),
+        children,
+    )
+}
+
+// A responsive navigation owns one mounted tree while changing between inline and modal layout.
+pub(crate) fn modal_root_with_inline(
+    open: RwSignal<bool>,
+    presentation: ModalPresentation,
+    on_close: Option<UnsyncCallback<()>>,
+    id: String,
+    inline: Signal<bool>,
     children: Children,
 ) -> impl IntoView {
     assert_dom_id(&id);
@@ -79,6 +99,7 @@ pub(crate) fn modal_root(
         panel_ref: NodeRef::new(),
         presentation,
         on_close,
+        inline,
     };
     install_modal_lifecycle(context.clone());
     view! { <Provider value=context>{children()}</Provider> }
@@ -141,6 +162,7 @@ pub(crate) fn modal_content(
     let description_aria_id = description_id.clone();
     let close_id = format!("{}-close", context.id);
     let open = context.open;
+    let inline = context.inline;
     let panel_ref = context.panel_ref;
     let presentation = context.presentation;
     let layer_close = context.clone();
@@ -151,30 +173,34 @@ pub(crate) fn modal_content(
     view! {
         <div
                 class="ob-modal-layer"
-                hidden=move || !open.get()
+                hidden=move || !inline.get() && !open.get()
+                data-inline=move || inline.get().then_some("true")
                 data-presentation=presentation.kind()
                 data-side=presentation.side()
             >
                 <div
                     class="ob-modal-backdrop"
+                    hidden=move || inline.get()
                     on:click=move |_| close(layer_close.clone())
                 ></div>
                 <div
                     id=panel_id
                     class="ob-modal-panel"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby=title_aria_id
+                    role=move || (!inline.get()).then_some("dialog")
+                    aria-modal=move || (!inline.get()).then_some("true")
+                    aria-labelledby=move || (!inline.get()).then(|| title_aria_id.clone())
                     aria-describedby=move || {
-                        (!description_visible.get().is_empty()).then(|| description_aria_id.clone())
+                        (!inline.get() && !description_visible.get().is_empty()).then(|| description_aria_id.clone())
                     }
-                    tabindex="-1"
+                    tabindex=move || (!inline.get()).then_some("-1")
                     node_ref=panel_ref
                     data-presentation=presentation.kind()
                     data-side=presentation.side()
-                    on:keydown=move |event| handle_panel_key(event, key_context.clone())
+                    on:keydown=move |event| {
+                        if !inline.get() { handle_panel_key(event, key_context.clone()); }
+                    }
                 >
-                    <header class="ob-modal-header">
+                    <header class="ob-modal-header" hidden=move || inline.get()>
                         <h2 id=title_id>{move || title.get()}</h2>
                         <p
                             id=description_id
@@ -196,11 +222,13 @@ pub(crate) fn modal_content(
 fn ModalCloseButton(id: String) -> impl IntoView {
     let i18n = use_i18n();
     let context = modal_context();
+    let inline = context.inline;
     view! {
         <button
             id=id
             type="button"
             class="ob-modal-close"
+            hidden=move || inline.get()
             aria-label=move || t_string!(i18n, common.close).to_owned()
             on:click=move |_| close(context.clone())
         >
@@ -249,6 +277,8 @@ fn modal_context() -> ModalContext {
 fn install_modal_lifecycle(context: ModalContext) {
     let was_open = StoredValue::new(false);
     let previous_overflow = StoredValue::new(None::<String>);
+    #[cfg(target_arch = "wasm32")]
+    let previous_focus = StoredValue::new_local(None::<web_sys::HtmlElement>);
     let effect_context = context.clone();
     Effect::new(move |_| {
         let open = effect_context.open.get();
@@ -258,6 +288,16 @@ fn install_modal_lifecycle(context: ModalContext) {
         }
         was_open.set_value(open);
         if open {
+            #[cfg(target_arch = "wasm32")]
+            {
+                use wasm_bindgen::JsCast as _;
+                previous_focus.set_value(
+                    web_sys::window()
+                        .and_then(|window| window.document())
+                        .and_then(|document| document.active_element())
+                        .and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok()),
+                );
+            }
             lock_body(previous_overflow);
             set_background_inert(&effect_context.id, true);
             let focus_context = effect_context.clone();
@@ -271,6 +311,15 @@ fn install_modal_lifecycle(context: ModalContext) {
             let trigger_ref = effect_context.trigger_ref;
             leptos::task::spawn_local_scoped_with_cancellation(async move {
                 leptos::task::tick().await;
+                #[cfg(target_arch = "wasm32")]
+                if let Some(previous) = previous_focus.get_value()
+                    && visible_focus_target(&previous)
+                {
+                    _ = previous.focus();
+                } else {
+                    focus_trigger(trigger_ref);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
                 focus_trigger(trigger_ref);
             });
         }
@@ -278,6 +327,13 @@ fn install_modal_lifecycle(context: ModalContext) {
     on_cleanup(move || {
         unlock_body(previous_overflow);
         set_background_inert(&context.id, false);
+        #[cfg(target_arch = "wasm32")]
+        if was_open.get_value()
+            && let Some(previous) = previous_focus.get_value()
+            && visible_focus_target(&previous)
+        {
+            _ = previous.focus();
+        }
     });
 }
 
@@ -319,15 +375,51 @@ fn focusables(panel_ref: NodeRef<html::Div>) -> Vec<web_sys::HtmlElement> {
     let Some(panel) = panel_ref.get() else {
         return Vec::new();
     };
-    let selector = "a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex='-1'])";
+    let selector = "a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),summary,[tabindex]:not([tabindex='-1'])";
     let Ok(nodes) = web_sys::Element::query_selector_all(&panel, selector) else {
         return Vec::new();
     };
     (0..nodes.length())
         .filter_map(|index| nodes.item(index))
         .filter_map(|node| node.dyn_into::<web_sys::HtmlElement>().ok())
-        .filter(|element| !element.hidden())
+        .filter(|element| element.tab_index() >= 0 && visible_focus_target(element))
         .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn visible_focus_target(element: &web_sys::HtmlElement) -> bool {
+    let rect = element.get_bounding_client_rect();
+    if !element.is_connected()
+        || rect.width() <= 0.0
+        || rect.height() <= 0.0
+        || element.closest("[hidden],[inert]").ok().flatten().is_some()
+    {
+        return false;
+    }
+    // Chromium can retain layout rectangles for closed-details descendants. Only the
+    // direct summary remains focusable; geometry alone cannot prove visibility here.
+    let mut ancestor = element.parent_element();
+    while let Some(parent) = ancestor {
+        if parent.tag_name() == "DETAILS" && !parent.has_attribute("open") {
+            let in_summary = parent
+                .query_selector(":scope > summary")
+                .ok()
+                .flatten()
+                .is_some_and(|summary| summary.contains(Some(element.as_ref())));
+            if !in_summary {
+                return false;
+            }
+        }
+        ancestor = parent.parent_element();
+    }
+    web_sys::window()
+        .and_then(|window| window.get_computed_style(element).ok().flatten())
+        .is_some_and(|style| {
+            !matches!(
+                style.get_property_value("visibility").ok().as_deref(),
+                Some("hidden" | "collapse")
+            )
+        })
 }
 
 #[cfg(target_arch = "wasm32")]
