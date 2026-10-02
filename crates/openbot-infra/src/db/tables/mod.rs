@@ -74,6 +74,8 @@ impl fmt::Debug for Redacted {
 /// - `agent_profiles.callback_token_hash` 是回调令牌的散列。散列不是原文，但它是**验证物**：
 ///   泄漏之后可以离线爆破低熵令牌，所以按 secret 处理而不是按摘要处理。
 /// - `credentials.encrypted_value` 是 vault 密文本体。
+/// - `remember_effect_receipts.args_hash` 沿原 `tool_calls.args_hash` 保护运行期参数摘要；
+///   `capability_id` 沿原 `tool_attempts.capability_id` 保护能力绑定，即使列名不命中扫描词根。
 /// - `sessions.token` 是明文会话令牌，拿到即可冒充该用户。
 /// - `sso_providers` 的两列是上游 `encrypt-sso-config.ts::ENCRYPTED_FIELDS` 点名要加密的字段，
 ///   即上游自己也认定它们承载凭据。
@@ -98,6 +100,8 @@ pub const SECRET_COLUMNS: &[(&str, &str)] = &[
     ("messages", "search_text"),
     ("model_connection_secrets", "encrypted_value"),
     ("outbox", "payload"),
+    ("remember_effect_receipts", "args_hash"),
+    ("remember_effect_receipts", "capability_id"),
     ("remote_agent_interrupts", "descriptor"),
     ("remote_agent_interrupts", "response_payload"),
     ("run_events", "payload"),
@@ -312,6 +316,11 @@ pub const SECRET_SCAN_EXEMPTIONS: &[(&str, &str, &str)] = &[
         "tool_calls",
         "schema_hash",
         "SHA-256 catalog schema 摘要是公开版本标识，不由运行期 secret 输入派生",
+    ),
+    (
+        "remember_effect_receipts",
+        "schema_hash",
+        "原 tool_calls.schema_hash 的冻结副本：公开 catalog schema 版本摘要，不由 remember 运行期参数派生；args_hash 仍按敏感列脱敏",
     ),
 ];
 
@@ -688,6 +697,7 @@ pub const NATIVE_0028_TABLES: &[TableSpec] = &[TableSpec {
 pub mod model_connection_secrets;
 pub mod model_connections;
 pub mod oauth_refresh_operations;
+pub mod remember_effect_receipts;
 pub mod run_model_selections;
 pub mod sdk_gateway_connections;
 pub mod sdk_gateway_operations;
@@ -740,6 +750,13 @@ pub const NATIVE_0034_TABLES: &[TableSpec] = &[TableSpec {
     column_specs: oauth_refresh_operations::COLUMN_SPECS,
 }];
 
+/// Immutable remember business evidence (native 0035).
+pub const NATIVE_0035_TABLES: &[TableSpec] = &[TableSpec {
+    name: remember_effect_receipts::TABLE_NAME,
+    columns: remember_effect_receipts::COLUMNS,
+    column_specs: remember_effect_receipts::COLUMN_SPECS,
+}];
+
 /// Complete current public-table registry: fixed upstream 0012 plus every Rust-owned native table.
 /// Historical callers that specifically compare the upstream boundary must continue using
 /// [`ALL_TABLES`] instead.
@@ -758,6 +775,7 @@ pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
         .chain(NATIVE_0031_TABLES.iter())
         .chain(NATIVE_0033_TABLES.iter())
         .chain(NATIVE_0034_TABLES.iter())
+        .chain(NATIVE_0035_TABLES.iter())
 }
 
 #[cfg(test)]
@@ -1045,6 +1063,42 @@ mod tests {
         assert_redacted("agent_profiles", &format!("{row:?}"));
     }
 
+    #[test]
+    fn remember_effect_receipts_debug_redacts_args_and_capability_but_keeps_catalog_hash() {
+        let catalog_hash = "c".repeat(64);
+        let row = remember_effect_receipts::Row {
+            receipt_id: MARKER.to_string(),
+            deployment_id: "deployment".to_string(),
+            tenant_id: "tenant".to_string(),
+            thread_id: "thread".to_string(),
+            run_id: "run".to_string(),
+            actor_id: "actor".to_string(),
+            bot_id: "bot".to_string(),
+            auth_generation: 0,
+            tool_call_id: "call".to_string(),
+            call_seq: 0,
+            attempt_id: "attempt".to_string(),
+            attempt_seq: 0,
+            decision_id: "decision".to_string(),
+            capability_id: format!("{SENTINEL}-capability"),
+            args_hash: format!("{SENTINEL}-arguments"),
+            schema_hash: catalog_hash.clone(),
+            catalog_generation: 0,
+            target_kind: "memory_user".to_string(),
+            target_id: "actor".to_string(),
+            memory_id: uuid::Uuid::nil().to_string(),
+            memory_event_seq: 0,
+            audit_event_id: uuid::Uuid::nil().to_string(),
+            recorded_at: epoch(),
+        };
+        let rendered = format!("{row:?}");
+        assert_redacted("remember_effect_receipts", &rendered);
+        assert!(rendered.contains("args_hash: <redacted>"));
+        assert!(rendered.contains("capability_id: <redacted>"));
+        assert!(rendered.contains(&format!("schema_hash: {catalog_hash:?}")));
+        assert_eq!(rendered.matches("<redacted>").count(), 2);
+    }
+
     /// 负向对照：脱敏不是全局把所有值都遮掉 —— 没登记 secret 列的表照常打印。
     ///
     /// 没有这一条，上面六条在"`Debug` 恒输出 `<redacted>`"的实现下同样通过。
@@ -1121,8 +1175,8 @@ mod tests {
             })
             .count();
         assert_eq!(hits, registered_root_hits + exemption_root_hits);
-        assert_eq!(SECRET_COLUMNS.len(), 36);
-        assert_eq!(SECRET_SCAN_EXEMPTIONS.len(), 29);
+        assert_eq!(SECRET_COLUMNS.len(), 38);
+        assert_eq!(SECRET_SCAN_EXEMPTIONS.len(), 30);
     }
 
     /// 两张名单都必须指向真实存在的 `(表, 列)`，且互不重叠。

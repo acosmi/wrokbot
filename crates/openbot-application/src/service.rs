@@ -144,6 +144,7 @@ pub const fn command_kind(command: &AppCommand) -> &'static str {
         AppCommand::GetThreadHistory { .. } => "get_thread_history",
         AppCommand::GetThreadConversation { .. } => "get_thread_conversation",
         AppCommand::GetRunReconciliation { .. } => "get_run_reconciliation",
+        AppCommand::GetRunEffectReceipts { .. } => "get_run_effect_receipts",
         AppCommand::ListPendingRemoteInterrupts => "list_pending_remote_interrupts",
         AppCommand::ResolveRemoteInterrupt { .. } => "resolve_remote_interrupt",
         AppCommand::RememberMemory(_) => "remember_memory",

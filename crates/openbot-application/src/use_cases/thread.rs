@@ -211,6 +211,85 @@ pub async fn get_thread_conversation<D: ThreadDirectory>(
 #[path = "run_reconciliation_tests.rs"]
 mod reconciliation_tests;
 
+#[cfg(test)]
+#[path = "run_effect_receipts_tests.rs"]
+mod effect_receipts_tests;
+
+/// Read immutable positive evidence without changing the original Unknown or its occupancy.
+pub async fn get_run_effect_receipts<D: ThreadDirectory>(
+    directory: &D,
+    auth: &AuthContext,
+    thread: ThreadId,
+    run: openbot_contracts::ids::RunId,
+    after: Option<openbot_contracts::reconciliation::RunReconciliationCursor>,
+    limit: Option<u32>,
+) -> Result<openbot_contracts::reconciliation::RunEffectReceiptsSnapshot, AppError> {
+    use openbot_contracts::reconciliation::{
+        MAX_RUN_RECONCILIATION_RESPONSE_BYTES, RunReconciliationCursor, valid_reconciliation_id,
+        validate_page,
+    };
+    if !ThreadIdentity::is_plausible(&thread) {
+        return Err(AppError::MalformedPayload { field: "thread_id" });
+    }
+    if !valid_reconciliation_id(run.as_str()) {
+        return Err(AppError::MalformedPayload { field: "run_id" });
+    }
+    let limit = validate_page(after, limit)?;
+    let snapshot = directory
+        .run_effect_receipts(crate::ports::RunEffectReceiptsRequest {
+            deployment: auth.deployment().clone(),
+            tenant: auth.tenant().clone(),
+            actor: auth.actor().clone(),
+            auth_generation: auth.auth_generation(),
+            thread: thread.clone(),
+            run: run.clone(),
+            after,
+            limit,
+        })
+        .await
+        .map_err(|error| error.into_app_error())?;
+    let unavailable = || AppError::DependencyUnavailable {
+        dependency: "thread_directory",
+    };
+    if snapshot.thread_id != thread
+        || snapshot.run_id != run
+        || snapshot.terminal_event_sequence > i64::MAX as u64
+        || snapshot.receipts.len() > limit as usize
+    {
+        return Err(unavailable());
+    }
+    let mut previous = after;
+    for receipt in &snapshot.receipts {
+        let cursor = RunReconciliationCursor {
+            call_sequence: receipt.call_sequence,
+            attempt_sequence: receipt.attempt_sequence,
+        };
+        if !cursor.is_valid()
+            || previous.is_some_and(|value| cursor <= value)
+            || !valid_reconciliation_id(&receipt.receipt_id)
+            || !valid_reconciliation_id(&receipt.tool_call_id)
+            || !valid_reconciliation_id(&receipt.attempt_id)
+        {
+            return Err(unavailable());
+        }
+        previous = Some(cursor);
+    }
+    if snapshot.next.is_some()
+        && (snapshot.receipts.len() != limit as usize || snapshot.next != previous)
+    {
+        return Err(unavailable());
+    }
+    // Bound identities and collection length before allocating the serialized response.
+    if serde_json::to_vec(&snapshot)
+        .map_err(|_| unavailable())?
+        .len()
+        > MAX_RUN_RECONCILIATION_RESPONSE_BYTES
+    {
+        return Err(unavailable());
+    }
+    Ok(snapshot)
+}
+
 /// Read current actor-owned durable Unknown facts without authorizing any follow-up effect.
 pub async fn get_run_reconciliation<D: ThreadDirectory>(
     directory: &D,

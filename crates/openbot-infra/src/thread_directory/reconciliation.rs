@@ -12,34 +12,7 @@ use tokio_postgres::Row;
 
 // Do not borrow the execution-authority predicate: a terminal run has no live worker lease.
 // Project no business payload or arbitrary error text, including into the database client.
-const QUERY: &str = r"
-WITH visible_run AS (
-  SELECT r.run_id,r.thread_id,r.status,r.foreground,r.terminal_event_seq,r.actor_id,r.bot_id
-  FROM public.runs r
-  JOIN public.threads t ON t.thread_id=r.thread_id
-  JOIN public.users u ON u.id=r.actor_id
-  JOIN public.agents b ON b.id=r.bot_id
-  JOIN public.agent_profiles p ON p.agent_id=b.id
-  LEFT JOIN public.deployment_packages bp ON bp.id=b.package_id
-  WHERE r.thread_id=$1 AND r.run_id=$2 AND r.actor_id=$3
-    AND t.deployment_id=$4 AND t.tenant_id=$5 AND t.status<>'deleted'
-    AND coalesce(u.auth_generation,0)=$6
-    AND EXISTS(SELECT 1 FROM public.user_roles ur
-               WHERE ur.user_id=u.id AND ur.role IN ('user','admin'))
-    AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email))
-    AND p.deleted_at IS NULL AND (p.visibility='public' OR p.owner_user_id=$3)
-    AND (b.package_id IS NULL OR bp.tenant_id=$5)
-    AND (
-      (t.anchor_kind='direct_bot' AND t.anchor_id=b.id AND EXISTS(
-        SELECT 1 FROM public.thread_memberships tm WHERE tm.thread_id=t.thread_id AND tm.user_id=$3))
-      OR (t.anchor_kind='channel' AND EXISTS(
-        SELECT 1 FROM public.channels ch
-        JOIN public.channel_memberships cm ON cm.channel_id=ch.id AND cm.user_id=$3
-        JOIN public.channel_agents ca ON ca.channel_id=ch.id AND ca.agent_id=b.id
-        LEFT JOIN public.deployment_packages cp ON cp.id=ch.package_id
-        WHERE ch.id=t.anchor_id AND (ch.package_id IS NULL OR cp.tenant_id=$5)))
-    )
-)
+const PAGE_QUERY: &str = r"
 SELECT v.run_id,v.thread_id,
        CASE WHEN v.status IN ('queued','running','completed','failed','cancelled',
                              'reconciliation_required') THEN v.status END AS run_status,
@@ -112,9 +85,14 @@ pub(super) async fn read(
         .get()
         .await
         .map_err(|_| ThreadDirectoryError::Unavailable)?;
+    let query = format!(
+        "{}{}",
+        super::reconciliation_visibility::VISIBLE_RUN,
+        PAGE_QUERY
+    );
     let rows = client
         .query(
-            QUERY,
+            &query,
             &[
                 &request.thread.as_str(),
                 &request.run.as_str(),

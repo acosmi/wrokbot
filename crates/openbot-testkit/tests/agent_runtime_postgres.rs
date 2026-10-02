@@ -35,7 +35,6 @@ use openbot_contracts::components::{
 };
 use openbot_contracts::ids::thread::ThreadIdentity;
 use openbot_contracts::ids::{ActorId, BotId, DeploymentId, RunId, TenantId};
-use openbot_contracts::memory::MemoryRecord;
 use openbot_contracts::remote_interrupt::{RemoteInterruptAnswer, RemoteInterruptAnswerStatus};
 use openbot_domain::policy::{ActionPolicy, PolicyMode};
 use openbot_domain::remote_callback::{RemoteRunAssertionSigner, RemoteToolSet};
@@ -333,7 +332,7 @@ impl RememberToolMemory for RevokeBeforeSecondRemember {
     async fn remember_from_tool(
         &self,
         request: RememberToolMemoryRequest,
-    ) -> Result<MemoryRecord, MemoryAdministrationError> {
+    ) -> Result<openbot_application::CommittedMemoryEffect, MemoryAdministrationError> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
             self.pool
                 .get()
@@ -1135,7 +1134,9 @@ async fn remember_tool_runs_through_policy_capability_memory_audit_and_second_sa
                 )
                 .await
                 .map_err(|error| error.to_string())?;
-            let memory = PostgresMemoryAdministration::new(pool.clone());
+            let memory = PostgresMemoryAdministration::new(pool.clone())
+                .with_effect_audit_key(vec![0xa5; 32])
+                .map_err(|error| error.to_string())?;
             let tool_memory = Arc::new(RevokeBeforeSecondRemember {
                 inner: memory.clone(),
                 pool: pool.clone(),

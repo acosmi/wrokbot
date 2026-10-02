@@ -1,13 +1,14 @@
 //! Explicit memory GUI journey 的 PostgreSQL 17 真库证据。
 
+#[path = "remember_effect_receipts/support.rs"]
+mod effect_support;
 mod harness;
 
 use harness::{admin_config, with_temp_database};
 use openbot_application::{
     CorrectMemoryRequest, MemoryAdministration, MemoryAdministrationError, MemoryControlRequest,
     MemoryPageRequest, MutateMemoryRequest, RecallMemoriesRequest, RememberMemoryRequest,
-    RememberToolMemory, RememberToolMemoryRequest, UpdateMemoryControlRequest,
-    parse_remember_tool_arguments,
+    RememberToolMemory, UpdateMemoryControlRequest,
 };
 use openbot_contracts::auth::AuthGeneration;
 use openbot_contracts::ids::{ActorId, BotId, RunId, TenantId, ThreadId};
@@ -74,7 +75,7 @@ async fn write_control_blocks_gui_tool_and_correction_but_never_erasure() {
             .map_err(|error| error.to_string())?;
         let result = async {
             provision(&pool).await?;
-            let store = PostgresMemoryAdministration::new(pool.clone());
+            let store = effect_support::store(&pool);
             let tenant = TenantId::new("tenant-a");
             let actor = ActorId::new("actor-a");
             let scope = MemoryControlRequest {
@@ -157,24 +158,17 @@ async fn write_control_blocks_gui_tool_and_correction_but_never_erasure() {
             {
                 return Err("disabled correction must not create a replacement".to_owned());
             }
-            let tool_arguments = parse_remember_tool_arguments(&serde_json::json!({
-                "memoryKind":"preference",
-                "scope":"user",
-                "content":"Remember from tool",
-                "tags":[],
-                "sensitivity":"normal"
-            }))
-            .map_err(|error| error.to_string())?;
+            let tool_auth = openbot_contracts::auth::AuthContextBuilder::from_verified_session(
+                openbot_contracts::ids::DeploymentId::new("dep-a"), tenant.clone(), actor.clone(),
+                AuthGeneration::new(0), false,
+            ).with_role(openbot_contracts::auth::Role::User).build();
+            let request = effect_support::capture(&pool, &tool_auth, openbot_contracts::tool::ToolInvocation {
+                call_id:openbot_contracts::ids::ToolCallId::new("memory-control-tool"),
+                run_id:RunId::new("run-memory"),bot_id:BotId::new("bot-1"),call_seq:0,tool_name:"remember".into(),
+                arguments:serde_json::json!({"memoryKind":"preference","scope":"user","content":"Remember from tool","tags":[],"sensitivity":"normal"}),
+            }).await?;
             if store
-                .remember_from_tool(RememberToolMemoryRequest {
-                    tenant: tenant.clone(),
-                    actor: actor.clone(),
-                    auth_generation: AuthGeneration::new(0),
-                    run: RunId::new("run-memory"),
-                    bot: BotId::new("bot-1"),
-                    thread: ThreadId::new("550e8400-e29b-41d4-a716-446655440000"),
-                    arguments: tool_arguments,
-                })
+                .remember_from_tool(request)
                 .await
                 != Err(MemoryAdministrationError::WritesDisabled)
             {

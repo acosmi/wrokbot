@@ -172,9 +172,113 @@ pub struct RunReconciliationSnapshot {
     pub available_actions: [(); 0],
 }
 
+/// 由第一方业务事务产生的正向事实，不是原 attempt 的结果改写。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunEffectReceiptFact {
+    /// 原 remember 事务曾创建 memory；不表示 memory 目前仍 active。
+    MemoryCreated,
+}
+
+/// 不含业务目标、正文、能力或绑定摘要的历史提交引用。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunEffectReceipt {
+    /// 同事务产生的内部回执身份。
+    pub receipt_id: String,
+    /// 原 tool call 身份。
+    pub tool_call_id: String,
+    /// 原 call 序号。
+    pub call_sequence: i64,
+    /// 原 attempt 身份。
+    pub attempt_id: String,
+    /// 原 attempt 序号。
+    pub attempt_sequence: i64,
+    /// 受支持的正向业务事实。
+    pub fact: RunEffectReceiptFact,
+    /// PG 事务内记录时间，不是精确 commit 时间。
+    #[serde(with = "time::serde::rfc3339")]
+    pub recorded_at: OffsetDateTime,
+}
+
+/// 当前 owner 获准读取的正向回执页；空页不证明未提交。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunEffectReceiptsSnapshot {
+    /// 受权 thread 身份。
+    pub thread_id: ThreadId,
+    /// 原 run 身份。
+    pub run_id: RunId,
+    /// 原 Unknown 终态保持不变。
+    pub status: RunReconciliationStatus,
+    /// 原 run 的 terminal 序号。
+    pub terminal_event_sequence: u64,
+    /// 本页数据库 statement 时间。
+    #[serde(with = "time::serde::rfc3339")]
+    pub observed_at: OffsetDateTime,
+    /// 该 run 当前 foreground 占用事实。
+    pub foreground_blocked: bool,
+    /// 本页正向历史回执。
+    pub receipts: Vec<RunEffectReceipt>,
+    /// 有更多记录时，本页最后一项的原二元位置。
+    pub next: Option<RunReconciliationCursor>,
+    /// 没有写证据、处置、解锁或重放入口。
+    pub available_actions: [(); 0],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn positive_receipt_wire_is_closed_and_does_not_expose_business_bindings() {
+        let snapshot = RunEffectReceiptsSnapshot {
+            thread_id: ThreadId::new("thread"),
+            run_id: RunId::new("run"),
+            status: RunReconciliationStatus::ReconciliationRequired,
+            terminal_event_sequence: 7,
+            observed_at: OffsetDateTime::UNIX_EPOCH,
+            foreground_blocked: true,
+            receipts: vec![RunEffectReceipt {
+                receipt_id: "00000000-0000-4000-8000-000000000075".into(),
+                tool_call_id: "call".into(),
+                call_sequence: 2,
+                attempt_id: "attempt".into(),
+                attempt_sequence: 1,
+                fact: RunEffectReceiptFact::MemoryCreated,
+                recorded_at: OffsetDateTime::UNIX_EPOCH,
+            }],
+            next: None,
+            available_actions: [],
+        };
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 9);
+        assert_eq!(value["receipts"][0].as_object().unwrap().len(), 7);
+        assert_eq!(value["receipts"][0]["fact"], "memory_created");
+        assert_eq!(value["receipts"][0]["recordedAt"], "1970-01-01T00:00:00Z");
+        assert_eq!(value["availableActions"], serde_json::json!([]));
+        assert_eq!(
+            serde_json::from_value::<RunEffectReceiptsSnapshot>(value.clone()).unwrap(),
+            snapshot
+        );
+        for field in [
+            "memoryId",
+            "targetId",
+            "argsHash",
+            "capabilityId",
+            "content",
+        ] {
+            let mut unknown = value.clone();
+            unknown["receipts"][0][field] = serde_json::json!("forbidden");
+            assert!(serde_json::from_value::<RunEffectReceiptsSnapshot>(unknown).is_err());
+        }
+        let mut unknown = value.clone();
+        unknown["receipts"][0]["fact"] = serde_json::json!("not_committed");
+        assert!(serde_json::from_value::<RunEffectReceiptsSnapshot>(unknown).is_err());
+        let mut unknown = value;
+        unknown["availableActions"] = serde_json::json!([null]);
+        assert!(serde_json::from_value::<RunEffectReceiptsSnapshot>(unknown).is_err());
+    }
 
     #[test]
     fn query_requires_complete_nonnegative_cursor_and_bounded_limit() {

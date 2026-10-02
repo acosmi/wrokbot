@@ -792,6 +792,22 @@ where
                 )
                 .await?,
             )),
+            AppCommand::GetRunEffectReceipts {
+                thread_id,
+                run_id,
+                after,
+                limit,
+            } => Ok(AppReply::RunEffectReceipts(
+                crate::use_cases::thread::get_run_effect_receipts(
+                    &self.threads,
+                    auth,
+                    thread_id,
+                    run_id,
+                    after,
+                    limit,
+                )
+                .await?,
+            )),
             AppCommand::ListPendingRemoteInterrupts => Ok(AppReply::PendingRemoteInterrupts(
                 list_pending_remote_interrupts(self.remote_interrupts.as_ref(), auth).await?,
             )),

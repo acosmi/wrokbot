@@ -20,7 +20,6 @@ use openbot_application::{
 };
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::ids::{ActorId, ComputerGeneration, DeploymentId, RunId, TenantId};
-use openbot_contracts::memory::MemoryStatus;
 use openbot_contracts::tool::ToolInvocation;
 use openbot_domain::identity::roles::resolve_effective_role;
 use openbot_domain::policy::context::{
@@ -948,30 +947,31 @@ where
                 );
             }
         };
-        let request = RememberToolMemoryRequest {
-            tenant: call.tenant().clone(),
-            actor: call.actor().actor().clone(),
-            auth_generation: call.auth_generation(),
-            run: call.run().clone(),
-            bot: call.actor().bot().clone(),
-            thread: call.thread().clone(),
-            arguments,
+        let _ = arguments; // The private request reparses the original envelope, never a new body.
+        let request = match RememberToolMemoryRequest::from_execution(
+            self.deployment.clone(),
+            &call,
+            &redeemed,
+        ) {
+            Ok(request) => request,
+            Err(_) => {
+                return ToolExecutionReport::new(
+                    redeemed,
+                    r#"{"status":"unknown","error":"memory_binding_invalid"}"#.to_owned(),
+                    CommitState::Unknown,
+                    started.elapsed(),
+                    Some("memory_binding_invalid"),
+                );
+            }
         };
         let result = tokio::time::timeout(timeout, self.memory.remember_from_tool(request)).await;
         match result {
-            Ok(Ok(record)) if record.status == MemoryStatus::Active => ToolExecutionReport::new(
+            Ok(Ok(record)) => ToolExecutionReport::new(
                 redeemed,
                 json!({"status":"remembered","memoryId":record.memory_id}).to_string(),
                 CommitState::Committed,
                 started.elapsed(),
                 None,
-            ),
-            Ok(Ok(_)) => ToolExecutionReport::new(
-                redeemed,
-                r#"{"status":"not_remembered","error":"memory_state_invalid"}"#.to_owned(),
-                CommitState::NotCommitted,
-                started.elapsed(),
-                Some("memory_state_invalid"),
             ),
             Ok(Err(error)) => {
                 let (commit, code) = match error {
@@ -985,14 +985,14 @@ where
                         (CommitState::NotCommitted, "not_visible")
                     }
                     openbot_application::MemoryAdministrationError::Conflict => {
-                        (CommitState::NotCommitted, "memory_conflict")
+                        (CommitState::Unknown, "memory_conflict")
                     }
                     openbot_application::MemoryAdministrationError::WritesDisabled => {
                         (CommitState::NotCommitted, "memory_writes_disabled")
                     }
                     openbot_application::MemoryAdministrationError::Unavailable
                     | openbot_application::MemoryAdministrationError::Corrupt { .. } => {
-                        (CommitState::NotCommitted, "dependency_unavailable")
+                        (CommitState::Unknown, "memory_unavailable")
                     }
                 };
                 ToolExecutionReport::new(

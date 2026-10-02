@@ -313,6 +313,10 @@ pub enum AuditFact {
     RoutingCandidates(AuditIdentifierList),
     /// 本次 acting 之前写下的 durable decision 的 id（§17.2 条 2 的锚点）。
     DecisionId(AuditIdentifier),
+    /// Original tool attempt bound to a same-transaction business receipt.
+    ToolAttemptId(AuditIdentifier),
+    /// Original business memory event sequence, never current content.
+    MemoryEventSequence(u64),
     /// 做出该 decision 时生效的 policy 版本（§8.3：多副本下用旧版本做出的 decision 必须可辨认）。
     PolicyVersion(AuditIdentifier),
     /// 触发拒绝的规则 id。
@@ -418,6 +422,8 @@ impl AuditFact {
             Self::RoutingViaMention(_) => "via_mention",
             Self::RoutingCandidates(_) => "candidates",
             Self::DecisionId(_) => "decision_id",
+            Self::ToolAttemptId(_) => "tool_attempt_id",
+            Self::MemoryEventSequence(_) => "memory_event_sequence",
             Self::PolicyVersion(_) => "policy_version",
             Self::RefusedByRule(_) => "refused_by_rule",
             Self::ErrorCode(_) => "error_code",
@@ -462,6 +468,7 @@ impl AuditFact {
             | Self::TargetId(value)
             | Self::RoutingChosen(value)
             | Self::DecisionId(value)
+            | Self::ToolAttemptId(value)
             | Self::ApprovalId(value)
             | Self::PolicyVersion(value)
             | Self::RefusedByRule(value)
@@ -496,6 +503,7 @@ impl AuditFact {
             | Self::RoutingViaMention(value)
             | Self::OutputTruncated(value) => Value::Bool(*value),
             Self::ComputerGeneration(value)
+            | Self::MemoryEventSequence(value)
             | Self::CredentialKeyReferenceBytes(value)
             | Self::CatalogGeneration(value)
             | Self::DocumentGeneration(value)
@@ -551,6 +559,7 @@ impl AuditFact {
             | Self::TargetId(value)
             | Self::RoutingChosen(value)
             | Self::DecisionId(value)
+            | Self::ToolAttemptId(value)
             | Self::ApprovalId(value)
             | Self::PolicyVersion(value)
             | Self::RefusedByRule(value)
@@ -585,6 +594,7 @@ impl AuditFact {
             | Self::RoutingViaMention(value)
             | Self::OutputTruncated(value) => writer.bool(*value),
             Self::ComputerGeneration(value)
+            | Self::MemoryEventSequence(value)
             | Self::CredentialKeyReferenceBytes(value)
             | Self::CatalogGeneration(value)
             | Self::DocumentGeneration(value)
@@ -648,6 +658,8 @@ pub const AUDIT_FIELD_LEDGER: &[&str] = &[
     "via_mention",
     "candidates",
     "decision_id",
+    "tool_attempt_id",
+    "memory_event_sequence",
     "policy_version",
     "refused_by_rule",
     "error_code",
@@ -831,6 +843,8 @@ mod tests {
                     .unwrap(),
             ),
             AuditFact::DecisionId(identifier("pd-1")),
+            AuditFact::ToolAttemptId(identifier("attempt-1")),
+            AuditFact::MemoryEventSequence(0),
             AuditFact::PolicyVersion(identifier("pv-7")),
             AuditFact::RefusedByRule(identifier("deny.private_hosts")),
             AuditFact::ErrorCode(AuditLabel::new("policy_refused")),

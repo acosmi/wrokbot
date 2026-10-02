@@ -520,6 +520,7 @@ fn http_route_of(command: &AppCommand) -> Option<String> {
         | AppCommand::GetThreadHistory { .. }
         | AppCommand::GetThreadConversation { .. }
         | AppCommand::GetRunReconciliation { .. }
+        | AppCommand::GetRunEffectReceipts { .. }
         | AppCommand::RememberMemory(_)
         | AppCommand::GetMemoryControl
         | AppCommand::UpdateMemoryControl(_)

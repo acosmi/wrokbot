@@ -1,6 +1,6 @@
 # Wrok Bot 后端实施台账
 
-更新时间：2026-10-02。补充074的Unknown持久事实只读查询与局部验证；此前审计修复及055、072、073集成事实、历次实施和实测记录保留。
+更新时间：2026-10-02。075的remember同事务业务回执、受权读取已通过精确候选独立复核并提交PR #96；074已正常合入，此前集成事实、历次实施和实测记录保留。
 
 001–047 已核实为 main 祖先。换机主控已亲读、实测并正常合入049、050、051、052、053、056、057、058及重建060/061、新增必要维护063/064；055、072、073也已按PR及main祖先事实核实合入。048、054保留开放候选，059/062未完成，不能继续用旧待批准记录替代当前合同及实际检查状态。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。下方历次检查点是历史记录，当前状态以任务表及本轮最终结论为准。
 
@@ -86,7 +86,8 @@
 | V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 已正常合入；原局部默认lib86/86、严格Clippy与fmt实测记录保留 | [#92](https://github.com/acosmi/wrokbot/pull/92) | [b62f3ae4e8](https://github.com/acosmi/wrokbot/commit/b62f3ae4e84d8998703113ab62363d5d3eb59c0c) |
 | V6-PR-073 | Unix诊断fixture codesign输出有界保留 | 已正常合入；原局部16/16、xtask严格Clippy及fmt实测记录保留 | [#93](https://github.com/acosmi/wrokbot/pull/93) | [09df8854e0](https://github.com/acosmi/wrokbot/commit/09df8854e06e6b145de16454fd684a670d766e85) |
 | 原任务审计修复 | OAuth单次刷新、Provider内容检查、TLS准入、最终帧与验收工具 | 具体修复已完成定向验证与独立复核；集成状态以PR记录为准，未新增任务编号 | [#94](https://github.com/acosmi/wrokbot/pull/94) | 见PR合并记录 |
-| V6-PR-074 | Unknown原run的受权持久事实只读分页；Server/Desktop接入 | 本地局部验证及独立复核通过；集成状态以PR记录为准 | [#95](https://github.com/acosmi/wrokbot/pull/95) | 见PR合并记录 |
+| V6-PR-074 | Unknown原run的受权持久事实只读分页；Server/Desktop接入 | 已正常合入；原局部验证和独立复核记录保留 | [#95](https://github.com/acosmi/wrokbot/pull/95) | [8ef3188bfb](https://github.com/acosmi/wrokbot/commit/8ef3188bfb2b789d8a5f4a670fda574ab7c57154) |
+| V6-PR-075 | remember同事务业务回执、后置结果防矛盾及受权只读页 | 精确源码候选独立复核通过；集成状态以PR实际记录为准 | [#96](https://github.com/acosmi/wrokbot/pull/96) | 见PR合并记录 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -339,3 +340,18 @@ Contracts WASM检查、核心all-targets严格Clippy、Infra/Server/Agent及Desk
 本项不修改原terminal、attempt、foreground、lease、outbox或audit，不提供查证、裁决、重放或继续入口；没有迁移、依赖、lock、历史SQL或前端变更。Unknown完整处置与安全续作、profile/lease及其余全量范围继续开放，A0–A7仍无完整通过证据。此处为提交前验证记录，集成状态以本项PR实际记录为准，未执行完整CI或Actions。
 
 最终源码候选 `590466357b58f6043b55de1f3b6baecbc5fbbdcd`（tree `77e0af61e85c2fed669a5396ddb79b3edd531e1f`）已完成独立源码与原始证据复核；另确认Standalone Desktop launcher编译检查通过。本次登记仅更新公开台账，产品与构建输入保持，引用以上精确依赖范围内的真实结果；最终HEAD与合并事实见[PR #95](https://github.com/acosmi/wrokbot/pull/95)。
+
+
+## V6-PR-075 remember同事务业务回执与受权读取
+
+2026-10-02：从已合主线 `8ef3188bfb2b789d8a5f4a670fda574ab7c57154` 将remember产生的memory、初始event、最小正向receipt及专用audit放入同一事务。请求从真实已兑换capability的原call/attempt派生；事务锁定当前actor、原run/call/attempt和当前权限，核取消、lease及写入控制。锁冲突有界拒绝并保留Unknown语义；精确重复只返回历史引用。后置journal在取得锁后重新读取receipt，拒绝终态后的写入及与正向事实矛盾的NotCommitted，不改历史terminal或原Unknown占用。
+
+新增native0035不可变回执表及真实数据库提取的schema fixture；旧SQL和旧fixture保持。回执不保存正文、无业务级外键，memory后续修正或删除不擦去最小历史证据；参数摘要和capability绑定在typed Debug中脱敏。Server/Desktop经同一Application提供当前owner授权的只读回执分页，单条SQL复核当前权限及全部原绑定，严格边界和no-store保持；模型原remember输出形状不变。
+
+固定Rust1.98.0、offline/locked实际通过1162个不同Rust用例，零ignored：Contracts119、Domain423、Application180、Infra371；隔离PG17.11/SCRAM迁移及查询20、remember producer16、既有memory7和tool journal5；真实AgentHost remember回归1；Server3、Desktop6、新回执跨宿主对拍3和既有对拍8。重复执行和生成schema操作不计新增通过。真实PG覆盖后置审计失败后RR与新连接读取、COMMIT回包丢失、原子回滚、锁等待及竞争、合法错误绑定、历史更改/删除、同库完整dump/restore和原Unknown仍拒绝begin。非零attempt测试是owned fixture调整真实绑定attempt的历史位置后验证producer/journal，不代表普通管线自动重试；跨宿主对拍使用同一真实Application实例和确定性只读端口，业务提交由另列真库测试证明。
+
+核心及受影响目标严格Clippy、Contracts WASM、Standalone Desktop launcher、全仓fmt和两项既有装配守卫通过。每项保存原始输出、输入清单和工具链/feature边界；早期输入遗漏已以完整工作树清单复验，lib结果只按未变实际编译依赖引用。测试类型、无效lease/异run夹具、锁等待链、敏感列漏登记及Clippy诊断的失败原记录保留，修正后重验，不把旧失败改写成通过。所有自有PG实例均实际stop等待成功；只用合成数据，不涉及用户数据库、备份、Keychain或TTY。
+
+最终源码候选 `6d12684d8ffe430b4bfc2b5ee0f878f0b0464c9c`（tree `af9a3ead09e27a9f0f2d5dd573d5d2e7fa60b88b`，base `8ef3188bfb2b789d8a5f4a670fda574ab7c57154`）已完成独立实施与原始证据复核，13项最终记录、1162个不同通过用例及44项验收矩阵核同，无阻断项。此后仅登记公开台账，产品与构建输入保持；最终HEAD和实际集成事实见[PR #96](https://github.com/acosmi/wrokbot/pull/96)。
+
+未运行完整CI或手动派发Actions；正常合并可能触发现有自动通知工作流，通知不是产品验证。处置/CAS、解除Unknown占用、安全后续run、通用vendor事实、完整恢复/A6及其余全量范围仍未完成，A0–A7没有因本项新增完整通过声明。

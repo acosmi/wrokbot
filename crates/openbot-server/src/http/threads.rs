@@ -50,7 +50,7 @@ pub(super) async fn reconciliation_response_policy(
         .strip_prefix("/api/threads/")
         .is_some_and(|suffix| {
             let parts = suffix.split('/').collect::<Vec<_>>();
-            matches!(parts.as_slice(), [thread, "runs", run, "reconciliation"] if !thread.is_empty() && !run.is_empty())
+            matches!(parts.as_slice(), [thread, "runs", run, "reconciliation"] | [thread, "runs", run, "reconciliation", "receipts"] if !thread.is_empty() && !run.is_empty())
         });
     let get = request.method() == axum::http::Method::GET;
     let mut response = next.run(request).await;
@@ -76,6 +76,50 @@ pub async fn reconciliation(
     query: Result<Query<RunReconciliationQuery>, QueryRejection>,
     request: Request,
 ) -> Result<Response, HttpError> {
+    reconciliation_read(
+        state,
+        auth,
+        path,
+        query,
+        request,
+        ReconciliationRead::Attempts,
+    )
+    .await
+}
+
+/// Read positive business receipts through the same authority and bounded framing as attempts.
+pub async fn effect_receipts(
+    State(state): State<ServerState>,
+    Authenticated(auth): Authenticated,
+    path: Result<Path<(String, String)>, axum::extract::rejection::PathRejection>,
+    query: Result<Query<RunReconciliationQuery>, QueryRejection>,
+    request: Request,
+) -> Result<Response, HttpError> {
+    reconciliation_read(
+        state,
+        auth,
+        path,
+        query,
+        request,
+        ReconciliationRead::Receipts,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum ReconciliationRead {
+    Attempts,
+    Receipts,
+}
+
+async fn reconciliation_read(
+    state: ServerState,
+    auth: openbot_contracts::auth::AuthContext,
+    path: Result<Path<(String, String)>, axum::extract::rejection::PathRejection>,
+    query: Result<Query<RunReconciliationQuery>, QueryRejection>,
+    request: Request,
+    kind: ReconciliationRead,
+) -> Result<Response, HttpError> {
     // Axum performs the one actual path decode. Its percent decoder preserves malformed
     // escapes, so reject those raw triplets here to match the controlled Desktop protocol.
     if !valid_reconciliation_percent_escapes(request.uri().path()) {
@@ -98,35 +142,44 @@ pub async fn reconciliation(
     if !body.is_empty() {
         return Err(AppError::MalformedPayload { field: "body" }.into());
     }
-    match state
-        .application()
-        .execute(
-            auth,
-            AppCommand::GetRunReconciliation {
-                thread_id: ThreadId::new(thread_id),
-                run_id: RunId::new(run_id),
-                after,
-                limit,
-            },
-        )
-        .await?
-    {
-        AppReply::RunReconciliation(snapshot) => {
-            let body = serde_json::to_vec(&snapshot).map_err(|_| application_contract_error())?;
-            if body.len() > MAX_RUN_RECONCILIATION_RESPONSE_BYTES {
-                return Err(application_contract_error());
-            }
-            Ok((
-                [
-                    (axum::http::header::CONTENT_TYPE, "application/json"),
-                    (CACHE_CONTROL, "no-store"),
-                ],
-                body,
-            )
-                .into_response())
+    let thread_id = ThreadId::new(thread_id);
+    let run_id = RunId::new(run_id);
+    let command = match kind {
+        ReconciliationRead::Attempts => AppCommand::GetRunReconciliation {
+            thread_id,
+            run_id,
+            after,
+            limit,
+        },
+        ReconciliationRead::Receipts => AppCommand::GetRunEffectReceipts {
+            thread_id,
+            run_id,
+            after,
+            limit,
+        },
+    };
+    let reply = state.application().execute(auth, command).await?;
+    let body = match (kind, reply) {
+        (ReconciliationRead::Attempts, AppReply::RunReconciliation(snapshot)) => {
+            serde_json::to_vec(&snapshot)
         }
-        _ => Err(application_contract_error()),
+        (ReconciliationRead::Receipts, AppReply::RunEffectReceipts(snapshot)) => {
+            serde_json::to_vec(&snapshot)
+        }
+        _ => return Err(application_contract_error()),
     }
+    .map_err(|_| application_contract_error())?;
+    if body.len() > MAX_RUN_RECONCILIATION_RESPONSE_BYTES {
+        return Err(application_contract_error());
+    }
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json"),
+            (CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 fn valid_reconciliation_percent_escapes(raw: &str) -> bool {

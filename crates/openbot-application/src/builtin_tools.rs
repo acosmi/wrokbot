@@ -5,8 +5,11 @@ use core::time::Duration;
 use async_trait::async_trait;
 use openbot_contracts::auth::AuthGeneration;
 use openbot_contracts::error::AppError;
-use openbot_contracts::ids::{ActorId, BotId, CatalogGeneration, RunId, TenantId, ThreadId};
-use openbot_contracts::memory::{MemoryKind, MemoryRecord, MemorySensitivity};
+use openbot_contracts::ids::{
+    ActorId, AttemptId, BotId, CapabilityId, CatalogGeneration, DeploymentId, PolicyDecisionId,
+    RunId, TenantId, ThreadId, ToolCallId,
+};
+use openbot_contracts::memory::{MemoryKind, MemorySensitivity};
 use openbot_domain::audit::hash::Sha256Digest;
 use openbot_domain::tool::metadata::{
     ApprovalClass, Effect, EffectClassification, Idempotency, SandboxRequirement, ToolLimits,
@@ -155,20 +158,133 @@ pub fn remember_tool_metadata() -> ToolMetadata {
 /// Fully authoritative request presented to the remember-tool storage port.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RememberToolMemoryRequest {
-    /// Deployment tenant.
-    pub tenant: TenantId,
-    /// Current actor/owner.
-    pub actor: ActorId,
-    /// Generation revalidated in the memory INSERT transaction.
-    pub auth_generation: AuthGeneration,
-    /// Active run.
-    pub run: RunId,
-    /// Active run Bot.
-    pub bot: BotId,
-    /// Active run thread.
-    pub thread: ThreadId,
-    /// Validated model arguments without any target ID or provenance field.
-    pub arguments: RememberToolArguments,
+    deployment: DeploymentId,
+    tenant: TenantId,
+    actor: ActorId,
+    auth_generation: AuthGeneration,
+    run: RunId,
+    bot: BotId,
+    thread: ThreadId,
+    call: ToolCallId,
+    attempt: AttemptId,
+    decision: PolicyDecisionId,
+    capability: CapabilityId,
+    args_hash: Sha256Digest,
+    schema_hash: Sha256Digest,
+    catalog_generation: CatalogGeneration,
+    target: openbot_domain::tool::approval::ApprovalTarget,
+    arguments: RememberToolArguments,
+}
+
+impl RememberToolMemoryRequest {
+    /// Derive every effect field from the redeemed execution envelope; model input cannot supply
+    /// identities, authority, or an alternate body. Deployment comes from the host assembly.
+    pub fn from_execution(
+        deployment: DeploymentId,
+        call: &crate::tool::ExecutableToolCall,
+        proof: &openbot_domain::tool::pipeline::RedeemedCapability,
+    ) -> Result<Self, MemoryAdministrationError> {
+        if call.metadata().name.as_str() != REMEMBER_TOOL_NAME || call.capability_id() != proof.id()
+        {
+            return Err(MemoryAdministrationError::Corrupt {
+                field: "remember_binding",
+            });
+        }
+        let arguments = parse_remember_tool_arguments(call.arguments().as_value())
+            .map_err(|_| MemoryAdministrationError::InvalidInput { field: "arguments" })?;
+        Ok(Self {
+            deployment,
+            tenant: call.tenant().clone(),
+            actor: call.actor().actor().clone(),
+            auth_generation: call.auth_generation(),
+            run: call.run().clone(),
+            bot: call.actor().bot().clone(),
+            thread: call.thread().clone(),
+            call: call.call_id().clone(),
+            attempt: call.attempt_id().clone(),
+            decision: call.decision_id().clone(),
+            capability: proof.id().clone(),
+            args_hash: call.arguments().canonical_hash(),
+            schema_hash: call.metadata().schema_hash,
+            catalog_generation: call.metadata().catalog_generation,
+            target: call.target().clone(),
+            arguments,
+        })
+    }
+
+    /// Configured deployment.
+    pub const fn deployment(&self) -> &DeploymentId {
+        &self.deployment
+    }
+    /// Original tenant.
+    pub const fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+    /// Original actor.
+    pub const fn actor(&self) -> &ActorId {
+        &self.actor
+    }
+    /// Generation of the original executable call.
+    pub const fn auth_generation(&self) -> AuthGeneration {
+        self.auth_generation
+    }
+    /// Original run.
+    pub const fn run(&self) -> &RunId {
+        &self.run
+    }
+    /// Original Bot.
+    pub const fn bot(&self) -> &BotId {
+        &self.bot
+    }
+    /// Original thread.
+    pub const fn thread(&self) -> &ThreadId {
+        &self.thread
+    }
+    /// Original tool call.
+    pub const fn call(&self) -> &ToolCallId {
+        &self.call
+    }
+    /// Original attempt.
+    pub const fn attempt(&self) -> &AttemptId {
+        &self.attempt
+    }
+    /// Original decision.
+    pub const fn decision(&self) -> &PolicyDecisionId {
+        &self.decision
+    }
+    /// Identity of the consumed capability.
+    pub const fn capability(&self) -> &CapabilityId {
+        &self.capability
+    }
+    /// Canonical body binding; not an exportable receipt field.
+    pub const fn args_hash(&self) -> &Sha256Digest {
+        &self.args_hash
+    }
+    /// Original catalog schema binding.
+    pub const fn schema_hash(&self) -> &Sha256Digest {
+        &self.schema_hash
+    }
+    /// Original catalog generation.
+    pub const fn catalog_generation(&self) -> CatalogGeneration {
+        self.catalog_generation
+    }
+    /// Original authoritative target scope.
+    pub const fn target(&self) -> &openbot_domain::tool::approval::ApprovalTarget {
+        &self.target
+    }
+    /// Parsed original body.
+    pub const fn arguments(&self) -> &RememberToolArguments {
+        &self.arguments
+    }
+}
+
+/// A same-transaction historical business commit, independent of current memory lifecycle state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommittedMemoryEffect {
+    /// Internal business object originally created.
+    pub memory_id: String,
+    /// Immutable receipt identity; not returned to the model.
+    pub receipt_id: String,
 }
 
 /// Storage boundary used only after the complete decision/attempt/capability pipeline.
@@ -178,7 +294,7 @@ pub trait RememberToolMemory: Send + Sync {
     async fn remember_from_tool(
         &self,
         request: RememberToolMemoryRequest,
-    ) -> Result<MemoryRecord, MemoryAdministrationError>;
+    ) -> Result<CommittedMemoryEffect, MemoryAdministrationError>;
 }
 
 fn remember_schema() -> Value {
