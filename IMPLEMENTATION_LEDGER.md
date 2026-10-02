@@ -89,7 +89,7 @@
 | V6-PR-074 | Unknown原run的受权持久事实只读分页；Server/Desktop接入 | 已正常合入；原局部验证和独立复核记录保留 | [#95](https://github.com/acosmi/wrokbot/pull/95) | [8ef3188bfb](https://github.com/acosmi/wrokbot/commit/8ef3188bfb2b789d8a5f4a670fda574ab7c57154) |
 | V6-PR-075 | remember同事务业务回执、后置结果防矛盾及受权只读页 | 已正常合入；原局部验证和独立复核记录保留 | [#96](https://github.com/acosmi/wrokbot/pull/96) | [36cfd67f28](https://github.com/acosmi/wrokbot/commit/36cfd67f284103d26b54afe6547e011993003d24) |
 | V6-PR-076 | 原run终态后的tool journal写入防护及真实应用旅程 | 精确源码候选独立复核通过；集成状态以PR实际记录为准 | [#97](https://github.com/acosmi/wrokbot/pull/97) | 见PR合并记录 |
-| V6-PR-077 | 兼容foreground占用投影、写入防护与五消费者完整性核验 | 定向验证通过，待精确候选独立验收 | 待创建 | 未合并 |
+| V6-PR-077 | 兼容foreground占用投影、写入防护与五消费者完整性核验 | 精确源码候选独立复核通过；集成状态以PR实际记录为准 | [#98](https://github.com/acosmi/wrokbot/pull/98) | 见PR合并记录 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -384,4 +384,6 @@ begin、conversation、RunRepo active及074/075两个只读页共用同一静态
 
 受影响lib/测试与Desktop最小`desktop-local-vault` lib严格Clippy、全仓fmt及diff检查通过。最终5项检查的1133个产品/构建输入逐项一致；旧SQL、旧schema fixture、依赖及hooks保持。首次PG运行的0035旧canary断言失败原记录保留，修正为旧版仅可升级、0036才是当前后完整重跑；两处begin顺序审阅问题均补真实回归。首个精确候选因仅重建pool/adapter、缺实际restart证据被独立NO-GO；保留原回执，补真实重启后完整重跑465项。历史0031/0035测试明确钉住其原版本；既有损坏夹具仅在专属一次性数据库中显式停用guard，不放宽产品约束。6次自有集群运行均最终stop等待退出0并移除临时密码，其中2次含中途实际stop/start，共8次成功停止；未访问用户数据库、备份、Keychain、TTY或受保护062资源。
 
-此处为独立候选验收前记录，未提前声明PR合并。未运行完整CI、手动Actions、默认server-sso或完整跨宿主验收。R385处置/CAS/audit/精确占用转移/安全后继及旧索引和兼容guard同步改造仍须后续闭环；R258、A6、M0的A0–A7与M1/M2仍开放。
+最终源码候选 `5ebf69d19a91dbb2f9f49849be6daf787042cd94`（tree `bd8b11ff547fbc319e2fcf2f1bb63377c752634b`，base `9f4f70d79746e43b25d4dd9a403dde3131227d85`）已完成独立实施与原始证据复核，5项最终检查、465个不同通过用例、18项局部验收映射及实际重启/停止证据核同，无阻断项。1133个产品/构建输入保持，本次后续登记仅更新公开台账；最终HEAD及实际集成见[PR #98](https://github.com/acosmi/wrokbot/pull/98)，不提前声明已合并。
+
+未运行完整CI、手动Actions、默认server-sso或完整跨宿主验收。R385处置/CAS/audit/精确占用转移/安全后继及旧索引和兼容guard同步改造仍须后续闭环；R258、A6、M0的A0–A7与M1/M2仍开放。
