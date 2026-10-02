@@ -81,6 +81,8 @@ fn record(actor: &ActorId) -> MemoryRecord {
         tags: vec!["tag".into()],
         sensitivity: MemorySensitivity::Normal,
         source: None,
+        source_run_id: None,
+        source_authorization_snapshot: None,
         origin: MemoryOrigin::UserAction,
         created_by: actor.as_str().into(),
         supersedes_id: None,

@@ -11,16 +11,37 @@ pub(super) async fn lock_actor(
     actor: &ActorId,
     auth_generation: AuthGeneration,
 ) -> Result<(), MemoryAdministrationError> {
+    lock_actor_with_mode(transaction, actor, auth_generation, false).await
+}
+
+/// Order a write-control revocation after already admitted GUI writes and before later writes.
+pub(super) async fn lock_actor_for_control(
+    transaction: &Transaction<'_>,
+    actor: &ActorId,
+    auth_generation: AuthGeneration,
+) -> Result<(), MemoryAdministrationError> {
+    lock_actor_with_mode(transaction, actor, auth_generation, true).await
+}
+
+async fn lock_actor_with_mode(
+    transaction: &Transaction<'_>,
+    actor: &ActorId,
+    auth_generation: AuthGeneration,
+    exclusive: bool,
+) -> Result<(), MemoryAdministrationError> {
     let generation =
         i64::try_from(auth_generation.get()).map_err(|_| MemoryAdministrationError::NotVisible)?;
     let current = transaction
         .query_opt(
-            "SELECT u.id FROM public.users u
+            &format!(
+                "SELECT u.id FROM public.users u
               WHERE u.id=$1 AND coalesce(u.auth_generation,0)=$2
                 AND EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=u.id)
                 AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra
                                 WHERE ra.email=lower(u.email))
-              FOR SHARE OF u",
+              {} OF u",
+                if exclusive { "FOR UPDATE" } else { "FOR SHARE" }
+            ),
             &[&actor.as_str(), &generation],
         )
         .await

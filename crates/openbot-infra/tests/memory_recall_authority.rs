@@ -116,6 +116,7 @@ async fn provision(pool: &Pool) -> Result<(), String> {
     ] {
         store
             .remember(RememberMemoryRequest {
+                deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
                 auth_generation: openbot_contracts::auth::AuthGeneration::new(0),
                 tenant: TenantId::new("tenant-a"),
                 actor: ActorId::new("actor-a"),

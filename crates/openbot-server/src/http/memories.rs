@@ -290,6 +290,8 @@ mod tests {
             tags: Vec::new(),
             sensitivity: MemorySensitivity::Normal,
             source: None,
+            source_run_id: None,
+            source_authorization_snapshot: None,
             origin: MemoryOrigin::UserAction,
             created_by: "actor-memory".to_owned(),
             supersedes_id: None,

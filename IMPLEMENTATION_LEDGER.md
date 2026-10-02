@@ -432,3 +432,18 @@ P0 最终候选 `fee829c2b91d4279b9670dbc101b6ea35a8b81bc`（tree `c831aaf3e8e02
 P1 从上述合并主线建立独立分支。正在重建 Token/公共壳、48+220导航、64/56工具栏、701/1101断点、助手真实目录和 Modal/Menu 基本外观。早期独立源码复核发现跨断点卸载导航、隐藏返回焦点、关闭details内控件入trap及助手目录失效遗漏，已返修；新增目录仍经现有授权list_agents，不增加后端能力。224项UI单测、WASM检查、严格Clippy和production Web构建通过，均为在途输入检查，精确最终候选尚未验收。重复样式清理后的实际CSS125951/131072字节、WASM gzip3513219/3670016、字体740216/819200、1个外部脚本且0 inline；CSS仍有预警，预算不放宽。
 
 隔离本机合成服务上的首轮生产bundle交互检查13项通过、3项失败；导航Sheet焦点反例待补，菜单选择器和后续路由主题期望两处QA错误已纠正，旧失败保持。真实macOS宿主、系统按钮/拖动、读屏和实际浏览器200%缩放尚未观察；候选截图不作参考oracle。旧详情面板和各页面迁移继续属于P2–P4欠项，P5–P9后端/SYNC依赖保持真实开放。P1未创建PR或合并，不将局部绿色冒充全量完成；未全量CI、Actions、升级依赖或发行。
+
+## V7-COMP-003 记忆不可变来源与当时授权
+
+2026-10-02：承接已合 PR #100（merge `4c34993ab9007ae456f59e6e10ff9131b69f27bd`），交付基底为 UI P0 已合后的 `c74814f994f78b708b2271a6b38c736d14164f5c`。本项为既有记忆写入补充只读 sourceRunId 与封闭七字段的当时授权快照；GUI、remember、correction、VerifiedImport 四条生产入口逐项复核。GUI 在同一 SQL 快照核当前来源、scope、channel/package/deployment及精确 message/run 关系；remember 绑定 admitted run/thread 中最新持久 user message。修正保留原来源和原 nullable 快照，并另记当前修正授权；旧记录及无法证明原始授权的导入保持 NULL，初次导入、精确重放和完成后重建均不推测回填。历史快照只描述事实，不能作为当前权限。
+
+native0037只增加两列 nullable 来源事实，约束初始形状并禁止 UPDATE 改写来源、owner、scope、kind、origin和原创建时间；精确来源绑定由生产入口 SQL 保证，不冒称新增数据库 INSERT 同源外键。迁移、typed row及实际 PG 提取的 schema0037 同步，旧 SQL/fixture 保持。写入控制取得 actor UPDATE 锁，与 GUI save/correct 的 SHARE 及 tool 原 guard 排序到提交；真实等待链分别证明 save-first、correct-first、control-first。来源/修正时间取事务开始时间，不表示精确授权语句或提交时刻。现有 Agent 未发现生产 memory 内容注入消费链，不由本项声明完整撤权加载或 G3。
+
+固定 Rust1.98.0、offline/locked 的14份最终定向记录绑定相同1139个产品/构建输入，独立从日志重建743个不同通过用例、零 failed/ignored：Contracts122、Application180、Infra lib360；实际自有 PG63（含18项 remember 回执及新 provenance/权限/迁移/导入）；实际 AgentHost remember1；HTTP/typed IPC同 Application 合成端口对拍1；Server5、Desktop8及现有 UI memory 类型消费者3。四组受影响严格 Clippy、Contracts WASM、fmt通过。真实重启使用同 data-dir，旧 PID86069实际消失、新 PID87583启动；Rust核 postmaster 时间变新，原 effect、receipt、terminal、Unknown占用及五消费者读回保持，新 begin 仍拒绝。实例最后停止成功，无密码或运行 postmaster 留存；生成 schema 不计通过数。11份最初编译、fixture、格式、网络权限与缺重启控制器失败保留，不改为通过。
+
+精确源码候选 `d41560720dfff45f16d342a01547a088c6089cf3`（tree `b85e2acd9bc61612dd8056efb32c414c696c5ee2`）已获独立源码 GO，无阻断项；独立报告摘要 `fc950295ccb3733eeae77c6a79d582cbbdae715ad8b1a83805dce2b989706dec`。本增量只登记公开台账，产品输入保持；[PR #102](https://github.com/acosmi/wrokbot/pull/102)须经最终台账独立复核后按授权正常 admin 合并，最终 HEAD及实际合并事实取远端记录，不提前宣称合入。两处 UI 测试构造和已有 fixture 仅适配只读字段，不是 UI5验收；本项不关闭整个 R413/R416/R417/R420、M0或A0–A7（完整通过仍0/8）。其余并发编辑及074–077、能力与执行目标新反例继续本轮；新能力只登记。未运行全量 CI、手动 Actions、强推或绕过 hooks，私有规范和 QA 保持本机。
+
+
+P1 首个源码提交为`835743a088260ace2804097e57c25cd3be9046c1`；该精确提交的224项单测、WASM、严格Clippy/fmt/design/CSS及生产构建通过，1135个实际tracked输入逐次未变。第四轮生产bundle浏览器交互17项通过，包含真实DOM几何、700/701持久状态、关闭details焦点反例、Modal程序化opener回焦点、主题/语言保存回执与助手创建/改名/隐藏/恢复的侧栏失效；宿主为现有独立合成HTTP/Application服务，不能推广为生产PG/M0或原生Mac通过。前轮菜单场景漏准备合成连接态和导航前未等偏好写回的QA失败保留，未通过改产品状态或放宽断言解决。实际WASM gzip3528417/3670016；其余预算值沿前记录。用户要求及时清理编译垃圾，已在本机清理约6.7GiB本任务中间物，保留工具、bundle、QA，未清理其他窗口。
+
+正常集成后端已合PR #102的main`b4feea5557a2f56de2cc2a3cfad73e6eaf8c4b97`，仅台账尾部冲突按两边事实保留；后端memory合同与其两处UI投影按主线原样带入，不由P1重写。集成候选将重新验证受影响输入和独立复核后创建本包PR；尚未声称P1已合或全页/最终视觉已验收。

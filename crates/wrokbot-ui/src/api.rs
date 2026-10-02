@@ -3945,6 +3945,8 @@ mod tests {
             tags: vec!["preference".to_owned()],
             sensitivity: MemorySensitivity::Normal,
             source: None,
+            source_run_id: None,
+            source_authorization_snapshot: None,
             origin: MemoryOrigin::UserAction,
             created_by: "actor".to_owned(),
             supersedes_id: None,

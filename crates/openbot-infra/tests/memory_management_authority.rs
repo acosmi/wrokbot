@@ -143,6 +143,7 @@ fn require(condition: bool, message: &'static str) -> Result<(), String> {
 async fn seed(pool: &Pool, generation: u64) -> Result<String, String> {
     PostgresMemoryAdministration::new(pool.clone())
         .remember(RememberMemoryRequest {
+            deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
             auth_generation: AuthGeneration::new(generation),
             tenant: TenantId::new("tenant-a"),
             actor: ActorId::new("actor-a"),
