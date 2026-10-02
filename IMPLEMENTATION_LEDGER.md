@@ -1,8 +1,8 @@
 # Wrok Bot 后端实施台账
 
-更新时间：2026-10-02。055 已补充本轮独立本地检查；其余检查点及 2026-09-19 的实施、实测记录保留为历史记录。
+更新时间：2026-10-02。补充原任务审计修复的局部验证与PR记录，核对055、072、073的实际集成事实；其余检查点及历次实施、实测记录保留为历史记录。
 
-001–047 已核实为 main 祖先。换机主控已亲读、实测并正常合入049、050、051、052、053、056、057、058及重建060/061、新增必要维护063/064；048、054、055保留开放候选，059/062仍缺合同批准。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。下方历次检查点是历史记录，当前状态以任务表及本轮最终结论为准。
+001–047 已核实为 main 祖先。换机主控已亲读、实测并正常合入049、050、051、052、053、056、057、058及重建060/061、新增必要维护063/064；055、072、073也已按PR及main祖先事实核实合入。048、054保留开放候选，059/062未完成，不能继续用旧待批准记录替代当前合同及实际检查状态。后端规范原件已在本机核对；旧机原始 QA 和其余缺失输入尚未恢复，不能把历史自报转记为新机验收通过。下方历次检查点是历史记录，当前状态以任务表及本轮最终结论为准。
 
 本台账记录实施与验证事实，不定义产品能力或架构。每个任务对应一个独立 PR，按冻结合同及实际依赖顺序集成。PR 链接中的合并状态与提交是远端集成事实；局部测试通过不表示产品阶段或发布验收完成。
 
@@ -84,7 +84,8 @@
 | V6-PR-070 | 真实PG审批组合测试夹具的单语句时间 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#88](https://github.com/acosmi/wrokbot/pull/88) | 以PR实际合并状态为准 |
 | V6-PR-071 | 取消测试的启动阶段观察预算 | 代码候选主控定向1/1；最终含台账候选复验与集成事实见PR | [#89](https://github.com/acosmi/wrokbot/pull/89) | 以PR实际合并状态为准 |
 | V6-PR-072 | Desktop preference read bounded（Desktop UI preference 有界读取） | 已正常合入；原局部默认lib86/86、严格Clippy与fmt实测记录保留 | [#92](https://github.com/acosmi/wrokbot/pull/92) | [b62f3ae4e8](https://github.com/acosmi/wrokbot/commit/b62f3ae4e84d8998703113ab62363d5d3eb59c0c) |
-| V6-PR-073 | Unix诊断fixture codesign输出有界保留 | 局部16/16、xtask全目标严格Clippy及fmt实测通过；待主控发布合入 | 无 | 未合入 |
+| V6-PR-073 | Unix诊断fixture codesign输出有界保留 | 已正常合入；原局部16/16、xtask严格Clippy及fmt实测记录保留 | [#93](https://github.com/acosmi/wrokbot/pull/93) | [09df8854e0](https://github.com/acosmi/wrokbot/commit/09df8854e06e6b145de16454fd684a670d766e85) |
+| 原任务审计修复 | OAuth单次刷新、Provider内容检查、TLS准入、最终帧与验收工具 | 具体修复已完成定向验证与独立复核；集成状态以PR记录为准，未新增任务编号 | [#94](https://github.com/acosmi/wrokbot/pull/94) | 见PR合并记录 |
 
 接续记录：065旧候选`0fee263c`严格拒绝四类记录的72个畸形输入；完整侧车回归102通过、1失败、0忽略，失败为拒绝损坏consumed时已替换既有epoch。主控复核原始授权覆盖必要返修，已在同一owner的回收闭包先核consumed，再持久mint epoch，再删启动锁；没有新增权限或错误码。返修`077bb653`模块15/15通过，完整侧车109通过、1失败、0忽略，失败为既有审批夹具时间倒置；该独立缺陷由070修复并合入，最终065含台账组合须重新实测。历史失败与原断言保留；坏consumed时prior epoch字节/inode保持是本任务回归属性，不冒充规范逐字要求。067候选`ddfd7831`模块16/16、完整侧车104/104（含真实PG）、runtime/launcher严格Clippy及格式检查通过；该旧main候选不替代依赖整合后验收，亦不计作当前main同候选A门证据。
 
@@ -314,3 +315,14 @@ A0–A7仍无完整同候选通过证据。SDK登录、三来源实际模型旅�
 干净检查候选 `019c2889fdfd27a85afd2a2db285211ea2d97429`（tree `73b8108268413a9bd69c85f47ffb67f2c7f8b634`）在固定Rust1.98.0、独立target、offline/locked及既有原生构建依赖路径下，实际运行 `openbot-testkit --features xtask --bin xtask engine_bundle::tests`：16 passed、0 failed、0 ignored、0 measured、179 filtered；11项新增覆盖边界/增长、零保留、读故障、两流各2MiB的四种组合、buffered HUP、EOF后原Child等待和错误优先级。同feature all-targets严格Clippy（`-D warnings`）及workspace fmt check均退出0。原首轮缺xmlsec1-config的构建101/零测试与新增测试helper的Clippy101均保留；后者已不放宽lint地修复，旧9fea候选15/15只作该候选历史。
 
 最终登记只改台账，并把072任务行校正为实际PR92/b62f3ae合入事实；原055、072、065–068记录及失败历史不改写。完整tracked树除台账与上述检查候选逐字节一致，精确引用该候选真实局部回执，不冒充在登记后HEAD重新执行。未运行真实codesign、签名证书、PG、TTY、Keychain或原生权限探测；签名profile、entitlements、命令、manifest、生产Engine协议、权限及release拒绝路径保持。本项不是生产Engine合同冻结、真实签名验收或A0–A7/M0完成。
+
+
+## 2026-10-02 原任务审计修复交付
+
+按用户要求在原审计任务内修复，未新增实施任务编号。交付源码提交为 `600b35c64a1473dbd6687af4a4f9e093e7235910`，tree为 `bafe4f682856d98280050bc15709efc457dc4d79`，基底为 `09df8854e06e6b145de16454fd684a670d766e85`；[PR #94](https://github.com/acosmi/wrokbot/pull/94)记录实际集成状态。该59文件候选包含OAuth持久claim/admission/回执、Provider业务已知秘密检查、Server默认拒绝与同机TLS代理证明、Viewer最终帧队列，以及full缺输入拒绝/显式fixtures-only和静态守卫修复。独立复核另发现底层307/308重发路径，已在MCP/Drive刷新请求关闭redirect后再验；303也不执行第二跳。
+
+累计1763个不同Rust用例、35个Python用例通过；重复执行不累加。本轮新增6个真实PG/HTTP重定向用例与原MCP/Drive34项均通过，源码输入摘要运行前后相同；隔离PG执行stop等待成功，测试服务停止并等待结束。另完成14项既有SafeDialer回归、受影响Clippy和Server编译及相关守卫；UI WASM与原分组检查按未变输入保留。首次发布扫描命中确定性测试假值，仅改成低熵重复字符后8项配置测试通过，扫描配置保持不变。较早1757项运行未逐次记录完整源码摘要，不倒填为完整实机验收。历史编译、沙箱bind、依赖缓存、扫描和HTTPS推送权限失败均保留，未执行/跳过不记通过；最终正常发布守卫通过。GitHub连接已建立精确候选分支。
+
+完整parity/recount因缺九份台账与overlay退出1，不能计为产品通过；fixtures-only的六项复算通过。Unknown安全续作、profile迁移、HumanLease清理以及生产装配、完整恢复、签名与其余产品阶段仍未闭合；A0–A7仍无完整通过证据，不因本PR计为M0完成。未运行完整CI或触发Actions。
+
+本次后续登记仅修改公开台账；产品与构建输入逐字节沿用上述已复核源码提交。PR合并状态和最终提交以链接中的实际记录为准，台账不提前冒称合并。
