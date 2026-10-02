@@ -15,6 +15,9 @@ use openbot_contracts::{
 /// Closed operational failures; no URL, key, database prose or user content crosses this type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ModelConnectionError {
+    /// Current authorized configuration is newer than the caller's revision.
+    #[error("model_connection_stale_snapshot")]
+    StaleSnapshot(openbot_contracts::revision::RevisionSnapshot),
     /// Bad typed input.
     #[error("model_connection_invalid field={field}")]
     InvalidInput {
@@ -42,6 +45,11 @@ impl ModelConnectionError {
     /// Existing shared error vocabulary.
     pub const fn into_app_error(self) -> AppError {
         match self {
+            Self::StaleSnapshot(snapshot) => AppError::StaleGeneration {
+                subject: openbot_contracts::error::StaleGenerationSubject::Configuration {
+                    snapshot,
+                },
+            },
             Self::InvalidInput { field } => AppError::MalformedPayload { field },
             Self::NotVisible => AppError::NotVisible,
             Self::Conflict => AppError::RequestConflict {

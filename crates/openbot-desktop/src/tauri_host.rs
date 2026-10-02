@@ -2837,8 +2837,13 @@ fn sensitive_body_error_response(error: SensitiveBodyError) -> Response<Vec<u8>>
 }
 
 fn error_response(error: AppError) -> Response<Vec<u8>> {
-    let body = serde_json::to_vec(&json!({"code": error.code().as_str()}))
-        .unwrap_or_else(|_| b"{\"code\":\"dependency_unavailable\"}".to_vec());
+    let body = match &error {
+        AppError::StaleGeneration {
+            subject: openbot_contracts::error::StaleGenerationSubject::Configuration { snapshot },
+        } => serde_json::to_vec(snapshot),
+        _ => serde_json::to_vec(&json!({"code": error.code().as_str()})),
+    }
+    .unwrap_or_else(|_| b"{\"code\":\"dependency_unavailable\"}".to_vec());
     response(
         StatusCode::from_u16(error.http_status()).unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
         "application/json",
@@ -5358,6 +5363,25 @@ mod tests {
         ] {
             assert_eq!(channel_list_query(Some(invalid)), None, "{invalid}");
         }
+    }
+
+    #[test]
+    fn revision_conflict_projects_the_closed_snapshot_without_cache_or_internal_fields() {
+        let snapshot = openbot_contracts::revision::RevisionSnapshot::from_public(
+            2,
+            time::OffsetDateTime::UNIX_EPOCH,
+            &json!({"revision":2}),
+        )
+        .unwrap();
+        let response = error_response(AppError::StaleGeneration {
+            subject: openbot_contracts::error::StaleGenerationSubject::Configuration { snapshot },
+        });
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.headers()[http::header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(response.body()).unwrap(),
+            serde_json::to_value(snapshot).unwrap()
+        );
     }
 
     #[test]

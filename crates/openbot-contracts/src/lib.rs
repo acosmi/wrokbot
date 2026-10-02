@@ -92,6 +92,7 @@ pub mod people;
 pub mod policy;
 pub mod reconciliation;
 pub mod remote_interrupt;
+pub mod revision;
 pub mod sandboxed;
 pub mod screen;
 mod secret_text;

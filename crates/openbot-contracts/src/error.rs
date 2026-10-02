@@ -163,6 +163,11 @@ impl fmt::Display for AuditKind {
 /// `observed` 的比较是**数值序**，不会出现字典序把 `10` 判成小于 `9` 的情形。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StaleGenerationSubject {
+    /// Current authorized configuration snapshot after a revision conflict.
+    Configuration {
+        /// Closed current revision, public digest and database timestamp.
+        snapshot: crate::revision::RevisionSnapshot,
+    },
     /// computer 代际陈旧（engine restart/reset 之后，§17.2 条 6）。
     Computer {
         /// 权威方当前的代际。
@@ -182,6 +187,11 @@ pub enum StaleGenerationSubject {
 impl fmt::Display for StaleGenerationSubject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Configuration { snapshot } => write!(
+                f,
+                "subject=configuration revision={}",
+                snapshot.current_revision()
+            ),
             Self::Computer { expected, observed } => {
                 write!(
                     f,

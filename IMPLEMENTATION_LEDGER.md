@@ -400,6 +400,17 @@ begin、conversation、RunRepo active及074/075两个只读页共用同一静态
 
 精确源码候选`7188fcbff23bded79ec2376be7eda753f9970815`（tree`91a8b969e25f92a9ea6b84d74343aa08b01d85a3`，base`8fabc9f634c2f8c640373bf96d2bca8b80559726`）已获独立GO：三份新通过记录、原失败、1133个产品输入及日志摘要核同，独立定向4/4通过，后者不新增不同用例计数。此后登记只改公开台账，产品输入不变；[PR #99](https://github.com/acosmi/wrokbot/pull/99)正常admin合并事实以实际远端记录为准，不提前宣称已合入。本任务只完成当前轮结果补全，其余并发、来源与链验证仍在本轮开放范围。
 
+
+## V7-COMP-002 模型配置受权并发快照
+
+2026-10-02：承接已合[PR #99](https://github.com/acosmi/wrokbot/pull/99)，其实际merge为`303f48319f2882fc5f96fc8951cbce25ef6bad83`。本项只补既有个人模型配置的后端并发冲突：同事务验证当前actor和owner、锁定对象、比较expectedRevision；陈旧更新/删除经Server和Desktop返回同一闭合的当前revision、公共表示SHA-256和RFC3339时间，附no-store。摘要递归排序，秘密不进入摘要输入；成功写入仍原子推进revision并写audit，失败请求不轮换key或追加成功审计。写事务显式Read Committed，不依赖连接池默认隔离级别。
+
+本轮固定Rust1.98.0/offline/locked新验：Contracts121/Application180；隔离PG5（第三自有连接锁行、实际观察两个writer等待后释放、RR默认仍一胜一陈旧快照）；真实会话/HTTP/PG/Vault旅程1（当前revision4下他人stale写仍仅404、更新/删除stale同快照且全表/审计不变）；Server错误13与Desktop投影1。摘要两用例另在preserve_order feature重验，属于重复验证不叠加不同通过数。WASM、核心all-targets/Infra精确lib+model目标/Server all-targets/Desktop launcher all-targets四组严格Clippy、fmt通过。12份最终记录1134个产品输入逐项核同。早期稳定码碰撞、测试编译、lint及不适用SSO feature组合失败完整保留；没有删除断言、lint豁免或修改历史QA。两个自有PG实例实际stop成功、无postmaster残留。
+
+精确源码候选`1f81292d23857732ec19d0db48b8eeb87941f15a`（tree`0dc68be3da9489962766d0b1a4ccb0b2c4804c62`）已获独立GO，无阻断项。此后台账增量只登记事实，产品输入保持；[PR #100](https://github.com/acosmi/wrokbot/pull/100)按定向验证、源码与台账独立复核通过后正常admin合并，实际最终HEAD及合并状态取远端记录，不提前宣称合入。
+
+仅此后端对象补全，不关闭整个R415；其他对象分独立任务，UI在独立轨道消费实际已合合同，未以本项证明UI编辑状态机或视觉验收。无DDL/依赖/lockfile/前端变更，无全量CI或手动Actions；新能力仍登记，不启动078。
+
 ## 2026-10-02 UI5-P0 前端全量实施入场
 
 用户明确授权 UI v5.1 全量 UI5-P0–P9 实施与逐工作包独立 PR，规定验证和独立复核通过后正常合并；此前“仅制定/未授权”是历史。持续目标已建立，无另设预算。规范摘要 `2469dbd18b30876467290a0e7569388c5827845dcb5eb9a982952c890303fcd2`，后端合同仍为 v7/R422。新独立工作树基于 main `303f48319f2882fc5f96fc8951cbce25ef6bad83`；主工作区未提交改动和后端 V7-COMP-002 在途候选保持。
@@ -410,3 +421,5 @@ P0 已登记固定 OpenDots commit `b01ac1f6a903e5e56c119d960901353ac0a3d171` / 
 
 首轮候选 `95b6129` 独立复核 NO-GO：动作矩阵漏记 sandbox 编辑/保存/发布/删除，混同全局 tool approval 与会话 decision/interrupt，错记频道成员/分页及尚未适配的 Unknown 读取；源码索引遗漏受控输入。原候选、检查与拒绝记录保留。已按实际源文件/行号返修矩阵，分列既有动作、目标待接与全局壳操作，522 条当前控制/回调/链接索引核同；加强后的 32 项定向 L1 检查通过。一次结构检查误将“不挂 compiled 预览”说明当成提供该动作，失败原记录保留，改为核实际动作列后通过。返修候选仍须重新独立复核；原应用像素门保持未通过。[PR #101](https://github.com/acosmi/wrokbot/pull/101) 当前未合并。
 第二轮候选 `91c28ad` 独立 NO-GO 原记录保留：按文件族复制的附表误称路由可达，且遗漏简写 props。现改为真实路由 view 入口与独立文件族词法引用索引，明确分支/路由可达性未验证、不宣称完整控件覆盖；具名简写反例已补录。1057 条源引用与原行核同，36 项 L1 检查通过，仍待第三轮精确复核。后端 V7-COMP-002 已正常合入 PR #100；本 P0 基线早于该合并，后续 P6 须核验合入合同，不改后端在途工作。最终像素门及 P1–P9 继续开放。
+
+P0 集成候选正常 merge main `4c34993ab9007ae456f59e6e10ff9131b69f27bd`，保留后端 PR #100 与 UI 两方台账。P0 产品输入按此已合主线重新核同，仅公开台账为本包差异；最初 303f483 基线与旧证据仍保留。
