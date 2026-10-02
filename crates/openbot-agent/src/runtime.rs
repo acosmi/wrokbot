@@ -805,6 +805,8 @@ async fn execute_run(inner: &Inner, activation: &mut Activation) {
             }
         };
         let mut usage_seen = false;
+        // Context, reasoning and earlier provider invocations cannot supply this answer.
+        let mut current_text_seen = false;
         let mut pending_tools = BTreeMap::<u32, AgentToolCall>::new();
         let calls = loop {
             let chunk_deadline = journal.next_deadline().map(tokio::time::Instant::from_std);
@@ -898,6 +900,7 @@ async fn execute_run(inner: &Inner, activation: &mut Activation) {
                         let sampling = ProviderSamplingContext {
                             max_output_tokens,
                             usage_seen: &mut usage_seen,
+                            current_text_seen: &mut current_text_seen,
                             runtime: inner.runtime.as_ref(),
                             lease,
                             sampling_index,
@@ -1558,6 +1561,7 @@ async fn stop_cancellable_tool_task<T>(
 struct ProviderSamplingContext<'a> {
     max_output_tokens: Option<u32>,
     usage_seen: &'a mut bool,
+    current_text_seen: &'a mut bool,
     runtime: &'a dyn RunRuntime,
     lease: &'a RunExecutionLease,
     sampling_index: u32,
@@ -1579,6 +1583,10 @@ async fn handle_provider_event(
         | ProviderEvent::ToolCallStarted { .. }
         | ProviderEvent::ToolArgumentsDelta { .. } => false,
         ProviderEvent::TextDelta { delta, .. } => {
+            if delta.is_empty() {
+                return false;
+            }
+            *sampling.current_text_seen |= !delta.trim().is_empty();
             let Ok((next, effects)) = reduce(state, AgentEvent::ProviderTextDelta(delta)) else {
                 return true;
             };
@@ -1724,7 +1732,9 @@ async fn handle_provider_event(
             }
         }
         ProviderEvent::Completed => {
-            if sampling.max_output_tokens.is_some() && !*sampling.usage_seen {
+            if !*sampling.current_text_seen
+                || (sampling.max_output_tokens.is_some() && !*sampling.usage_seen)
+            {
                 drive_terminal_event(
                     state,
                     journal,
@@ -2523,7 +2533,13 @@ mod tests {
                     .expect("test batch"),
                 )]
             } else {
-                vec![ProviderEvent::Completed]
+                vec![
+                    ProviderEvent::TextDelta {
+                        index: 0,
+                        delta: "resumed answer".to_owned(),
+                    },
+                    ProviderEvent::Completed,
+                ]
             };
             Ok(Box::new(FakeSession {
                 events: events.into(),
@@ -3006,11 +3022,169 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn current_sampling_cannot_complete_from_history_reasoning_or_blank_text() {
+        for current in [None, Some(""), Some(" \n\t")] {
+            let runtime = Arc::new(FakeRuntime::new());
+            let mut events = vec![ProviderEvent::ReasoningDelta {
+                index: 0,
+                delta: "reasoning is not an answer".to_owned(),
+            }];
+            if let Some(delta) = current {
+                events.push(ProviderEvent::TextDelta {
+                    index: 0,
+                    delta: delta.to_owned(),
+                });
+            }
+            events.extend([
+                ProviderEvent::Usage(ProviderUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                }),
+                ProviderEvent::Completed,
+            ]);
+            let agent = BuiltInAgentRuntime::start(
+                runtime.clone(),
+                Arc::new(HistoricalAnswerContext),
+                Arc::new(FakeProvider {
+                    events,
+                    hold: false,
+                }),
+                Arc::new(NoAgentToolInvoker),
+                Arc::new(NoAgentAudit),
+                test_config(),
+            )
+            .unwrap();
+            let consumer = agent.consumer();
+            let lease = lease("run-with-only-old-answer");
+            assert_eq!(
+                consumer.dispatch(lease.clone()).await,
+                RunDispatchDecision::Accepted
+            );
+            consumer.activate(&lease).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), runtime.terminal.notified())
+                .await
+                .unwrap();
+            assert!(matches!(
+                runtime.calls().last(),
+                Some(RuntimeCall::Finish(
+                    _,
+                    RunTerminal::Failed(RunFailureCode::ProviderInvalidResponse)
+                ))
+            ));
+            assert!(!runtime.calls().iter().any(
+                |call| matches!(call, RuntimeCall::Chunk(_, _, text) if text == "old answer")
+            ));
+            agent.stop().await;
+        }
+    }
+
+    struct HistoricalAnswerContext;
+
+    #[async_trait]
+    impl AgentContextSource for HistoricalAnswerContext {
+        async fn load(
+            &self,
+            lease: &RunExecutionLease,
+        ) -> Result<ProviderRequest, AgentContextError> {
+            let mut request = FakeContext.load(lease).await?;
+            request.messages.insert(
+                0,
+                ProviderMessage {
+                    role: ProviderMessageRole::Assistant,
+                    content: "old answer".to_owned(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_calls: Vec::new(),
+                },
+            );
+            Ok(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn earlier_sampling_text_and_committed_tools_do_not_hide_empty_or_failed_answer() {
+        for failure in [None, Some(ProviderFailure::GenerationFailed)] {
+            let runtime = Arc::new(FakeRuntime::new());
+            let usage = ProviderEvent::Usage(ProviderUsage {
+                input_tokens: 1,
+                output_tokens: 1,
+                total_tokens: 2,
+            });
+            let ending = failure.map_or(ProviderEvent::Completed, ProviderEvent::Failed);
+            let provider = Arc::new(SequencedProvider {
+                sessions: StdMutex::new(
+                    vec![
+                        vec![
+                            ProviderEvent::TextDelta {
+                                index: 0,
+                                delta: "working".to_owned(),
+                            },
+                            ProviderEvent::ToolCallCompleted {
+                                index: 0,
+                                call_id: "once".to_owned(),
+                                name: "remember".to_owned(),
+                                arguments: serde_json::json!({"order":1}),
+                            },
+                            usage.clone(),
+                            ProviderEvent::Completed,
+                        ],
+                        vec![usage, ending],
+                    ]
+                    .into(),
+                ),
+                starts: AtomicUsize::new(0),
+            });
+            let tools = Arc::new(OrderedToolInvoker::default());
+            let agent = BuiltInAgentRuntime::start(
+                runtime.clone(),
+                Arc::new(HistoricalAnswerContext),
+                provider.clone(),
+                tools.clone(),
+                Arc::new(NoAgentAudit),
+                test_config(),
+            )
+            .unwrap();
+            let consumer = agent.consumer();
+            let lease = lease("run-empty-after-effect");
+            assert_eq!(
+                consumer.dispatch(lease.clone()).await,
+                RunDispatchDecision::Accepted
+            );
+            consumer.activate(&lease).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), runtime.terminal.notified())
+                .await
+                .unwrap();
+            let code = if failure.is_some() {
+                RunFailureCode::ProviderGenerationFailed
+            } else {
+                RunFailureCode::ProviderInvalidResponse
+            };
+            assert_eq!(
+                runtime.calls(),
+                [
+                    RuntimeCall::Chunk(1, RunSemanticChannel::Text, "working".to_owned()),
+                    RuntimeCall::ToolExchange(
+                        2,
+                        "once".to_owned(),
+                        "remember".to_owned(),
+                        "result-1".to_owned()
+                    ),
+                    RuntimeCall::Finish(3, RunTerminal::Failed(code)),
+                ]
+            );
+            assert_eq!(*tools.seen.lock().unwrap(), [1]);
+            assert_eq!(provider.starts.load(AtomicOrdering::SeqCst), 2);
+            agent.stop().await;
+        }
+    }
+
+    #[tokio::test]
     async fn accepted_text_stream_reaches_durable_chunk_and_completed_terminal() {
         let runtime = Arc::new(FakeRuntime::new());
         let agent = BuiltInAgentRuntime::start(
             runtime.clone(),
-            Arc::new(FakeContext),
+            Arc::new(HistoricalAnswerContext),
             Arc::new(FakeProvider {
                 events: vec![
                     ProviderEvent::ResponseStarted {
@@ -3099,7 +3273,10 @@ mod tests {
         }
         assert_eq!(
             runtime.calls(),
-            [RuntimeCall::Finish(1, RunTerminal::Completed)]
+            [
+                RuntimeCall::Chunk(1, RunSemanticChannel::Text, "resumed answer".to_owned()),
+                RuntimeCall::Finish(2, RunTerminal::Completed),
+            ]
         );
         agent.stop().await;
     }
@@ -3620,6 +3797,10 @@ mod tests {
                         ProviderEvent::Completed,
                     ],
                     vec![
+                        ProviderEvent::TextDelta {
+                            index: 0,
+                            delta: "fresh result".to_owned(),
+                        },
                         ProviderEvent::Usage(ProviderUsage {
                             input_tokens: 5,
                             output_tokens: 1,
@@ -3668,7 +3849,8 @@ mod tests {
                     "remember".to_owned(),
                     "result-5".to_owned(),
                 ),
-                RuntimeCall::Finish(3, RunTerminal::Completed),
+                RuntimeCall::Chunk(3, RunSemanticChannel::Text, "fresh result".to_owned()),
+                RuntimeCall::Finish(4, RunTerminal::Completed),
             ]
         );
         agent.stop().await;
@@ -3770,6 +3952,10 @@ mod tests {
                         ProviderEvent::Completed,
                     ],
                     vec![
+                        ProviderEvent::TextDelta {
+                            index: 0,
+                            delta: "fresh result".to_owned(),
+                        },
                         ProviderEvent::Usage(ProviderUsage {
                             input_tokens: 2,
                             output_tokens: 1,
@@ -3837,7 +4023,8 @@ mod tests {
                     "parallel".to_owned(),
                     "result-3".to_owned(),
                 ),
-                RuntimeCall::Finish(5, RunTerminal::Completed),
+                RuntimeCall::Chunk(5, RunSemanticChannel::Text, "fresh result".to_owned()),
+                RuntimeCall::Finish(6, RunTerminal::Completed),
             ]
         );
         agent.stop().await;
