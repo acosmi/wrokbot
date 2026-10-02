@@ -103,7 +103,7 @@ async fn personal_crud_rotates_bound_keys_and_retires_atomically() {
         assert!(vault.open(&first,SecretKind::Model,SecretPrincipal::Actor(ActorId::new("alice")),SecretPrincipal::Service(ServiceId::new("other-connection")),&encrypted).is_err());
         let mut replace=update(&created);replace.model="model-2".to_owned();replace.enabled=false;
         let changed=port.update(&owner(),&created.id,&replace).await.unwrap();assert_eq!(changed.revision,2);assert!(!changed.enabled);assert_eq!(current_secret(&pool,&created.id).await.0,first);
-        assert_eq!(port.update(&owner(),&created.id,&replace).await.unwrap_err(),Error::Conflict);
+        assert_eq!(port.update(&owner(),&created.id,&replace).await.unwrap_err(),Error::StaleSnapshot(openbot_contracts::revision::RevisionSnapshot::from_public(changed.revision,changed.updated_at,&changed).unwrap()));
         let mut replace=update(&changed);replace.endpoint="https://other.example.test/v1".to_owned();
         assert!(matches!(port.update(&owner(),&created.id,&replace).await,Err(Error::InvalidInput {field:"apiKey"})));
         replace.api_key=Some(ModelApiKey::new(Zeroizing::new("MODEL_FAKE_CANARY_TWO".to_owned())).unwrap());replace.enabled=true;
@@ -125,6 +125,7 @@ async fn current_actor_generation_roles_deny_and_all_scopes_are_enforced() {
     harness::with_temp_database(&config,"modelauth",|config|async move {
         let pool=pool::connect(&config).await.map_err(|e|e.to_string())?;let (port,vault)=setup(&pool).await?;
         let row=port.create(&owner(),&input()).await.unwrap();let admin=auth("bob",3,Role::Admin);
+        let advanced=port.update(&owner(),&row.id,&update(&row)).await.unwrap();assert_eq!(advanced.revision,2);
         assert_eq!(port.get(&admin,&row.id).await.unwrap_err(),Error::NotVisible);
         assert_eq!(port.update(&admin,&row.id,&update(&row)).await.unwrap_err(),Error::NotVisible);
         assert_eq!(port.delete(&admin,&row.id,&DeleteModelConnection {expected_revision:1}).await.unwrap_err(),Error::NotVisible);
@@ -140,6 +141,8 @@ async fn current_actor_generation_roles_deny_and_all_scopes_are_enforced() {
         let missing=auth("missing",7,Role::User);assert_eq!(port.create(&missing,&input()).await.unwrap_err(),Error::NotVisible);
         let c=pool.get().await.unwrap();c.batch_execute("UPDATE public.users SET auth_generation=8 WHERE id='alice'").await.unwrap();drop(c);
         assert_eq!(port.get(&owner(),&row.id).await.unwrap_err(),Error::NotVisible);assert_eq!(port.create(&owner(),&input()).await.unwrap_err(),Error::NotVisible);
+        assert_eq!(port.update(&owner(),&row.id,&update(&row)).await.unwrap_err(),Error::NotVisible);
+        assert_eq!(port.delete(&owner(),&row.id,&DeleteModelConnection {expected_revision:1}).await.unwrap_err(),Error::NotVisible);
         let fresh=auth("alice",8,Role::User);assert!(port.get(&fresh,&row.id).await.is_ok());
         let c=pool.get().await.unwrap();c.batch_execute("DELETE FROM public.user_roles WHERE user_id='alice'").await.unwrap();drop(c);
         assert_eq!(port.list(&fresh,&ModelConnectionPageRequest::default()).await.unwrap_err(),Error::NotVisible);
@@ -212,23 +215,72 @@ async fn inventory_page_is_stable_bounded_and_actor_scoped() {
 async fn concurrent_metadata_replacements_commit_exactly_one_revision() {
     let config = harness::admin_config("model_connections_concurrent");
     harness::with_temp_database(&config, "modelcas", |config| async move {
-        let pool = pool::connect(&config).await.map_err(|e| e.to_string())?;
+        let config = config.with_max_pool_size(2);
+        let pool = pool::connect(&config)
+            .await
+            .map_err(|e| e.to_string())?;
         let (port, _) = setup(&pool).await?;
         let created = port.create(&owner(), &input()).await.unwrap();
+        // A stronger session default must not turn a stale edit into a serialization error.
+        // Hold both pool connections while configuring them, so both writers inherit it.
+        let first = pool.get().await.unwrap();
+        let second = pool.get().await.unwrap();
+        for client in [&first, &second] {
+            client
+                .batch_execute("SET default_transaction_isolation = 'repeatable read'")
+                .await
+                .unwrap();
+            let isolation: String = client
+                .query_one("SHOW default_transaction_isolation", &[])
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(isolation, "repeatable read");
+        }
+        drop(first);
+        drop(second);
+        // Lock with a third owned connection and observe both writers waiting before release.
+        // Both transactions have therefore taken a snapshot before either can commit.
+        let (mut barrier, connection) = config.to_pg_config().connect(tokio_postgres::NoTls).await.unwrap();
+        let connection_task = tokio::spawn(async move { connection.await.unwrap() });
+        let barrier_tx = barrier.transaction().await.unwrap();
+        barrier_tx.query_one("SELECT id FROM public.model_connections WHERE id=$1 FOR UPDATE", &[&Uuid::parse_str(&created.id).unwrap()]).await.unwrap();
         let mut left = update(&created);
         let mut right = left.clone();
         left.name = "left".to_owned();
         right.name = "right".to_owned();
         let auth = owner();
-        let (left, right) = tokio::join!(
+        let (left, right, ()) = tokio::join!(
             port.update(&auth, &created.id, &left),
-            port.update(&auth, &created.id, &right)
+            port.update(&auth, &created.id, &right),
+            async {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let waiting: i64 = barrier_tx.query_one("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND cardinality(pg_blocking_pids(pid))>0", &[]).await.unwrap().get(0);
+                        if waiting == 2 { break; }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                }).await.expect("both real writers must reach the lock barrier");
+                barrier_tx.commit().await.unwrap();
+            }
         );
-        let winner = match (left, right) {
-            (Ok(row), Err(Error::Conflict)) | (Err(Error::Conflict), Ok(row)) => row,
+        drop(barrier);
+        connection_task.await.unwrap();
+        let (winner, snapshot) = match (left, right) {
+            (Ok(row), Err(Error::StaleSnapshot(snapshot)))
+            | (Err(Error::StaleSnapshot(snapshot)), Ok(row)) => (row, snapshot),
             other => panic!("one revision must win: {other:?}"),
         };
         assert_eq!(winner.revision, 2);
+        assert_eq!(
+            snapshot,
+            openbot_contracts::revision::RevisionSnapshot::from_public(
+                winner.revision,
+                winner.updated_at,
+                &winner
+            )
+            .unwrap()
+        );
         assert_eq!(port.get(&auth, &created.id).await.unwrap(), winner);
         let client = pool.get().await.unwrap();
         let count: i64 = client
@@ -237,6 +289,15 @@ async fn concurrent_metadata_replacements_commit_exactly_one_revision() {
             .unwrap()
             .get(0);
         assert_eq!(count, 1);
+        let audit_count: i64 = client
+            .query_one(
+                "SELECT count(*) FROM public.audit_events WHERE target_type='model_connection'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(audit_count, 2);
         drop(client);
         pool.close();
         Ok(())

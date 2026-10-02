@@ -208,7 +208,12 @@ impl ModelConnectionAdministration for PostgresModelConnections {
         self.scope(auth)?;
         let cursor = request.cursor.as_deref().map(parse_id).transpose()?;
         let mut client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        let tx = client.transaction().await.map_err(unavailable)?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(unavailable)?;
         lock_actor(&tx, auth).await?;
         let limit = (MODEL_CONNECTION_PAGE_SIZE + 1) as i64;
         let rows = tx.query(&format!("SELECT {COLUMNS} FROM public.model_connections c WHERE c.deployment_id=$1 AND c.tenant_id=$2 AND c.owner_user_id=$3 AND c.deleted_at IS NULL AND ($4::uuid IS NULL OR c.id>$4) ORDER BY c.id LIMIT $5"),
@@ -234,7 +239,12 @@ impl ModelConnectionAdministration for PostgresModelConnections {
         self.scope(auth)?;
         let id = parse_id(id)?;
         let mut client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        let tx = client.transaction().await.map_err(unavailable)?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(unavailable)?;
         lock_actor(&tx, auth).await?;
         let result = project(&self.row(&tx, auth, id, false).await?)?;
         tx.commit().await.map_err(unavailable)?;
@@ -255,7 +265,12 @@ impl ModelConnectionAdministration for PostgresModelConnections {
             input.enabled,
         )?;
         let mut client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        let tx = client.transaction().await.map_err(unavailable)?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(unavailable)?;
         lock_actor(&tx, auth).await?;
         let id = Uuid::now_v7();
         let now = now(&tx).await?;
@@ -286,12 +301,17 @@ impl ModelConnectionAdministration for PostgresModelConnections {
             input.enabled,
         )?;
         let mut client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        let tx = client.transaction().await.map_err(unavailable)?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(unavailable)?;
         lock_actor(&tx, auth).await?;
         let old = self.row(&tx, auth, id, true).await?;
         let previous = project(&old)?;
         if previous.revision != input.expected_revision {
-            return Err(Error::Conflict);
+            return Err(stale_snapshot(&previous)?);
         }
         if (previous.protocol != config.protocol || previous.endpoint != config.endpoint)
             && input.api_key.is_none()
@@ -334,12 +354,17 @@ impl ModelConnectionAdministration for PostgresModelConnections {
         let id = parse_id(id)?;
         revision(input.expected_revision)?;
         let mut client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        let tx = client.transaction().await.map_err(unavailable)?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(unavailable)?;
         lock_actor(&tx, auth).await?;
         let row = self.row(&tx, auth, id, true).await?;
         let old_revision: i64 = row.try_get("revision").map_err(|_| Error::Corrupt)?;
         if old_revision != input.expected_revision {
-            return Err(Error::Conflict);
+            return Err(stale_snapshot(&project(&row)?)?);
         }
         let revision = old_revision.checked_add(1).ok_or(Error::Conflict)?;
         let now = now(&tx).await?;
@@ -360,6 +385,12 @@ async fn lock_actor(tx: &Transaction<'_>, auth: &AuthContext) -> Result<(), Erro
     let generation = i64::try_from(auth.auth_generation().get()).map_err(|_| Error::NotVisible)?;
     let row = tx.query_opt("SELECT u.id FROM public.users u WHERE u.id=$1 AND coalesce(u.auth_generation,0)=$2 AND EXISTS(SELECT 1 FROM public.user_roles r WHERE r.user_id=u.id AND r.role IN ('user','admin')) AND NOT EXISTS(SELECT 1 FROM public.revoked_access a WHERE a.email=lower(u.email)) FOR SHARE OF u", &[&auth.actor().as_str(),&generation]).await.map_err(unavailable)?;
     row.map(|_| ()).ok_or(Error::NotVisible)
+}
+
+fn stale_snapshot(row: &ModelConnection) -> Result<Error, Error> {
+    openbot_contracts::revision::RevisionSnapshot::from_public(row.revision, row.updated_at, row)
+        .map(Error::StaleSnapshot)
+        .map_err(|_| Error::Corrupt)
 }
 fn parse_id(value: &str) -> Result<Uuid, Error> {
     if value.len() != 36 {

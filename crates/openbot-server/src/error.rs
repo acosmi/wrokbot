@@ -6,7 +6,8 @@
 //! `ActorId`、policy decision id。这些是给日志与审计的，不是给客户端的。所以本模块做的
 //! 事是**挑出可以出边界的那几样**，而不是把错误 serde 出去。
 //!
-//! 出边界的恰好两样：
+//! 普通错误出边界的恰好两样；配置 CAS 冲突另投影封闭的当前版本快照：
+//! `{currentRevision, currentSha256, updatedAt}`，由已授权的 Application 路径构造。
 //!
 //! | 字段 | 为什么可以出去 |
 //! | --- | --- |
@@ -98,6 +99,18 @@ impl IntoResponse for HttpError {
             "请求以 AppError 收场"
         );
 
+        if let AppError::StaleGeneration {
+            subject: openbot_contracts::error::StaleGenerationSubject::Configuration { snapshot },
+        } = self.0
+        {
+            let mut response = (status, Json(snapshot)).into_response();
+            response.headers_mut().insert(
+                http::header::CACHE_CONTROL,
+                http::HeaderValue::from_static("no-store"),
+            );
+            return response;
+        }
+
         let rule = match &self.0 {
             AppError::PolicyRefused { rule, .. } => Some(rule.as_str()),
             AppError::Unauthenticated
@@ -134,6 +147,25 @@ mod tests {
     use openbot_contracts::auth::Role;
     use openbot_contracts::error::{ErrorCode, StaleGenerationSubject};
     use openbot_contracts::ids::{ActorId, ComputerGeneration, PolicyDecisionId};
+
+    #[tokio::test]
+    async fn authorized_revision_conflict_has_the_closed_snapshot_body() {
+        let snapshot = openbot_contracts::revision::RevisionSnapshot::from_public(
+            2,
+            time::OffsetDateTime::UNIX_EPOCH,
+            &serde_json::json!({"revision":2}),
+        )
+        .unwrap();
+        let (status, body) = render(AppError::StaleGeneration {
+            subject: openbot_contracts::error::StaleGenerationSubject::Configuration { snapshot },
+        })
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::to_value(snapshot).unwrap()
+        );
+    }
 
     /// 本模块的变体台账。与 contracts 里那份是**两份独立台账**，刻意不共享：
     /// contracts 的那份是 `#[cfg(test)]` 私有的，跨 crate 借不到。新增变体会在
