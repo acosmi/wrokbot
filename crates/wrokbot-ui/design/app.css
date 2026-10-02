@@ -4797,6 +4797,7 @@ summary:focus-visible {
 .ob-account-chevron { margin-inline-start: auto; color: var(--fg-muted); }
 .ob-account-panel { position: absolute; inset-block-end: calc(100% + 4px); inset-inline-start: 0; z-index: var(--z-menu); width: var(--size-menu-min); max-width: calc(100vw - 24px); max-height: 70dvh; overflow: auto; display: grid; gap: 4px; padding: var(--size-menu-padding); border: 1px solid var(--menu-border); border-radius: var(--size-menu-radius); background: var(--bg-popover); box-shadow: var(--elevation-popover); }
 .ob-account-panel .ob-sidebar-preferences { padding: 9px; border-block: 1px solid var(--border); }
+.ob-account-panel .ob-segmented-button { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; padding-inline: 4px; white-space: nowrap; }
 .ob-account-panel .ob-sidebar-preferences, .ob-account-panel .ob-button { display: grid; }
 html[data-window-chrome="macos-overlay"] { --chrome-height: var(--size-native-toolbar); --window-toolbar-start: calc(var(--spacing) * 22); }
 html[data-window-chrome="macos-overlay"] .ob-app-shell { padding-top: var(--chrome-height); }
