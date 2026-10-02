@@ -13,6 +13,8 @@ crate::db::tables::define_table! {
     sensitivity: String = ("sensitivity", "text", true),
     source_thread_id: Option<String> = ("source_thread_id", "text", false),
     source_message_id: Option<String> = ("source_message_id", "text", false),
+    source_run_id: Option<String> = ("source_run_id", "text", false),
+    source_authorization_snapshot: Option<serde_json::Value> = ("source_authorization_snapshot", "jsonb", false),
     origin: String = ("origin", "text", true),
     created_by: String = ("created_by", "text", true),
     supersedes_id: Option<String> = ("supersedes_id", "text", false),

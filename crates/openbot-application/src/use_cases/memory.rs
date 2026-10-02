@@ -66,6 +66,7 @@ pub async fn remember_memory<M: MemoryAdministration>(
     validate_remember(&input)?;
     memory
         .remember(RememberMemoryRequest {
+            deployment: auth.deployment().clone(),
             auth_generation: auth.auth_generation(),
             tenant: auth.tenant().clone(),
             actor: auth.actor().clone(),
@@ -114,6 +115,7 @@ pub async fn correct_memory<M: MemoryAdministration>(
     validate_tags(&correction.tags)?;
     memory
         .correct(CorrectMemoryRequest {
+            deployment: auth.deployment().clone(),
             auth_generation: auth.auth_generation(),
             tenant: auth.tenant().clone(),
             actor: auth.actor().clone(),
@@ -293,6 +295,8 @@ mod tests {
             tags: vec!["drink".to_owned()],
             sensitivity: MemorySensitivity::Normal,
             source: None,
+            source_run_id: None,
+            source_authorization_snapshot: None,
             origin: MemoryOrigin::UserAction,
             created_by: "actor-memory".to_owned(),
             supersedes_id: None,
@@ -457,6 +461,7 @@ mod tests {
         assert_eq!(
             memory.calls.lock().expect("fake lock").as_slice(),
             &[Call::Remember(RememberMemoryRequest {
+                deployment: openbot_contracts::ids::DeploymentId::new("dep-memory"),
                 auth_generation: AuthGeneration::new(1),
                 tenant: TenantId::new("tenant-memory"),
                 actor: ActorId::new("actor-memory"),
@@ -552,6 +557,7 @@ mod tests {
             memory.calls.lock().expect("fake lock").as_slice(),
             &[
                 Call::Correct(CorrectMemoryRequest {
+                    deployment: openbot_contracts::ids::DeploymentId::new("dep-memory"),
                     auth_generation: AuthGeneration::new(1),
                     tenant: TenantId::new("tenant-memory"),
                     actor: ActorId::new("actor-memory"),

@@ -95,6 +95,7 @@ pub const SECRET_COLUMNS: &[(&str, &str)] = &[
     ("intelligence_import_cursors", "provenance"),
     ("memories", "content"),
     ("memories", "tags"),
+    ("memories", "source_authorization_snapshot"),
     ("memory_events", "metadata"),
     ("messages", "content"),
     ("messages", "search_text"),
@@ -1184,7 +1185,7 @@ mod tests {
             })
             .count();
         assert_eq!(hits, registered_root_hits + exemption_root_hits);
-        assert_eq!(SECRET_COLUMNS.len(), 38);
+        assert_eq!(SECRET_COLUMNS.len(), 39);
         assert_eq!(SECRET_SCAN_EXEMPTIONS.len(), 30);
     }
 

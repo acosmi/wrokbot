@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ids::{BotId, ThreadId};
+use crate::auth::Role;
+use crate::ids::{ActorId, BotId, DeploymentId, RunId, TenantId, ThreadId};
 
 /// R1 只允许 preference/fact。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +150,27 @@ pub enum MemoryMutation {
     Delete,
 }
 
+/// Historical authorization at first retention. Descriptive evidence, never a capability.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemorySourceAuthorization {
+    /// Actor whose current authority was checked when the material was retained.
+    pub actor_id: ActorId,
+    /// Then-current tenant and host deployment; later context edits do not rewrite them.
+    pub tenant_id: TenantId,
+    /// Trusted host deployment, never accepted from the GUI body.
+    pub deployment_id: DeploymentId,
+    /// Then-current generation, kept independently of today's authority.
+    pub auth_generation: u64,
+    /// Then-current roles read from the same database transaction.
+    pub roles: Vec<Role>,
+    /// Explicitly authorized retention scope.
+    pub scope: MemoryScope,
+    /// First capture time; correction inherits it without inventing old facts.
+    #[serde(with = "time::serde::rfc3339")]
+    pub captured_at: OffsetDateTime,
+}
+
 /// 用户可见 memory 记录；forbidden/deleted 的 content 必须为 null。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -169,6 +191,12 @@ pub struct MemoryRecord {
     pub sensitivity: MemorySensitivity,
     /// Provenance。
     pub source: Option<MemorySource>,
+    /// Exact source-message run, or the admitted tool's original run. Unknown stays absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_run_id: Option<RunId>,
+    /// Immutable historical evidence. Legacy/imported unknown values stay absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_authorization_snapshot: Option<MemorySourceAuthorization>,
     /// Origin。
     pub origin: MemoryOrigin,
     /// 权威创建 actor。
@@ -243,6 +271,11 @@ mod tests {
         assert!(!json.contains("origin"), "{json}");
         assert!(!json.contains("createdBy"), "{json}");
         assert!(serde_json::from_str::<RememberMemory>(&json).is_ok());
+        for key in ["sourceRunId", "sourceAuthorizationSnapshot", "deployment"] {
+            let mut forged = serde_json::to_value(&input).unwrap();
+            forged[key] = serde_json::json!("forged");
+            assert!(serde_json::from_value::<RememberMemory>(forged).is_err());
+        }
         assert!(
             serde_json::from_str::<RememberMemory>(
                 r#"{"memoryKind":"preference","scope":{"kind":"user"},"content":"tea","tags":[],"sensitivity":"normal","source":null,"expiresAt":null,"origin":"verified_import"}"#
@@ -257,6 +290,27 @@ mod tests {
             serde_json::to_string(&MemoryPage::default()).unwrap(),
             r#"{"memories":[],"nextCursor":null}"#
         );
+    }
+
+    #[test]
+    fn correction_rejects_source_or_authorization_injection() {
+        let input = CorrectMemory {
+            content: "correction".into(),
+            tags: vec![],
+            sensitivity: MemorySensitivity::Normal,
+            expires_at: None,
+        };
+        for key in [
+            "source",
+            "sourceRunId",
+            "sourceAuthorizationSnapshot",
+            "scope",
+            "ownerUserId",
+        ] {
+            let mut forged = serde_json::to_value(&input).unwrap();
+            forged[key] = serde_json::json!("forged");
+            assert!(serde_json::from_value::<CorrectMemory>(forged).is_err());
+        }
     }
 
     #[test]

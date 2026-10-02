@@ -221,6 +221,29 @@ async fn lifecycle(pool: &Pool) -> Result<Value, String> {
 }
 
 #[tokio::test]
+#[ignore = "requires owned PostgreSQL"]
+async fn tool_source_never_borrows_a_user_message_from_another_run_or_thread() {
+    fixture("remembersourceboundary", |f| async move {
+        let request=f.capture(0).await?;
+        let c=f.pool.get().await.map_err(|e|e.to_string())?;
+        let foreign=ThreadIdentity::new(&f.begin.deployment).mint_from_entropy([117;16]);
+        c.execute("INSERT INTO public.threads(thread_id,tenant_id,deployment_id,created_by,anchor_kind,anchor_id,next_message_seq)
+            VALUES($1,$2,$3,$4,'direct_bot',$5,1)",&[&foreign.as_str(),&f.begin.tenant.as_str(),
+            &f.begin.deployment.as_str(),&f.begin.actor.as_str(),&f.begin.command.bot_id.as_str()]).await.unwrap();
+        c.execute("INSERT INTO public.messages(message_id,thread_id,seq,role,content,search_text,run_id,actor_id)
+            VALUES('other-thread-source',$1,0,'user','{}','synthetic',$2,$3)",&[&foreign.as_str(),
+            &f.begin.command.run_id.as_str(),&f.begin.actor.as_str()]).await.unwrap();
+        c.execute("UPDATE public.messages SET run_id='another-source-run' WHERE thread_id=$1 AND role='user'",
+            &[&f.begin.command.thread_id.as_str()]).await.unwrap();
+        let before=effects(&f.pool).await?;
+        assert_eq!(store(&f.pool).remember_from_tool(request).await,
+            Err(openbot_application::MemoryAdministrationError::Corrupt {field:"remember_source_message"}));
+        assert_eq!(effects(&f.pool).await?,before);
+        Ok(())
+    }).await;
+}
+
+#[tokio::test]
 #[ignore = "requires owned PostgreSQL via OPENBOT_TEST_DATABASE_URL"]
 async fn real_pipeline_commits_memory_event_receipt_audit_and_keeps_model_reply_unchanged() {
     fixture("rememberpipeline",|f|async move {
@@ -228,6 +251,17 @@ async fn real_pipeline_commits_memory_event_receipt_audit_and_keeps_model_reply_
             let (result,request,_) = support::pipeline(&f.pool,&f.auth(),f.invocation(seq as u64,scope),Some(store(&f.pool)),false).await?;
             let reply=result.map_err(|e|e.to_string())?;
             assert_eq!(reply.commit_state,openbot_contracts::tool::ToolCommitState::Committed);
+            let c=f.pool.get().await.map_err(|e|e.to_string())?;
+            let row=c.query_one("SELECT source_thread_id,source_run_id,source_message_id,source_authorization_snapshot
+                FROM public.memories WHERE scope_kind=$1",&[&scope]).await.map_err(|e|e.to_string())?;
+            assert_eq!(row.get::<_,String>("source_thread_id"),f.begin.command.thread_id.as_str());
+            assert_eq!(row.get::<_,String>("source_run_id"),f.begin.command.run_id.as_str());
+            let message:String=row.get("source_message_id");
+            assert!(c.query_one("SELECT EXISTS(SELECT 1 FROM public.messages WHERE message_id=$1 AND thread_id=$2
+                AND run_id=$3 AND role='user')",&[&message,&f.begin.command.thread_id.as_str(),&f.begin.command.run_id.as_str()]).await.unwrap().get::<_,bool>(0));
+            let snapshot:Value=row.get("source_authorization_snapshot");
+            assert_eq!(snapshot["actorId"],f.begin.actor.as_str()); assert_eq!(snapshot["authGeneration"],0);
+            drop(c);
             let output:Value=serde_json::from_str(&reply.content).unwrap();
             assert_eq!(output["status"],"remembered");assert_eq!(output.as_object().unwrap().len(),2);
             assert!(!reply.content.contains("receipt"));
@@ -274,7 +308,7 @@ async fn effect_survives_later_outcome_failure_reconnect_erasure_and_duplicate_w
         let reconnected=pool::connect(&f.config).await.map_err(|e|e.to_string())?;
         let directory=PostgresThreadDirectory::with_runtime(reconnected.clone(),f.config.clone(),"readback-only".into(),time::Duration::minutes(10)).map_err(|e|e.to_string())?;
         assert_eq!(directory.run_effect_receipts(f.query()).await.map_err(|e|e.to_string())?.receipts,snapshot.receipts);
-        let replacement=store(&f.pool).correct(openbot_application::CorrectMemoryRequest {
+        let replacement=store(&f.pool).correct(openbot_application::CorrectMemoryRequest { deployment: openbot_contracts::ids::DeploymentId::new("dep-a"),
             tenant:f.begin.tenant.clone(),actor:f.begin.actor.clone(),auth_generation:AuthGeneration::new(0),memory_id:historical.memory_id.clone(),
             correction:openbot_contracts::memory::CorrectMemory {content:"synthetic corrected preference".into(),tags:vec![],sensitivity:openbot_contracts::memory::MemorySensitivity::Normal,expires_at:None},
         }).await.map_err(|e|e.to_string())?;

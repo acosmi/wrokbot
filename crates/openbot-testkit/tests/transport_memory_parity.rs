@@ -13,10 +13,11 @@ use openbot_application::{
 };
 use openbot_contracts::auth::{AuthContext, AuthGeneration, Role};
 use openbot_contracts::command::{AppCommand, AppReply, ChannelSummary};
-use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
+use openbot_contracts::ids::{ActorId, DeploymentId, RunId, TenantId, ThreadId};
 use openbot_contracts::memory::{
     MemoryControl, MemoryKind, MemoryOrigin, MemoryPage, MemoryRecall, MemoryRecord, MemoryScope,
-    MemorySensitivity, MemoryStatus, RecallMemories, RememberMemory, UpdateMemoryControl,
+    MemorySensitivity, MemorySource, MemorySourceAuthorization, MemoryStatus, RecallMemories,
+    RememberMemory, UpdateMemoryControl,
 };
 use openbot_desktop::InProcessTransport;
 use openbot_domain::identity::session::{SessionLifetimePolicy, TrustedOrigins};
@@ -52,7 +53,20 @@ fn record() -> MemoryRecord {
         content: Some("tea".to_owned()),
         tags: Vec::new(),
         sensitivity: MemorySensitivity::Normal,
-        source: None,
+        source: Some(MemorySource {
+            thread_id: ThreadId::new("synthetic-source"),
+            message_id: "source-message".into(),
+        }),
+        source_run_id: Some(RunId::new("source-run")),
+        source_authorization_snapshot: Some(MemorySourceAuthorization {
+            actor_id: ActorId::new("actor-memory"),
+            tenant_id: TenantId::new("tenant-memory"),
+            deployment_id: DeploymentId::new("dep-memory"),
+            auth_generation: 1,
+            roles: vec![Role::User],
+            scope: MemoryScope::User,
+            captured_at: OffsetDateTime::UNIX_EPOCH,
+        }),
         origin: MemoryOrigin::UserAction,
         created_by: "actor-memory".to_owned(),
         supersedes_id: None,

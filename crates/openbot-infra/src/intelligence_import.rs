@@ -667,12 +667,17 @@ async fn insert_memory(
         .query_one(
             "SELECT tenant_id,owner_user_id,scope_kind,scope_id,memory_kind,content,tags, \
                     sensitivity,source_thread_id,source_message_id,origin,created_by,supersedes_id, \
-                    status,expires_at,created_at,updated_at FROM public.memories WHERE memory_id=$1",
+                    status,expires_at,created_at,updated_at,source_run_id,source_authorization_snapshot \
+                    FROM public.memories WHERE memory_id=$1",
             &[&memory.memory_id],
         )
         .await
         .map_err(|error| unavailable("核对 import memory", error))?;
     let exact = decode::<String>(&row, "tenant_id")? == request.target_tenant_id
+        // The existing signed format does not carry these original provenance facts.
+        // Neither a later message binding nor the importing actor may fill that historical gap.
+        && decode::<Option<String>>(&row, "source_run_id")?.is_none()
+        && decode::<Option<serde_json::Value>>(&row, "source_authorization_snapshot")?.is_none()
         && decode::<String>(&row, "owner_user_id")? == memory.owner_user_id
         && decode::<String>(&row, "scope_kind")? == scope_kind
         && decode::<Option<String>>(&row, "scope_id")?.as_deref() == scope_id
@@ -887,7 +892,8 @@ async fn reconstruct_memories(
         .query(
             "SELECT memory_id,owner_user_id,scope_kind,scope_id,memory_kind,content,tags, \
                     sensitivity,source_thread_id,source_message_id,created_by,supersedes_id,status, \
-                    expires_at,created_at,updated_at FROM public.memories \
+                    expires_at,created_at,updated_at,source_run_id,source_authorization_snapshot \
+                    FROM public.memories \
              WHERE source_thread_id=$1 ORDER BY memory_id",
             &[&thread_id],
         )
@@ -895,6 +901,13 @@ async fn reconstruct_memories(
         .map_err(|error| unavailable("读取 imported memories", error))?
         .iter()
         .map(|row| {
+            // Completed/resumed import observes the same original nullable facts as a new page.
+            // The signed legacy format cannot silently certify later enrichment as an exact replay.
+            if decode::<Option<String>>(row, "source_run_id")?.is_some()
+                || decode::<Option<serde_json::Value>>(row, "source_authorization_snapshot")?.is_some()
+            {
+                return Err(IntelligenceImportError::Corrupt { field: "memory_source_provenance" });
+            }
             let scope_kind: String = decode(row, "scope_kind")?;
             let scope_id: Option<String> = decode(row, "scope_id")?;
             let scope = match (scope_kind.as_str(), scope_id) {

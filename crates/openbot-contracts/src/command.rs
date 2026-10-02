@@ -1831,6 +1831,8 @@ mod tests {
             tags: Vec::new(),
             sensitivity: crate::memory::MemorySensitivity::Normal,
             source: None,
+            source_run_id: None,
+            source_authorization_snapshot: None,
             origin: crate::memory::MemoryOrigin::UserAction,
             created_by: "u1".to_owned(),
             supersedes_id: None,
