@@ -4708,6 +4708,30 @@ html[data-window-chrome="macos-overlay"] .ob-shell-topbar > .ob-sidebar-trigger 
   border-radius: 7px; background: transparent; color: var(--fg-secondary); font-size: 12px;
 }
 .ob-chat-controls :is(.ob-select-trigger, .ob-composer-mode):is(:hover, :focus-visible) { background: var(--bg-subtle); }
+.ob-chat-controls .ob-listbox-popup {
+  inset-block-start: auto; inset-block-end: calc(100% + 4px);
+  width: var(--size-menu-min); max-width: calc(100vw - 32px);
+  max-height: min(var(--size-listbox-max), calc(100dvh - 180px));
+  padding: var(--size-menu-padding); border-color: var(--menu-border);
+  border-radius: var(--size-menu-radius);
+}
+.ob-chat-controls .ob-listbox-option {
+  flex-direction: column; align-items: stretch; gap: 3px;
+  padding: 7px 26px 7px 8px; font-size: 13px; line-height: 1.5;
+}
+.ob-chat-controls .ob-listbox-option > :is(strong, small) { min-width: 0; overflow-wrap: anywhere; }
+.ob-chat-controls .ob-listbox-option > strong { font-weight: 550; }
+.ob-chat-controls .ob-listbox-option > small { color: var(--fg-muted); font-size: 11px; }
+.ob-chat-controls .ob-recipient-field .ob-listbox-option { flex-direction: row; align-items: center; }
+.ob-chat-controls .ob-skill-picker, .ob-chat-draft { position: relative; }
+.ob-chat-composer .ob-home-mention-results {
+  position: absolute; inset-block-start: auto; inset-block-end: calc(100% + 4px);
+  z-index: var(--z-combobox); width: var(--size-menu-min); max-width: calc(100vw - 32px);
+  max-height: min(var(--size-listbox-max), calc(100dvh - 180px));
+  padding: var(--size-menu-padding); border-color: var(--menu-border);
+  border-radius: var(--size-menu-radius); background: var(--bg-popover); box-shadow: var(--elevation-popover);
+}
+.ob-chat-controls .ob-home-mention-results { inset-inline-end: 0; }
 .ob-composer-mode { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .ob-composer-mode > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob-chat-send { flex: 0 0 auto; margin-left: auto; }
