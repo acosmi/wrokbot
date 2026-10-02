@@ -1,6 +1,8 @@
 //! Real remember producer evidence, using owned PostgreSQL fixtures and the actual capability,
 //! memory, journal and run adapters. Capture-only fixtures never certify a business effect.
 mod harness;
+#[path = "remember_effect_receipts/process_restart.rs"]
+mod process_restart;
 #[path = "remember_effect_receipts/races.rs"]
 mod races;
 #[path = "remember_effect_receipts/recovery.rs"]
