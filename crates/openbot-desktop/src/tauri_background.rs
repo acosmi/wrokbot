@@ -43,8 +43,9 @@ use crate::tauri_host::{
     DesktopTauriProtocol, DesktopTauriProtocolSlot, register_tauri_protocol_slot, valid_scheme,
 };
 use crate::{
-    DesktopAgentBudgets, DesktopOpenAiProviderInput, DesktopUiPreferenceStore,
-    DesktopWindowLifecycle, InProcessTransport, VerifiedDesktopWindowAuthority,
+    DesktopAgentBudgets, DesktopOpenAiProviderInput, DesktopUiPreferenceAdministration,
+    DesktopUiPreferenceStore, DesktopWindowLifecycle, InProcessTransport,
+    VerifiedDesktopWindowAuthority,
 };
 
 type PackageFactory = Box<
@@ -1178,6 +1179,20 @@ pub(crate) async fn prepare_desktop_local_runtime(
     let agent_audit_key = audit_key.expose().to_vec();
     let agent_remote_assertions = Arc::clone(&remote_assertions);
     let agent_listener_database = listener_database.clone();
+    let preference_authority =
+        match openbot_infra::ui_preferences::PostgresUiPreferenceAdministration::new(
+            pool.clone(),
+            auth.deployment().clone(),
+            auth.tenant().clone(),
+            openbot_domain::vault::SecretBytes::new(audit_key.expose().to_vec()),
+        ) {
+            Ok(port) => Arc::new(port),
+            Err(_) => {
+                return Err(
+                    cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
+                );
+            }
+        };
     let assembly = match assemble_postgres_application(PostgresApplicationAssemblyInput {
         pool: pool.clone(),
         listener_database: listener_database.clone(),
@@ -1192,7 +1207,8 @@ pub(crate) async fn prepare_desktop_local_runtime(
         remote_assertions,
         mcp_oauth_state_key,
         policy_store,
-        ui_preferences: Arc::new(DesktopUiPreferenceStore::new(
+        ui_preferences: Arc::new(DesktopUiPreferenceAdministration::new(
+            preference_authority,
             app_data_root.as_path().join(DESKTOP_UI_PREFERENCES_FILE),
         )),
         screen_sessions: Arc::new(ScreenSessionService::new(screen_hub)),
@@ -1249,7 +1265,11 @@ pub(crate) async fn prepare_desktop_local_runtime(
         )),
     };
     let protocol = match opened_protocol {
-        Ok(protocol) => Arc::new(protocol),
+        Ok(protocol) => Arc::new(protocol.with_first_frame_projection(
+            DesktopUiPreferenceStore::new(
+                app_data_root.as_path().join(DESKTOP_UI_PREFERENCES_FILE),
+            ),
+        )),
         Err(_) => {
             return Err(cleanup_agent_host(
                 data_plane,

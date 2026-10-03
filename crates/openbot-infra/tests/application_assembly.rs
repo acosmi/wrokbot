@@ -96,7 +96,15 @@ async fn shared_postgres_application_assembly_executes_real_command() {
                 ),
                 mcp_oauth_state_key: SecretBytes::new(vec![0x53; 32]),
                 policy_store,
-                ui_preferences: Arc::new(PostgresUiPreferenceAdministration::new(pool.clone())),
+                ui_preferences: Arc::new(
+                    PostgresUiPreferenceAdministration::new(
+                        pool.clone(),
+                        deployment.clone(),
+                        tenant.clone(),
+                        SecretBytes::new(vec![0x51; 32]),
+                    )
+                    .map_err(|e| e.to_string())?,
+                ),
                 screen_sessions: Arc::new(openbot_application::NoScreenSessionAdministration),
                 remote_agent_probe: Arc::new(ClosedRemoteProbe),
                 managed_slot_available: false,
@@ -137,6 +145,35 @@ async fn shared_postgres_application_assembly_executes_real_command() {
                 .map_err(|error| error.to_string())?;
             if !matches!(reply, AppReply::CurrentUser(_)) {
                 return Err(format!("shared application reply drifted: {reply:?}"));
+            }
+            // The real shared application must use the authoritative PG preference port.
+            let client = pool.get().await.map_err(|error| error.to_string())?;
+            let before: i64=client.query_one("SELECT count(*) FROM public.user_ui_preferences",&[])
+                .await.map_err(|e|e.to_string())?.get(0);
+            let empty=application.execute(auth.clone(),AppCommand::GetUiPreferences)
+                .await.map_err(|e|e.to_string())?;
+            if empty!=AppReply::UiPreferences(openbot_contracts::ui::UiPreferences::default()) {
+                return Err("uninitialized PG preferences must remain absent".to_owned());
+            }
+            if client.query_one("SELECT count(*) FROM public.user_ui_preferences",&[])
+                .await.map_err(|e|e.to_string())?.get::<_,i64>(0)!=before {
+                return Err("preference GET created a row".to_owned());
+            }
+            let created=application.execute(auth.clone(),AppCommand::UpdateUiPreferences(
+                openbot_contracts::ui::UpdateUiPreferences {theme:Some(openbot_contracts::ui::UiTheme::Light),
+                    locale:None,expected_revision:None}))
+                .await.map_err(|e|e.to_string())?;
+            if !matches!(created,AppReply::UiPreferences(p) if p.revision==Some(1) && p.updated_at.is_some()) {
+                return Err("assembled preference create receipt drifted".to_owned());
+            }
+            let advanced=application.execute(auth.clone(),AppCommand::UpdateUiPreferences(
+                openbot_contracts::ui::UpdateUiPreferences {theme:None,
+                    locale:Some(openbot_contracts::ui::UiLocale::ZhCn),expected_revision:Some(1)}))
+                .await.map_err(|e|e.to_string())?;
+            if !matches!(advanced,AppReply::UiPreferences(p) if p.revision==Some(2)
+                && p.theme==Some(openbot_contracts::ui::UiTheme::Light)
+                && p.locale==Some(openbot_contracts::ui::UiLocale::ZhCn)) {
+                return Err("assembled exact-version partial receipt drifted".to_owned());
             }
             let preference = RunCostBudgetPreference {
                 cap: Some(RunCostCapInput {

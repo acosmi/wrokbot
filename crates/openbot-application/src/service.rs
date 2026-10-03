@@ -517,6 +517,7 @@ mod tests {
                 AppCommand::UpdateUiPreferences(openbot_contracts::ui::UpdateUiPreferences {
                     theme: Some(openbot_contracts::ui::UiTheme::Dark),
                     locale: None,
+                    expected_revision: None,
                 }),
                 "update_ui_preferences",
             ),

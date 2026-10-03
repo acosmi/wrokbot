@@ -368,7 +368,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         remote_assertions: remote_assertions.clone(),
         mcp_oauth_state_key: SecretBytes::new(mcp_oauth_state_key.expose().to_vec()),
         policy_store: policy_store.clone(),
-        ui_preferences: Arc::new(PostgresUiPreferenceAdministration::new(pool.clone())),
+        ui_preferences: Arc::new(PostgresUiPreferenceAdministration::new(
+            pool.clone(),
+            deployment.clone(),
+            tenant.clone(),
+            SecretBytes::new(audit_key.expose().to_vec()),
+        )?),
         screen_sessions,
         remote_agent_probe,
         managed_slot_available: managed_provider_for_slot(&server).is_some(),
