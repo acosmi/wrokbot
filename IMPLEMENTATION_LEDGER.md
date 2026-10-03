@@ -633,3 +633,12 @@ Exact candidate checks, expanded browser regression, the reviewed action matrix,
 HTTP两技能写入口在JSON前检查freshness/Origin，Desktop在body前检查窗口authority/freshness，当前角色/DB权限在对象锁及冲突快照前。最小既有UI冻结打开时版本并保护迟到回执，不认证三份编辑状态、完整autosave/800ms/10s或UI5-P6；preferences CAS/审计、074–077其余新反例、能力状态及精确执行目标继续开放，全新未交付能力仅登记，M0完整门未关闭。新增两次缓存清理共47items/433828025逻辑字节，只清可再生成debug缓存，源码/QA/历史验收/数据库及必要产物保持。入场140项含授权台账；139项其它用户文件摘要一致，台账历史主体保留，入口登记和事实追加单列。
 
 本段记录时PR #107尚未合并；最终ledger-only差量需独立GO，再绑定准确head按持续授权正常admin合并并核fresh实际回执。未运行本机全量CI或手动Actions，未强推、修改保护或绕过hooks；规范与QA保持本机，不以局部补全关闭总目标。
+
+
+## UI5-P4 candidate1 exact checks and independent follow-up
+
+2026-10-03 UTC: clean source43c086acd5c1cfa989553b477e7597e1e432f96a/tree05345c4459ddc9b60e4c32a52ee6fef74eb8c0e8 passed nine directed checks on unchanged1164 inputs, including253 UI tests. Actual WASM gzip3126320/3670016 and CSS130967/131072 pass with the original CSS warning. Delivered backend PR107/7248463 was normally integrated, preserving the real skill edit-version contract. The rebuilt isolated host matches898 non-UI inputs and differs only by two nullable Memory seed fields. No production backend claim is made.
+
+The primary browser record has222 pass/four failures: two QA timing failures and their two summaries. Original failures remain. Explicit destination-heading waits and actual typed cancellation-response waits then pass separate1/78-case reruns on the identical candidate and24 artifacts, providing226 distinct finite observations in the combined index, with zero JS/panic/external requests and actual host exits. Fifteen User-scope recall cases and account/SAML cases now ran; reads preserve write Unknown locks.
+
+Independent source, route-image and historical-action review found three real remaining source issues: loss of the old approval error-notification dismissal, an oversized decorative admin Computer placeholder, and an unsized plugin account link. They are being repaired before a new exact candidate. Notification dismissal must retain the visible Unknown state, disabled decisions and operation observations, with zero mutation replay. Current43 evidence remains historical; no final P4 GO, PR or merge exists. Original oracle/native/production, unexecuted action branches and P5-P9 acceptance remain open.

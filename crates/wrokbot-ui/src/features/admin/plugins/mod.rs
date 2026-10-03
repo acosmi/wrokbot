@@ -256,7 +256,9 @@ fn PluginDetail(data: PluginData, server_id: String, editor: EditorLocation) -> 
                             on_activate=move |_| connect_own_account(key.get_value(), connecting, connect_error)>{move || t!(i18n, plugins.personal_connect)}</Button>
                     </Show>
                     <Show when=move || key.get_value() == "google-drive">
-                        <a class="ob-button" href=api::account_href(&key.get_value()).expect("validated server")>{move || t!(i18n, plugins.personal_manage)}</a>
+                        <div class="ob-plugin-controls">
+                            <a class="ob-button" data-size="md" data-variant="secondary" href=api::account_href(&key.get_value()).expect("validated server")>{move || t!(i18n, plugins.personal_manage)}</a>
+                        </div>
                     </Show>
                     <Show when=move || connect_error.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.connect_error)}</p></Show>
                 </Show>
