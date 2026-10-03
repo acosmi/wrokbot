@@ -46,6 +46,9 @@
 pub mod api;
 pub mod app;
 mod configuration_writes;
+mod editor_notice;
+mod editor_runtime;
+mod revision_editor;
 #[cfg(feature = "design-gallery")]
 pub mod design_gallery;
 pub mod features;

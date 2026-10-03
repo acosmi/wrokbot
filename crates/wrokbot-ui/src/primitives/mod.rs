@@ -31,7 +31,7 @@ mod skeleton;
 mod switch;
 mod textarea;
 mod theme_toggle;
-mod timing;
+pub(crate) mod timing;
 mod toast;
 mod tooltip;
 

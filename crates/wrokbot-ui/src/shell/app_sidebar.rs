@@ -255,7 +255,7 @@ pub fn AppSidebar() -> impl IntoView {
                             <IconView icon=Icon::ShieldLock size=IconSize::Inline />{move || t!(i18n, shell.nav_admin)}
                         </a>
                     </Show>
-                    <div class="ob-sidebar-preferences"><ThemeToggle /><LocaleSwitch id="sidebar-locale-switch" /><PreferenceSaveStatus /></div>
+                    <div class="ob-sidebar-preferences"><ThemeToggle /><LocaleSwitch id="sidebar-locale-switch" /><PreferenceSaveStatus id_prefix="sidebar-preferences-editor"/></div>
                     <Show when=move || revocable.get()>
                         <Button variant=ButtonVariant::DangerText size=ButtonSize::Medium loading=sign_out_pending on_activate=sign_out>
                             <IconView icon=Icon::LogOut size=IconSize::Inline /><span>{move || t!(i18n, auth.sign_out)}</span>

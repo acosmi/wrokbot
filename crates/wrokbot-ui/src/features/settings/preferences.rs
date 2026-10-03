@@ -264,7 +264,7 @@ pub fn SettingsPage() -> impl IntoView {
                     </div>
                 </div>
                 <div class="ob-settings-preference-status">
-                    <PreferenceSaveStatus />
+                    <PreferenceSaveStatus id_prefix="settings-preferences-editor"/>
                 </div>
             </PageSection>
         </PageShell>

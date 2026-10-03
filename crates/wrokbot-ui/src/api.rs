@@ -14,6 +14,8 @@ pub(crate) mod desktop_transport;
 
 #[path = "model_connections_api.rs"]
 pub(crate) mod model_connections;
+#[path = "preference_cas_api.rs"]
+pub(crate) mod preference_cas;
 #[path = "plugins_api.rs"]
 pub(crate) mod plugins;
 #[path = "skills_api.rs"]
@@ -507,6 +509,68 @@ pub async fn save_sandboxed_component_draft(
         format!("custom_{}", request.slug),
         save_sandboxed_component_draft_write(request),
     )
+    .await
+}
+
+/// Existing draft CAS with its own exact closed conflict and explicit recovery ownership.
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn save_sandboxed_component_draft_cas(
+    request: &SaveSandboxedComponentRequest,
+    mode: crate::configuration_writes::SandboxCasMode,
+) -> Result<SandboxedComponentResponse, crate::configuration_writes::CasWriteError> {
+    use crate::configuration_writes::{CasWriteError, track_sandbox_cas};
+    let Some(expected) = request.expected_revision.filter(|revision| *revision > 0) else {
+        return Err(CasWriteError::Rejected(ApiError::NotSubmitted));
+    };
+    validate_sandboxed_request(request)
+        .map_err(|_| CasWriteError::Rejected(ApiError::NotSubmitted))?;
+    track_sandbox_cas(format!("custom_{}", request.slug), expected, mode, async {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use crate::api::request::Request;
+            let response = Request::send(
+                Request::post("/api/sandboxed")
+                    .json(request)
+                    .map_err(|_| CasWriteError::Rejected(ApiError::NotSubmitted))?,
+            )
+            .await
+            .map_err(CasWriteError::Unknown)?;
+            if response.status() == 409 {
+                let snapshot =
+                    Request::decode::<openbot_contracts::revision::RevisionSnapshot>(&response)
+                        .await
+                        .map_err(|_| CasWriteError::Unknown(ApiError::InvalidResponse))?;
+                if snapshot.current_revision() <= expected {
+                    return Err(CasWriteError::Unknown(ApiError::InvalidResponse));
+                }
+                return Err(CasWriteError::Conflict(snapshot));
+            }
+            if response.status() != 200 {
+                let error = status_error(response.status());
+                return Err(
+                    if matches!(
+                        error,
+                        ApiError::Unauthorized | ApiError::Forbidden | ApiError::NotFound
+                    ) {
+                        CasWriteError::Rejected(error)
+                    } else {
+                        CasWriteError::Unknown(error)
+                    },
+                );
+            }
+            let saved = Request::decode::<SandboxedComponentResponse>(&response)
+                .await
+                .map_err(CasWriteError::Unknown)?;
+            validate_sandboxed_record(&saved.component).map_err(CasWriteError::Unknown)?;
+            validate_sandboxed_draft_receipt(request, &saved.component)
+                .map_err(CasWriteError::Unknown)?;
+            Ok(saved)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Err(CasWriteError::Unknown(ApiError::Unavailable))
+        }
+    })
     .await
 }
 

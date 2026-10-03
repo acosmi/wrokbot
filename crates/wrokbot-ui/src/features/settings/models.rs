@@ -1,6 +1,7 @@
 //! Model-service settings. Personal custom inventory uses the authoritative management API.
 mod form;
 mod state;
+mod revision;
 use crate::api::model_connections::WriteError;
 use crate::features::channels::composer::models::{DirectoryStatus, ModelDirectory};
 use crate::{
