@@ -478,6 +478,10 @@ async fn ordinary_server_role_without_pg_control_system_permission_can_adopt_reg
             let role = format!("artifact_it_{}", uuid::Uuid::now_v7().simple());
             let password = format!("{}{}", uuid::Uuid::now_v7().simple(), uuid::Uuid::now_v7().simple());
             let c = p.get().await.map_err(|e| e.to_string())?;
+            // 显式控制本测试临时库 ACL，不声称这是部署默认。pg_catalog function ACL 是
+            // database-local；不修改生产权限，也不把普通 Server 路径扩成管理员路径。
+            c.batch_execute("REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC")
+                .await.map_err(|_| "设置 owned test-only pg_control_system ACL 失败".to_owned())?;
             // 仅授予本测试临时库的业务表权限；口令不进入日志或断言输出。
             c.batch_execute(&format!(
                 "CREATE ROLE {role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '{password}'; \
@@ -519,6 +523,9 @@ async fn ordinary_server_role_without_pg_control_system_permission_can_adopt_reg
                 .await.map_err(|_| "清理 owned test-only 角色失败".to_owned())?;
             drop(c);
             p.close();
+            if result.is_ok() {
+                println!("artifact_server_role_receipt test=ordinary_server_role_without_pg_control_system_permission_can_adopt_registry acl_source=test_controlled_owned_database rolsuper=false pg_control_system_execute=false pg_control_system_select_sqlstate=42501 registry_valid=true role_cleanup=true");
+            }
             result
         },
     ).await;
@@ -578,10 +585,20 @@ mod desktop {
     const TEST_USER: &str = "desktop_admin";
     const TEST_PASSWORD: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    fn postgres_binary(name: &str) -> PathBuf {
-        std::env::var_os("OPENBOT_TEST_POSTGRES_BIN_DIR")
+    fn postgres_binary(name: &str) -> Result<PathBuf, String> {
+        let directory = std::env::var_os("OPENBOT_TEST_PG_BIN")
             .map(PathBuf::from)
-            .map_or_else(|| PathBuf::from(name), |directory| directory.join(name))
+            .ok_or_else(|| "owned runner must set OPENBOT_TEST_PG_BIN".to_owned())?;
+        if !directory.is_absolute() {
+            return Err(
+                "OPENBOT_TEST_PG_BIN must be an absolute owned test binary directory".to_owned(),
+            );
+        }
+        let binary = directory.join(name);
+        if !binary.is_file() {
+            return Err(format!("owned PostgreSQL binary missing: {name}"));
+        }
+        Ok(binary)
     }
 
     fn run(command: &mut Command, phase: &'static str) -> Result<(), String> {
@@ -603,24 +620,109 @@ mod desktop {
         socket_dir: PathBuf,
         socket_created: bool,
         started: bool,
+        postmaster_pid: Option<u32>,
+    }
+
+    impl OwnedSidecar {
+        fn read_owned_postmaster_pid(&self) -> Result<u32, String> {
+            let content = fs::read_to_string(self.data_dir.join("postmaster.pid"))
+                .map_err(|_| "read owned postmaster.pid failed".to_owned())?;
+            content
+                .lines()
+                .next()
+                .and_then(|line| line.parse::<u32>().ok())
+                .filter(|pid| *pid > 1 && *pid <= i32::MAX as u32)
+                .ok_or_else(|| "owned postmaster PID is not a positive process identity".to_owned())
+        }
+
+        fn stop_verified(&mut self) -> Result<u32, String> {
+            let pid = self
+                .postmaster_pid
+                .map_or_else(|| self.read_owned_postmaster_pid(), Ok)?;
+            if self.read_owned_postmaster_pid()? != pid {
+                return Err("owned postmaster.pid changed before stop".to_owned());
+            }
+            // success() means actual exit 0; no Drop result stands in for this acceptance.
+            run(
+                Command::new(&self.pg_ctl)
+                    .arg("-D")
+                    .arg(&self.data_dir)
+                    .args(["-t", "15", "-m", "fast", "-w", "stop"]),
+                "owned pg_ctl stop",
+            )?;
+            match fs::symlink_metadata(self.data_dir.join("postmaster.pid")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => {
+                    return Err(
+                        "owned postmaster.pid remains or cannot be observed after stop".to_owned(),
+                    );
+                }
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                // Signal 0 only queries the PID captured from this test's own PG data directory.
+                // Require ESRCH text in a fixed locale; EPERM or a missing tool proves nothing.
+                let probe = Command::new("/bin/kill")
+                    .env("LC_ALL", "C")
+                    .args(["-0", &pid.to_string()])
+                    .output()
+                    .map_err(|_| "query owned stopped PID failed".to_owned())?;
+                if probe.status.code() == Some(1)
+                    && String::from_utf8_lossy(&probe.stderr).contains("No such process")
+                {
+                    break;
+                }
+                if !probe.status.success() || std::time::Instant::now() >= deadline {
+                    return Err(
+                        "owned old postmaster PID is still present or absence was not proved"
+                            .to_owned(),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            self.started = false;
+            Ok(pid)
+        }
+
+        fn cleanup_owned_paths(&mut self) -> Result<(), String> {
+            match fs::remove_dir_all(&self.app_root) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err("remove owned stopped app root failed".to_owned()),
+            }
+            if self.socket_created {
+                match fs::remove_dir_all(&self.socket_dir) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err("remove owned stopped socket root failed".to_owned()),
+                }
+                self.socket_created = false;
+            }
+            Ok(())
+        }
+
+        fn finish(&mut self, test: &'static str) -> Result<(), String> {
+            if !self.started {
+                return Err(
+                    "owned successful fixture must explicitly stop its started PG".to_owned(),
+                );
+            }
+            let pid = self.stop_verified()?;
+            self.cleanup_owned_paths()?;
+            println!(
+                "artifact_owned_sidecar_receipt test={test} stop_exit=0 postmaster_pid_absent=true old_pid={pid} old_pid_absent=true app_root_removed=true socket_root_removed=true"
+            );
+            Ok(())
+        }
     }
 
     impl Drop for OwnedSidecar {
         fn drop(&mut self) {
-            let stopped = !self.started
-                || run(
-                    Command::new(&self.pg_ctl)
-                        .arg("-D")
-                        .arg(&self.data_dir)
-                        .args(["-m", "fast", "-w", "stop"]),
-                    "pg_ctl stop",
-                )
-                .is_ok();
+            // Failed tests/startups retain this best-effort fallback. A successful test must use
+            // explicit finish, and only that path emits its acceptance receipt.
+            let stopped = !self.started || self.stop_verified().is_ok();
             if stopped {
-                let _ = fs::remove_dir_all(&self.app_root);
-                if self.socket_created {
-                    let _ = fs::remove_dir_all(&self.socket_dir);
-                }
+                let _ = self.cleanup_owned_paths();
             }
         }
     }
@@ -630,6 +732,13 @@ mod desktop {
         installation: DesktopLocalInstallation,
         port: u16,
         _sidecar: OwnedSidecar,
+    }
+
+    impl OwnedDesktop {
+        fn finish(mut self, test: &'static str) -> Result<(), String> {
+            self.database.close();
+            self._sidecar.finish(test)
+        }
     }
 
     fn append_postgres_config(data_dir: &Path, socket_dir: &Path, port: u16) -> Result<(), String> {
@@ -648,6 +757,8 @@ mod desktop {
     }
 
     async fn start_owned_desktop() -> Result<OwnedDesktop, String> {
+        let pg_ctl = postgres_binary("pg_ctl")?;
+        let initdb = postgres_binary("initdb")?;
         let id = uuid::Uuid::now_v7().simple().to_string();
         let app_root = std::env::temp_dir().join(format!("openbot-artifact-desktop-{id}"));
         // PG Unix socket 路径长度有限，仍只使用 create_new 的测试自有路径。
@@ -657,12 +768,13 @@ mod desktop {
             .create(&app_root)
             .map_err(|_| "create owned app root failed".to_owned())?;
         let mut sidecar = OwnedSidecar {
-            pg_ctl: postgres_binary("pg_ctl"),
+            pg_ctl,
             data_dir: app_root.join("not-started"),
             app_root,
             socket_dir,
             socket_created: false,
             started: false,
+            postmaster_pid: None,
         };
         let store = DesktopLocalAuthorityStore::new(
             CurrentOsUserAppDataRoot::from_current_os_user_app_data(&sidecar.app_root)
@@ -686,7 +798,7 @@ mod desktop {
             .map_err(|_| "sync owned initdb credential failed".to_owned())?;
         drop(password);
         run(
-            Command::new(postgres_binary("initdb"))
+            Command::new(initdb)
                 .arg("--pgdata")
                 .arg(&sidecar.data_dir)
                 .arg(format!("--username={TEST_USER}"))
@@ -725,6 +837,7 @@ mod desktop {
                 .args(["-w", "start"]),
             "pg_ctl start",
         )?;
+        sidecar.postmaster_pid = Some(sidecar.read_owned_postmaster_pid()?);
         let admin =
             connect_for_attestation(port, SecretBytes::new(TEST_PASSWORD.as_bytes().to_vec()))
                 .await
@@ -834,7 +947,9 @@ mod desktop {
         assert_eq!(reobserved.binding().dataset_id(), dataset);
         assert_eq!(reobserved.binding().initial_origin(), "desktop_canary");
         assert_eq!(registry_count(fixture.database.pool()).await, 1);
-        fixture.database.close();
+        fixture
+            .finish("current_desktop_crypto_proof_adopts_original_dataset_and_preserves_origin")
+            .unwrap();
     }
 
     #[tokio::test]
@@ -867,7 +982,9 @@ mod desktop {
         assert_eq!(registry.binding().dataset_id(), dataset);
         registry.validate_current().await.unwrap();
         reopened.close();
-        fixture.database.close();
+        fixture
+            .finish("reopened_same_physical_desktop_database_requires_new_current_owner_proof")
+            .unwrap();
     }
 
     #[tokio::test]
@@ -884,7 +1001,9 @@ mod desktop {
                 .is_err()
         );
         assert_eq!(registry_count(fixture.database.pool()).await, 0);
-        fixture.database.close();
+        fixture
+            .finish("stale_desktop_canary_crypto_observation_cannot_initialize_registry")
+            .unwrap();
     }
 
     #[tokio::test]
@@ -921,7 +1040,9 @@ mod desktop {
             .get(0);
         assert_eq!(persisted, before);
         drop(c);
-        fixture.database.close();
+        fixture
+            .finish("desktop_canary_cannot_replace_existing_different_server_dataset")
+            .unwrap();
     }
 
     #[tokio::test]
@@ -947,6 +1068,8 @@ mod desktop {
         assert_eq!(registry.binding().initial_origin(), "server_first_adoption");
         registry.validate_current().await.unwrap();
         assert_eq!(registry_count(fixture.database.pool()).await, 1);
-        fixture.database.close();
+        fixture
+            .finish("current_desktop_proof_for_existing_server_tuple_keeps_initial_server_origin")
+            .unwrap();
     }
 }
