@@ -35,6 +35,9 @@ pub fn is_sandboxed_component_name(name: &str) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SaveSandboxedComponentRequest {
+    /// Known editing version; absence creates a new identity and never overwrites an existing one.
+    #[serde(default)]
+    pub expected_revision: Option<i64>,
     /// Lower-case letters, digits, and underscores before the server-owned `custom_` prefix.
     pub slug: String,
     /// Administrator-facing component title.
@@ -89,6 +92,11 @@ pub struct SandboxedComponentRecord {
     pub sample_arguments: BTreeMap<String, Value>,
     /// Monotonic publication revision; saving a draft does not increment it.
     pub revision: u32,
+    /// Independent monotonic editing version for save, publish and delete CAS.
+    pub editing_revision: i64,
+    /// Database-clock time of the current editing version.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
     /// Whether at least one complete source revision has been published.
     pub published: bool,
     /// Database-clock time of the latest publication.
@@ -147,9 +155,40 @@ pub struct SandboxedComponentDeleted {
     pub ok: bool,
 }
 
+/// Closed expected editing version for an existing sandbox publish or delete action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxedComponentRevisionRequest {
+    /// Current editing version observed by the caller, never the publication revision.
+    pub expected_revision: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_action_revision_body_is_required_i64_and_cannot_carry_identity_or_authority() {
+        let request: SandboxedComponentRevisionRequest =
+            serde_json::from_str(r#"{"expectedRevision":9223372036854775807}"#).unwrap();
+        assert_eq!(request.expected_revision, i64::MAX);
+        for body in [
+            r#"{}"#,
+            r#"{"expectedRevision":1,"actor":"admin"}"#,
+            r#"{"expectedRevision":"1"}"#,
+            r#"{"expectedRevision":1.5}"#,
+            r#"{"expectedRevision":9223372036854775808}"#,
+        ] {
+            assert!(serde_json::from_str::<SandboxedComponentRevisionRequest>(body).is_err());
+        }
+        let create: SaveSandboxedComponentRequest =
+            serde_json::from_str(r#"{"slug":"new_name","title":"title"}"#).unwrap();
+        assert_eq!(create.expected_revision, None);
+        let edit: SaveSandboxedComponentRequest =
+            serde_json::from_str(r#"{"slug":"new_name","title":"title","expectedRevision":3}"#)
+                .unwrap();
+        assert_eq!(edit.expected_revision, Some(3));
+    }
 
     #[test]
     fn draft_defaults_optional_source_and_json_objects_without_accepting_unknown_fields() {

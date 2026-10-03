@@ -36,6 +36,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
                 .batch_execute(
                     "INSERT INTO public.users(id,email,auth_generation)
                        VALUES('sandbox-admin','sandbox-admin@example.test',0);
+                     INSERT INTO public.user_roles(user_id,role) VALUES('sandbox-admin','admin');
                      INSERT INTO public.components(
                        name,title,kind,draft_description,published_description,published,
                        published_at,updated_by,created_at,updated_at
@@ -95,7 +96,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
             }
 
             let published_v1 = adapter
-                .publish_sandboxed_component(&auth, &initial.name)
+                .publish_sandboxed_component(&auth, &initial.name, saved.editing_revision)
                 .await
                 .map_err(|error| error.to_string())?;
             if published_v1.revision != 1
@@ -109,6 +110,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
             assert_published_only(&adapter, &auth, &initial, 1).await?;
 
             let mut metadata_only = initial.clone();
+            metadata_only.expected_revision = Some(published_v1.editing_revision);
             metadata_only.description = "description v2".to_owned();
             metadata_only.argument_schema.insert("revision".to_owned(), json!(2));
             metadata_only.sample_arguments.insert("version".to_owned(), json!("v2"));
@@ -130,6 +132,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
             }
 
             let mut source_v2 = metadata_only.clone();
+            source_v2.expected_revision = Some(metadata_saved.editing_revision);
             source_v2.html = "<p>ETA v2</p>".to_owned();
             let source_saved = adapter
                 .save_sandboxed_component(&auth, &source_v2)
@@ -146,7 +149,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
                 return Err("draft HTML leaked before second publication".to_owned());
             }
             let published_v2 = adapter
-                .publish_sandboxed_component(&auth, &source_v2.name)
+                .publish_sandboxed_component(&auth, &source_v2.name, source_saved.editing_revision)
                 .await
                 .map_err(|error| error.to_string())?;
             if published_v2.revision != 2
@@ -212,7 +215,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
                 return Err("compiled governance collision was not refused".to_owned());
             }
             if !matches!(
-                adapter.delete_sandboxed_component(&auth, "showQuote").await,
+                adapter.delete_sandboxed_component(&auth, "showQuote", 1).await,
                 Err(SandboxedComponentAdministrationError::NotVisible)
             ) {
                 return Err("compiled component delete was not refused".to_owned());
@@ -247,7 +250,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
             }
             if !matches!(
                 adapter
-                    .publish_sandboxed_component(&auth, &source_v2.name)
+                    .publish_sandboxed_component(&auth, &source_v2.name, published_v2.editing_revision)
                     .await,
                 Err(SandboxedComponentAdministrationError::Unavailable)
             ) {
@@ -255,7 +258,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
             }
             if !matches!(
                 adapter
-                    .delete_sandboxed_component(&auth, &source_v2.name)
+                    .delete_sandboxed_component(&auth, &source_v2.name, published_v2.editing_revision)
                     .await,
                 Err(SandboxedComponentAdministrationError::Unavailable)
             ) {
@@ -318,12 +321,15 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
                 .map_err(|error| error.to_string())?;
             drop(client);
 
+            assert!(matches!(adapter.delete_sandboxed_component(&auth,"custom_orphan",1).await,
+                Err(SandboxedComponentAdministrationError::Corrupt { field: "component_governance" })));
+            let c=pool.get().await.unwrap();
+            assert_eq!(c.query_one("SELECT count(*) FROM public.components WHERE name='custom_orphan'",&[]).await.unwrap().get::<_,i64>(0),1);
+            assert_eq!(c.query_one("SELECT count(*) FROM public.sandboxed_component_retired_names WHERE name='custom_orphan'",&[]).await.unwrap().get::<_,i64>(0),0);
+            c.execute("DELETE FROM public.components WHERE name='custom_orphan'",&[]).await.unwrap();
+            drop(c);
             adapter
-                .delete_sandboxed_component(&auth, "custom_orphan")
-                .await
-                .map_err(|error| error.to_string())?;
-            adapter
-                .delete_sandboxed_component(&auth, &source_v2.name)
+                .delete_sandboxed_component(&auth, &source_v2.name, published_v2.editing_revision)
                 .await
                 .map_err(|error| error.to_string())?;
             let client = pool.get().await.map_err(|error| error.to_string())?;
@@ -410,6 +416,7 @@ async fn sandboxed_lifecycle_is_atomic_published_only_audited_and_namespace_safe
 
 fn draft(name: &str, version: &str, html: &str) -> SandboxedComponentDraft {
     SandboxedComponentDraft {
+        expected_revision: None,
         name: name.to_owned(),
         title: "Delivery ETA".to_owned(),
         description: format!("description {version}"),

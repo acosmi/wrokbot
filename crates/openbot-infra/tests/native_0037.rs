@@ -1,16 +1,16 @@
 //! R417's registered physical schema and closed nullable snapshot boundary.
 mod harness;
-use openbot_infra::db::{desktop_vault_canary, fresh, native, pool, schema_facts};
+use openbot_infra::db::{baseline, desktop_vault_canary, fresh, native, pool, schema_facts};
 use tokio_postgres::error::SqlState;
 
 #[tokio::test]
 #[ignore = "requires owned isolated PostgreSQL"]
-async fn latest_fresh_schema_matches_actual_pg_oracle_and_preserves_every_prior_table() {
+async fn historical_0037_schema_matches_its_oracle_and_preserves_every_prior_table() {
     harness::with_temp_database(&harness::admin_config("provenance37schema"),"provenance37schema",|config| async move {
         let p=pool::connect(&config).await.map_err(|e|e.to_string())?;
         let mut c=p.get().await.unwrap();
         c.batch_execute("SET default_transaction_isolation='repeatable read'").await.unwrap();
-        fresh::apply(&mut c).await.unwrap();
+        baseline::apply(&c).await.unwrap();native::apply_through(&mut c,native::NATIVE_0037_VERSION).await.unwrap();
         let actual=schema_facts::fetch(&c).await.unwrap();
         let expected=serde_json::from_str(include_str!("../../../fixtures/db/schema-0037.json")).unwrap();
         assert_eq!(actual,expected);
@@ -28,8 +28,8 @@ async fn latest_fresh_schema_matches_actual_pg_oracle_and_preserves_every_prior_
         assert_eq!(actual.enums,previous.enums);assert_eq!(actual.extensions,previous.extensions);
         let trigger=c.query_one("SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid='public.memories'::regclass AND tgname='memory_provenance_immutable'",&[]).await.unwrap().get::<_,String>(0);
         assert!(trigger.contains("BEFORE UPDATE"));assert!(trigger.contains("guard_memory_provenance"));
-        assert_eq!(native::apply(&mut c).await.unwrap(),native::ApplyOutcome::AlreadyApplied);
-        drop(c);desktop_vault_canary::verify_current_layout(&p).await.unwrap();p.close();Ok(())
+        assert_eq!(native::apply_through(&mut c,native::NATIVE_0037_VERSION).await.unwrap(),native::ApplyOutcome::AlreadyApplied);
+        drop(c);assert_eq!(desktop_vault_canary::verify_pre_upgrade_layout(&p).await.unwrap().native_version(),37);assert!(desktop_vault_canary::verify_current_layout(&p).await.is_err());p.close();Ok(())
     }).await;
 }
 

@@ -84,6 +84,8 @@ impl SandboxedComponentAdministration for FixedSandboxed {
         draft: &SandboxedComponentDraft,
     ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError> {
         Ok(SandboxedComponentRecord {
+            editing_revision: draft.expected_revision.map_or(1, |r| r + 1),
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             name: draft.name.clone(),
             title: draft.title.clone(),
             draft_description: draft.description.clone(),
@@ -108,12 +110,24 @@ impl SandboxedComponentAdministration for FixedSandboxed {
         &self,
         auth: &AuthContext,
         _component_name: &str,
+        expected_revision: i64,
     ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError> {
         let mut record = draft_record(auth.actor().as_str());
+        if expected_revision != record.editing_revision {
+            return Err(SandboxedComponentAdministrationError::StaleSnapshot(
+                openbot_contracts::revision::RevisionSnapshot::from_public(
+                    record.editing_revision,
+                    record.updated_at,
+                    &record,
+                )
+                .unwrap(),
+            ));
+        }
         record.published_html = Some(record.draft_html.clone());
         record.published_css = Some(record.draft_css.clone());
         record.published_js_functions = Some(record.draft_js_functions.clone());
         record.published_argument_schema = Some(record.draft_argument_schema.clone());
+        record.editing_revision = 2;
         record.revision = 1;
         record.published = true;
         record.published_at = Some(OffsetDateTime::UNIX_EPOCH);
@@ -124,6 +138,7 @@ impl SandboxedComponentAdministration for FixedSandboxed {
         &self,
         _auth: &AuthContext,
         _component_name: &str,
+        _expected_revision: i64,
     ) -> Result<(), SandboxedComponentAdministrationError> {
         Ok(())
     }
@@ -131,6 +146,8 @@ impl SandboxedComponentAdministration for FixedSandboxed {
 
 fn draft_record(actor: &str) -> SandboxedComponentRecord {
     SandboxedComponentRecord {
+        editing_revision: 1,
+        updated_at: time::OffsetDateTime::UNIX_EPOCH,
         name: "custom_delivery_eta".to_owned(),
         title: "Delivery ETA".to_owned(),
         draft_description: "Delivery estimate".to_owned(),
@@ -196,6 +213,10 @@ async fn axum_response(
         )
         .await
         .unwrap();
+    assert_eq!(
+        response.headers()[axum::http::header::CACHE_CONTROL],
+        "no-store"
+    );
     let status = response.status();
     let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
         .await
@@ -219,6 +240,10 @@ async fn tauri_response(
                 .unwrap(),
         )
         .await;
+    assert_eq!(
+        response.headers()[axum::http::header::CACHE_CONTROL],
+        "no-store"
+    );
     (
         response.status(),
         serde_json::from_slice(response.body()).unwrap(),
@@ -258,6 +283,7 @@ async fn sandboxed_governance_has_exact_axum_tauri_semantic_parity_on_one_applic
         .unwrap();
 
     let draft = serde_json::to_vec(&SaveSandboxedComponentRequest {
+        expected_revision: None,
         slug: "delivery_eta".to_owned(),
         title: "Delivery ETA".to_owned(),
         description: "Delivery estimate".to_owned(),
@@ -275,12 +301,12 @@ async fn sandboxed_governance_has_exact_axum_tauri_semantic_parity_on_one_applic
         (
             Method::POST,
             "/api/sandboxed/custom_delivery_eta/publish",
-            Vec::new(),
+            br#"{"expectedRevision":1}"#.to_vec(),
         ),
         (
             Method::DELETE,
             "/api/sandboxed/custom_delivery_eta",
-            Vec::new(),
+            br#"{"expectedRevision":2}"#.to_vec(),
         ),
     ];
     for (method, path, body) in cases {
@@ -290,5 +316,41 @@ async fn sandboxed_governance_has_exact_axum_tauri_semantic_parity_on_one_applic
         assert_eq!(web.0, StatusCode::OK);
     }
 
+    // Synthetic authority port: actual PostgreSQL compare/locking is separately exercised.
+    for (body, expected) in [
+        (br#"{"expectedRevision":9}"#.to_vec(), StatusCode::CONFLICT),
+        (
+            br#"{"expectedRevision":0}"#.to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            br#"{"expectedRevision":1,"actor":"injected"}"#.to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (Vec::new(), StatusCode::BAD_REQUEST),
+    ] {
+        let web = axum_response(
+            axum.clone(),
+            Method::POST,
+            "/api/sandboxed/custom_delivery_eta/publish",
+            body.clone(),
+        )
+        .await;
+        let desktop = tauri_response(
+            &protocol,
+            Method::POST,
+            "/api/sandboxed/custom_delivery_eta/publish",
+            body,
+        )
+        .await;
+        assert_eq!(web, desktop);
+        assert_eq!(web.0, expected);
+        if expected == StatusCode::CONFLICT {
+            assert_eq!(web.1.as_object().unwrap().len(), 3);
+            assert_eq!(web.1["currentRevision"], 1);
+            assert_eq!(web.1["currentSha256"].as_str().unwrap().len(), 64);
+            assert_eq!(web.1["updatedAt"], "1970-01-01T00:00:00Z");
+        }
+    }
     fs::remove_dir_all(root).unwrap();
 }

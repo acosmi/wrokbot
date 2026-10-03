@@ -104,7 +104,7 @@ async fn published_sandbox_schema_grant_and_authorization_are_fresh_and_fail_clo
                 .await
                 .map_err(|error| error.to_string())?;
             sandboxed
-                .publish_sandboxed_component(&auth, &v1.name)
+                .publish_sandboxed_component(&auth, &v1.name, 1)
                 .await
                 .map_err(|error| error.to_string())?;
 
@@ -207,6 +207,7 @@ async fn published_sandbox_schema_grant_and_authorization_are_fresh_and_fail_clo
                 "v2",
             );
             v2.name = v1.name.clone();
+            v2.expected_revision=Some(2);
             sandboxed
                 .save_sandboxed_component(&auth, &v2)
                 .await
@@ -219,7 +220,7 @@ async fn published_sandbox_schema_grant_and_authorization_are_fresh_and_fail_clo
                 return Err("draft schema reached provider before publication".to_owned());
             }
             sandboxed
-                .publish_sandboxed_component(&auth, &v2.name)
+                .publish_sandboxed_component(&auth, &v2.name, 3)
                 .await
                 .map_err(|error| error.to_string())?;
             let after_publish = context
@@ -337,6 +338,7 @@ async fn published_sandbox_schema_grant_and_authorization_are_fresh_and_fail_clo
 
 fn draft(schema: Value, version: &str) -> SandboxedComponentDraft {
     SandboxedComponentDraft {
+        expected_revision: None,
         name: "custom_delivery_eta".to_owned(),
         title: "Delivery ETA".to_owned(),
         description: format!("Show a delivery estimate ({version})."),

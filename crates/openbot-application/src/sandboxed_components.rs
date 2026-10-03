@@ -24,6 +24,8 @@ const MAX_ACTOR_IDENTIFIER_BYTES: usize = 256;
 /// Validated draft passed to persistence; its name is already server-namespaced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SandboxedComponentDraft {
+    /// None creates only; a positive editing version updates only that known version.
+    pub expected_revision: Option<i64>,
     /// Stable `custom_` component identity.
     pub name: String,
     /// Administrator-facing title.
@@ -65,6 +67,9 @@ pub struct GrantedSandboxedComponents {
 /// Stable sandboxed-component failures without SQL text or untrusted source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SandboxedComponentAdministrationError {
+    /// Current authorized state after a stale editing-version request.
+    #[error("sandboxed_component_stale_snapshot")]
+    StaleSnapshot(openbot_contracts::revision::RevisionSnapshot),
     /// A closed request or projection violated its contract.
     #[error("sandboxed_component_invalid_input field={field}")]
     InvalidInput {
@@ -101,6 +106,11 @@ impl SandboxedComponentAdministrationError {
             Self::Conflict => AppError::RequestConflict {
                 resource: "sandboxed_component",
             },
+            Self::StaleSnapshot(snapshot) => AppError::StaleGeneration {
+                subject: openbot_contracts::error::StaleGenerationSubject::Configuration {
+                    snapshot,
+                },
+            },
             Self::Unavailable | Self::Corrupt { .. } => AppError::DependencyUnavailable {
                 dependency: "sandboxed_components",
             },
@@ -136,6 +146,7 @@ pub trait SandboxedComponentAdministration: Send + Sync {
         &self,
         auth: &AuthContext,
         component_name: &str,
+        expected_revision: i64,
     ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError>;
 
     /// Atomically delete sandboxed source and shared governance.
@@ -143,6 +154,7 @@ pub trait SandboxedComponentAdministration: Send + Sync {
         &self,
         auth: &AuthContext,
         component_name: &str,
+        expected_revision: i64,
     ) -> Result<(), SandboxedComponentAdministrationError>;
 
     /// List current published sandbox definitions granted to one authoritative Agent scope.
@@ -196,6 +208,7 @@ impl SandboxedComponentAdministration for NoSandboxedComponentAdministration {
         &self,
         _auth: &AuthContext,
         _component_name: &str,
+        _expected_revision: i64,
     ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError> {
         Err(SandboxedComponentAdministrationError::Unavailable)
     }
@@ -204,6 +217,7 @@ impl SandboxedComponentAdministration for NoSandboxedComponentAdministration {
         &self,
         _auth: &AuthContext,
         _component_name: &str,
+        _expected_revision: i64,
     ) -> Result<(), SandboxedComponentAdministrationError> {
         Err(SandboxedComponentAdministrationError::Unavailable)
     }
@@ -256,7 +270,14 @@ pub async fn save_sandboxed_component(
         .await
         .map_err(SandboxedComponentAdministrationError::into_app_error)?;
     validate_record(&component).map_err(SandboxedComponentAdministrationError::into_app_error)?;
-    if component.name != draft.name
+    if component.editing_revision
+        != draft
+            .expected_revision
+            .map_or(Some(1), |r| r.checked_add(1))
+            .ok_or(AppError::RequestConflict {
+                resource: "sandboxed_component",
+            })?
+        || component.name != draft.name
         || component.title != draft.title
         || component.draft_description != draft.description
         || component.draft_html != draft.html
@@ -279,16 +300,25 @@ pub async fn publish_sandboxed_component(
     port: &dyn SandboxedComponentAdministration,
     auth: &AuthContext,
     component_name: String,
+    expected_revision: i64,
 ) -> Result<SandboxedComponentResponse, AppError> {
     require_admin(auth)?;
+    validate_expected_revision(expected_revision)
+        .map_err(SandboxedComponentAdministrationError::into_app_error)?;
     validate_sandboxed_name(&component_name)
         .map_err(SandboxedComponentAdministrationError::into_app_error)?;
     let component = port
-        .publish_sandboxed_component(auth, &component_name)
+        .publish_sandboxed_component(auth, &component_name, expected_revision)
         .await
         .map_err(SandboxedComponentAdministrationError::into_app_error)?;
     validate_record(&component).map_err(SandboxedComponentAdministrationError::into_app_error)?;
-    if component.name != component_name
+    if component.editing_revision
+        != expected_revision
+            .checked_add(1)
+            .ok_or(AppError::RequestConflict {
+                resource: "sandboxed_component",
+            })?
+        || component.name != component_name
         || !component.published
         || component.published_at.is_none()
         || component.has_unpublished_changes
@@ -306,11 +336,14 @@ pub async fn delete_sandboxed_component(
     port: &dyn SandboxedComponentAdministration,
     auth: &AuthContext,
     component_name: String,
+    expected_revision: i64,
 ) -> Result<SandboxedComponentDeleted, AppError> {
     require_admin(auth)?;
+    validate_expected_revision(expected_revision)
+        .map_err(SandboxedComponentAdministrationError::into_app_error)?;
     validate_sandboxed_name(&component_name)
         .map_err(SandboxedComponentAdministrationError::into_app_error)?;
-    port.delete_sandboxed_component(auth, &component_name)
+    port.delete_sandboxed_component(auth, &component_name, expected_revision)
         .await
         .map_err(SandboxedComponentAdministrationError::into_app_error)?;
     Ok(SandboxedComponentDeleted { ok: true })
@@ -401,6 +434,9 @@ fn require_admin(auth: &AuthContext) -> Result<(), AppError> {
 fn validate_draft(
     request: SaveSandboxedComponentRequest,
 ) -> Result<SandboxedComponentDraft, SandboxedComponentAdministrationError> {
+    if let Some(expected) = request.expected_revision {
+        validate_expected_revision(expected)?;
+    }
     let encoded = serde_json::to_vec(&request)
         .map_err(|_| SandboxedComponentAdministrationError::InvalidInput { field: "body" })?;
     if encoded.len() > MAX_SANDBOXED_COMPONENT_DRAFT_BYTES {
@@ -419,6 +455,7 @@ fn validate_draft(
     validate_json_object(&request.argument_schema, "argument_schema")?;
     validate_json_object(&request.sample_arguments, "sample_arguments")?;
     Ok(SandboxedComponentDraft {
+        expected_revision: request.expected_revision,
         name: format!("{SANDBOXED_COMPONENT_PREFIX}{}", request.slug),
         title: request.title,
         description: request.description,
@@ -428,6 +465,16 @@ fn validate_draft(
         argument_schema: request.argument_schema,
         sample_arguments: request.sample_arguments,
     })
+}
+
+fn validate_expected_revision(value: i64) -> Result<(), SandboxedComponentAdministrationError> {
+    if value <= 0 {
+        Err(SandboxedComponentAdministrationError::InvalidInput {
+            field: "expectedRevision",
+        })
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_slug(slug: &str) -> Result<(), SandboxedComponentAdministrationError> {
@@ -505,6 +552,13 @@ fn validate_json_object(
 fn validate_record(
     record: &SandboxedComponentRecord,
 ) -> Result<(), SandboxedComponentAdministrationError> {
+    validate_expected_revision(record.editing_revision).map_err(as_corrupt)?;
+    record
+        .updated_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|_| SandboxedComponentAdministrationError::Corrupt {
+            field: "updated_at",
+        })?;
     validate_sandboxed_name(&record.name).map_err(|_| {
         SandboxedComponentAdministrationError::Corrupt {
             field: "component_name",
@@ -617,6 +671,7 @@ mod tests {
     fn fixed_upstream_slug_grammar_is_exact_and_namespaced() {
         for valid in ["ab", "a0", "delivery_eta", &format!("a{}z", "_".repeat(38))] {
             let request = SaveSandboxedComponentRequest {
+                expected_revision: None,
                 slug: valid.to_owned(),
                 title: "Title".to_owned(),
                 description: String::new(),
@@ -663,6 +718,8 @@ mod tests {
     #[test]
     fn publication_change_flag_preserves_fixed_upstream_three_source_comparison() {
         let record = SandboxedComponentRecord {
+            editing_revision: 1,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             name: "custom_delivery_eta".to_owned(),
             title: "Delivery ETA".to_owned(),
             draft_description: "new description only".to_owned(),
@@ -687,6 +744,7 @@ mod tests {
     #[test]
     fn in_process_drafts_share_http_size_depth_and_postgres_nul_boundaries() {
         let oversized = SaveSandboxedComponentRequest {
+            expected_revision: None,
             slug: "oversized".to_owned(),
             title: "Title".to_owned(),
             description: String::new(),

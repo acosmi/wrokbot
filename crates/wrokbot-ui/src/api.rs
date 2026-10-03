@@ -557,6 +557,7 @@ async fn publish_sandboxed_component_write(
     phase: crate::configuration_writes::WritePhase,
 ) -> Result<SandboxedComponentResponse, ApiError> {
     let saved = save_sandboxed_component_draft_write(request).await?;
+    let expected_revision = saved.component.editing_revision;
     let name = saved.component.name.clone();
     phase.sandbox_draft_saved();
     if !is_sandboxed_component_name(&name) {
@@ -567,7 +568,16 @@ async fn publish_sandboxed_component_write(
         use crate::api::request::Request;
 
         let path = format!("/api/sandboxed/{}/publish", encode_url_component(&name));
-        let response = Request::send(Request::post(&path)).await?;
+        let response = Request::send(
+            Request::post(&path)
+                .json(
+                    &openbot_contracts::sandboxed::SandboxedComponentRevisionRequest {
+                        expected_revision,
+                    },
+                )
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
@@ -581,6 +591,7 @@ async fn publish_sandboxed_component_write(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = expected_revision;
         Err(ApiError::Unavailable)
     }
 }
@@ -624,17 +635,23 @@ fn validate_sandboxed_publication_receipt(
 }
 
 /// Delete one fresh-admin browser-authored component.
-pub async fn delete_sandboxed_component(name: &str) -> Result<(), ApiError> {
+pub async fn delete_sandboxed_component(
+    name: &str,
+    expected_revision: i64,
+) -> Result<(), ApiError> {
     crate::configuration_writes::track(
         crate::configuration_writes::ConfigurationKind::Sandbox,
         name.to_owned(),
-        delete_sandboxed_component_write(name),
+        delete_sandboxed_component_write(name, expected_revision),
     )
     .await
 }
 
-async fn delete_sandboxed_component_write(name: &str) -> Result<(), ApiError> {
-    if !is_sandboxed_component_name(name) {
+async fn delete_sandboxed_component_write(
+    name: &str,
+    expected_revision: i64,
+) -> Result<(), ApiError> {
+    if expected_revision <= 0 || !is_sandboxed_component_name(name) {
         return Err(ApiError::NotSubmitted);
     }
     #[cfg(target_arch = "wasm32")]
@@ -642,7 +659,16 @@ async fn delete_sandboxed_component_write(name: &str) -> Result<(), ApiError> {
         use crate::api::request::Request;
 
         let path = format!("/api/sandboxed/{}", encode_url_component(name));
-        let response = Request::send(Request::delete(&path)).await?;
+        let response = Request::send(
+            Request::delete(&path)
+                .json(
+                    &openbot_contracts::sandboxed::SandboxedComponentRevisionRequest {
+                        expected_revision,
+                    },
+                )
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
@@ -2833,7 +2859,10 @@ fn validate_component_records(records: &ComponentRecords) -> Result<(), ApiError
 }
 
 fn validate_sandboxed_request(request: &SaveSandboxedComponentRequest) -> Result<(), ApiError> {
-    if !is_sandboxed_component_name(&format!("custom_{}", request.slug))
+    if request
+        .expected_revision
+        .is_some_and(|revision| revision <= 0)
+        || !is_sandboxed_component_name(&format!("custom_{}", request.slug))
         || request.title.is_empty()
         || request.title.as_bytes().contains(&0)
         || [
@@ -2870,7 +2899,8 @@ fn validate_sandboxed_components(components: &SandboxedComponents) -> Result<(),
 
 #[cfg(any(target_arch = "wasm32", test))]
 fn validate_sandboxed_record(component: &SandboxedComponentRecord) -> Result<(), ApiError> {
-    if !is_sandboxed_component_name(&component.name)
+    if component.editing_revision <= 0
+        || !is_sandboxed_component_name(&component.name)
         || component.title.is_empty()
         || component.title.as_bytes().contains(&0)
         || [
@@ -4154,6 +4184,8 @@ mod tests {
     #[test]
     fn sandboxed_admin_and_published_projections_are_closed_and_sorted() {
         let record = SandboxedComponentRecord {
+            editing_revision: 1,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             name: "custom_delivery_eta".to_owned(),
             title: "Delivery ETA".to_owned(),
             draft_description: "Show an ETA.".to_owned(),
