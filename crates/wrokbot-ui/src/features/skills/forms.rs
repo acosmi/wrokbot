@@ -1,12 +1,13 @@
 //! Skill editor and separately acknowledged grant changes; instruction text is data, never code.
 
-use super::state::SkillData;
+use super::state::SkillPageState;
 use crate::api::skills as api;
 use crate::features::admin::plugins::PluginActions;
-use crate::i18n::{t, t_string, use_i18n};
-use crate::primitives::{
-    Button, ButtonVariant, Dialog, DialogBody, DialogContent, DialogFooter, Field, Input, Textarea,
+use crate::features::layout::{
+    editor_location::EditorLocation, library_editor::LibraryEditorFrame,
 };
+use crate::i18n::{t, t_string, use_i18n};
+use crate::primitives::{Button, ButtonVariant, Field, Input, Textarea};
 use leptos::prelude::*;
 use openbot_contracts::mcp::PluginSkillMutation;
 
@@ -38,11 +39,13 @@ impl SkillDialog {
 #[component]
 pub fn SkillDialogs(
     dialog: RwSignal<Option<SkillDialog>>,
-    data: RwSignal<Option<SkillData>>,
+    state: SkillPageState,
     deployment: bool,
+    editor: EditorLocation,
 ) -> impl IntoView {
     let i18n = use_i18n();
     let actions = expect_context::<PluginActions>();
+    let data = state.data;
     let open = RwSignal::new(false);
     let slug = RwSignal::new(String::new());
     let title = RwSignal::new(String::new());
@@ -51,18 +54,39 @@ pub fn SkillDialogs(
     let invalid = RwSignal::new(false);
     let collision = RwSignal::new(false);
     let attempted = RwSignal::new(false);
-    // Keep the version opened by this dialog; list reloads cannot silently rebase the draft.
+    // Capture the first readable version opened by this editor; reloads cannot rebase its draft.
     let opened_revision = RwSignal::new(None::<(String, i64)>);
     let generation = RwSignal::new(0_u64);
+    let initialized = RwSignal::new(false);
+    let readable = Memo::new(move |_| {
+        if state.loading.get() || state.error.get() {
+            return false;
+        }
+        let Some(current) = data.get() else {
+            return false;
+        };
+        dialog.get().is_some_and(|selected| {
+            selected
+                .slug()
+                .is_none_or(|slug| current.selected(slug, deployment).is_some())
+        })
+    });
+    let return_focus = RwSignal::new("skill-create".to_owned());
     Effect::new(move |_| {
         let selected = dialog.get();
         let Some(next) = generation.get_untracked().checked_add(1) else {
+            initialized.set(false);
+            opened_revision.set(None);
             open.set(false);
             invalid.set(true);
             return;
         };
         generation.set(next);
         opened_revision.set(None);
+        if selected.is_some() {
+            return_focus.set("skill-create".to_owned());
+        }
+        initialized.set(matches!(selected, Some(SkillDialog::Create)));
         open.set(selected.is_some());
         invalid.set(false);
         collision.set(false);
@@ -75,26 +99,32 @@ pub fn SkillDialogs(
             && let Some(selected_slug) = selected.slug()
         {
             slug.set(selected_slug.to_owned());
-            if let Some(row) = data
-                .get_untracked()
-                .and_then(|d| d.selected(selected_slug, deployment))
-            {
-                opened_revision.set(Some((row.slug.clone(), row.revision)));
-                title.set(row.title);
-                summary.set(row.summary);
-                instructions.set(row.instructions);
-            }
+        }
+    });
+    Effect::new(move |_| {
+        generation.track();
+        let selected = dialog.get();
+        let current = data.get();
+        if !readable.get() || initialized.get_untracked() {
+            return;
+        }
+        if let Some(selected) = selected
+            && let Some(row) = current.and_then(|d| d.selected(selected.slug()?, deployment))
+        {
+            opened_revision.set(Some((row.slug.clone(), row.revision)));
+            title.set(row.title);
+            summary.set(row.summary);
+            instructions.set(row.instructions);
+            return_focus.set(selected.return_id());
+            initialized.set(true);
         }
     });
     let close = UnsyncCallback::new(move |_| {
-        let Some(selected) = dialog.get_untracked() else {
-            return;
-        };
-        dialog.set(None);
-        actions.return_to(&selected.return_id());
+        editor.close();
     });
     let save = move |_| {
-        if actions.busy.get_untracked() {
+        if actions.busy.get_untracked() || !initialized.get_untracked() || !readable.get_untracked()
+        {
             return;
         }
         let Some(selected) = dialog.get_untracked() else {
@@ -110,7 +140,13 @@ pub fn SkillDialogs(
         let submitted_dialog = selected.clone();
         let finish = move |ok| {
             if ok {
-                close_saved_dialog(dialog, generation, submitted_generation, &submitted_dialog);
+                close_saved_dialog(
+                    dialog,
+                    generation,
+                    submitted_generation,
+                    &submitted_dialog,
+                    move || editor.close(),
+                );
             }
         };
         match selected {
@@ -187,12 +223,18 @@ pub fn SkillDialogs(
         }
     };
     view! {
-        <Dialog id="skills-dialog" open on_close=close>
-            <DialogContent title=move || match dialog.get(){Some(SkillDialog::Create)=>t_string!(i18n,skills.create).to_owned(),Some(SkillDialog::Edit(_))=>t_string!(i18n,skills.edit).to_owned(),Some(SkillDialog::Delete(_))=>t_string!(i18n,skills.delete).to_owned(),Some(SkillDialog::Grants(_))=>t_string!(i18n,skills.grants).to_owned(),None=>String::new()}>
-                <DialogBody>
+        <LibraryEditorFrame id="skills-dialog" open=Signal::derive(move || open.get())
+            confirm=Signal::derive(move || matches!(dialog.get(),Some(SkillDialog::Delete(_))))
+            return_focus_id=move || return_focus.get() on_close=close
+            title=move || match dialog.get(){Some(SkillDialog::Create)=>t_string!(i18n,skills.create).to_owned(),Some(SkillDialog::Edit(_))=>t_string!(i18n,skills.edit).to_owned(),Some(SkillDialog::Delete(_))=>t_string!(i18n,skills.delete).to_owned(),Some(SkillDialog::Grants(_))=>t_string!(i18n,skills.grants).to_owned(),None=>t_string!(i18n,skills.saved).to_owned()}>
+                <Show when=move || initialized.get() && readable.get() fallback=move || view! {
+                    <p class="ob-page-empty" role="status">{move || if state.loading.get() {t_string!(i18n,common.loading).to_owned()} else {t_string!(i18n,skills.no_longer_available).to_owned()}}</p>
+                    <Button disabled=state.loading on_activate=move |_| state.reload(deployment)>{move ||t!(i18n,common.retry)}</Button>
+                }>
+                <div class="ob-library-form">
                     <Show when=move || invalid.get()><p class="ob-alert" role="alert">{move ||t!(i18n,skills.invalid)}</p></Show>
                     <Show when=move || collision.get()><p class="ob-alert" role="alert">{move ||t!(i18n,skills.collision)}</p></Show>
-                    <Show when=move || attempted.get() && actions.failed.get()><p class="ob-alert" role="alert">{move ||t!(i18n,skills.write_error)}</p></Show>
+                    <Show when=move || attempted.get() && actions.failed.get() && !actions.unknown.get()><p class="ob-alert" role="alert">{move ||t!(i18n,skills.write_error)}</p></Show>
                     <Show when=move || matches!(dialog.get(),Some(SkillDialog::Create|SkillDialog::Edit(_)))>
                         <Field control_id="skill-slug" label=move ||t_string!(i18n,skills.slug).to_owned() description=move ||t_string!(i18n,skills.slug_help).to_owned()>
                             <Input value=slug disabled=Signal::derive(move ||actions.busy.get()||!matches!(dialog.get(),Some(SkillDialog::Create))) />
@@ -232,8 +274,8 @@ pub fn SkillDialogs(
                             }.into_any()
                         }}
                     </Show>
-                </DialogBody>
-                <DialogFooter>
+                </div>
+                <div class="ob-library-form-actions">
                     <Button on_activate=move |_|close.run(())>{move ||t!(i18n,common.close)}</Button>
                     <Show when=move ||matches!(dialog.get(),Some(SkillDialog::Create|SkillDialog::Edit(_)))>
                         <Button id="skill-save" variant=ButtonVariant::Primary disabled=actions.busy on_activate=save>{move ||t!(i18n,common.save)}</Button>
@@ -241,9 +283,9 @@ pub fn SkillDialogs(
                     <Show when=move ||matches!(dialog.get(),Some(SkillDialog::Delete(_)))>
                         <Button id="skill-confirm-delete" variant=ButtonVariant::DangerText disabled=actions.busy on_activate=save>{move ||t!(i18n,skills.confirm_delete)}</Button>
                     </Show>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
+                </div>
+                </Show>
+        </LibraryEditorFrame>
     }
 }
 
@@ -252,11 +294,12 @@ fn close_saved_dialog(
     generation: RwSignal<u64>,
     submitted_generation: u64,
     submitted_dialog: &SkillDialog,
+    close: impl FnOnce(),
 ) {
     if generation.try_get_untracked() == Some(submitted_generation)
         && dialog.try_get_untracked().flatten().as_ref() == Some(submitted_dialog)
     {
-        dialog.try_set(None);
+        close();
     }
 }
 
@@ -271,13 +314,13 @@ mod tests {
             let dialog = RwSignal::new(Some(first.clone()));
             let generation = RwSignal::new(1);
             dialog.set(Some(SkillDialog::Edit("other".into())));
-            close_saved_dialog(dialog, generation, 1, &first);
+            close_saved_dialog(dialog, generation, 1, &first, || dialog.set(None));
             assert!(dialog.get_untracked().is_some());
             dialog.set(Some(first.clone()));
             generation.set(3);
-            close_saved_dialog(dialog, generation, 1, &first);
+            close_saved_dialog(dialog, generation, 1, &first, || dialog.set(None));
             assert!(dialog.get_untracked().is_some());
-            close_saved_dialog(dialog, generation, 3, &first);
+            close_saved_dialog(dialog, generation, 3, &first, || dialog.set(None));
             assert!(dialog.get_untracked().is_none());
         });
     }

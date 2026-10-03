@@ -23,11 +23,12 @@ pub fn AdminAuditPage() -> impl IntoView {
     let next_cursor = RwSignal::new(None::<String>);
     let loading = RwSignal::new(false);
     let load_error = RwSignal::new(false);
+    let page_owner = StoredValue::new(Owner::current());
 
-    request_audit_page(events, next_cursor, loading, load_error, None);
+    request_audit_page(events, next_cursor, loading, load_error, page_owner, None);
     let load_more = move |_| {
         let cursor = next_cursor.get_untracked();
-        request_audit_page(events, next_cursor, loading, load_error, cursor);
+        request_audit_page(events, next_cursor, loading, load_error, page_owner, cursor);
     };
 
     view! {
@@ -55,6 +56,9 @@ pub fn AdminAuditPage() -> impl IntoView {
                 <div class="ob-alert" role="alert">
                     <IconView icon=Icon::TriangleAlert size=IconSize::Inline />
                     <span>{move || t!(i18n, admin.audit_load_error)}</span>
+                    <Button disabled=loading on_activate=load_more>
+                        {move || t!(i18n, common.retry)}
+                    </Button>
                 </div>
             </Show>
             <Show when=move || loading.get() && events.with(Vec::is_empty)>
@@ -84,6 +88,7 @@ fn request_audit_page(
     next_cursor: RwSignal<Option<String>>,
     loading: RwSignal<bool>,
     load_error: RwSignal<bool>,
+    page_owner: StoredValue<Option<Owner>>,
     cursor: Option<String>,
 ) {
     if loading.get_untracked() {
@@ -92,22 +97,26 @@ fn request_audit_page(
     loading.set(true);
     load_error.set(false);
     #[cfg(target_arch = "wasm32")]
-    leptos::task::spawn_local_scoped_with_cancellation(async move {
-        match load_audit_page(cursor.as_deref()).await {
-            Ok(page) => {
-                if append_audit_page(&mut events.write(), &page).is_err() {
-                    load_error.set(true);
-                } else {
-                    next_cursor.set(page.next_cursor);
+    if let Some(owner) = page_owner.try_get_value().flatten() {
+        owner.with(|| {
+            leptos::task::spawn_local_scoped_with_cancellation(async move {
+                match load_audit_page(cursor.as_deref()).await {
+                    Ok(page) => {
+                        if append_audit_page(&mut events.write(), &page).is_err() {
+                            load_error.set(true);
+                        } else {
+                            next_cursor.set(page.next_cursor);
+                        }
+                    }
+                    Err(_) => load_error.set(true),
                 }
-            }
-            Err(_) => load_error.set(true),
-        }
-        loading.set(false);
-    });
+                loading.set(false);
+            })
+        });
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (events, next_cursor, cursor);
+        let _ = (events, next_cursor, page_owner, cursor);
         loading.set(false);
         load_error.set(true);
     }

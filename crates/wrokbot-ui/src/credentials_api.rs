@@ -22,8 +22,7 @@ pub(crate) async fn load(cursor: Option<&str>) -> Result<CredentialPage, ApiErro
     };
     #[cfg(target_arch = "wasm32")]
     {
-        let response = builder(&path, false)
-            .send()
+        let response = crate::api::request::Request::send(builder(&path, false))
             .await
             .map_err(|_| ApiError::Network)?;
         if response.status() != 200 {
@@ -65,7 +64,9 @@ pub(crate) async fn save(
         );
         let outgoing = super::secret_json(builder(&path, true), &input)?;
         drop(input);
-        let response = outgoing.send().await.map_err(|_| ApiError::Network)?;
+        let response = crate::api::request::Request::send(outgoing)
+            .await
+            .map_err(|_| ApiError::Network)?;
         if response.status() != if previous.is_some() { 200 } else { 201 } {
             return Err(super::status_error(response.status()));
         }
@@ -95,8 +96,7 @@ pub(crate) async fn revoke(id: &str) -> Result<(), ApiError> {
     let path = format!("{}/revoke", credential_path(id)?);
     #[cfg(target_arch = "wasm32")]
     {
-        let response = builder(&path, true)
-            .send()
+        let response = crate::api::request::Request::send(builder(&path, true))
             .await
             .map_err(|_| ApiError::Network)?;
         if response.status() != 200 {
@@ -175,15 +175,11 @@ pub(crate) fn validate_page(page: &CredentialPage) -> Result<(), ApiError> {
 #[cfg(target_arch = "wasm32")]
 fn builder(path: &str, post: bool) -> gloo_net::http::RequestBuilder {
     use crate::api::request::Request;
-    use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-    (if post {
+    if post {
         Request::post(path)
     } else {
         Request::get(path)
-    })
-    .cache(RequestCache::NoStore)
-    .credentials(RequestCredentials::SameOrigin)
-    .redirect(RequestRedirect::Error)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

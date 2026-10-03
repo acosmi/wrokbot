@@ -18,14 +18,15 @@ pub fn CallbackTokenPanel(
     has_token: bool,
 ) -> impl IntoView {
     let i18n = use_i18n();
-    #[cfg(target_arch = "wasm32")]
     let agent_id = StoredValue::new(agent_id);
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = agent_id;
     let current_has_token = RwSignal::new(has_token);
     let token = StoredValue::new(None::<CallbackTokenIssued>);
     let token_visible = RwSignal::new(false);
     let pending = RwSignal::new(false);
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        move || agent_id.get_value().as_str().to_owned(),
+    );
     let operation_error = RwSignal::new(false);
 
     let clear_token = move || {
@@ -93,7 +94,7 @@ pub fn CallbackTokenPanel(
                         <Button
                             variant=ButtonVariant::Chip
                             size=ButtonSize::Small
-                            disabled=pending
+                            disabled=Signal::derive(move || pending.get() || write_lock.get())
                             on_activate=issue
                         >
                             {move || if pending.get() {
@@ -108,7 +109,7 @@ pub fn CallbackTokenPanel(
                             <Button
                                 variant=ButtonVariant::DangerText
                                 size=ButtonSize::Small
-                                disabled=pending
+                                disabled=Signal::derive(move || pending.get() || write_lock.get())
                                 on_activate=revoke
                             >{move || t!(i18n, agents.callback_revoke)}</Button>
                         </Show>

@@ -1,4 +1,4 @@
-//! Administrator gate and 200px secondary navigation for implemented admin destinations.
+//! Administrator gate and library section navigation for implemented admin destinations.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -82,14 +82,14 @@ fn admin_shell_view(
     let computers_location = location.clone();
     let playground_location = location;
     view! {
-        <div class="ob-settings-shell">
-            <aside class="ob-settings-subnav">
+        <div class="ob-section-shell">
+            <div class="ob-section-navigation">
                 <nav aria-label=move || t_string!(i18n, admin.title).to_owned()>
-                    <a class="ob-settings-back" href="/">
+                    <a class="ob-section-back" href="/">
                         <IconView icon=Icon::ArrowLeft size=IconSize::Inline />
                         <span>{move || t!(i18n, admin.back_to_app)}</span>
                     </a>
-                    <ul class="ob-settings-subnav-list">
+                    <ul class="ob-section-links">
                         <AdminNavItem href="/admin/computers" current=Signal::derive(move || is_exact(&computers_location.pathname.get(), "/admin/computers")) icon=Icon::LayoutGrid label=move || t_string!(i18n, computer.admin_title).to_owned()/>
 
                         <AdminNavItem
@@ -173,8 +173,8 @@ fn admin_shell_view(
                         />
                     </ul>
                 </nav>
-            </aside>
-            <div class="ob-settings-shell-content">{children()}</div>
+            </div>
+            <div class="ob-section-content">{children()}</div>
         </div>
     }
 }
@@ -189,7 +189,7 @@ fn AdminNavItem(
     view! {
         <li>
             <a
-                class="ob-settings-subnav-link"
+                class="ob-section-link"
                 href=href
                 data-state=move || current.get().then_some("current")
                 aria-current=move || current.get().then_some("page")

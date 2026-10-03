@@ -1,4 +1,4 @@
-//! Shared 200px secondary navigation for implemented `/settings` destinations.
+//! Shared library section navigation for implemented `/settings` destinations.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -24,17 +24,17 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
     let models_location = location.clone();
     let memory_location = location;
     view! {
-        <div class="ob-settings-shell">
-            <aside class="ob-settings-subnav">
+        <div class="ob-section-shell">
+            <div class="ob-section-navigation">
                 <nav aria-label=move || t_string!(i18n, settings.title).to_owned()>
-                    <a class="ob-settings-back" href="/">
+                    <a class="ob-section-back" href="/">
                         <IconView icon=Icon::ArrowLeft size=IconSize::Inline />
                         <span>{move || t!(i18n, settings.back_to_app)}</span>
                     </a>
-                    <ul class="ob-settings-subnav-list">
+                    <ul class="ob-section-links">
                         <li>
                             <a
-                                class="ob-settings-subnav-link"
+                                class="ob-section-link"
                                 href=GENERAL_PATH
                                 data-state=move || {
                                     is_current(&general_location.pathname.get(), GENERAL_PATH)
@@ -51,7 +51,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                         </li>
                         <li>
                             <a
-                                class="ob-settings-subnav-link"
+                                class="ob-section-link"
                                 href=CONNECTED_ACCOUNTS_PATH
                                 data-state=move || {
                                     is_section_current(
@@ -74,7 +74,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                         </li>
                         <li>
                             <a
-                                class="ob-settings-subnav-link"
+                                class="ob-section-link"
                                 href=COMPONENTS_GALLERY_PATH
                                 data-state=move || {
                                     is_section_current(
@@ -97,7 +97,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                         </li>
                         <li>
                             <a
-                                class="ob-settings-subnav-link"
+                                class="ob-section-link"
                                 href=MEMORY_PATH
                                 data-state=move || {
                                     is_current(&memory_location.pathname.get(), MEMORY_PATH)
@@ -113,7 +113,7 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                             </a>
                         </li>
                         <li>
-                            <a class="ob-settings-subnav-link" href=MODELS_PATH
+                            <a class="ob-section-link" href=MODELS_PATH
                                 data-state=move || is_current(&models_location.pathname.get(), MODELS_PATH).then_some("current")
                                 aria-current=move || is_current(&models_location.pathname.get(), MODELS_PATH).then_some("page")>
                                 <IconView icon=Icon::Plug size=IconSize::Inline />
@@ -122,8 +122,8 @@ pub fn SettingsShell(children: Children) -> impl IntoView {
                         </li>
                     </ul>
                 </nav>
-            </aside>
-            <div class="ob-settings-shell-content">
+            </div>
+            <div class="ob-section-content">
                 {children()}
             </div>
         </div>

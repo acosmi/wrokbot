@@ -328,3 +328,8 @@ openidconnect = { version = "4.0.1", default-features = false }
 # redirect URI 的精确比对与 issuer / audience 校验都要一个真正的 URL 解析器，不能用字符串前缀。
 # 它已经在依赖图里（经 `openidconnect` -> `oauth2`），本条不新增 crate，只是把版本钉在根上。
 url = "2.5.8"
+
+# Optimize the shared Web/Desktop UI for the existing bundle size budget.
+# Backend packages and dependency release profiles retain their defaults.
+[profile.release.package.openbot-ui]
+opt-level = "s"

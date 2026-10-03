@@ -170,16 +170,11 @@ pub(crate) async fn register_client(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-        let outgoing = super::secret_json(
-            Request::post(&path)
-                .cache(RequestCache::NoStore)
-                .credentials(RequestCredentials::SameOrigin)
-                .redirect(RequestRedirect::Error),
-            &registration,
-        )?;
+        let outgoing = super::secret_json(Request::post(&path), &registration)?;
         drop(registration);
-        let response = outgoing.send().await.map_err(|_| ApiError::Network)?;
+        let response = crate::api::request::Request::send(outgoing)
+            .await
+            .map_err(|_| ApiError::Network)?;
         if response.status() != 200 {
             return Err(super::status_error(response.status()));
         }
@@ -277,24 +272,16 @@ pub(crate) async fn request(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
         let request = match method {
             "GET" => Request::get(path),
             "POST" => Request::post(path),
             "DELETE" => Request::delete(path),
             _ => return Err(ApiError::InvalidResponse),
-        }
-        .cache(RequestCache::NoStore)
-        .credentials(RequestCredentials::SameOrigin)
-        .redirect(RequestRedirect::Error);
+        };
         let response = if let Some(body) = body {
-            request
-                .json(&body)
-                .map_err(|_| ApiError::InvalidResponse)?
-                .send()
-                .await
+            Request::send(request.json(&body).map_err(|_| ApiError::InvalidResponse)?).await
         } else {
-            request.send().await
+            Request::send(request).await
         }
         .map_err(|_| ApiError::Network)?;
         // 202 is an unknown commit, never a success receipt. Only an acknowledged write refreshes;

@@ -4,11 +4,14 @@ mod state;
 use crate::api::model_connections::WriteError;
 use crate::features::channels::composer::models::{DirectoryStatus, ModelDirectory};
 use crate::{
-    features::layout::{PageHeader, PageSection, PageShell},
+    features::layout::{
+        DetailPanel, DetailPanelLayout, DetailPanelMain, PageHeader, PageSection, PageShell,
+        editor_location::EditorLocation,
+    },
     i18n::{t, t_string, use_i18n},
     primitives::{Button, ButtonVariant},
 };
-use form::{EditTarget, ModelDialog};
+use form::{EditTarget, ModelDeleteDialog, ModelEditor};
 use leptos::prelude::*;
 pub(crate) use state::ModelActions;
 use state::Status;
@@ -17,7 +20,26 @@ use state::Status;
 #[component]
 pub fn ModelServicesPage() -> impl IntoView {
     let i18n = use_i18n();
+    let editor = EditorLocation::new(&["model-new", "model-edit", "model-delete"]);
+    let target = Memo::new(move |_| {
+        let selected = editor.selection.get()?;
+        match selected.kind {
+            "model-new" => Some(EditTarget::Create),
+            "model-edit" => selected.target.map(EditTarget::Edit),
+            "model-delete" => selected.target.map(EditTarget::Delete),
+            _ => None,
+        }
+    });
+    let page_open = Signal::derive(move || {
+        target
+            .get()
+            .is_some_and(|target| !matches!(target, EditTarget::Delete(_)))
+    });
+    let close = UnsyncCallback::new(move |_| editor.close());
     view! {
+        <DetailPanelLayout open=page_open>
+        <DetailPanelMain>
+        <div id="model-services-focus" tabindex="-1">
         <PageShell>
             <PageHeader heading_id="model-services-title" title=move || t_string!(i18n, models.title).to_owned() description=move || t_string!(i18n, models.description).to_owned()/>
             <PageSection heading_id="model-gateway" title=move || t_string!(i18n, models.gateway).to_owned()>
@@ -27,26 +49,39 @@ pub fn ModelServicesPage() -> impl IntoView {
             </PageSection>
             <PageSection heading_id="model-custom" title=move || t_string!(i18n, models.custom).to_owned()>
                 <p class="ob-page-intro">{move || t!(i18n, models.custom_description)}</p>
-                <CustomConnections/>
+                <CustomConnections editor/>
             </PageSection>
             <PageSection heading_id="model-accounts" title=move || t_string!(i18n, models.bridge).to_owned()>
                 <p class="ob-page-intro">{move || t!(i18n, models.bridge_description)}</p>
                 <p class="ob-preference-saving" role="status">{move || t!(i18n, models.bridge_pending)}</p>
                 <Button variant=ButtonVariant::Chip disabled=true on_activate=move |_| {}>{move || t!(i18n, models.bridge_connect)}</Button>
             </PageSection>
+            <PageSection heading_id="model-local" title=move || t_string!(i18n, models.local_title).to_owned()
+                description=move || t_string!(i18n, models.local_description).to_owned()>
+                <p class="ob-page-empty">{move || t!(i18n, models.local_pending)}</p>
+            </PageSection>
         </PageShell>
+        </div>
+        </DetailPanelMain>
+        <DetailPanel id="model-dialog" open=page_open return_focus_id="model-services-focus" on_close=close
+            title=move || if target.get()==Some(EditTarget::Create) {t_string!(i18n, models.custom_add).to_owned()} else {t_string!(i18n, models.edit).to_owned()}>
+            {move || target.get().filter(|target| !matches!(target, EditTarget::Delete(_)))
+                .map(|target| view! { <ModelEditor target close/> })}
+        </DetailPanel>
+        {move || target.get().filter(|target| matches!(target, EditTarget::Delete(_)))
+            .map(|target| view! { <ModelDeleteDialog target close/> })}
+        </DetailPanelLayout>
     }
 }
 
 #[component]
-fn CustomConnections() -> impl IntoView {
+fn CustomConnections(editor: EditorLocation) -> impl IntoView {
     let i18n = use_i18n();
     let actions = expect_context::<ModelActions>();
     let directory = expect_context::<ModelDirectory>();
     if directory.status.get_untracked() == DirectoryStatus::Idle {
         directory.reload();
     }
-    let target = RwSignal::new(None::<EditTarget>);
     let reading = Signal::derive(move || {
         matches!(
             directory.status.get(),
@@ -60,10 +95,11 @@ fn CustomConnections() -> impl IntoView {
             return;
         }
         actions.status.set(Status::Idle);
-        target.set(Some(selection));
-    });
-    let close = UnsyncCallback::new(move |_| {
-        target.try_set(None);
+        match selection {
+            EditTarget::Create => editor.open("model-new", None),
+            EditTarget::Edit(id) => editor.open("model-edit", Some(id)),
+            EditTarget::Delete(id) => editor.open("model-delete", Some(id)),
+        }
     });
     view! {
         <p class="ob-page-intro">{move ||t!(i18n, models.saved_boundary)}</p>
@@ -91,6 +127,5 @@ fn CustomConnections() -> impl IntoView {
                 }/>
             </div>
         </Show>
-        {move ||target.get().map(|target|view!{<ModelDialog target close/>})}
     }
 }

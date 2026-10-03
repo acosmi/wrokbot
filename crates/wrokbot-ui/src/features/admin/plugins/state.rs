@@ -215,6 +215,8 @@ pub struct PluginData {
 
 #[derive(Clone, Copy)]
 pub struct PluginPageState {
+    #[cfg(target_arch = "wasm32")]
+    owner: StoredValue<Option<Owner>>,
     pub data: RwSignal<Option<PluginData>>,
     pub loading: RwSignal<bool>,
     pub error: RwSignal<bool>,
@@ -224,6 +226,8 @@ pub struct PluginPageState {
 impl PluginPageState {
     pub fn new() -> Self {
         Self {
+            #[cfg(target_arch = "wasm32")]
+            owner: StoredValue::new(Owner::current()),
             data: RwSignal::new(None),
             loading: RwSignal::new(true),
             error: RwSignal::new(false),
@@ -241,24 +245,28 @@ impl PluginPageState {
         #[cfg(target_arch = "wasm32")]
         let actions = expect_context::<PluginActions>();
         #[cfg(target_arch = "wasm32")]
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            let result = load().await;
-            if self.serial.try_get_untracked() != Some(serial) {
-                return;
-            }
-            match result {
-                Ok(data) => {
-                    self.data.set(Some(data));
-                }
-                Err(_) => {
-                    self.error.set(true);
-                }
-            }
-            self.loading.set(false);
-            if !actions.busy.get_untracked() {
-                actions.restore_focus();
-            }
-        });
+        if let Some(owner) = self.owner.try_get_value().flatten() {
+            owner.with(|| {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let result = load().await;
+                    if self.serial.try_get_untracked() != Some(serial) {
+                        return;
+                    }
+                    match result {
+                        Ok(data) => {
+                            self.data.set(Some(data));
+                        }
+                        Err(_) => {
+                            self.error.set(true);
+                        }
+                    }
+                    self.loading.set(false);
+                    if !actions.busy.get_untracked() {
+                        actions.restore_focus();
+                    }
+                })
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = serial;

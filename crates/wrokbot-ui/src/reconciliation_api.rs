@@ -170,12 +170,7 @@ fn validate_rows<'a>(
 
 #[cfg(target_arch = "wasm32")]
 async fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, ApiError> {
-    use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-    let response = super::request::Request::get(path)
-        .cache(RequestCache::NoStore)
-        .credentials(RequestCredentials::SameOrigin)
-        .redirect(RequestRedirect::Error)
-        .send()
+    let response = super::request::Request::send(super::request::Request::get(path))
         .await
         .map_err(|_| ApiError::Network)?;
     if response.status() != 200 {

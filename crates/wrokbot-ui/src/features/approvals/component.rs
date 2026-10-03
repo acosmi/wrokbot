@@ -89,6 +89,8 @@ struct DecisionObservation {
     decision: ToolApprovalDecision,
     binding: [u8; 32],
     phase: DecisionPhase,
+    // Presentation only: a closed notice cannot change or release the decision observation.
+    dismissed_binding: Option<[u8; 32]>,
 }
 
 /// One authentication owner supplies both current-actor and inline approval surfaces.
@@ -168,6 +170,7 @@ impl ToolApprovalActions {
                     decision,
                     binding: super::attention::binding(card),
                     phase: DecisionPhase::Submitting,
+                    dismissed_binding: None,
                 },
             );
         });
@@ -204,6 +207,46 @@ impl ToolApprovalActions {
         });
         // A pending-list refresh is an observation, never permission to clear Unknown and resend.
         self.refresh.request();
+    }
+
+    fn dismiss_notice(self, id: &str, binding: [u8; 32]) -> bool {
+        let Some(error) = self.refresh.load_error.try_get_untracked() else {
+            return false;
+        };
+        if matches!(
+            error,
+            Some(ApiError::Unauthorized | ApiError::Forbidden | ApiError::NotFound)
+        ) {
+            return false;
+        }
+        let Some(pending) = self.refresh.approvals.try_get_untracked() else {
+            return false;
+        };
+        let card = pending
+            .into_iter()
+            .find(|card| card.approval_id == id)
+            .or_else(|| self.retained.try_get_untracked()?.remove(id));
+        let Some(card) = card else {
+            return false;
+        };
+        // An old surface must not close a notice for a refreshed object with the same id.
+        if super::attention::binding(&card) != binding {
+            return false;
+        }
+        self.decisions
+            .try_update(|entries| {
+                let Some(entry) = entries.get_mut(id) else {
+                    return false;
+                };
+                if entry.phase != DecisionPhase::Unknown
+                    && (card.arguments.is_empty() || entry.binding == binding)
+                {
+                    return false;
+                }
+                entry.dismissed_binding = Some(binding);
+                true
+            })
+            .unwrap_or(false)
     }
 
     fn decide(self, card: ApprovalCardView, decision: ToolApprovalDecision) {
@@ -344,6 +387,7 @@ fn ApprovalCard(card: ApprovalCardView, actions: ToolApprovalActions) -> impl In
     let approval_id = card.approval_id.clone();
     let grant_card = card.clone();
     let deny_card = card.clone();
+    let dismiss_id = StoredValue::new(approval_id.clone());
     let expires_at = card.expires_at;
     let expires_datetime = card
         .expires_at
@@ -381,6 +425,11 @@ fn ApprovalCard(card: ApprovalCardView, actions: ToolApprovalActions) -> impl In
     let deny = move |_| {
         actions.decide(deny_card.clone(), ToolApprovalDecision::Deny);
     };
+    let dismiss_notice = move |_| {
+        if let Some(id) = dismiss_id.try_get_value() {
+            actions.dismiss_notice(&id, current_binding);
+        }
+    };
     let effect = card.effect;
     let approval_class = card.approval_class;
     let server = card.server.clone();
@@ -404,11 +453,23 @@ fn ApprovalCard(card: ApprovalCardView, actions: ToolApprovalActions) -> impl In
             <Show when=move || observation.get().is_some()>
                 <p class="ob-approval-observation" role="status">{move || match observation.get() {
                     Some(DecisionObservation { phase: DecisionPhase::Submitting, .. }) => t_string!(i18n, common.loading).to_owned(),
-                    Some(DecisionObservation { phase: DecisionPhase::Unknown, .. }) => t_string!(i18n, admin.approval_decision_error).to_owned(),
+                    Some(DecisionObservation { phase: DecisionPhase::Unknown, .. }) => t_string!(i18n, common.unknown).to_owned(),
                     Some(DecisionObservation { decision: ToolApprovalDecision::Grant, phase: DecisionPhase::Confirmed, .. }) => t_string!(i18n, admin.approval_granted).to_owned(),
                     Some(DecisionObservation { decision: ToolApprovalDecision::Deny, phase: DecisionPhase::Confirmed, .. }) => t_string!(i18n, admin.approval_denied).to_owned(),
                     None => String::new(),
                 }}</p>
+            </Show>
+            <Show when=move || observation.get().is_some_and(|value| value.phase == DecisionPhase::Unknown && value.dismissed_binding != Some(current_binding))>
+                <div class="ob-alert" role="alert" data-approval-notice="decision-unknown">
+                    <span>{move || t!(i18n, admin.approval_decision_error)}</span>
+                    <Button
+                        variant=ButtonVariant::Ghost
+                        size=ButtonSize::Small
+                        on_activate=dismiss_notice
+                    >
+                        {move || t!(i18n, common.close)}
+                    </Button>
+                </div>
             </Show>
 
             {current_details.then(|| view! {
@@ -792,6 +853,134 @@ mod tests {
             assert_eq!(
                 actions.decisions.get_untracked()[&card.approval_id].phase,
                 DecisionPhase::Unknown
+            );
+        });
+    }
+
+    #[test]
+    fn closing_one_unknown_notice_keeps_both_locks_and_rejects_stale_bindings() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let actions = ToolApprovalActions::new();
+            let first = card();
+            let mut second = first.clone();
+            second.approval_id = "approval-2".into();
+            actions.refresh.install(
+                actions.refresh.epoch.get_untracked(),
+                Ok(vec![first.clone(), second.clone()]),
+            );
+            assert!(actions.begin(&first, ToolApprovalDecision::Grant));
+            assert!(actions.begin(&second, ToolApprovalDecision::Deny));
+            for (card, decision) in [
+                (&first, ToolApprovalDecision::Grant),
+                (&second, ToolApprovalDecision::Deny),
+            ] {
+                actions.complete(&card.approval_id, decision, Err(ApiError::Unavailable));
+            }
+            let epoch = actions.refresh.epoch.get_untracked();
+            actions
+                .refresh
+                .install(epoch, Ok(vec![first.clone(), second.clone()]));
+            let binding = super::super::attention::binding(&first);
+            let before = actions.decisions.get_untracked();
+            assert!(actions.dismiss_notice(&first.approval_id, binding));
+            let after = actions.decisions.get_untracked();
+            assert_eq!(after[&second.approval_id], before[&second.approval_id]);
+            let first_before = before[&first.approval_id];
+            let first_after = after[&first.approval_id];
+            assert_eq!(
+                (first_after.decision, first_after.binding, first_after.phase),
+                (
+                    first_before.decision,
+                    first_before.binding,
+                    first_before.phase
+                )
+            );
+            assert_eq!(first_after.dismissed_binding, Some(binding));
+            assert_eq!(actions.refresh.epoch.get_untracked(), epoch);
+            for card in [&first, &second] {
+                assert!(!actions.begin(card, ToolApprovalDecision::Grant));
+                assert!(!actions.begin(card, ToolApprovalDecision::Deny));
+            }
+
+            let mut changed = first.clone();
+            changed.arguments = "{\"target\":\"refreshed\"}".into();
+            let changed_binding = super::super::attention::binding(&changed);
+            assert_ne!(binding, changed_binding);
+            actions
+                .refresh
+                .install(epoch, Ok(vec![changed.clone(), second]));
+            assert!(!actions.dismiss_notice(&first.approval_id, binding));
+            assert_ne!(
+                actions.decisions.get_untracked()[&first.approval_id].dismissed_binding,
+                Some(changed_binding)
+            );
+            assert!(actions.dismiss_notice(&changed.approval_id, changed_binding));
+            assert!(!actions.begin(&changed, ToolApprovalDecision::Grant));
+            assert!(!actions.begin(&changed, ToolApprovalDecision::Deny));
+        });
+    }
+
+    #[test]
+    fn notice_close_does_not_affect_submitting_confirmed_or_another_actor() {
+        for decision in [ToolApprovalDecision::Grant, ToolApprovalDecision::Deny] {
+            let owner = Owner::new();
+            let (actions, card, binding) = owner.with(|| {
+                let actions = ToolApprovalActions::new();
+                let card = card();
+                let binding = super::super::attention::binding(&card);
+                actions.refresh.install(
+                    actions.refresh.epoch.get_untracked(),
+                    Ok(vec![card.clone()]),
+                );
+                assert!(actions.begin(&card, decision));
+                assert!(!actions.dismiss_notice(&card.approval_id, binding));
+                actions.complete(
+                    &card.approval_id,
+                    decision,
+                    Ok(ToolApprovalResolved {
+                        approval_id: card.approval_id.clone(),
+                        decision,
+                    }),
+                );
+                actions.refresh.install(
+                    actions.refresh.epoch.get_untracked(),
+                    Ok(vec![card.clone()]),
+                );
+                assert!(!actions.dismiss_notice(&card.approval_id, binding));
+                assert_eq!(
+                    actions.decisions.get_untracked()[&card.approval_id].phase,
+                    DecisionPhase::Confirmed
+                );
+                assert_eq!(
+                    actions.decisions.get_untracked()[&card.approval_id].dismissed_binding,
+                    None
+                );
+                (actions, card, binding)
+            });
+            owner.cleanup();
+            assert!(!actions.dismiss_notice(&card.approval_id, binding));
+        }
+        let owner = Owner::new();
+        owner.with(|| {
+            let actions = ToolApprovalActions::new();
+            let card = card();
+            actions.refresh.install(
+                actions.refresh.epoch.get_untracked(),
+                Ok(vec![card.clone()]),
+            );
+            assert!(actions.begin(&card, ToolApprovalDecision::Grant));
+            actions.complete(
+                &card.approval_id,
+                ToolApprovalDecision::Grant,
+                Err(ApiError::Forbidden),
+            );
+            assert!(
+                !actions.dismiss_notice(&card.approval_id, super::super::attention::binding(&card))
+            );
+            assert_eq!(
+                actions.decisions.get_untracked()[&card.approval_id].dismissed_binding,
+                None
             );
         });
     }

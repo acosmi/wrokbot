@@ -98,7 +98,7 @@ pub fn AgentsPage() -> impl IntoView {
     let panel_open = Signal::derive(move || creating.get() || selected_agent_id.get().is_some());
 
     view! {
-        <DetailPanelLayout>
+        <DetailPanelLayout open=panel_open>
             <DetailPanelMain>
                 <div id="agents-roster-focus" class="ob-agent-roster-focus" tabindex="-1">
                     <PageShell width=PageWidth::Content>
@@ -142,7 +142,7 @@ pub fn AgentsPage() -> impl IntoView {
                                             <PageEmpty>{move || t!(i18n, agents.mine_empty)}</PageEmpty>
                                         }
                                     >
-                                        <div class="ob-agent-grid">
+                                        <div class="ob-agent-list">
                                             <For
                                                 each=move || mine.get()
                                                 key=|(_, agent)| agent.id.clone()
@@ -163,7 +163,7 @@ pub fn AgentsPage() -> impl IntoView {
                                         title=move || t_string!(i18n, agents.hidden_agents).to_owned()
                                         description=move || t_string!(i18n, agents.hidden_help).to_owned()
                                     >
-                                        <div class="ob-agent-grid">
+                                        <div class="ob-agent-list">
                                             <For
                                                 each=move || hidden.get()
                                                 key=|(_, agent)| agent.id.clone()
@@ -186,7 +186,7 @@ pub fn AgentsPage() -> impl IntoView {
                                             <PageEmpty>{move || t!(i18n, agents.explore_empty)}</PageEmpty>
                                         }
                                     >
-                                        <div class="ob-agent-grid">
+                                        <div class="ob-agent-list">
                                             <For
                                                 each=move || explore.get()
                                                 key=|(_, agent)| agent.id.clone()
