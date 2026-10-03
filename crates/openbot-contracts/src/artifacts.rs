@@ -5,6 +5,177 @@
 //! 必须由后续存储、持久化和授权编排核验。预算是冻结上限，宿主只能收紧。
 
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+use crate::ids::{ActorId, DeploymentId, RunId, TenantId, ThreadId};
+
+/// R424 explicit save of a selected real user message; selectors are not authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveRunMessageTextArtifact {
+    /// UUIDv7 request locator, canonicalized before durable admission.
+    pub request_id: String,
+    /// Exact current source Thread.
+    pub source_thread_id: ThreadId,
+    /// Exact current source Run owned by the authenticated actor.
+    pub source_run_id: RunId,
+    /// Exact user message within both source selectors.
+    pub source_message_id: String,
+    /// Expected digest of the exact logical UTF-8 text, never supplied content.
+    pub expected_sha256: String,
+}
+
+/// Closed metadata selector; an ID cannot grant visibility or byte access.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetArtifactMetadata {
+    /// Standard UUIDv7 artifact selector.
+    pub artifact_id: String,
+}
+
+/// R424 positive local registration fact; no content or current byte/permission proof.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArtifactRegistrationReceipt {
+    /// Rust-issued stable operation UUIDv7.
+    pub operation_id: String,
+    /// Rust-issued artifact UUIDv7.
+    pub artifact_id: String,
+    /// Canonical request UUIDv7 bound to this operation.
+    pub request_id: String,
+    /// The original saving owner, not a transferable authority.
+    pub owner_actor_id: ActorId,
+    /// Original source Thread.
+    pub source_thread_id: ThreadId,
+    /// Original source Run.
+    pub source_run_id: RunId,
+    /// Original source message.
+    pub source_message_id: String,
+    /// Tool provenance when present; null for the R424 user producer.
+    pub source_call_seq: Option<u64>,
+    /// Paired tool attempt provenance; null for the R424 user producer.
+    pub source_attempt_seq: Option<u64>,
+}
+
+/// Descriptive workspace, resolved from PG; never accepted as save authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ArtifactWorkspace {
+    /// Channel anchor workspace.
+    Channel {
+        /// Exact opaque anchor identity.
+        id: String,
+    },
+    /// Direct conversation workspace.
+    Thread {
+        /// Exact Thread identity, never its Bot anchor.
+        id: String,
+    },
+}
+
+/// Complete live R414 record facts; byte fields describe actual observations, not estimates.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArtifactRecordMetadata {
+    /// Rust-issued artifact UUIDv7.
+    pub artifact_id: String,
+    /// Trusted deployment.
+    pub deployment_id: DeploymentId,
+    /// Trusted tenant namespace.
+    pub tenant_id: TenantId,
+    /// Registry dataset identity.
+    pub dataset_id: String,
+    /// Original owner.
+    pub owner_actor_id: ActorId,
+    /// Exact PG-resolved workspace.
+    pub workspace: ArtifactWorkspace,
+    /// Original source Thread.
+    pub source_thread_id: ThreadId,
+    /// Original source Run.
+    pub source_run_id: RunId,
+    /// Paired source call sequence, if tool-produced.
+    pub source_call_seq: Option<u64>,
+    /// Paired source attempt sequence, if tool-produced.
+    pub source_attempt_seq: Option<u64>,
+    /// Actual producer's media type.
+    pub media_type: String,
+    /// Actual observed byte length, including a real zero-length failed object.
+    pub byte_length: u64,
+    /// Actual full-object lowercase SHA-256.
+    pub sha256: String,
+    /// Frozen retention class.
+    pub retention_class: ArtifactRetentionClass,
+    /// Present only for an explicitly saved artifact.
+    pub saved_by: Option<ActorId>,
+    /// PG saving time, paired with saved_by.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub saved_at: Option<OffsetDateTime>,
+}
+
+/// Erased record/operation evidence: only the R424 allowed identities and sequences remain.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArtifactTombstone {
+    /// Original artifact UUIDv7.
+    pub artifact_id: String,
+    /// Original operation UUIDv7.
+    pub operation_id: String,
+    /// Occupied request locator; never used to reconstruct erased content.
+    pub request_id: String,
+    /// Original owner identity.
+    pub owner_actor_id: ActorId,
+    /// Original source Thread.
+    pub source_thread_id: ThreadId,
+    /// Original source Run.
+    pub source_run_id: RunId,
+    /// Original source message.
+    pub source_message_id: String,
+    /// Original source call sequence.
+    pub source_call_seq: Option<u64>,
+    /// Original source attempt sequence.
+    pub source_attempt_seq: Option<u64>,
+}
+
+/// Status-tagged record shapes; erased states cannot accidentally contain live byte fields.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ArtifactMetadata {
+    /// A registered object; current bytes and authority still require independent checks.
+    Available(ArtifactRecordMetadata),
+    /// An actually observed failed object, with accurate byte facts.
+    FailedPartial(ArtifactRecordMetadata),
+    /// Erased state, exposed through the closed 410 application error.
+    Deleted(ArtifactTombstone),
+    /// Expired state, exposed through the closed 410 application error.
+    Expired(ArtifactTombstone),
+}
+
+/// Sanitized gone status; arbitrary record states cannot be projected as 410.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactGoneStatus {
+    /// Deleted artifact.
+    Deleted,
+    /// Expired artifact.
+    Expired,
+}
+
+impl ArtifactGoneStatus {
+    /// Closed wire/storage spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deleted => "deleted",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+impl core::fmt::Display for ArtifactGoneStatus {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 /// R414 单成果冻结大小上限：64 MiB。
 pub const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
@@ -82,6 +253,33 @@ pub fn is_uuid_v7_artifact_id(value: &str) -> bool {
     bytes[14] == b'7' && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b')
 }
 
+/// Parse standard UUIDv7 bytes and return its canonical lowercase hyphenated identity.
+///
+/// Case aliases identify one durable locator. Opaque source IDs are never passed here.
+#[must_use]
+pub fn canonical_artifact_uuid_v7(value: &str) -> Option<String> {
+    if !is_uuid_v7_artifact_id(value) {
+        return None;
+    }
+    let mut parsed = [0_u8; 16];
+    let mut digits = value.bytes().filter(|byte| *byte != b'-');
+    for byte in &mut parsed {
+        let high = char::from(digits.next()?).to_digit(16)?;
+        let low = char::from(digits.next()?).to_digit(16)?;
+        *byte = u8::try_from(high * 16 + low).ok()?;
+    }
+    let hex = b"0123456789abcdef";
+    let mut canonical = String::with_capacity(36);
+    for (index, byte) in parsed.into_iter().enumerate() {
+        if [4, 6, 8, 10].contains(&index) {
+            canonical.push('-');
+        }
+        canonical.push(char::from(hex[usize::from(byte >> 4)]));
+        canonical.push(char::from(hex[usize::from(byte & 15)]));
+    }
+    Some(canonical)
+}
+
 /// 校验恰好 64 个 ASCII 小写十六进制字符的 SHA-256 文本。
 ///
 /// 不修剪、不折叠大小写；形状合法不表示摘要与实际字节一致。
@@ -96,6 +294,216 @@ pub fn is_valid_artifact_sha256(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn receipt_example() -> ArtifactRegistrationReceipt {
+        ArtifactRegistrationReceipt {
+            operation_id: "019a0300-0000-7000-8000-000000000001".into(),
+            artifact_id: "019a0300-0000-7000-8000-000000000002".into(),
+            request_id: "019a0300-0000-7000-8000-000000000003".into(),
+            owner_actor_id: ActorId::new("actor"),
+            source_thread_id: ThreadId::new("source-thread"),
+            source_run_id: RunId::new("来源/opaque"),
+            source_message_id: String::from("message"),
+            source_call_seq: None,
+            source_attempt_seq: None,
+        }
+    }
+
+    #[test]
+    fn save_and_metadata_selectors_have_exact_closed_camel_case_fields() {
+        let input = SaveRunMessageTextArtifact {
+            request_id: receipt_example().request_id,
+            source_thread_id: ThreadId::new("thread"),
+            source_run_id: RunId::new("来源/opaque"),
+            source_message_id: String::from("message"),
+            expected_sha256: "a".repeat(64),
+        };
+        let value = serde_json::to_value(&input).unwrap();
+        let keys: std::collections::BTreeSet<_> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "requestId",
+                "sourceThreadId",
+                "sourceRunId",
+                "sourceMessageId",
+                "expectedSha256"
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(
+            serde_json::from_value::<SaveRunMessageTextArtifact>(value.clone()).unwrap(),
+            input
+        );
+        for key in [
+            "body",
+            "path",
+            "ownerActorId",
+            "datasetId",
+            "workspace",
+            "sourceCallSeq",
+            "method",
+        ] {
+            let mut extra = value.clone();
+            extra[key] = serde_json::json!("caller");
+            assert!(
+                serde_json::from_value::<SaveRunMessageTextArtifact>(extra).is_err(),
+                "{key}"
+            );
+        }
+        let selector = serde_json::json!({"artifactId":receipt_example().artifact_id});
+        assert!(serde_json::from_value::<GetArtifactMetadata>(selector.clone()).is_ok());
+        let mut extra = selector;
+        extra["path"] = serde_json::json!("caller");
+        assert!(serde_json::from_value::<GetArtifactMetadata>(extra).is_err());
+    }
+
+    #[test]
+    fn positive_receipt_serializes_only_frozen_ids_and_null_sequences() {
+        let receipt = receipt_example();
+        let value = serde_json::to_value(&receipt).unwrap();
+        let keys: std::collections::BTreeSet<_> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "operationId",
+                "artifactId",
+                "requestId",
+                "ownerActorId",
+                "sourceThreadId",
+                "sourceRunId",
+                "sourceMessageId",
+                "sourceCallSeq",
+                "sourceAttemptSeq"
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert!(value["sourceCallSeq"].is_null());
+        assert!(value["sourceAttemptSeq"].is_null());
+        for forbidden in [
+            "sha256",
+            "byteLength",
+            "mediaType",
+            "savedAt",
+            "status",
+            "replayed",
+            "body",
+            "path",
+        ] {
+            let mut extra = value.clone();
+            extra[forbidden] = serde_json::json!("untrusted");
+            assert!(serde_json::from_value::<ArtifactRegistrationReceipt>(extra).is_err());
+        }
+    }
+
+    #[test]
+    fn closed_commands_and_receipt_reply_roundtrip_through_registered_enum_tags() {
+        use crate::command::{AppCommand, AppReply};
+        let source = receipt_example();
+        for command in [
+            AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
+                request_id: source.request_id.clone(),
+                source_thread_id: source.source_thread_id.clone(),
+                source_run_id: source.source_run_id.clone(),
+                source_message_id: source.source_message_id.clone(),
+                expected_sha256: "a".repeat(64),
+            }),
+            AppCommand::GetArtifactMetadata(GetArtifactMetadata {
+                artifact_id: source.artifact_id.clone(),
+            }),
+        ] {
+            let value = serde_json::to_value(&command).unwrap();
+            assert_eq!(
+                serde_json::from_value::<AppCommand>(value).unwrap(),
+                command
+            );
+        }
+        let reply = AppReply::ArtifactRegistrationReceipt(source);
+        let value = serde_json::to_value(&reply).unwrap();
+        assert_eq!(value["kind"], "artifact_registration_receipt");
+        assert_eq!(serde_json::from_value::<AppReply>(value).unwrap(), reply);
+    }
+
+    #[test]
+    fn live_and_tombstone_shapes_cannot_exchange_byte_fields() {
+        let receipt = receipt_example();
+        let tombstone = ArtifactTombstone {
+            artifact_id: receipt.artifact_id.clone(),
+            operation_id: receipt.operation_id,
+            request_id: receipt.request_id,
+            owner_actor_id: receipt.owner_actor_id.clone(),
+            source_thread_id: receipt.source_thread_id.clone(),
+            source_run_id: receipt.source_run_id.clone(),
+            source_message_id: receipt.source_message_id,
+            source_call_seq: None,
+            source_attempt_seq: None,
+        };
+        let gone = serde_json::to_value(ArtifactMetadata::Deleted(tombstone)).unwrap();
+        assert_eq!(gone["status"], "deleted");
+        for key in ["sha256", "byteLength", "mediaType", "savedAt"] {
+            let mut extra = gone.clone();
+            extra[key] = serde_json::json!("forbidden");
+            assert!(serde_json::from_value::<ArtifactMetadata>(extra).is_err());
+        }
+        let live = ArtifactMetadata::FailedPartial(ArtifactRecordMetadata {
+            artifact_id: receipt.artifact_id,
+            deployment_id: DeploymentId::new("deployment"),
+            tenant_id: TenantId::new("tenant"),
+            dataset_id: "dataset".into(),
+            owner_actor_id: receipt.owner_actor_id.clone(),
+            workspace: ArtifactWorkspace::Thread {
+                id: "source-thread".into(),
+            },
+            source_thread_id: receipt.source_thread_id,
+            source_run_id: receipt.source_run_id,
+            source_call_seq: None,
+            source_attempt_seq: None,
+            media_type: "text/plain; charset=utf-8".into(),
+            byte_length: 0,
+            sha256: "a".repeat(64),
+            retention_class: ArtifactRetentionClass::ExplicitSaved,
+            saved_by: Some(receipt.owner_actor_id),
+            saved_at: Some(OffsetDateTime::UNIX_EPOCH),
+        });
+        let mut value = serde_json::to_value(&live).unwrap();
+        assert_eq!(value["status"], "failed_partial");
+        assert_eq!(
+            serde_json::from_value::<ArtifactMetadata>(value.clone()).unwrap(),
+            live
+        );
+        value["sha256"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<ArtifactMetadata>(value).is_err());
+    }
+
+    #[test]
+    fn uuid_v7_case_aliases_parse_to_one_canonical_locator() {
+        let lower = "019a0300-abcd-7def-8abc-123456abcdef";
+        assert_eq!(canonical_artifact_uuid_v7(lower), Some(lower.into()));
+        assert_eq!(
+            canonical_artifact_uuid_v7(&lower.to_uppercase()),
+            Some(lower.into())
+        );
+        for invalid in [
+            lower.replace('-', ""),
+            format!(" {lower}"),
+            format!("urn:uuid:{lower}"),
+            lower.replacen("7def", "4def", 1),
+        ] {
+            assert!(canonical_artifact_uuid_v7(&invalid).is_none());
+        }
+    }
 
     #[test]
     fn frozen_storage_and_injection_budgets_match_r414_exactly() {
