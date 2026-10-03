@@ -58,6 +58,8 @@ use crate::net::safe_http::{CidrAllowlist, SchemePolicy};
 use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 use crate::vault::CredentialRecordVault;
 
+mod skill_editing;
+
 type HmacSha256 = Hmac<Sha256>;
 
 const CALLBACK_PATH: &str = "/api/plugins/oauth/callback";
@@ -2822,151 +2824,17 @@ impl McpConnectionAdministration for PostgresMcpConnections {
         auth: &AuthContext,
         mutation: &PluginSkillMutation,
     ) -> Result<PluginSkills, McpConnectionError> {
-        self.ensure_auth_current(auth).await?;
-        let prepared = prepare_skill_mutation(mutation)?;
-        if prepared.deployment_wide && !auth.has_role(Role::Admin) {
-            return Err(McpConnectionError::NotVisible);
-        }
-        let mut client = self.pool.get().await.map_err(unavailable)?;
-        let transaction = client.transaction().await.map_err(query_unavailable)?;
-        ensure_transaction_actor(
-            &transaction,
-            auth,
-            prepared.deployment_wide || auth.has_role(Role::Admin),
-        )
-        .await?;
-        transaction
-            .query_one(
-                "SELECT pg_advisory_xact_lock(hashtextextended($1,$2))",
-                &[&prepared.slug, &PLUGIN_ADMIN_LOCK_SEED],
-            )
-            .await
-            .map_err(query_unavailable)?;
-        let existing = transaction
-            .query_opt(
-                "SELECT id,owner_user_id FROM public.skills WHERE slug=$1 FOR UPDATE",
-                &[&prepared.slug],
-            )
-            .await
-            .map_err(query_unavailable)?;
-        if let Some(row) = existing {
-            let owner: Option<String> = row
-                .try_get("owner_user_id")
-                .map_err(|_| corrupt("skill_owner"))?;
-            if !auth.has_role(Role::Admin) && owner.as_deref() != Some(auth.actor().as_str()) {
-                return Err(McpConnectionError::NotVisible);
-            }
-            transaction
-                .execute(
-                    "UPDATE public.skills SET title=$2,summary=$3,instructions=$4,
-                       updated_at=clock_timestamp() WHERE slug=$1",
-                    &[
-                        &prepared.slug,
-                        &prepared.title,
-                        &prepared.summary,
-                        &prepared.instructions,
-                    ],
-                )
-                .await
-                .map_err(query_unavailable)?;
-        } else {
-            let owner = (!prepared.deployment_wide).then(|| auth.actor().as_str().to_owned());
-            transaction
-                .execute(
-                    "INSERT INTO public.skills(
-                       id,owner_user_id,slug,title,summary,instructions,origin,installed_by,
-                       created_at,updated_at)
-                     VALUES($1,$2,$1,$3,$4,$5,'yours',$6,clock_timestamp(),clock_timestamp())",
-                    &[
-                        &prepared.slug,
-                        &owner,
-                        &prepared.title,
-                        &prepared.summary,
-                        &prepared.instructions,
-                        &auth.actor().as_str(),
-                    ],
-                )
-                .await
-                .map_err(query_unavailable)?;
-        }
-        append_plugin_audit(
-            &transaction,
-            auth.actor(),
-            "skill",
-            &prepared.slug,
-            "skill_saved",
-            None,
-            self.checkpoint_key.expose(),
-        )
-        .await?;
-        let skills = visible_skills(&transaction, auth, &self.tenant).await?;
-        transaction.commit().await.map_err(|error| {
-            tracing::error!(error = %error, "plugin skill save commit 结果未知");
-            McpConnectionError::CommitUnknown
-        })?;
-        Ok(PluginSkills { skills })
+        self.save_skill_revision(auth, mutation).await
     }
 
     async fn remove_skill(
         &self,
         auth: &AuthContext,
         slug: &str,
+        expected_revision: i64,
     ) -> Result<PluginMutationAcknowledged, McpConnectionError> {
-        self.ensure_auth_current(auth).await?;
-        validate_skill_slug(slug)?;
-        let mut client = self.pool.get().await.map_err(unavailable)?;
-        let transaction = client.transaction().await.map_err(query_unavailable)?;
-        ensure_transaction_actor(&transaction, auth, auth.has_role(Role::Admin)).await?;
-        transaction
-            .query_one(
-                "SELECT pg_advisory_xact_lock(hashtextextended($1,$2))",
-                &[&slug, &PLUGIN_ADMIN_LOCK_SEED],
-            )
+        self.remove_skill_revision(auth, slug, expected_revision)
             .await
-            .map_err(query_unavailable)?;
-        if let Some(row) = transaction
-            .query_opt(
-                "SELECT owner_user_id FROM public.skills WHERE slug=$1 FOR UPDATE",
-                &[&slug],
-            )
-            .await
-            .map_err(query_unavailable)?
-        {
-            let owner: Option<String> = row
-                .try_get("owner_user_id")
-                .map_err(|_| corrupt("skill_owner"))?;
-            if !auth.has_role(Role::Admin) && owner.as_deref() != Some(auth.actor().as_str()) {
-                return Err(McpConnectionError::NotVisible);
-            }
-        } else if !auth.has_role(Role::Admin) {
-            return Err(McpConnectionError::NotVisible);
-        }
-        transaction
-            .execute(
-                "DELETE FROM public.plugin_grants WHERE kind='skill' AND ref=$1",
-                &[&slug],
-            )
-            .await
-            .map_err(query_unavailable)?;
-        transaction
-            .execute("DELETE FROM public.skills WHERE slug=$1", &[&slug])
-            .await
-            .map_err(query_unavailable)?;
-        append_plugin_audit(
-            &transaction,
-            auth.actor(),
-            "skill",
-            slug,
-            "skill_removed",
-            None,
-            self.checkpoint_key.expose(),
-        )
-        .await?;
-        transaction.commit().await.map_err(|error| {
-            tracing::error!(error = %error, "plugin skill removal commit 结果未知");
-            McpConnectionError::CommitUnknown
-        })?;
-        Ok(PluginMutationAcknowledged::success())
     }
 
     async fn set_grant(
@@ -3726,7 +3594,8 @@ async fn visible_skills<C: GenericClient + Sync>(
     let is_admin = auth.has_role(Role::Admin);
     let skill_rows = client
         .query(
-            "SELECT id,slug,owner_user_id,title,summary,instructions,origin,installed_by
+            "SELECT id,slug,owner_user_id,title,summary,instructions,origin,installed_by,
+                      coalesce(revision,1)::bigint AS revision,updated_at
                FROM public.skills
               WHERE $2::boolean OR owner_user_id IS NULL OR owner_user_id=$1
               ORDER BY title,id",
@@ -3763,57 +3632,84 @@ async fn visible_skills<C: GenericClient + Sync>(
     }
     let mut skills = Vec::with_capacity(skill_rows.len());
     for row in skill_rows {
-        let id: String = row.try_get("id").map_err(|_| corrupt("skill_id"))?;
-        if id.is_empty() || id.len() > 256 || id.as_bytes().contains(&0) {
-            return Err(corrupt("skill_id"));
-        }
         let slug: String = row.try_get("slug").map_err(|_| corrupt("skill_slug"))?;
-        let owner_user_id: Option<String> = row
-            .try_get("owner_user_id")
-            .map_err(|_| corrupt("skill_owner"))?;
-        let title: String = row.try_get("title").map_err(|_| corrupt("skill_title"))?;
-        let summary: String = row
-            .try_get("summary")
-            .map_err(|_| corrupt("skill_summary"))?;
-        let instructions: String = row
-            .try_get("instructions")
-            .map_err(|_| corrupt("skill_instructions"))?;
-        prepare_skill_mutation(&PluginSkillMutation {
-            slug: slug.clone(),
-            title: title.clone(),
-            summary: summary.clone(),
-            instructions: instructions.clone(),
-            deployment_wide: owner_user_id.is_none(),
-        })
-        .map_err(|_| corrupt("skill_projection"))?;
-        let origin: String = row.try_get("origin").map_err(|_| corrupt("skill_origin"))?;
-        if origin.is_empty() || origin.len() > 256 || origin.chars().any(char::is_control) {
-            return Err(corrupt("skill_origin"));
-        }
-        let installed_by: Option<String> = row
-            .try_get("installed_by")
-            .map_err(|_| corrupt("skill_installed_by"))?;
-        for identity in [owner_user_id.as_deref(), installed_by.as_deref()]
-            .into_iter()
-            .flatten()
-        {
-            if identity.is_empty() || identity.len() > 4_096 || identity.as_bytes().contains(&0) {
-                return Err(corrupt("skill_actor"));
-            }
-        }
-        skills.push(McpAdminSkill {
-            id,
-            slug: slug.clone(),
-            owner_user_id,
-            title,
-            summary,
-            instructions,
-            origin,
-            installed_by,
-            granted_to: skill_grants.remove(&slug).unwrap_or_default(),
-        });
+        skills.push(decode_admin_skill(
+            &row,
+            skill_grants.remove(&slug).unwrap_or_default(),
+        )?);
     }
     Ok(skills)
+}
+
+fn decode_admin_skill(
+    row: &tokio_postgres::Row,
+    granted_to: Vec<String>,
+) -> Result<McpAdminSkill, McpConnectionError> {
+    let id: String = row.try_get("id").map_err(|_| corrupt("skill_id"))?;
+    if id.is_empty() || id.len() > 256 || id.as_bytes().contains(&0) {
+        return Err(corrupt("skill_id"));
+    }
+    let slug: String = row.try_get("slug").map_err(|_| corrupt("skill_slug"))?;
+    let owner_user_id: Option<String> = row
+        .try_get("owner_user_id")
+        .map_err(|_| corrupt("skill_owner"))?;
+    let title: String = row.try_get("title").map_err(|_| corrupt("skill_title"))?;
+    let summary: String = row
+        .try_get("summary")
+        .map_err(|_| corrupt("skill_summary"))?;
+    let instructions: String = row
+        .try_get("instructions")
+        .map_err(|_| corrupt("skill_instructions"))?;
+    prepare_skill_mutation(&PluginSkillMutation {
+        slug: slug.clone(),
+        title: title.clone(),
+        summary: summary.clone(),
+        instructions: instructions.clone(),
+        deployment_wide: owner_user_id.is_none(),
+        expected_revision: None,
+    })
+    .map_err(|_| corrupt("skill_projection"))?;
+    let origin: String = row.try_get("origin").map_err(|_| corrupt("skill_origin"))?;
+    if origin.is_empty() || origin.len() > 256 || origin.chars().any(char::is_control) {
+        return Err(corrupt("skill_origin"));
+    }
+    let installed_by: Option<String> = row
+        .try_get("installed_by")
+        .map_err(|_| corrupt("skill_installed_by"))?;
+    for identity in [owner_user_id.as_deref(), installed_by.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if identity.is_empty() || identity.len() > 4_096 || identity.as_bytes().contains(&0) {
+            return Err(corrupt("skill_actor"));
+        }
+    }
+    let revision: i64 = row
+        .try_get("revision")
+        .map_err(|_| corrupt("skill_revision"))?;
+    if revision <= 0 {
+        return Err(corrupt("skill_revision"));
+    }
+    let updated_at = row
+        .try_get("updated_at")
+        .map_err(|_| corrupt("skill_updated_at"))?;
+    let skill = McpAdminSkill {
+        id,
+        slug,
+        owner_user_id,
+        title,
+        summary,
+        instructions,
+        origin,
+        installed_by,
+        revision,
+        updated_at,
+        granted_to,
+    };
+    skill
+        .revision_snapshot()
+        .map_err(|_| corrupt("skill_snapshot"))?;
+    Ok(skill)
 }
 
 fn decode_granted_skill(
@@ -3834,6 +3730,7 @@ fn decode_granted_skill(
         summary: summary.clone(),
         instructions: instructions.clone(),
         deployment_wide: false,
+        expected_revision: None,
     })
     .map_err(|_| corrupt("skill_projection"))?;
     Ok(GrantedPluginSkill {

@@ -783,13 +783,32 @@ pub const NATIVE_0038_TABLES: &[TableSpec] = &[
     },
 ];
 
+pub mod editing_skills;
+pub mod skill_retired_slugs;
+
+/// Native0039 current skills and permanent identities; upstream ten-column facts are retained.
+pub const NATIVE_0039_TABLES: &[TableSpec] = &[
+    TableSpec {
+        name: editing_skills::TABLE_NAME,
+        columns: editing_skills::COLUMNS,
+        column_specs: editing_skills::COLUMN_SPECS,
+    },
+    TableSpec {
+        name: skill_retired_slugs::TABLE_NAME,
+        columns: skill_retired_slugs::COLUMNS,
+        column_specs: skill_retired_slugs::COLUMN_SPECS,
+    },
+];
+
 /// Complete current public-table registry: fixed upstream 0012 plus every Rust-owned native table.
 /// Historical callers that specifically compare the upstream boundary must continue using
 /// [`ALL_TABLES`] instead.
 pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
     ALL_TABLES
         .iter()
-        .filter(|table| table.name != sandboxed_components::TABLE_NAME)
+        .filter(|table| {
+            table.name != sandboxed_components::TABLE_NAME && table.name != skills::TABLE_NAME
+        })
         .chain(NATIVE_0013_TABLES.iter())
         .chain(NATIVE_0016_TABLES.iter())
         .chain(NATIVE_0020_TABLES.iter())
@@ -805,6 +824,7 @@ pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
         .chain(NATIVE_0035_TABLES.iter())
         .chain(NATIVE_0036_TABLES.iter())
         .chain(NATIVE_0038_TABLES.iter())
+        .chain(NATIVE_0039_TABLES.iter())
 }
 
 #[cfg(test)]

@@ -30,6 +30,9 @@ pub enum McpConnectionError {
         /// Static resource class only.
         resource: &'static str,
     },
+    /// Current authorized skill metadata differs from the submitted editing revision.
+    #[error("mcp_connection_stale_snapshot")]
+    StaleSnapshot(openbot_contracts::revision::RevisionSnapshot),
     /// Local dependency is unavailable.
     #[error("mcp_connection_unavailable")]
     Unavailable,
@@ -55,6 +58,11 @@ impl McpConnectionError {
             Self::NotVisible => AppError::NotVisible,
             Self::InvalidInput { field } => AppError::MalformedPayload { field },
             Self::Conflict { resource } => AppError::RequestConflict { resource },
+            Self::StaleSnapshot(snapshot) => AppError::StaleGeneration {
+                subject: openbot_contracts::error::StaleGenerationSubject::Configuration {
+                    snapshot,
+                },
+            },
             Self::Unavailable | Self::Corrupt { .. } => AppError::DependencyUnavailable {
                 dependency: "mcp_connections",
             },
@@ -156,6 +164,7 @@ pub trait McpConnectionAdministration: Send + Sync {
         &self,
         _auth: &AuthContext,
         _slug: &str,
+        _expected_revision: i64,
     ) -> Result<PluginMutationAcknowledged, McpConnectionError> {
         Err(McpConnectionError::Unavailable)
     }
@@ -417,9 +426,52 @@ pub async fn save_plugin_skill(
             required: Role::Admin,
         });
     }
-    port.save_skill(auth, mutation)
+    if mutation
+        .expected_revision
+        .is_some_and(|revision| revision <= 0)
+    {
+        return Err(AppError::MalformedPayload {
+            field: "expectedRevision",
+        });
+    }
+    let skills = port
+        .save_skill(auth, mutation)
         .await
-        .map_err(McpConnectionError::into_app_error)
+        .map_err(McpConnectionError::into_app_error)?;
+    let expected_result = mutation
+        .expected_revision
+        .map_or(Some(1), |r| r.checked_add(1))
+        .ok_or(AppError::RequestConflict { resource: "skill" })?;
+    let mut matching = skills
+        .skills
+        .iter()
+        .filter(|skill| skill.slug == mutation.slug);
+    let saved = matching
+        .next()
+        .ok_or_else(|| McpConnectionError::Corrupt { field: "skill" }.into_app_error())?;
+    if matching.next().is_some()
+        || saved.revision != expected_result
+        || saved
+            .updated_at
+            .format(&time::format_description::well_known::Rfc3339)
+            .is_err()
+        || saved.title != mutation.title
+        || saved.summary != mutation.summary
+        || saved.instructions != mutation.instructions
+        || if mutation.expected_revision.is_none() {
+            if mutation.deployment_wide {
+                saved.owner_user_id.is_some()
+            } else {
+                saved.owner_user_id.as_deref() != Some(auth.actor().as_str())
+            }
+        } else {
+            !auth.has_role(Role::Admin)
+                && saved.owner_user_id.as_deref() != Some(auth.actor().as_str())
+        }
+    {
+        return Err(McpConnectionError::Corrupt { field: "skill" }.into_app_error());
+    }
+    Ok(skills)
 }
 
 /// Application use case: remove one actor/admin-managed skill.
@@ -427,8 +479,14 @@ pub async fn remove_plugin_skill(
     port: &dyn McpConnectionAdministration,
     auth: &AuthContext,
     slug: &str,
+    expected_revision: i64,
 ) -> Result<PluginMutationAcknowledged, AppError> {
-    port.remove_skill(auth, slug)
+    if expected_revision <= 0 {
+        return Err(AppError::MalformedPayload {
+            field: "expectedRevision",
+        });
+    }
+    port.remove_skill(auth, slug, expected_revision)
         .await
         .map_err(McpConnectionError::into_app_error)
 }
@@ -481,7 +539,10 @@ mod tests {
     use super::*;
     use openbot_contracts::auth::AuthGeneration;
     use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
-    use openbot_contracts::mcp::{McpOAuthClientAuthMethod, McpOAuthClientRegistration};
+    use openbot_contracts::mcp::{
+        McpAdminSkill, McpOAuthClientAuthMethod, McpOAuthClientRegistration,
+    };
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Default)]
@@ -492,6 +553,9 @@ mod tests {
         removals: AtomicUsize,
         refreshes: AtomicUsize,
         skill_saves: AtomicUsize,
+        skill_removals: AtomicUsize,
+        skill_reply: Mutex<Option<PluginSkills>>,
+        skill_error: Mutex<Option<McpConnectionError>>,
         grant_sets: AtomicUsize,
     }
 
@@ -584,11 +648,32 @@ mod tests {
 
         async fn save_skill(
             &self,
-            _auth: &AuthContext,
-            _mutation: &PluginSkillMutation,
+            auth: &AuthContext,
+            mutation: &PluginSkillMutation,
         ) -> Result<PluginSkills, McpConnectionError> {
             self.skill_saves.fetch_add(1, Ordering::SeqCst);
-            Ok(PluginSkills { skills: Vec::new() })
+            if let Some(error) = *self.skill_error.lock().unwrap() {
+                return Err(error);
+            }
+            Ok(self
+                .skill_reply
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| skill_reply(auth, mutation)))
+        }
+
+        async fn remove_skill(
+            &self,
+            _auth: &AuthContext,
+            _slug: &str,
+            _expected_revision: i64,
+        ) -> Result<PluginMutationAcknowledged, McpConnectionError> {
+            self.skill_removals.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = *self.skill_error.lock().unwrap() {
+                return Err(error);
+            }
+            Ok(PluginMutationAcknowledged::success())
         }
 
         async fn set_grant(
@@ -613,6 +698,25 @@ mod tests {
         )
     }
 
+    fn skill_reply(auth: &AuthContext, mutation: &PluginSkillMutation) -> PluginSkills {
+        PluginSkills {
+            skills: vec![McpAdminSkill {
+                id: mutation.slug.clone(),
+                slug: mutation.slug.clone(),
+                owner_user_id: (!mutation.deployment_wide)
+                    .then(|| auth.actor().as_str().to_owned()),
+                title: mutation.title.clone(),
+                summary: mutation.summary.clone(),
+                instructions: mutation.instructions.clone(),
+                origin: "yours".into(),
+                installed_by: None,
+                revision: mutation.expected_revision.map_or(1, |r| r + 1),
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
+                granted_to: Vec::new(),
+            }],
+        }
+    }
+
     fn registration() -> McpOAuthClientRegistration {
         McpOAuthClientRegistration::new(
             "client".to_owned(),
@@ -622,6 +726,153 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    fn personal_skill() -> PluginSkillMutation {
+        PluginSkillMutation {
+            slug: "review".into(),
+            title: "Review".into(),
+            summary: String::new(),
+            instructions: "Read sources".into(),
+            deployment_wide: false,
+            expected_revision: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_nonpositive_versions_never_dispatch_and_role_gate_stays_first() {
+        let port = FakePort::default();
+        let mut mutation = personal_skill();
+        for revision in [0, -1, i64::MIN] {
+            mutation.expected_revision = Some(revision);
+            assert!(matches!(
+                save_plugin_skill(&port, &auth(Role::User), &mutation).await,
+                Err(AppError::MalformedPayload {
+                    field: "expectedRevision"
+                })
+            ));
+            assert!(matches!(
+                remove_plugin_skill(&port, &auth(Role::User), "review", revision).await,
+                Err(AppError::MalformedPayload {
+                    field: "expectedRevision"
+                })
+            ));
+        }
+        mutation.expected_revision = Some(0);
+        mutation.deployment_wide = true;
+        assert!(matches!(
+            save_plugin_skill(&port, &auth(Role::User), &mutation).await,
+            Err(AppError::ForbiddenRole {
+                required: Role::Admin
+            })
+        ));
+        assert_eq!(port.skill_saves.load(Ordering::SeqCst), 0);
+        assert_eq!(port.skill_removals.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn skill_maximum_expected_revision_defers_to_current_authorization_and_cas() {
+        let actor = auth(Role::User);
+        let port = FakePort::default();
+        let mut mutation = personal_skill();
+        let mut current = skill_reply(&actor, &mutation);
+        current.skills[0].revision = 2;
+        let snapshot = current.skills[0].revision_snapshot().unwrap();
+        mutation.expected_revision = Some(i64::MAX);
+        for error in [
+            McpConnectionError::StaleSnapshot(snapshot),
+            McpConnectionError::NotVisible,
+            McpConnectionError::Conflict { resource: "skill" },
+        ] {
+            *port.skill_error.lock().unwrap() = Some(error);
+            assert_eq!(
+                save_plugin_skill(&port, &actor, &mutation).await,
+                Err(error.into_app_error())
+            );
+        }
+        assert_eq!(port.skill_saves.load(Ordering::SeqCst), 3);
+        // A port claiming success at the exhausted sequence still cannot yield a successful reply.
+        *port.skill_error.lock().unwrap() = None;
+        *port.skill_reply.lock().unwrap() = Some(current);
+        assert!(matches!(
+            save_plugin_skill(&port, &actor, &mutation).await,
+            Err(AppError::RequestConflict { resource: "skill" })
+        ));
+        assert_eq!(port.skill_saves.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn skill_save_requires_matching_revision_content_and_authoritative_row() {
+        let actor = auth(Role::User);
+        let mut mutation = personal_skill();
+        mutation.expected_revision = Some(4);
+        let port = FakePort::default();
+        let valid = skill_reply(&actor, &mutation);
+        assert_eq!(
+            save_plugin_skill(&port, &actor, &mutation).await.unwrap(),
+            valid
+        );
+        for corrupt in [
+            PluginSkills { skills: Vec::new() },
+            PluginSkills {
+                skills: vec![valid.skills[0].clone(), valid.skills[0].clone()],
+            },
+            {
+                let mut reply = valid.clone();
+                reply.skills[0].revision = 4;
+                reply
+            },
+            {
+                let mut reply = valid.clone();
+                reply.skills[0].instructions = "wrong".into();
+                reply
+            },
+            {
+                let mut reply = valid.clone();
+                reply.skills[0].owner_user_id = Some("other".into());
+                reply
+            },
+        ] {
+            *port.skill_reply.lock().unwrap() = Some(corrupt);
+            assert!(matches!(
+                save_plugin_skill(&port, &actor, &mutation).await,
+                Err(AppError::DependencyUnavailable {
+                    dependency: "mcp_connections"
+                })
+            ));
+        }
+        let mut admin_reply = valid;
+        admin_reply.skills[0].owner_user_id = Some("original-owner".into());
+        *port.skill_reply.lock().unwrap() = Some(admin_reply.clone());
+        mutation.deployment_wide = true;
+        assert_eq!(
+            save_plugin_skill(&port, &auth(Role::Admin), &mutation)
+                .await
+                .unwrap(),
+            admin_reply
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_stale_snapshot_maps_to_closed_configuration_conflict() {
+        let actor = auth(Role::User);
+        let mutation = personal_skill();
+        let snapshot = skill_reply(&actor, &mutation).skills[0]
+            .revision_snapshot()
+            .unwrap();
+        let port = FakePort::default();
+        *port.skill_error.lock().unwrap() = Some(McpConnectionError::StaleSnapshot(snapshot));
+        let expected = AppError::StaleGeneration {
+            subject: openbot_contracts::error::StaleGenerationSubject::Configuration { snapshot },
+        };
+        assert_eq!(
+            save_plugin_skill(&port, &actor, &mutation).await,
+            Err(expected.clone())
+        );
+        assert_eq!(
+            remove_plugin_skill(&port, &actor, "review", 1).await,
+            Err(expected)
+        );
     }
 
     #[tokio::test]
@@ -724,6 +975,7 @@ mod tests {
             summary: "Review".to_owned(),
             instructions: "Review the notes.".to_owned(),
             deployment_wide: true,
+            expected_revision: None,
         };
         assert!(matches!(
             save_plugin_skill(&port, &auth(Role::User), &skill).await,
@@ -736,7 +988,7 @@ mod tests {
         skill.deployment_wide = false;
         assert_eq!(
             save_plugin_skill(&port, &auth(Role::User), &skill).await,
-            Ok(PluginSkills { skills: Vec::new() })
+            Ok(skill_reply(&auth(Role::User), &skill))
         );
         assert_eq!(port.skill_saves.load(Ordering::SeqCst), 1);
 

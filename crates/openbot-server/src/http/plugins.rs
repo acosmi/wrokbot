@@ -14,11 +14,13 @@ use openbot_contracts::mcp::{
     McpCuratedServerSelection, McpCustomServerRegistration, McpOAuthAuthorization,
     McpOAuthClientRegistered, McpOAuthClientRegistration, McpOAuthReturnTo, McpServerMutation,
     McpServerRemoved, PluginGrantKind, PluginGrantMutation, PluginMutationAcknowledged,
-    PluginSkillMutation, PluginSkills,
+    PluginSkillMutation, PluginSkillRevisionRequest, PluginSkills,
 };
 use serde::Deserialize;
 
-use crate::auth::{Authenticated, OriginAuthenticated, SensitiveAuthenticated};
+use crate::auth::{
+    Authenticated, FreshOriginAuthenticated, OriginAuthenticated, SensitiveAuthenticated,
+};
 use crate::error::HttpError;
 use crate::http::ServerState;
 
@@ -246,23 +248,16 @@ pub async fn servers_refresh_post(
 /// `POST /api/plugins/skills`; personal skills need origin, deployment skills also need admin.
 pub async fn skills_post(
     State(state): State<ServerState>,
-    SensitiveAuthenticated(resolved): SensitiveAuthenticated,
-    headers: HeaderMap,
+    FreshOriginAuthenticated(auth): FreshOriginAuthenticated,
     body: Result<Json<PluginSkillMutation>, JsonRejection>,
 ) -> Result<(HeaderMap, Json<PluginSkills>), HttpError> {
-    state
-        .authorize_fresh_origin_write(&resolved, request_origin(&headers))
-        .await?;
     let Json(mutation) = body.map_err(|rejection| {
         tracing::debug!(rejection = %rejection, "plugin skill body 解析失败");
         AppError::MalformedPayload { field: "body" }
     })?;
     match state
         .application()
-        .execute(
-            resolved.into_context(),
-            AppCommand::SavePluginSkill(mutation),
-        )
+        .execute(auth, AppCommand::SavePluginSkill(mutation))
         .await?
     {
         AppReply::PluginSkills(skills) => Ok((no_store_headers(), Json(skills))),
@@ -273,18 +268,19 @@ pub async fn skills_post(
 /// `DELETE /api/plugins/skills/{slug}`; ownership is resolved behind the typed port.
 pub async fn skills_delete(
     State(state): State<ServerState>,
-    SensitiveAuthenticated(resolved): SensitiveAuthenticated,
-    headers: HeaderMap,
+    FreshOriginAuthenticated(auth): FreshOriginAuthenticated,
     Path(slug): Path<String>,
+    body: Result<Json<PluginSkillRevisionRequest>, JsonRejection>,
 ) -> Result<(HeaderMap, Json<PluginMutationAcknowledged>), HttpError> {
-    state
-        .authorize_fresh_origin_write(&resolved, request_origin(&headers))
-        .await?;
+    let Json(revision) = body.map_err(|_| AppError::MalformedPayload { field: "body" })?;
     match state
         .application()
         .execute(
-            resolved.into_context(),
-            AppCommand::RemovePluginSkill { slug },
+            auth,
+            AppCommand::RemovePluginSkill {
+                slug,
+                expected_revision: revision.expected_revision,
+            },
         )
         .await?
     {
@@ -507,7 +503,7 @@ mod tests {
         Remove(ActorId, String),
         Refresh(ActorId, String),
         SaveSkill(ActorId, String, bool),
-        RemoveSkill(ActorId, String),
+        RemoveSkill(ActorId, String, i64),
         Grant(ActorId, String, String),
         Revoke(ActorId, String, String),
         ForAgent(ActorId, String),
@@ -676,18 +672,51 @@ mod tests {
                 mutation.slug.clone(),
                 mutation.deployment_wide,
             ));
-            Ok(PluginSkills { skills: Vec::new() })
+            let skill = openbot_contracts::mcp::McpAdminSkill {
+                id: mutation.slug.clone(),
+                slug: mutation.slug.clone(),
+                owner_user_id: (!mutation.deployment_wide)
+                    .then(|| auth.actor().as_str().to_owned()),
+                title: mutation.title.clone(),
+                summary: mutation.summary.clone(),
+                instructions: mutation.instructions.clone(),
+                origin: "yours".into(),
+                installed_by: None,
+                revision: mutation.expected_revision.map_or(1, |r| r + 1),
+                updated_at: OffsetDateTime::UNIX_EPOCH,
+                granted_to: Vec::new(),
+            };
+            if mutation.expected_revision == Some(9) {
+                return Err(McpConnectionError::StaleSnapshot(
+                    skill.revision_snapshot().unwrap(),
+                ));
+            }
+            Ok(PluginSkills {
+                skills: vec![skill],
+            })
         }
 
         async fn remove_skill(
             &self,
             auth: &AuthContext,
             slug: &str,
+            expected_revision: i64,
         ) -> Result<PluginMutationAcknowledged, McpConnectionError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(Call::RemoveSkill(auth.actor().clone(), slug.to_owned()));
+            self.calls.lock().unwrap().push(Call::RemoveSkill(
+                auth.actor().clone(),
+                slug.to_owned(),
+                expected_revision,
+            ));
+            if expected_revision == 9 {
+                return Err(McpConnectionError::StaleSnapshot(
+                    openbot_contracts::revision::RevisionSnapshot::from_public(
+                        10,
+                        OffsetDateTime::UNIX_EPOCH,
+                        &serde_json::json!({"slug": slug, "revision": 10}),
+                    )
+                    .unwrap(),
+                ));
+            }
             Ok(PluginMutationAcknowledged::success())
         }
 
@@ -809,12 +838,16 @@ mod tests {
     }
 
     fn registration_app(connections: FakeConnections) -> Router {
+        skill_write_app(connections, Role::Admin)
+    }
+
+    fn skill_write_app(connections: FakeConnections, role: Role) -> Router {
         let generation = AuthGeneration::new(1);
         let context = AuthContext::for_test(
             DeploymentId::new("dep"),
             TenantId::new("tenant"),
             ActorId::new("actor"),
-            [Role::Admin],
+            [role],
             generation,
             false,
         );
@@ -844,6 +877,93 @@ mod tests {
             ))
             .build(),
         )
+    }
+
+    #[tokio::test]
+    async fn skill_fresh_origin_checks_reject_before_body_poll_and_members_still_manage_personal_skills()
+     {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let connections = FakeConnections::default();
+        for (method, uri) in [
+            (Method::POST, "/api/plugins/skills"),
+            (Method::DELETE, "/api/plugins/skills/review"),
+        ] {
+            for (case, origin, status) in [
+                (0, "https://evil.example.test", StatusCode::FORBIDDEN),
+                (1, "https://app.example.test", StatusCode::UNAUTHORIZED),
+                (2, "https://app.example.test", StatusCode::UNAUTHORIZED),
+            ] {
+                let router = match case {
+                    0 => registration_app(connections.clone()),
+                    1 => {
+                        app(
+                            connections.clone(),
+                            Arc::new(FakeCallback {
+                                calls: Mutex::new(Vec::new()),
+                            }),
+                        )
+                        .0
+                    }
+                    _ => crate::router(
+                        ServerBuilder::new(
+                            Arc::new(
+                                OpenBotApplication::new(EmptyChannels)
+                                    .with_mcp_connections(Arc::new(connections.clone())),
+                            ),
+                            Arc::new(FixedAuthResolver::rejecting(AppError::Unauthenticated)),
+                        )
+                        .build(),
+                    ),
+                };
+                let polled = Arc::new(AtomicBool::new(false));
+                let observed = polled.clone();
+                let body = Body::from_stream(futures_util::stream::once(async move {
+                    observed.store(true, Ordering::SeqCst);
+                    Ok::<_, std::io::Error>(axum::body::Bytes::from_static(
+                        b"not-json-INSTRUCTION-CANARY",
+                    ))
+                }));
+                let response = router
+                    .oneshot(
+                        Request::builder()
+                            .method(method.clone())
+                            .uri(uri)
+                            .header(http::header::ORIGIN, origin)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .body(body)
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), status);
+                assert!(!polled.load(Ordering::SeqCst), "{method} {case}");
+                assert!(connections.calls.lock().unwrap().is_empty());
+            }
+        }
+        let saved = send_body(
+            skill_write_app(connections.clone(), Role::User),
+            "/api/plugins/skills",
+            Some("https://app.example.test"),
+            r#"{"slug":"review","title":"Review","instructions":"Sources"}"#,
+        )
+        .await;
+        assert_eq!(saved.status(), StatusCode::OK);
+        let body: PluginSkills =
+            serde_json::from_slice(&to_bytes(saved.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body.skills[0].owner_user_id.as_deref(), Some("actor"));
+        let removed = skill_write_app(connections, Role::User)
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/api/plugins/skills/review")
+                    .header(http::header::ORIGIN, "https://app.example.test")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"expectedRevision":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1044,13 +1164,18 @@ mod tests {
         .await;
         assert_eq!(for_agent.status(), StatusCode::OK);
         assert_eq!(for_agent.headers()[CACHE_CONTROL], "no-store");
-        let removed = send(
-            registration_app(connections.clone()),
-            Method::DELETE,
-            "/api/plugins/skills/standup",
-            Some("https://app.example.test"),
-        )
-        .await;
+        let removed = registration_app(connections.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/api/plugins/skills/standup")
+                    .header(http::header::ORIGIN, "https://app.example.test")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"expectedRevision":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(removed.status(), StatusCode::OK);
         assert_eq!(
             connections.calls.lock().unwrap().as_slice(),
@@ -1067,9 +1192,49 @@ mod tests {
                     "bot-1".to_owned()
                 ),
                 Call::ForAgent(ActorId::new("actor"), "bot-1".to_owned()),
-                Call::RemoveSkill(ActorId::new("actor"), "standup".to_owned())
+                Call::RemoveSkill(ActorId::new("actor"), "standup".to_owned(), 1)
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn skill_editing_framing_requires_revision_and_preserves_closed_stale_snapshot() {
+        let connections = FakeConnections::default();
+        let request = |method: Method, body: &'static str| {
+            Request::builder()
+                .method(method)
+                .uri("/api/plugins/skills/standup")
+                .header(http::header::ORIGIN, "https://app.example.test")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        for body in [
+            "",
+            "{}",
+            r#"{"expectedRevision":0}"#,
+            r#"{"expectedRevision":"1"}"#,
+            r#"{"expectedRevision":1,"actor":"forged"}"#,
+        ] {
+            let response = registration_app(connections.clone())
+                .oneshot(request(Method::DELETE, body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+        }
+        assert!(connections.calls.lock().unwrap().is_empty());
+        for response in [
+            send_body(registration_app(connections.clone()), "/api/plugins/skills", Some("https://app.example.test"), r#"{"slug":"standup","title":"Standup","instructions":"Summarize.","expectedRevision":9}"#).await,
+            registration_app(connections.clone()).oneshot(request(Method::DELETE, r#"{"expectedRevision":9}"#)).await.unwrap(),
+        ] {
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            let body: serde_json::Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+            assert_eq!(body.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["currentRevision", "currentSha256", "updatedAt"]);
+            assert_eq!(body["currentRevision"], 10);
+            assert_eq!(body["currentSha256"].as_str().unwrap().len(), 64);
+            assert_eq!(body["updatedAt"], "1970-01-01T00:00:00Z");
+        }
     }
 
     #[tokio::test]

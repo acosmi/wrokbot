@@ -370,8 +370,52 @@ pub struct McpAdminSkill {
     pub origin: String,
     /// Actor that installed it, when known.
     pub installed_by: Option<String>,
+    /// Monotonic editing sequence, independent of Agent grants.
+    pub revision: i64,
+    /// Database time of this committed editing revision.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
     /// Stable Agent ids holding a grant.
     pub granted_to: Vec<String>,
+}
+
+impl McpAdminSkill {
+    /// Current editing metadata hashes configuration only; Agent grants have separate authority.
+    pub fn revision_snapshot(
+        &self,
+    ) -> Result<crate::revision::RevisionSnapshot, serde_json::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Configuration<'a> {
+            id: &'a str,
+            slug: &'a str,
+            owner_user_id: &'a Option<String>,
+            title: &'a str,
+            summary: &'a str,
+            instructions: &'a str,
+            origin: &'a str,
+            installed_by: &'a Option<String>,
+            revision: i64,
+            #[serde(with = "time::serde::rfc3339")]
+            updated_at: OffsetDateTime,
+        }
+        crate::revision::RevisionSnapshot::from_public(
+            self.revision,
+            self.updated_at,
+            &Configuration {
+                id: &self.id,
+                slug: &self.slug,
+                owner_user_id: &self.owner_user_id,
+                title: &self.title,
+                summary: &self.summary,
+                instructions: &self.instructions,
+                origin: &self.origin,
+                installed_by: &self.installed_by,
+                revision: self.revision,
+                updated_at: self.updated_at,
+            },
+        )
+    }
 }
 
 impl fmt::Debug for McpAdminSkill {
@@ -393,6 +437,8 @@ impl fmt::Debug for McpAdminSkill {
             .field("instructions_bytes", &self.instructions.len())
             .field("origin", &self.origin)
             .field("installed_by_present", &self.installed_by.is_some())
+            .field("revision", &self.revision)
+            .field("updated_at", &self.updated_at)
             .field("granted_count", &self.granted_to.len())
             .finish()
     }
@@ -466,6 +512,9 @@ pub struct PluginSkillMutation {
     /// `true` creates a deployment-owned skill and therefore requires an administrator.
     #[serde(default, rename = "global")]
     pub deployment_wide: bool,
+    /// Absent creates only; present updates only the known committed editing revision.
+    #[serde(default)]
+    pub expected_revision: Option<i64>,
 }
 
 impl fmt::Debug for PluginSkillMutation {
@@ -477,8 +526,17 @@ impl fmt::Debug for PluginSkillMutation {
             .field("summary_bytes", &self.summary.len())
             .field("instructions_bytes", &self.instructions.len())
             .field("deployment_wide", &self.deployment_wide)
+            .field("expected_revision", &self.expected_revision)
             .finish()
     }
+}
+
+/// Closed deletion request carrying the editing revision opened by the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginSkillRevisionRequest {
+    /// Positive current revision required for deletion.
+    pub expected_revision: i64,
 }
 
 /// Current actor-visible skill list after a successful mutation.
@@ -809,6 +867,103 @@ mod personal_connection_tests {
                 r#"{"availableServerIds":[],"connections":[],"redirectUri":null,"clientSecret":"forbidden"}"#
             )
             .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod skill_revision_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn editing_requests_reject_missing_or_non_integer_delete_versions_and_unknown_authority() {
+        for wire in [
+            r#"{}"#,
+            r#"{"expectedRevision":null}"#,
+            r#"{"expectedRevision":1.5}"#,
+            r#"{"expectedRevision":"1"}"#,
+            r#"{"expectedRevision":9223372036854775808}"#,
+            r#"{"expectedRevision":1,"actor":"forged"}"#,
+            r#"{"expectedRevision":1,"expectedRevision":2}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<PluginSkillRevisionRequest>(wire).is_err(),
+                "{wire}"
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<PluginSkillRevisionRequest>(r#"{"expectedRevision":2}"#)
+                .unwrap()
+                .expected_revision,
+            2
+        );
+        let create: PluginSkillMutation = serde_json::from_str(
+            r#"{"slug":"review","title":"Review","instructions":"Read sources"}"#,
+        )
+        .unwrap();
+        assert_eq!(create.expected_revision, None);
+        let mut update = serde_json::to_value(&create).unwrap();
+        update["expectedRevision"] = json!(7);
+        assert_eq!(
+            serde_json::from_value::<PluginSkillMutation>(update.clone())
+                .unwrap()
+                .expected_revision,
+            Some(7)
+        );
+        for invalid in [json!("7"), json!(1.5), json!(9223372036854775808_u64)] {
+            update["expectedRevision"] = invalid;
+            assert!(serde_json::from_value::<PluginSkillMutation>(update.clone()).is_err());
+        }
+    }
+
+    #[test]
+    fn skill_snapshot_hashes_configuration_and_separates_current_agent_grants() {
+        let mut skill = McpAdminSkill {
+            id: "skill-one".into(),
+            slug: "review".into(),
+            owner_user_id: Some("actor".into()),
+            title: "Review".into(),
+            summary: "Sources".into(),
+            instructions: "Private instruction".into(),
+            origin: "yours".into(),
+            installed_by: None,
+            revision: 3,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            granted_to: vec!["agent-one".into()],
+        };
+        let snapshot = skill.revision_snapshot().unwrap();
+        let canonical = crate::revision::RevisionSnapshot::from_public(
+            3,
+            OffsetDateTime::UNIX_EPOCH,
+            &json!({
+                "id":"skill-one", "slug":"review", "ownerUserId":"actor", "title":"Review",
+                "summary":"Sources", "instructions":"Private instruction", "origin":"yours",
+                "installedBy":null, "revision":3, "updatedAt":"1970-01-01T00:00:00Z"
+            }),
+        )
+        .unwrap();
+        assert_eq!(snapshot, canonical);
+        skill.granted_to = vec!["agent-two".into(), "agent-three".into()];
+        assert_eq!(skill.revision_snapshot().unwrap(), snapshot);
+        skill.instructions = "Changed private instruction".into();
+        assert_ne!(skill.revision_snapshot().unwrap(), snapshot);
+        let encoded = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(
+            encoded
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["currentRevision", "currentSha256", "updatedAt"]
+        );
+        assert!(!encoded.to_string().contains("instruction"));
+        let skill_wire = serde_json::to_value(&skill).unwrap();
+        assert_eq!(skill_wire["updatedAt"], "1970-01-01T00:00:00Z");
+        assert_eq!(
+            serde_json::from_value::<McpAdminSkill>(skill_wire).unwrap(),
+            skill
         );
     }
 }

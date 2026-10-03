@@ -4,7 +4,7 @@
 
 use openbot_contracts::mcp::{
     McpAdminPage, McpAdminSkill, PluginGrantKind, PluginGrantMutation, PluginSkillMutation,
-    PluginSkills,
+    PluginSkillRevisionRequest, PluginSkills,
 };
 use serde_json::json;
 
@@ -22,6 +22,9 @@ pub(crate) fn valid_slug(slug: &str) -> bool {
 
 pub(crate) fn validate_mutation(mutation: &PluginSkillMutation) -> Result<(), ApiError> {
     if !valid_slug(&mutation.slug)
+        || mutation
+            .expected_revision
+            .is_some_and(|revision| revision <= 0)
         || mutation.title.trim().is_empty()
         || mutation.title.len() > 256
         || mutation.title.chars().any(char::is_control)
@@ -57,6 +60,8 @@ fn validate_skills(skills: &[McpAdminSkill]) -> Result<(), ApiError> {
             || skill.origin.chars().any(char::is_control)
             || skill.granted_to.len() > 4096
             || instruction_bytes > 4 * 1024 * 1024
+            || skill.revision <= 0
+            || skill.revision_snapshot().is_err()
         {
             return Err(ApiError::InvalidResponse);
         }
@@ -66,6 +71,7 @@ fn validate_skills(skills: &[McpAdminSkill]) -> Result<(), ApiError> {
             summary: skill.summary.clone(),
             instructions: skill.instructions.clone(),
             deployment_wide: skill.owner_user_id.is_none(),
+            expected_revision: Some(skill.revision),
         })?;
         let mut grants = std::collections::BTreeSet::new();
         for grant in &skill.granted_to {
@@ -117,6 +123,7 @@ pub(crate) async fn granted_choices(agent_id: &str) -> Result<Vec<SkillChoice>, 
             summary: skill.summary.clone(),
             instructions: skill.instructions,
             deployment_wide: false,
+            expected_revision: None,
         })?;
         choices.push(SkillChoice {
             slug: skill.slug,
@@ -150,6 +157,10 @@ pub(crate) async fn save(
     )
     .map_err(|_| ApiError::InvalidResponse)?;
     validate_skills(&skills.skills)?;
+    let expected_revision = mutation
+        .expected_revision
+        .map_or(Some(1), |r| r.checked_add(1))
+        .ok_or(ApiError::InvalidResponse)?;
     // A 200 response with no matching authoritative row is not a successful save.
     if !skills.skills.iter().any(|skill| {
         skill.slug == mutation.slug
@@ -157,20 +168,24 @@ pub(crate) async fn save(
             && skill.summary == mutation.summary
             && skill.instructions == mutation.instructions
             && skill.owner_user_id == expected_owner
+            && skill.revision == expected_revision
     }) {
         return Err(ApiError::InvalidResponse);
     }
     Ok(())
 }
 
-pub(crate) async fn remove(slug: &str) -> Result<(), ApiError> {
-    if !valid_slug(slug) {
+pub(crate) async fn remove(slug: &str, expected_revision: i64) -> Result<(), ApiError> {
+    if !valid_slug(slug) || expected_revision <= 0 {
         return Err(ApiError::InvalidResponse);
     }
     let receipt = super::plugins::request(
         "DELETE",
         &format!("/api/plugins/skills/{}", encode_url_component(slug)),
-        None,
+        Some(
+            serde_json::to_value(PluginSkillRevisionRequest { expected_revision })
+                .map_err(|_| ApiError::InvalidResponse)?,
+        ),
     )
     .await?;
     acknowledged(receipt)
@@ -231,6 +246,8 @@ mod tests {
             instructions: "Keep citations.".to_owned(),
             origin: "yours".to_owned(),
             installed_by: None,
+            revision: 1,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             granted_to: vec!["bot-1".to_owned()],
         }
     }
@@ -243,6 +260,11 @@ mod tests {
         assert!(valid_slug("daily-review"));
         let row = skill("daily-review", Some("actor"));
         assert!(validate_skills(std::slice::from_ref(&row)).is_ok());
+        for revision in [0, -1] {
+            let mut invalid_revision = row.clone();
+            invalid_revision.revision = revision;
+            assert!(validate_skills(&[invalid_revision]).is_err());
+        }
         assert!(validate_skills(&[row.clone(), row.clone()]).is_err());
         let mut duplicate = row;
         duplicate.granted_to.push("bot-1".to_owned());
@@ -259,9 +281,14 @@ mod tests {
             summary: String::new(),
             instructions: "\n先核实来源。\n".to_owned(),
             deployment_wide: false,
+            expected_revision: None,
         };
         assert!(validate_mutation(&m).is_ok());
         assert_eq!(m.instructions, "\n先核实来源。\n");
+        m.expected_revision = Some(0);
+        assert!(validate_mutation(&m).is_err());
+        m.expected_revision = Some(4);
+        assert!(validate_mutation(&m).is_ok());
         m.instructions = "\0".to_owned();
         assert!(validate_mutation(&m).is_err());
         m.instructions = "  \n".to_owned();
