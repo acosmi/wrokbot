@@ -151,7 +151,8 @@ pub struct VerifiedArtifactDatasetBinding {
     binding_schema: i16,
     initial_origin: String,
     created_at: OffsetDateTime,
-    owner: Arc<()>,
+    // Retain this process owner even in the minimal registry-only Desktop graph.
+    _owner: Arc<()>,
 }
 
 impl VerifiedArtifactDatasetBinding {
@@ -407,12 +408,14 @@ impl ArtifactDatasetRegistry {
         Ok(())
     }
 
+    #[cfg(feature = "server-runtime")]
     pub(crate) const fn pool(&self) -> &Pool {
         &self.pool
     }
 
+    #[cfg(feature = "server-runtime")]
     pub(crate) fn owner(&self) -> Arc<()> {
-        Arc::clone(&self.binding.owner)
+        Arc::clone(&self.binding._owner)
     }
 }
 
@@ -500,7 +503,7 @@ fn decode_binding(row: Row) -> Result<VerifiedArtifactDatasetBinding, ArtifactRe
         binding_schema,
         initial_origin,
         created_at,
-        owner: Arc::new(()),
+        _owner: Arc::new(()),
     })
 }
 
