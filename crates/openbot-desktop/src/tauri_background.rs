@@ -669,14 +669,21 @@ struct DesktopLocalBackgroundOwner {
     data_plane: Option<RunningDesktopLocalDataPlane>,
 }
 
+impl Drop for DesktopLocalBackgroundOwner {
+    fn drop(&mut self) {
+        let _ = self.lifecycle.shutdown_authority();
+    }
+}
+
 #[async_trait::async_trait]
 impl RuntimeShutdownOwner for DesktopLocalBackgroundOwner {
     async fn shutdown(mut self: Box<Self>) -> Result<(), DesktopLocalRuntimeError> {
+        // Invalidate the real protocol owner before any resource is moved or drained.
+        let authority_ok = self.lifecycle.shutdown_authority().is_ok();
         let data_plane = self.data_plane.take();
         let agent_host = self.agent_host.take();
         let assembly = self.assembly.take();
         let non_database = async {
-            let authority_ok = self.lifecycle.shutdown_authority().is_ok();
             // Poll every stop signal before waiting: one slow relay must not prevent cancellation
             // of the Agent or the reconciler. All three share the existing five-second window.
             let (transport, (), (), ()) = tokio::join!(
@@ -1293,12 +1300,23 @@ pub(crate) async fn prepare_desktop_local_runtime(
             Arc::clone(&transport),
         )),
     };
+    #[cfg(target_os = "macos")]
+    let current_identity_source = Arc::new(
+        crate::local_confirmation_authority::PostgresLocalConfirmationAuthority::new(
+            data_plane.authority().clone(),
+            data_plane.pool().clone(),
+        ),
+    );
     let protocol = match opened_protocol {
-        Ok(protocol) => Arc::new(protocol.with_first_frame_projection(
-            DesktopUiPreferenceStore::new(
-                app_data_root.as_path().join(DESKTOP_UI_PREFERENCES_FILE),
-            ),
-        )),
+        Ok(protocol) => {
+            #[cfg(target_os = "macos")]
+            let protocol = protocol.with_current_identity_source(current_identity_source);
+            Arc::new(
+                protocol.with_first_frame_projection(DesktopUiPreferenceStore::new(
+                    app_data_root.as_path().join(DESKTOP_UI_PREFERENCES_FILE),
+                )),
+            )
+        }
         Err(_) => {
             return Err(cleanup_agent_host(
                 data_plane,
@@ -1312,6 +1330,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
     let lifecycle = match DesktopWindowLifecycle::new(&scheme, Arc::clone(&protocol)) {
         Ok(lifecycle) => Arc::new(lifecycle),
         Err(_) => {
+            protocol.close_request_bindings();
             return Err(cleanup_agent_host(
                 data_plane,
                 assembly,

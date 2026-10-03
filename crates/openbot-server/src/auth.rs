@@ -44,12 +44,17 @@ use http::request::Parts;
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::error::{AppError, SensitiveWriteReason};
 use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
+use openbot_contracts::request_binding::{
+    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind, RequestBindingIssuer,
+    RequestBindingOwnerLease, RequestBindingOwnerObservation, ServerSessionBindingIdentity,
+};
 use openbot_domain::identity::roles::resolve_effective_role;
 use openbot_domain::identity::session::{
     LiveSession, SensitiveWriteApproved, SensitiveWriteRejection, SensitiveWriteRequest,
     SessionHashKey, SessionLifetimePolicy, SessionState, SessionToken, SessionTokenHash,
     TrustedOrigins, authorize_fresh_origin_write, authorize_sensitive_write, evaluate_session,
 };
+use std::sync::{Arc, Weak};
 use time::OffsetDateTime;
 use tracing::Span;
 
@@ -85,6 +90,10 @@ pub trait AuthResolver: Send + Sync {
     async fn touch(&self, _resolved: &ResolvedAuth) -> Result<(), AppError> {
         Ok(())
     }
+
+    /// Close actual host bindings before its graceful drain or resource teardown.
+    /// Implementations without a real binding owner have nothing to close.
+    fn close_request_bindings(&self) {}
 
     /// Revoke exactly the concrete session carried by this resolved request.
     ///
@@ -433,6 +442,192 @@ pub struct PostgresSessionAuthResolver {
     lifetime: SessionLifetimePolicy,
     deployment: DeploymentId,
     tenant: TenantId,
+    binding_owner: Arc<ServerSessionBindingOwner>,
+}
+
+// Only the resolver owner owns the lifecycle lease. A current-check await may keep a probe
+// allocated, but that independent probe cannot keep the real owner's lease running.
+struct ServerSessionBindingOwner {
+    lease: RequestBindingOwnerLease,
+    issuer: RequestBindingIssuer,
+    probe: Arc<ServerSessionProbeState>,
+}
+
+struct ServerSessionProbeState {
+    pool: deadpool_postgres::Pool,
+    lifetime: SessionLifetimePolicy,
+    deployment: DeploymentId,
+    tenant: TenantId,
+}
+
+struct ServerSessionRowTuple {
+    id: String,
+    user_id: String,
+    token_column: String,
+    created_at: OffsetDateTime,
+    issued_generation: i64,
+}
+
+struct ServerSessionCurrentGuard {
+    probe: Weak<ServerSessionProbeState>,
+    owner: RequestBindingOwnerObservation,
+    original: AuthContext,
+    row: ServerSessionRowTuple,
+}
+
+const CURRENT_SESSION_SQL: &str = "SELECT s.id,s.user_id,s.token,s.expires_at,s.created_at,s.updated_at,s.auth_generation, \
+    u.auth_generation AS current_generation, \
+    EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)) AS revoked, \
+    ARRAY(SELECT ur.role::text FROM public.user_roles ur WHERE ur.user_id=u.id ORDER BY ur.role::text) AS roles \
+    FROM public.sessions s JOIN public.users u ON u.id=s.user_id \
+    WHERE s.id=$1 AND s.user_id=$2 AND s.token=$3 AND s.created_at=$4 AND s.auth_generation=$5";
+
+impl HostRequestBindingGuard for ServerSessionCurrentGuard {
+    fn verify_current<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            if auth != &self.original || !self.owner.is_current() {
+                return Err(HostRequestBindingError::NotCurrent);
+            }
+            let probe = self
+                .probe
+                .upgrade()
+                .ok_or(HostRequestBindingError::NotCurrent)?;
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.observe_current(&probe),
+            )
+            .await
+            .map_err(|_| HostRequestBindingError::Unavailable);
+            if !self.owner.is_current() {
+                return Err(HostRequestBindingError::NotCurrent);
+            }
+            result?
+        })
+    }
+}
+
+impl ServerSessionCurrentGuard {
+    async fn observe_current(
+        &self,
+        probe: &ServerSessionProbeState,
+    ) -> Result<(), HostRequestBindingError> {
+        let mut client = probe
+            .pool
+            .get()
+            .await
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let observation = async {
+            transaction
+                .batch_execute("SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='5s'")
+                .await
+                .map_err(|_| HostRequestBindingError::Unavailable)?;
+            let row = transaction
+                .query_opt(
+                    CURRENT_SESSION_SQL,
+                    &[
+                        &self.row.id,
+                        &self.row.user_id,
+                        &self.row.token_column,
+                        &self.row.created_at,
+                        &self.row.issued_generation,
+                    ],
+                )
+                .await
+                .map_err(|_| HostRequestBindingError::Unavailable)?;
+            self.check_row(probe, row)
+        }
+        .await;
+        transaction
+            .rollback()
+            .await
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        observation
+    }
+
+    fn check_row(
+        &self,
+        probe: &ServerSessionProbeState,
+        row: Option<tokio_postgres::Row>,
+    ) -> Result<(), HostRequestBindingError> {
+        let row = row.ok_or(HostRequestBindingError::NotCurrent)?;
+        let issued: Option<i64> = row
+            .try_get("auth_generation")
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let current: Option<i64> = row
+            .try_get("current_generation")
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let issued = issued
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let current = current
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let revoked: bool = row
+            .try_get("revoked")
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let created: OffsetDateTime = row
+            .try_get("created_at")
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let updated: OffsetDateTime = row
+            .try_get("updated_at")
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let expires: OffsetDateTime = row
+            .try_get("expires_at")
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let now = OffsetDateTime::now_utc();
+        if revoked
+            || now >= expires
+            || issued != current
+            || current != self.original.auth_generation().get()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let _current_session = evaluate_session(
+            probe.lifetime,
+            SessionState::rehydrate(created, updated, AuthGeneration::new(issued)),
+            AuthGeneration::new(current),
+            now,
+        )
+        .map_err(|_| HostRequestBindingError::NotCurrent)?;
+        let role_values: Vec<String> = row
+            .try_get("roles")
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let roles = role_values
+            .iter()
+            .map(|value| value.parse::<Role>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let effective = resolve_effective_role(roles.iter().copied())
+            .map_err(|_| HostRequestBindingError::NotCurrent)?;
+        let user: String = row
+            .try_get("user_id")
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        let current_auth = AuthContextBuilder::from_verified_session(
+            probe.deployment.clone(),
+            probe.tenant.clone(),
+            ActorId::new(user),
+            AuthGeneration::new(current),
+            false,
+        )
+        .with_role(effective)
+        .build();
+        if current_auth != self.original {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        Ok(())
+    }
 }
 
 impl PostgresSessionAuthResolver {
@@ -450,13 +645,31 @@ impl PostgresSessionAuthResolver {
                 dependency: "session_hash_key",
             });
         }
+        let (lease, issuer) =
+            RequestBindingOwnerLease::for_trusted_host(HostRequestBindingKind::ServerSession);
+        let probe = Arc::new(ServerSessionProbeState {
+            pool: pool.clone(),
+            lifetime,
+            deployment: deployment.clone(),
+            tenant: tenant.clone(),
+        });
         Ok(Self {
             pool,
             hash_key: hash_key.into(),
             lifetime,
             deployment,
             tenant,
+            binding_owner: Arc::new(ServerSessionBindingOwner {
+                lease,
+                issuer,
+                probe,
+            }),
         })
+    }
+
+    /// Permanently close this actual resolver owner's bindings before shutdown.
+    pub fn close_request_bindings(&self) {
+        self.binding_owner.lease.close();
     }
 
     async fn resolve_token(&self, token: &str) -> Result<ResolvedAuth, AppError> {
@@ -476,7 +689,7 @@ impl PostgresSessionAuthResolver {
         })?;
         let row = client
             .query_opt(
-                "SELECT s.id,s.user_id,s.expires_at,s.created_at,s.updated_at,s.auth_generation, \
+                "SELECT s.id,s.user_id,s.token,s.expires_at,s.created_at,s.updated_at,s.auth_generation, \
                         coalesce(u.auth_generation,0) AS current_generation, \
                         coalesce(bool_or(ra.email IS NOT NULL),false) AS revoked, \
                         coalesce(array_agg(distinct ur.role::text) \
@@ -546,6 +759,7 @@ impl PostgresSessionAuthResolver {
             })?;
         let user_id: String = row.try_get("user_id").map_err(auth_row_error)?;
         let session_id: String = row.try_get("id").map_err(auth_row_error)?;
+        let token_column: String = row.try_get("token").map_err(auth_row_error)?;
         let context = AuthContextBuilder::from_verified_session(
             self.deployment.clone(),
             self.tenant.clone(),
@@ -555,6 +769,37 @@ impl PostgresSessionAuthResolver {
         )
         .with_role(effective)
         .build();
+        let guard = Arc::new(ServerSessionCurrentGuard {
+            probe: Arc::downgrade(&self.binding_owner.probe),
+            owner: self.binding_owner.issuer.observation(),
+            original: context.clone(),
+            row: ServerSessionRowTuple {
+                id: session_id.clone(),
+                user_id: context.actor().as_str().to_owned(),
+                token_column: token_column.clone(),
+                created_at,
+                issued_generation: i64::try_from(issued_generation)
+                    .map_err(|_| AppError::Unauthenticated)?,
+            },
+        });
+        let binding = self
+            .binding_owner
+            .issuer
+            .bind_server_session(
+                &context,
+                ServerSessionBindingIdentity::from_verified_row(
+                    session_id.clone(),
+                    context.actor().clone(),
+                    token_column,
+                    created_at,
+                    AuthGeneration::new(issued_generation),
+                ),
+                guard,
+            )
+            .map_err(|_| AppError::Unauthenticated)?;
+        let context = context
+            .with_verified_request_binding(binding)
+            .map_err(|_| AppError::Unauthenticated)?;
         Ok(ResolvedAuth::from_live_session(
             context,
             live,
@@ -575,6 +820,9 @@ impl core::fmt::Debug for PostgresSessionAuthResolver {
 
 #[async_trait]
 impl AuthResolver for PostgresSessionAuthResolver {
+    fn close_request_bindings(&self) {
+        self.binding_owner.lease.close();
+    }
     async fn resolve(&self, parts: &Parts) -> Result<AuthContext, AppError> {
         self.resolve_with_assurance(parts)
             .await
@@ -644,10 +892,75 @@ impl AuthResolver for PostgresSessionAuthResolver {
 }
 
 /// 显式单用户部署的 production resolver。绑定范围必须在启动组装前已通过 §6.1 判定。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SingleUserAuthResolver {
     context: AuthContext,
     lifetime: SessionLifetimePolicy,
+    binding_owner: Option<Arc<SingleUserBindingOwner>>,
+}
+
+struct SingleUserBindingOwner {
+    lease: RequestBindingOwnerLease,
+    issuer: RequestBindingIssuer,
+    probe: Arc<SingleUserProbeState>,
+}
+
+struct SingleUserProbeState {
+    principal: openbot_infra::auth::single_user::VerifiedSingleUserPrincipal,
+}
+
+struct SingleUserCurrentGuard {
+    probe: Weak<SingleUserProbeState>,
+    owner: RequestBindingOwnerObservation,
+}
+
+impl HostRequestBindingGuard for SingleUserCurrentGuard {
+    fn verify_current<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            if !self.owner.is_current() {
+                return Err(HostRequestBindingError::NotCurrent);
+            }
+            let probe = self
+                .probe
+                .upgrade()
+                .ok_or(HostRequestBindingError::NotCurrent)?;
+            if probe.principal.auth_context() != auth {
+                return Err(HostRequestBindingError::NotCurrent);
+            }
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                probe.principal.verify_current(),
+            )
+            .await
+            .map_err(|_| HostRequestBindingError::Unavailable);
+            if !self.owner.is_current() {
+                return Err(HostRequestBindingError::NotCurrent);
+            }
+            result?.map_err(|error| match error {
+                openbot_infra::auth::single_user::SingleUserPrincipalCurrentError::NotCurrent => {
+                    HostRequestBindingError::NotCurrent
+                }
+                openbot_infra::auth::single_user::SingleUserPrincipalCurrentError::Unavailable => {
+                    HostRequestBindingError::Unavailable
+                }
+            })
+        })
+    }
+}
+
+impl core::fmt::Debug for SingleUserAuthResolver {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("SingleUserAuthResolver")
+            .field("context", &self.context)
+            .field("lifetime", &self.lifetime)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SingleUserAuthResolver {
@@ -657,9 +970,25 @@ impl SingleUserAuthResolver {
         principal: openbot_infra::auth::single_user::VerifiedSingleUserPrincipal,
         lifetime: SessionLifetimePolicy,
     ) -> Self {
+        let context = principal.auth_context().clone();
+        let (lease, issuer) = RequestBindingOwnerLease::for_trusted_host(
+            HostRequestBindingKind::ServerSingleUserOwner,
+        );
         Self {
-            context: principal.into_auth_context(),
+            context,
             lifetime,
+            binding_owner: Some(Arc::new(SingleUserBindingOwner {
+                lease,
+                issuer,
+                probe: Arc::new(SingleUserProbeState { principal }),
+            })),
+        }
+    }
+
+    /// Permanently close the actual runtime owner; synthetic test identities have no owner.
+    pub fn close_request_bindings(&self) {
+        if let Some(owner) = &self.binding_owner {
+            owner.lease.close();
         }
     }
 
@@ -683,6 +1012,7 @@ impl SingleUserAuthResolver {
             .with_roles([Role::Admin, Role::User])
             .build(),
             lifetime,
+            binding_owner: None,
         }
     }
 
@@ -696,16 +1026,29 @@ impl SingleUserAuthResolver {
             now,
         )
         .map_err(|_| AppError::Unauthenticated)?;
-        Ok(ResolvedAuth::from_live_session(
-            self.context.clone(),
-            live,
-            None,
-        ))
+        let mut context = self.context.clone();
+        if let Some(owner) = &self.binding_owner {
+            let guard = Arc::new(SingleUserCurrentGuard {
+                probe: Arc::downgrade(&owner.probe),
+                owner: owner.issuer.observation(),
+            });
+            let binding = owner
+                .issuer
+                .bind_single_user_owner(&context, guard)
+                .map_err(|_| AppError::Unauthenticated)?;
+            context = context
+                .with_verified_request_binding(binding)
+                .map_err(|_| AppError::Unauthenticated)?;
+        }
+        Ok(ResolvedAuth::from_live_session(context, live, None))
     }
 }
 
 #[async_trait]
 impl AuthResolver for SingleUserAuthResolver {
+    fn close_request_bindings(&self) {
+        Self::close_request_bindings(self);
+    }
     async fn resolve(&self, _parts: &Parts) -> Result<AuthContext, AppError> {
         self.resolved().map(ResolvedAuth::into_context)
     }

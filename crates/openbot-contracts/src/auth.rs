@@ -10,6 +10,7 @@
 use core::fmt;
 use core::str::FromStr;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -251,7 +252,7 @@ impl fmt::Display for AuthGeneration {
 /// 2. [`AuthContext::for_test`]（`testkit` feature 或 `cfg(test)` 下才存在，默认关）。
 ///
 /// 生产 transport 拿不到第 2 条 —— 它不在默认 feature 图里。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct AuthContext {
     deployment: DeploymentId,
     tenant: TenantId,
@@ -259,9 +260,27 @@ pub struct AuthContext {
     roles: BTreeSet<Role>,
     auth_generation: AuthGeneration,
     single_user: bool,
+    request_binding: Option<Arc<crate::request_binding::VerifiedHostRequestBinding>>,
 }
 
 impl AuthContext {
+    /// 非 Serde 宿主绑定；getter 本身不证明当前权限。
+    pub fn request_binding(&self) -> Option<&crate::request_binding::VerifiedHostRequestBinding> {
+        self.request_binding.as_deref()
+    }
+
+    /// 受信 host 在 builder 完成后消费式附加，核原六项身份。
+    #[doc(hidden)]
+    pub fn with_verified_request_binding(
+        mut self,
+        binding: crate::request_binding::VerifiedHostRequestBinding,
+    ) -> Result<Self, crate::request_binding::RequestBindingAttachError> {
+        if !binding.matches_auth(&self) {
+            return Err(crate::request_binding::RequestBindingAttachError::IdentityMismatch);
+        }
+        self.request_binding = Some(Arc::new(binding));
+        Ok(self)
+    }
     /// 部署身份。
     #[must_use]
     pub fn deployment(&self) -> &DeploymentId {
@@ -333,7 +352,33 @@ impl AuthContext {
             roles: roles.into_iter().collect(),
             auth_generation,
             single_user,
+            request_binding: None,
         }
+    }
+}
+
+impl PartialEq for AuthContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.deployment == other.deployment
+            && self.tenant == other.tenant
+            && self.actor == other.actor
+            && self.roles == other.roles
+            && self.auth_generation == other.auth_generation
+            && self.single_user == other.single_user
+    }
+}
+impl Eq for AuthContext {}
+impl core::fmt::Debug for AuthContext {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthContext")
+            .field("deployment", &self.deployment)
+            .field("tenant", &self.tenant)
+            .field("actor", &self.actor)
+            .field("roles", &self.roles)
+            .field("auth_generation", &self.auth_generation)
+            .field("single_user", &self.single_user)
+            .field("request_binding_present", &self.request_binding.is_some())
+            .finish()
     }
 }
 
@@ -378,6 +423,7 @@ impl AuthContextBuilder {
                 roles: BTreeSet::new(),
                 auth_generation,
                 single_user,
+                request_binding: None,
             },
         }
     }

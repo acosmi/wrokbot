@@ -29,9 +29,30 @@ pub const SINGLE_USER_NAME: &str = SINGLE_USER_EMAIL;
 
 /// A Server-only canonical principal whose generation and role were read from PostgreSQL.
 /// No caller-supplied actor, role, generation or AuthContext can construct this proof.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VerifiedSingleUserPrincipal {
     auth: AuthContext,
+    pool: Pool,
+}
+
+impl core::fmt::Debug for VerifiedSingleUserPrincipal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("VerifiedSingleUserPrincipal")
+            .field("auth", &self.auth)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A current canonical observation failed without manufacturing a replacement principal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SingleUserPrincipalCurrentError {
+    /// The original fixed identity, role, access or generation is no longer current.
+    #[error("single_user_principal_not_current")]
+    NotCurrent,
+    /// The owning database or bounded validation could not provide a current observation.
+    #[error("single_user_principal_unavailable")]
+    Unavailable,
 }
 
 impl VerifiedSingleUserPrincipal {
@@ -46,6 +67,97 @@ impl VerifiedSingleUserPrincipal {
     pub fn into_auth_context(self) -> AuthContext {
         self.auth
     }
+
+    /// Reobserve this original principal through its retained pool, without upgrading it.
+    ///
+    /// The five-second budget covers acquisition, the read-only transaction and rollback.
+    /// Timeout cancels this wait; it does not assert that a database worker has already stopped.
+    pub async fn verify_current(&self) -> Result<(), SingleUserPrincipalCurrentError> {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.verify_current_inner(),
+        )
+        .await
+        .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?
+    }
+
+    async fn verify_current_inner(&self) -> Result<(), SingleUserPrincipalCurrentError> {
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+        let observation = async {
+            transaction
+                .batch_execute("SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='5s'")
+                .await
+                .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+            let row = transaction
+                .query_opt(
+                    CANONICAL_BINDING_CURRENT_SQL,
+                    &[&SINGLE_USER_ACTOR_ID, &SINGLE_USER_EMAIL],
+                )
+                .await
+                .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+            decode_current_canonical_generation(row)
+        }
+        .await;
+        transaction
+            .rollback()
+            .await
+            .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+        let generation = observation?;
+        if generation != self.auth.auth_generation() {
+            return Err(SingleUserPrincipalCurrentError::NotCurrent);
+        }
+        Ok(())
+    }
+}
+
+const CANONICAL_CURRENT_SQL: &str = "SELECT coalesce(u.auth_generation,0) AS generation,u.email=$2 AS canonical_email, \
+    EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)) AS denied, \
+    ARRAY(SELECT ur.role::text FROM public.user_roles ur \
+    WHERE ur.user_id=u.id ORDER BY ur.role::text) AS roles \
+    FROM public.users u WHERE u.id=$1";
+
+// Only the new request-binding observation requires the raw current generation. The original
+// startup and Desktop canonical reader above deliberately keep their compatibility semantics.
+const CANONICAL_BINDING_CURRENT_SQL: &str = "SELECT u.auth_generation AS generation,u.email=$2 AS canonical_email, \
+    EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)) AS denied, \
+    ARRAY(SELECT ur.role::text FROM public.user_roles ur \
+    WHERE ur.user_id=u.id ORDER BY ur.role::text) AS roles \
+    FROM public.users u WHERE u.id=$1";
+
+fn decode_current_canonical_generation(
+    row: Option<tokio_postgres::Row>,
+) -> Result<AuthGeneration, SingleUserPrincipalCurrentError> {
+    let row = row.ok_or(SingleUserPrincipalCurrentError::NotCurrent)?;
+    let generation: Option<i64> = row
+        .try_get("generation")
+        .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+    let generation = generation
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or(SingleUserPrincipalCurrentError::NotCurrent)?;
+    let canonical_email: bool = row
+        .try_get("canonical_email")
+        .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+    let denied: bool = row
+        .try_get("denied")
+        .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+    let roles: Vec<String> = row
+        .try_get("roles")
+        .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
+    if !canonical_email || denied || roles != ["admin"] {
+        return Err(SingleUserPrincipalCurrentError::NotCurrent);
+    }
+    Ok(AuthGeneration::new(generation))
 }
 
 /// Load the fixed Server principal after explicit single-user provisioning.
@@ -75,6 +187,7 @@ pub async fn load_single_user_principal(
         // Preserve the existing local-runtime Admin + User projection after verifying soleAdmin in PG.
         .with_roles([Role::Admin, Role::User])
         .build(),
+        pool: pool.clone(),
     })
 }
 
@@ -90,17 +203,16 @@ pub(super) async fn load_canonical_generation(
     // One statement supplies one consistent authority snapshot. Later actor/role changes do not
     // silently upgrade this startup identity; operation-level generation checks invalidate it.
     let row = client
-        .query_opt(
-            "SELECT coalesce(u.auth_generation,0) AS generation,u.email=$2 AS canonical_email, \
-                    EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)) AS denied, \
-                    ARRAY(SELECT ur.role::text FROM public.user_roles ur \
-                          WHERE ur.user_id=u.id ORDER BY ur.role::text) AS roles \
-             FROM public.users u WHERE u.id=$1",
-            &[&actor_id, &email],
-        )
+        .query_opt(CANONICAL_CURRENT_SQL, &[&actor_id, &email])
         .await
-        .map_err(|error| InfraError::query("读取canonical principal授权快照", error))?
-        .ok_or_else(|| InfraError::repository_invariant("canonical_principal_missing"))?;
+        .map_err(|error| InfraError::query("读取canonical principal授权快照", error))?;
+    decode_canonical_generation(row)
+}
+
+fn decode_canonical_generation(
+    row: Option<tokio_postgres::Row>,
+) -> Result<AuthGeneration, InfraError> {
+    let row = row.ok_or_else(|| InfraError::repository_invariant("canonical_principal_missing"))?;
     let generation: i64 = row
         .try_get("generation")
         .map_err(|error| InfraError::query("解析canonical generation", error))?;
