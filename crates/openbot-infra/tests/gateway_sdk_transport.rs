@@ -36,6 +36,8 @@ include!("gateway_sdk_transport/authority.rs");
 mod account_tests;
 #[path = "gateway_sdk_transport/sdk5_tests.rs"]
 mod sdk5_tests;
+#[path = "gateway_sdk_transport/target_identity.rs"]
+mod target_identity;
 
 fn chat_text() -> String {
     format!(
