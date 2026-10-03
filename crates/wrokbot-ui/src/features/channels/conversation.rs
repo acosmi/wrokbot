@@ -151,6 +151,10 @@ struct StopControl {
     input_locked: bool,
     /// A durable cancellation request minted by this mount is still unacknowledged.
     cancelling_request: bool,
+    /// The current snapshot is being renewed or could not be read; retained facts cannot mint
+    /// another cancellation until an authorized read succeeds.
+    loading: bool,
+    snapshot_error: bool,
     /// An empty draft is what turns the primary control from Send into Stop.
     draft_empty: bool,
     /// Snapshot fact: this actor may mint the **first** durable cancellation request.
@@ -171,7 +175,91 @@ impl StopControl {
     /// Stop is actionable only for the first request this actor is allowed to mint; a run already
     /// `Cancelling` (here or on another replica) is observable but not re-requestable from the GUI.
     const fn enabled(self) -> bool {
-        !self.input_locked && !self.cancelling_request && self.draft_empty && self.cancellable
+        !self.input_locked
+            && !self.cancelling_request
+            && !self.loading
+            && !self.snapshot_error
+            && self.draft_empty
+            && self.cancellable
+            && matches!(self.run_state, Some(ThreadForegroundRunState::Running))
+    }
+}
+
+/// Facts captured when a user starts an authorized action read. A late reply is not permission
+/// for a different mount, reload, foreground, or event position. The current run observation is
+/// captured to preserve newer output; action reads never replace the transcript or current output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConversationActionRead {
+    thread: Option<ThreadId>,
+    generation: u64,
+    cursor: Option<u64>,
+    run: Option<RunId>,
+    run_state: Option<ThreadForegroundRunState>,
+    cancellable: bool,
+    observed_run: Option<RunObservation>,
+}
+
+impl ConversationActionRead {
+    fn capture(thread: Option<ThreadId>, generation: u64, state: &ConversationState) -> Self {
+        Self {
+            thread,
+            generation,
+            cursor: state.cursor,
+            run: state.active_run_id.clone(),
+            run_state: state.active_run_state,
+            cancellable: state.active_run_cancellable,
+            observed_run: state.observed_run.clone(),
+        }
+    }
+
+    fn is_current(
+        &self,
+        thread: Option<&ThreadId>,
+        generation: u64,
+        state: &ConversationState,
+    ) -> bool {
+        self.same_foreground(thread, generation, state) && self.cursor == state.cursor
+    }
+
+    fn same_foreground(
+        &self,
+        thread: Option<&ThreadId>,
+        generation: u64,
+        state: &ConversationState,
+    ) -> bool {
+        self.thread.as_ref() == thread
+            && self.generation == generation
+            && self.run == state.active_run_id
+            && self.run_state == state.active_run_state
+            && self.cancellable == state.active_run_cancellable
+    }
+
+    fn same_observed_foreground(&self, state: &ConversationState) -> bool {
+        self.run == state.active_run_id
+            && self.run_state == state.active_run_state
+            && self.cancellable == state.active_run_cancellable
+            && self.observed_run == state.observed_run
+    }
+}
+
+fn action_read_allows_stop(snapshot: &ThreadConversationSnapshot, run: &RunId) -> bool {
+    snapshot.active_run_id.as_ref() == Some(run)
+        && snapshot.active_run_state == Some(ThreadForegroundRunState::Running)
+        && snapshot.active_run_cancellable
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RetryReadFact {
+    Original,
+    Absent,
+    Other,
+}
+
+fn retry_read_fact(snapshot: &ThreadConversationSnapshot, run: &RunId) -> RetryReadFact {
+    match snapshot.active_run_id.as_ref() {
+        Some(active) if active == run => RetryReadFact::Original,
+        Some(_) => RetryReadFact::Other,
+        None => RetryReadFact::Absent,
     }
 }
 
@@ -902,6 +990,8 @@ fn ConversationSurface(
         StopControl {
             input_locked: input_locked.get(),
             cancelling_request: cancelling_request.get(),
+            loading: loading.get(),
+            snapshot_error: snapshot_error.get(),
             draft_empty: trim_ecmascript(&draft.get()).is_empty(),
             cancellable: snapshot.active_run_cancellable,
             run_state: snapshot.active_run_state,
@@ -914,17 +1004,20 @@ fn ConversationSurface(
         if submitting.get_untracked()
             || state.get_untracked().active_run_id.is_some()
             || !channel_active
+            || loading.get_untracked()
+            || snapshot_error.get_untracked()
         {
             return;
         }
         if resumable.get_untracked().is_none() && trim_ecmascript(&requested.message).is_empty() {
             return;
         }
-        #[cfg(target_arch = "wasm32")]
         let retry_unknown = resumable.get_untracked().is_some();
         submitting.set(true);
         send_notice.set(None);
-        begin_unknown.set(false);
+        if !retry_unknown {
+            begin_unknown.set(false);
+        }
         submission_blocked.set(false);
         #[cfg(target_arch = "wasm32")]
         leptos::task::spawn_local_scoped_with_cancellation(async move {
@@ -960,6 +1053,100 @@ fn ConversationSurface(
                     intent: attempt.clone(),
                     channel: None,
                 });
+            let action_read = ConversationActionRead::capture(
+                thread_id.get_untracked(),
+                reload_generation.get_untracked(),
+                &state.get_untracked(),
+            );
+            if retry_unknown {
+                // Only the exact retained Unknown owns this manual retry. A prior mount read,
+                // empty history, or a different recovery cannot authorize another BeginRun.
+                if attempt.thread_id != action_read.thread
+                    || run_anchor.try_get_value().as_ref() != Some(&attempt.anchor)
+                    || agent_id.try_get_value().flatten().as_ref() != Some(&attempt.agent_id)
+                    || recovery.intent != attempt
+                    || resumable_recovery.get_untracked().as_ref() != Some(&recovery)
+                    || submissions
+                        .run_unknown_for_scope(
+                            Some(resolved_thread),
+                            &attempt.anchor,
+                            Some(&attempt.agent_id),
+                        )
+                        .as_ref()
+                        != Some(&recovery)
+                {
+                    submission_blocked.set(true);
+                    submitting.set(false);
+                    return;
+                }
+                let result = load_thread_conversation(resolved_thread).await;
+                let (Some(current_thread), Some(generation), Some(current)) = (
+                    thread_id.try_get_untracked(),
+                    reload_generation.try_get_untracked(),
+                    state.try_get_untracked(),
+                ) else {
+                    return;
+                };
+                if !action_read.is_current(current_thread.as_ref(), generation, &current)
+                    || loading.try_get_untracked() != Some(false)
+                    || snapshot_error.try_get_untracked() != Some(false)
+                    || run_anchor.try_get_value().as_ref() != Some(&attempt.anchor)
+                    || agent_id.try_get_value().flatten().as_ref() != Some(&attempt.agent_id)
+                    || resumable.try_get_untracked().flatten().as_ref() != Some(&attempt)
+                    || resumable_recovery.try_get_untracked().flatten().as_ref() != Some(&recovery)
+                    || submissions
+                        .run_unknown_for_scope(
+                            Some(resolved_thread),
+                            &attempt.anchor,
+                            Some(&attempt.agent_id),
+                        )
+                        .as_ref()
+                        != Some(&recovery)
+                {
+                    submitting.set(false);
+                    return;
+                }
+                let snapshot = match result {
+                    Ok(snapshot) => snapshot,
+                    Err(_) => {
+                        // A failed read says nothing about the original effect. Keep its frozen
+                        // intent/Unknown and offer the existing authorized Read again recovery.
+                        snapshot_error.set(true);
+                        submitting.set(false);
+                        return;
+                    }
+                };
+                match retry_read_fact(&snapshot, &attempt.run_id) {
+                    RetryReadFact::Original => {
+                        if submissions.acknowledge_observed(
+                            resolved_thread,
+                            &attempt.anchor,
+                            &attempt.agent_id,
+                            &attempt.run_id,
+                        ) {
+                            resumable.set(None);
+                            resumable_recovery.set(None);
+                            skill_composer.clear();
+                            begin_unknown.set(false);
+                            allow_missing_snapshot.set(false);
+                            // Do not install this action snapshot over live output or history.
+                            // Renew the normal synchronization before enabling a new action.
+                            loading.set(true);
+                            reload_generation.update(|value| *value = value.saturating_add(1));
+                        }
+                        submitting.set(false);
+                        return;
+                    }
+                    RetryReadFact::Other => {
+                        send_notice.set(Some(SubmissionNotice::Conflict));
+                        submitting.set(false);
+                        return;
+                    }
+                    RetryReadFact::Absent => {}
+                }
+                // No active run is not proof of non-commit. The only continuation admitted
+                // below is this explicit retry of the original run id and complete UI intent.
+            }
             let Some(ticket) = submissions.start_run(&recovery, retry_unknown) else {
                 if !retry_unknown {
                     resumable.set(None);
@@ -968,7 +1155,7 @@ fn ConversationSurface(
                 submitting.set(false);
                 return;
             };
-            match begin_thread_run_with_skills_and_model(
+            let result = begin_thread_run_with_skills_and_model(
                 resolved_thread,
                 &attempt.agent_id,
                 &attempt.run_id,
@@ -977,10 +1164,67 @@ fn ConversationSurface(
                 &attempt.selected_skill_slugs,
                 attempt.model_selection.as_ref(),
             )
-            .await
+            .await;
+            match &result {
+                Ok(_) => ticket.accepted(),
+                Err(error) => ticket.failed(*error),
+            }
+            let (Some(current_thread), Some(generation), Some(current)) = (
+                thread_id.try_get_untracked(),
+                reload_generation.try_get_untracked(),
+                state.try_get_untracked(),
+            ) else {
+                return;
+            };
+            if !action_read.is_current(current_thread.as_ref(), generation, &current)
+                || resumable.try_get_untracked().flatten().as_ref() != Some(&attempt)
             {
+                // A snapshot/SSE may already have resolved this exact run while Begin was in
+                // flight. Its newer foreground and output must survive the late HTTP reply.
+                if current_thread == action_read.thread
+                    && resumable.get_untracked().as_ref() == Some(&attempt)
+                {
+                    if result.is_ok() {
+                        resumable.set(None);
+                        resumable_recovery.set(None);
+                        begin_unknown.set(false);
+                        if draft.get_untracked() == attempt.message
+                            && skill_composer.selected.get_untracked()
+                                == attempt.selected_skill_slugs
+                            && model_composer.selected.get_untracked() == attempt.model_selection
+                        {
+                            skill_composer.clear();
+                            model_composer.clear();
+                        }
+                        if current.active_run_id.is_none()
+                            && action_read.same_observed_foreground(&current)
+                        {
+                            // A reload alone did not observe the accepted run. Renew after this
+                            // ACK, making even an older pending NoActive reply obsolete, without
+                            // replacing any transcript or already-consumed current output.
+                            allow_missing_snapshot.set(false);
+                            thread_id.set(attempt.thread_id.clone());
+                            loading.set(true);
+                            reload_generation.update(|value| *value = value.saturating_add(1));
+                        }
+                    } else if submissions
+                        .run_unknown_for_scope(
+                            Some(resolved_thread),
+                            &attempt.anchor,
+                            Some(&attempt.agent_id),
+                        )
+                        .as_ref()
+                        == Some(&recovery)
+                    {
+                        resumable_recovery.set(Some(recovery));
+                        begin_unknown.set(true);
+                    }
+                }
+                submitting.set(false);
+                return;
+            }
+            match result {
                 Ok(_) => {
-                    ticket.accepted();
                     allow_missing_snapshot.set(false);
                     thread_id.set(attempt.thread_id.clone());
                     state.update(|state| {
@@ -1000,7 +1244,6 @@ fn ConversationSurface(
                     reload_generation.update(|value| *value = value.saturating_add(1));
                 }
                 Err(error) => {
-                    ticket.failed(error);
                     let definite = matches!(
                         error,
                         crate::api::ApiError::NotFound
@@ -1131,11 +1374,63 @@ fn ConversationSurface(
         let Some(run) = state.get_untracked().active_run_id else {
             return;
         };
+        #[cfg(target_arch = "wasm32")]
+        let action_read = ConversationActionRead::capture(
+            Some(thread.clone()),
+            reload_generation.get_untracked(),
+            &state.get_untracked(),
+        );
         cancelling_request.set(true);
         cancel_error.set(false);
         #[cfg(target_arch = "wasm32")]
         leptos::task::spawn_local_scoped_with_cancellation(async move {
-            match cancel_thread_run(&thread, &run).await {
+            let result = load_thread_conversation(&thread).await;
+            let (Some(current_thread), Some(generation), Some(current)) = (
+                thread_id.try_get_untracked(),
+                reload_generation.try_get_untracked(),
+                state.try_get_untracked(),
+            ) else {
+                return;
+            };
+            // Normal text/reasoning chunks do not revoke this original foreground's ability to
+            // stop. Scope, generation, state and current permission still must all match.
+            if !action_read.same_foreground(current_thread.as_ref(), generation, &current)
+                || loading.try_get_untracked() != Some(false)
+                || snapshot_error.try_get_untracked() != Some(false)
+            {
+                cancelling_request.set(false);
+                return;
+            }
+            let snapshot = match result {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    snapshot_error.set(true);
+                    cancel_error.set(true);
+                    cancelling_request.set(false);
+                    return;
+                }
+            };
+            if !action_read_allows_stop(&snapshot, &run) {
+                // Cancelling/terminal/another foreground cannot authorize a second cancel.
+                // Keep the current transcript and renew facts through the normal reader.
+                loading.set(true);
+                reload_generation.update(|value| *value = value.saturating_add(1));
+                cancelling_request.set(false);
+                return;
+            }
+            let result = cancel_thread_run(&thread, &run).await;
+            let (Some(current_thread), Some(generation), Some(current)) = (
+                thread_id.try_get_untracked(),
+                reload_generation.try_get_untracked(),
+                state.try_get_untracked(),
+            ) else {
+                return;
+            };
+            if !action_read.same_foreground(current_thread.as_ref(), generation, &current) {
+                cancelling_request.set(false);
+                return;
+            }
+            match result {
                 Ok(reply) => {
                     if matches!(
                         reply.state,
@@ -1149,13 +1444,15 @@ fn ConversationSurface(
                             }
                         });
                     }
-                    reload_generation.update(|value| *value = value.saturating_add(1));
                 }
                 Err(_) => {
                     cancel_error.set(true);
-                    reload_generation.update(|value| *value = value.saturating_add(1));
                 }
             }
+            // There is no frame in which the retained Running fact becomes actionable again
+            // between a lost cancellation reply and its renewed pending/failed snapshot.
+            loading.set(true);
+            reload_generation.update(|value| *value = value.saturating_add(1));
             cancelling_request.set(false);
         });
         #[cfg(not(target_arch = "wasm32"))]
@@ -2601,6 +2898,8 @@ mod tests {
         let stoppable = StopControl {
             input_locked: false,
             cancelling_request: false,
+            loading: false,
+            snapshot_error: false,
             draft_empty: true,
             cancellable: true,
             run_state: Some(ThreadForegroundRunState::Running),
@@ -2632,6 +2931,14 @@ mod tests {
                 cancelling_request: true,
                 ..stoppable
             },
+            StopControl {
+                loading: true,
+                ..stoppable
+            },
+            StopControl {
+                snapshot_error: true,
+                ..stoppable
+            },
         ] {
             assert!(inert.visible() && !inert.enabled());
         }
@@ -2645,6 +2952,166 @@ mod tests {
         assert!(cancelling.visible() && !cancelling.enabled());
 
         assert!(!StopControl::default().visible() && !StopControl::default().enabled());
+    }
+
+    #[test]
+    fn stop_action_read_requires_the_original_running_cancellable_foreground() {
+        let original = RunId::new("run-1");
+        let mut snapshot = ThreadConversationSnapshot {
+            messages: Vec::new(),
+            active_run_id: Some(original.clone()),
+            active_run_state: Some(ThreadForegroundRunState::Running),
+            active_run_cancellable: true,
+            active_run_text: "actual current output".to_owned(),
+            last_event_sequence: Some(4),
+        };
+        assert!(action_read_allows_stop(&snapshot, &original));
+        snapshot.active_run_id = Some(RunId::new("another-run"));
+        assert!(!action_read_allows_stop(&snapshot, &original));
+        snapshot.active_run_id = Some(original.clone());
+        for run_state in [
+            ThreadForegroundRunState::Queued,
+            ThreadForegroundRunState::Cancelling,
+            ThreadForegroundRunState::ReconciliationRequired,
+        ] {
+            snapshot.active_run_state = Some(run_state);
+            assert!(!action_read_allows_stop(&snapshot, &original));
+        }
+        snapshot.active_run_state = Some(ThreadForegroundRunState::Running);
+        snapshot.active_run_cancellable = false;
+        assert!(!action_read_allows_stop(&snapshot, &original));
+        snapshot.active_run_id = None;
+        snapshot.active_run_state = None;
+        snapshot.active_run_text.clear();
+        assert!(!action_read_allows_stop(&snapshot, &original));
+    }
+
+    #[test]
+    fn held_stop_read_preserves_streaming_but_rejects_changed_authority_or_foreground() {
+        let thread = ThreadId::new("thread-1");
+        let mut state = ConversationState {
+            active_run_id: Some(RunId::new("run-1")),
+            active_run_state: Some(ThreadForegroundRunState::Running),
+            active_run_cancellable: true,
+            streaming_text: "already observed ".to_owned(),
+            observed_run: Some(RunObservation::running(
+                RunId::new("run-1"),
+                "already observed ".to_owned(),
+            )),
+            cursor: Some(0),
+            ..Default::default()
+        };
+        let read = ConversationActionRead::capture(Some(thread.clone()), 7, &state);
+        assert!(read.is_current(Some(&thread), 7, &state));
+        assert!(read.same_foreground(Some(&thread), 7, &state));
+        assert!(!read.is_current(Some(&ThreadId::new("thread-2")), 7, &state));
+        assert!(!read.same_foreground(Some(&ThreadId::new("thread-2")), 7, &state));
+        assert!(!read.is_current(Some(&thread), 8, &state));
+        assert!(!read.same_foreground(Some(&thread), 8, &state));
+        let mut foreign = state.clone();
+        foreign.active_run_id = Some(RunId::new("another-run"));
+        assert!(!read.is_current(Some(&thread), 7, &foreign));
+        assert!(!read.same_foreground(Some(&thread), 7, &foreign));
+        let mut cancelling = state.clone();
+        cancelling.active_run_state = Some(ThreadForegroundRunState::Cancelling);
+        cancelling.active_run_cancellable = false;
+        assert!(!read.is_current(Some(&thread), 7, &cancelling));
+        assert!(!read.same_foreground(Some(&thread), 7, &cancelling));
+        assert_eq!(
+            apply_live_event(
+                &mut state,
+                &thread,
+                &event(
+                    1,
+                    ThreadRunEventKind::SemanticChunk,
+                    serde_json::json!({"channel":"text","delta":"newer output"}),
+                ),
+            ),
+            Ok(LiveEffect::None)
+        );
+        assert!(!read.is_current(Some(&thread), 7, &state));
+        assert!(read.same_foreground(Some(&thread), 7, &state));
+        assert!(!read.same_observed_foreground(&state));
+        assert_eq!(state.streaming_text, "already observed newer output");
+        assert_eq!(
+            state.observed_run.as_ref().unwrap().text,
+            "already observed newer output"
+        );
+        assert_eq!(state.cursor, Some(1));
+    }
+
+    #[test]
+    fn late_accepted_run_needs_observation_after_a_non_output_checkpoint() {
+        let thread = ThreadId::new("thread-1");
+        let mut state = ConversationState {
+            cursor: Some(0),
+            ..Default::default()
+        };
+        let read = ConversationActionRead::capture(Some(thread.clone()), 7, &state);
+        assert_eq!(
+            apply_live_event(
+                &mut state,
+                &thread,
+                &event(
+                    1,
+                    ThreadRunEventKind::Checkpoint,
+                    serde_json::json!({"kind":"current_observation_barrier"}),
+                ),
+            ),
+            Ok(LiveEffect::ReloadSnapshot)
+        );
+        assert!(!read.is_current(Some(&thread), 8, &state));
+        assert!(read.same_observed_foreground(&state));
+        assert!(state.observed_run.is_none() && state.streaming_text.is_empty());
+
+        assert_eq!(
+            apply_live_event(
+                &mut state,
+                &thread,
+                &event(2, ThreadRunEventKind::Started, serde_json::json!({})),
+            ),
+            Ok(LiveEffect::ReloadSnapshot)
+        );
+        assert!(!read.same_observed_foreground(&state));
+        assert_eq!(state.active_run_id, Some(RunId::new("run-1")));
+        assert!(state.streaming_text.is_empty());
+    }
+
+    #[test]
+    fn retry_action_read_distinguishes_exact_active_identity_without_installing_history() {
+        let original = RunId::new("run-1");
+        let mut snapshot = ThreadConversationSnapshot {
+            messages: Vec::new(),
+            active_run_id: Some(original.clone()),
+            active_run_state: Some(ThreadForegroundRunState::ReconciliationRequired),
+            active_run_cancellable: false,
+            active_run_text: "original unresolved output".to_owned(),
+            last_event_sequence: Some(4),
+        };
+        let state = ConversationState {
+            streaming_text: "newer retained output".to_owned(),
+            cursor: Some(9),
+            observed_run: Some(RunObservation {
+                run: original.clone(),
+                phase: OutputPhase::Unknown,
+                text: "current positive facts are independent".to_owned(),
+                terminal_sequence: Some(9),
+            }),
+            ..Default::default()
+        };
+        let before = state.clone();
+        assert_eq!(
+            retry_read_fact(&snapshot, &original),
+            RetryReadFact::Original
+        );
+        snapshot.active_run_id = Some(RunId::new("another-run"));
+        assert_eq!(retry_read_fact(&snapshot, &original), RetryReadFact::Other);
+        snapshot.active_run_id = None;
+        snapshot.active_run_state = None;
+        snapshot.active_run_text.clear();
+        // NoActive is only the manual same-intent retry branch, never a non-commit receipt.
+        assert_eq!(retry_read_fact(&snapshot, &original), RetryReadFact::Absent);
+        assert_eq!(state, before);
     }
 
     #[test]

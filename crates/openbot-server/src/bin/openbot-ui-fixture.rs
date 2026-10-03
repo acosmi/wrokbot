@@ -1609,6 +1609,8 @@ impl FixtureMemory {
                         thread_id: ThreadId::new(FIXTURE_EXISTING_THREAD),
                         message_id: "fixture-user-message".to_owned(),
                     }),
+                    source_run_id: None,
+                    source_authorization_snapshot: None,
                     origin: match index {
                         1 | 2 => MemoryOrigin::RememberTool,
                         6 => MemoryOrigin::VerifiedImport,
