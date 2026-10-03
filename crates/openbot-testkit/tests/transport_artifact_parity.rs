@@ -1,6 +1,8 @@
-//! R424 framing through one ApplicationService with a recording repository port.
+//! R424/R425 framing through one ApplicationService with a recording repository port.
 //! Actual PG authority, authenticated host carriers and physical bytes require integration evidence.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -18,6 +20,10 @@ use openbot_contracts::auth::{AuthContext, AuthGeneration, Role};
 use openbot_contracts::command::{AppCommand, AppReply, ChannelSummary};
 use openbot_contracts::ids::thread::ThreadIdentity;
 use openbot_contracts::ids::{ActorId, DeploymentId, RunId, TenantId};
+use openbot_contracts::{
+    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind,
+    RequestBindingOwnerLease, ServerSessionBindingIdentity,
+};
 use openbot_desktop::InProcessTransport;
 use openbot_domain::identity::session::{
     SessionLifetimePolicy, SessionState, TrustedOrigins, evaluate_session,
@@ -150,10 +156,38 @@ struct Fixture {
     service: Arc<dyn ApplicationService>,
     transport: InProcessTransport,
     port: Arc<RecordingArtifacts>,
+    context: AuthContext,
+    _binding_owner: RequestBindingOwnerLease,
+}
+
+/// Synthetic recording-port framing only; this guard makes no PostgreSQL/current-host claim.
+struct SyntheticFramingBinding;
+
+impl HostRequestBindingGuard for SyntheticFramingBinding {
+    fn verify_current<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 impl Fixture {
     fn new(error: Option<ArtifactAdministrationError>) -> Self {
+        let context = auth();
+        let (binding_owner, issuer) =
+            RequestBindingOwnerLease::for_trusted_host(HostRequestBindingKind::ServerSession);
+        let key = ServerSessionBindingIdentity::from_verified_row(
+            "synthetic-framing-session".to_owned(),
+            context.actor().clone(),
+            "synthetic-framing-token-column".to_owned(),
+            OffsetDateTime::UNIX_EPOCH,
+            context.auth_generation(),
+        );
+        let binding = issuer
+            .bind_server_session(&context, key, Arc::new(SyntheticFramingBinding))
+            .unwrap();
+        let context = context.with_verified_request_binding(binding).unwrap();
         let port = Arc::new(RecordingArtifacts {
             error,
             ..Default::default()
@@ -165,6 +199,8 @@ impl Fixture {
             service,
             transport,
             port,
+            context,
+            _binding_owner: binding_owner,
         }
     }
 
@@ -180,7 +216,7 @@ impl Fixture {
         )
         .unwrap();
         let now = OffsetDateTime::now_utc();
-        let context = auth();
+        let context = self.context.clone();
         let session = evaluate_session(
             lifetime,
             SessionState::rehydrate(now, now, context.auth_generation()),
@@ -330,7 +366,7 @@ async fn uuid_aliases_share_canonical_selector_while_opaque_source_bytes_stay_ex
     let typed = fixture
         .transport
         .execute(
-            auth(),
+            fixture.context.clone(),
             AppCommand::GetArtifactMetadata(GetArtifactMetadata {
                 artifact_id: ARTIFACT_ID.to_uppercase(),
             }),
@@ -346,6 +382,60 @@ async fn uuid_aliases_share_canonical_selector_while_opaque_source_bytes_stay_ex
     let reads = fixture.port.reads.lock().unwrap();
     assert_eq!(reads.len(), 2);
     assert!(reads.iter().all(|(_, id)| id == ARTIFACT_ID));
+}
+
+#[tokio::test]
+async fn missing_binding_rejects_each_carrier_without_a_recording_repository_call() {
+    let mut fixture = Fixture::new(None);
+    // This fixture intentionally carries only the original identity, with no host binding.
+    fixture.context = auth();
+    let error = fixture
+        .transport
+        .execute(
+            fixture.context.clone(),
+            AppCommand::GetArtifactMetadata(GetArtifactMetadata {
+                artifact_id: ARTIFACT_ID.into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        &error,
+        openbot_contracts::error::AppError::DependencyUnavailable {
+            dependency: "host_request_binding"
+        }
+    ));
+    let (status, wire) = fixture.metadata_http(ARTIFACT_ID).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(status.as_u16(), error.http_status());
+    assert_eq!(wire, serde_json::json!({"code":error.code().as_str()}));
+    assert!(fixture.port.reads.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn closed_fixture_owner_rejects_retained_context_on_each_carrier_before_repository() {
+    let fixture = Fixture::new(None);
+    let retained = fixture.context.clone();
+    fixture._binding_owner.close();
+    let error = fixture
+        .transport
+        .execute(
+            retained,
+            AppCommand::GetArtifactMetadata(GetArtifactMetadata {
+                artifact_id: ARTIFACT_ID.into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        &error,
+        openbot_contracts::error::AppError::Unauthenticated
+    ));
+    let (status, wire) = fixture.metadata_http(ARTIFACT_ID).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status.as_u16(), error.http_status());
+    assert_eq!(wire, serde_json::json!({"code":error.code().as_str()}));
+    assert!(fixture.port.reads.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -400,7 +490,7 @@ async fn repository_failures_keep_typed_and_http_code_status_rule_and_gone_state
         let typed = fixture
             .transport
             .execute(
-                auth(),
+                fixture.context.clone(),
                 AppCommand::GetArtifactMetadata(GetArtifactMetadata {
                     artifact_id: ARTIFACT_ID.into(),
                 }),

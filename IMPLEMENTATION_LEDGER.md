@@ -942,3 +942,41 @@ Ten NEW affected checks bind this bdb candidate and all1206 unchanged inputs; 76
 Seven unaffected pure/minimal/WASM checks remain original a1/1205 records with820 different cases; they are not bdb executions. Their source/Cargo/feature dependencies and stored evidence remain exact, but the ordinary runner did not capture every inherited environment variable or external binary; no full environment equality is claimed. Combined1589 cases are distinct across the new and retained groups. Earlier17-check/1571 source evidence and old0e3 publication GO retain their original identities, as do all original failures and the54 Desktop minimal-vault warnings.
 
 The same sole PR119 now receives this integrated source and factual ledger addition. Final publication GO and actual normal merge remain pending at this checkpoint. The finite save/metadata foundation retains the precise pre-realIO ACK-hold test boundary; one-use reads, lifecycle/cleanup, artifact-aware backup/restore, Run lists/M1 references, real SSO/Keychain/native GUI and other platforms, full R414/readiness/M0 and the continuing backend goal remain open.
+
+
+## V7-IMPL-004 — actual normal delivery and continuing next prerequisite
+
+PR119 actually normally admin-merged matching final head16afa8c45f0091c4e3a3de352d5f636ed52923d5 at 2026-10-03T16:16:13Z as 615fdfe3a7e300afa6e4d6c2a29c663b20c41c60. Fresh API and fetched Git independently agree with accepted treef70cb780636c0be5ac70d30bd7e9fcce891d4c1e and parents8f0+16a; the merged tree retains all1206 accepted products. Final source GO8c157abe and publication GO732637fb retain their exact candidates and finite limits. Actual execution receipt digest bce6a4ef0e2389567528dd69d772f8ee6bafe0088db377808254846766e01877. The first fresh-PR query TLS handshake timeout occurred before any merge action; its original failed record is retained separately, and a new identical-head fresh-read/normal-merge execution succeeds. No force, protection change, hook bypass or manual Actions.
+
+005 proceeds from this actual delivered main for genuine current session/window request binding and the real metadata await boundary, with no new migration or public wire. Primary physical-contract freeze and independent normative review precede product edits. Read/lifecycle/backup/Run links/M1 references, R419 capability API and all other included backend work remain open; the goal and30-minute status audit stay active.
+
+
+## V7-IMPL-005 — current host request binding entry
+
+005 is registered before product edits on its independent branch, based on actual PR119/main615fdfe3a7e300afa6e4d6c2a29c663b20c41c60. It owns the previously missing current Server session/explicit SingleUser runtime and native Desktop window request binding, with the existing Application metadata observation as a real pre/post-await consumer. It preserves common execute/subscribe and original six-fact identity equality, using separate exact binding identity and current verification. No public command, DTO, route or native migration is added;0043 is not occupied. COMP012 existing provider-target completion and UI5 frontend work remain separately owned.
+
+Physical-contract entry revision425 is manually anchored in the sole local source; original424 historical rows and prior artifact contracts, research/acceptance history and UI source retain exact bytes. Independent normative entry review is pending, so product edits and new business acceptance have not started. Session A/B individual logout, real query waiting and last-owner/window invalidation counterexamples are design requirements, not executed passes. Full artifact reads/lifecycle/backup/references, capability API and all remaining backend work stay open.
+
+
+## V7-IMPL-005 — limited normative GO and concrete author dispatch
+
+Independent R425 normative entry review now passes at exact original digest8e2f2fff, review digest06937305bd3499f1348f6a7ec225cb9f575e301e55195c0023f83bf81b60ee94. This is permission to implement the registered finite current-host binding foundation, with no source, business, publication or readiness acceptance. Concrete Contracts/Application/Desktop, Server/current-PG, and dedicated counterexample test hunks are registered before product edits. Root alone runs serial owned compilation and PostgreSQL fixtures. Stable actual-session identity, a separate noLease observation state, actual host shutdown/Drop, ownPool canonical checks and whole-Result metadata post-verification remain required. SingleUserOwner is limited to metadata observation and grants no R414 session/window read handle. No migration, public wire or0043 placeholder is added; COMP and UI ownership remain.
+
+At this audit the actual goal API unexpectedly reports blocked while this implementation can proceed. This status is recorded rather than represented as active; UI resume is requested, and authorized concrete work continues. No technical blocker or whole-goal completion is asserted.
+
+
+## V7-IMPL-005 — existing framing fixture adaptation claim
+
+Before editing, root registers the existing recording-port Artifact transport fixture hunk: an explicitly synthetic trusted binding with retained owner lease, bound metadata contexts on both carriers, and missing503/closed401 zero-repository/no-store assertions. This adapts framing tests to the new metadata contract and does not certify production PG or DesktopLocal authority. Dedicated actual session/window and owned PG tests remain separately assigned. No new production port, dependency, wire or migration is introduced by this fixture change; execution and acceptance remain pending.
+
+
+## V7-IMPL-005 — actual window and private Local counterexample scope
+
+Before edits, the real window integration test is reassigned to the existing host testkit, which already contains actual Server/Desktop/Infra dependencies. Its decorator delegates the assembled Application and real PG result; an actual Session is the upstream source. Actual Local source tests use a private Desktop module and owned installation/attested database fixtures, with no public test authority factory or added dependency. Core retains its sole protocol production and test-module-include hunk. Earlier proposed Desktop external-test path remains an unimplemented historical claim. New guard source reviews have found raw NULL handling and rowless upstream boundaries; repair and real directed execution remain pending, with old failures and finite review identities preserved. No complete artifact read, readiness or full-goal acceptance.
+
+
+## V7-IMPL-005 — first directed carrier preflight and fresh main audit
+
+Nine new std Contracts binding cases actually pass with1210 unchanged before/after product inputs at the dirty author phase based on615fdfe3. They cover explicit owner/epoch identity, same-six Eq, consuming attach, retained Clone, redaction/guard invocation and lease Drop during a pending guard. The original record digest4683e443 retains this phase identity; it is not final committed-source or PG acceptance. New Server/SingleUser and Local current guards now have source-only repairs for raw NULL generation refusal; Local uses its own RC/read-only bounded observation and nonLocal windows accept only ServerSession. Earlier independent static NO-GO records remain. Actual25 Session/SingleUser,10 window and trueLocal owned PG execution are pending.
+
+Fresh fetched main is now e0ac1287bd18b90a9ca6af93caa900de49d2d1b1, with separate COMP012 PR120 actually merged at2026-10-03T17:00:26Z. Its current track has advanced toCOMP013; UI5-P5 remains separately owned. Before final005 validation/publication the owned branch must normally integrate the latest main and retain incoming products. This audit PR119 query had an EOF network failure; the earlier verified119 delivery retains its original identity and is not described as a successful fresh query here. No current owned PG and no005 business/source/final acceptance.

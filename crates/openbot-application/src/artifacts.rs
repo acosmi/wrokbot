@@ -173,10 +173,11 @@ pub async fn get_artifact_metadata(
         canonical_artifact_uuid_v7(&input.artifact_id).ok_or(AppError::MalformedPayload {
             field: "artifactId",
         })?;
-    let metadata = port
-        .get_metadata(auth, &artifact_id)
-        .await
-        .map_err(ArtifactAdministrationError::into_app_error)?;
+    require_current_request_binding(auth).await?;
+    // Preserve the entire PG result until the real host postcheck has completed, including errors.
+    let result = port.get_metadata(auth, &artifact_id).await;
+    require_current_request_binding(auth).await?;
+    let metadata = result.map_err(ArtifactAdministrationError::into_app_error)?;
     match &metadata {
         ArtifactMetadata::Available(record) | ArtifactMetadata::FailedPartial(record) => {
             validate_record(auth, &artifact_id, record)?;
@@ -195,6 +196,26 @@ pub async fn get_artifact_metadata(
         }
     }
     Ok(metadata)
+}
+
+async fn require_current_request_binding(auth: &AuthContext) -> Result<(), AppError> {
+    use openbot_contracts::request_binding::HostRequestBindingError;
+    let binding = auth
+        .request_binding()
+        .ok_or(AppError::DependencyUnavailable {
+            dependency: "host_request_binding",
+        })?;
+    binding
+        .verify_current(auth)
+        .await
+        .map_err(|error| match error {
+            HostRequestBindingError::NotCurrent => AppError::Unauthenticated,
+            HostRequestBindingError::Missing | HostRequestBindingError::Unavailable => {
+                AppError::DependencyUnavailable {
+                    dependency: "host_request_binding",
+                }
+            }
+        })
 }
 
 fn canonical_id(value: &str) -> bool {
@@ -275,6 +296,54 @@ mod tests {
     const REQUEST_ID: &str = "019a7777-abcd-7abc-8abc-0123456789ab";
     const ARTIFACT_ID: &str = "019a7778-abcd-7abc-8abc-0123456789ab";
     const OPERATION_ID: &str = "019a7779-abcd-7abc-8abc-0123456789ab";
+
+    struct NoIoUnitGuard;
+    impl openbot_contracts::HostRequestBindingGuard for NoIoUnitGuard {
+        fn verify_current<'a>(
+            &'a self,
+            _auth: &'a AuthContext,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<(), openbot_contracts::HostRequestBindingError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    fn bound_auth(actor: &str) -> (openbot_contracts::RequestBindingOwnerLease, AuthContext) {
+        let auth = auth_for(actor);
+        let (owner, issuer) = openbot_contracts::RequestBindingOwnerLease::for_trusted_host(
+            openbot_contracts::HostRequestBindingKind::DesktopWindow,
+        );
+        let binding = issuer
+            .bind_desktop_window(&auth, "unit-no-io".into(), 1, Arc::new(NoIoUnitGuard))
+            .unwrap();
+        (owner, auth.with_verified_request_binding(binding).unwrap())
+    }
+
+    #[tokio::test]
+    async fn missing_host_binding_rejects_metadata_before_repository() {
+        let auth = auth_for("artifact-user");
+        let port = RecordingArtifacts::default();
+        let result = get_artifact_metadata(
+            &port,
+            &auth,
+            GetArtifactMetadata {
+                artifact_id: ARTIFACT_ID.into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(AppError::DependencyUnavailable {
+                dependency: "host_request_binding"
+            })
+        ));
+        assert!(port.reads.lock().unwrap().is_empty());
+    }
 
     fn input(auth: &AuthContext) -> SaveRunMessageTextArtifact {
         SaveRunMessageTextArtifact {
@@ -375,9 +444,74 @@ mod tests {
         }
     }
 
+    struct SecondCheckRefuses {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl openbot_contracts::HostRequestBindingGuard for SecondCheckRefuses {
+        fn verify_current<'a>(
+            &'a self,
+            _auth: &'a AuthContext,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<(), openbot_contracts::HostRequestBindingError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move {
+                if call == 0 {
+                    Ok(())
+                } else {
+                    Err(openbot_contracts::HostRequestBindingError::NotCurrent)
+                }
+            })
+        }
+    }
+    #[tokio::test]
+    async fn host_postcheck_precedes_success_and_repository_error_mapping() {
+        // No-I/O unit boundary; actual PG and host proof evidence belongs to integration cases.
+        for error in [
+            None,
+            Some(ArtifactAdministrationError::NotVisible),
+            Some(ArtifactAdministrationError::Gone {
+                status: ArtifactGoneStatus::Expired,
+            }),
+            Some(ArtifactAdministrationError::Unavailable),
+        ] {
+            let auth = auth_for("artifact-user");
+            let (_owner, issuer) = openbot_contracts::RequestBindingOwnerLease::for_trusted_host(
+                openbot_contracts::HostRequestBindingKind::DesktopWindow,
+            );
+            let guard = Arc::new(SecondCheckRefuses {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            });
+            let binding = issuer
+                .bind_desktop_window(&auth, "unit-no-io".into(), 1, guard.clone())
+                .unwrap();
+            let auth = auth.with_verified_request_binding(binding).unwrap();
+            let port = RecordingArtifacts {
+                error,
+                ..Default::default()
+            };
+            let result = get_artifact_metadata(
+                &port,
+                &auth,
+                GetArtifactMetadata {
+                    artifact_id: ARTIFACT_ID.into(),
+                },
+            )
+            .await;
+            assert!(matches!(result, Err(AppError::Unauthenticated)));
+            assert_eq!(guard.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert_eq!(port.reads.lock().unwrap().len(), 1);
+        }
+    }
+
     #[tokio::test]
     async fn malformed_selectors_never_reach_repository_and_do_not_echo_input() {
-        let auth = auth_for("artifact-user");
+        let (_binding_owner, auth) = bound_auth("artifact-user");
         let port = RecordingArtifacts::default();
         let valid = input(&auth);
         let mut bad_request = valid.clone();
@@ -424,7 +558,7 @@ mod tests {
 
     #[tokio::test]
     async fn typed_dispatch_canonicalizes_only_uuid_locators_and_forwards_authenticated_context() {
-        let auth = auth_for("artifact-user");
+        let (_binding_owner, auth) = bound_auth("artifact-user");
         let port = Arc::new(RecordingArtifacts::default());
         let app = OpenBotApplication::new(FakeChannelReader::empty())
             .with_artifacts(port.clone())
@@ -471,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn absent_composition_is_unavailable_for_both_artifact_commands() {
-        let auth = auth_for("artifact-user");
+        let (_binding_owner, auth) = bound_auth("artifact-user");
         let app = OpenBotApplication::new(FakeChannelReader::empty());
         for command in [
             AppCommand::SaveRunMessageTextArtifact(input(&auth)),
@@ -490,7 +624,7 @@ mod tests {
 
     #[tokio::test]
     async fn foreign_or_noncanonical_repository_receipt_never_becomes_positive_reply() {
-        let auth = auth_for("artifact-user");
+        let (_binding_owner, auth) = bound_auth("artifact-user");
         let input = input(&auth);
         let good = receipt(&auth, &input);
         let mut wrong_owner = good.clone();
@@ -529,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_metadata_requires_current_namespace_and_exact_saved_record_shape() {
-        let auth = auth_for("artifact-user");
+        let (_binding_owner, auth) = bound_auth("artifact-user");
         let good = record(&auth);
         let mut foreign = good.clone();
         foreign.tenant_id = TenantId::new("foreign-tenant");
@@ -593,7 +727,7 @@ mod tests {
 
     #[tokio::test]
     async fn valid_tombstone_is_closed_410_and_foreign_tombstone_is_dependency_failure() {
-        let auth = auth_for("artifact-user");
+        let (_binding_owner, auth) = bound_auth("artifact-user");
         let saved = receipt(&auth, &input(&auth));
         let tombstone = ArtifactTombstone {
             operation_id: saved.operation_id,

@@ -180,6 +180,7 @@ impl DesktopWindowLifecycle {
 
     /// Revoke authority for every native window before app shutdown.
     pub fn shutdown_authority(&self) -> Result<usize, DesktopWindowLifecycleError> {
+        self.protocol.close_request_bindings();
         #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
         self.protocol.shutdown_local_confirmation();
         let labels = self
