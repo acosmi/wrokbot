@@ -2386,7 +2386,7 @@ textarea:focus-visible,
   border-radius: 9px; padding: 14px 16px; margin-bottom: 25px;
   font-size: 13px; line-height: 1.6;
 }
-.ob-revision-notice p { margin: 0 0 10px; color: inherit; }
+.ob-revision-notice p { margin: 0 0 10px; color: inherit; font: inherit; }
 .dark .ob-revision-notice { background: var(--bg-subtle); color: var(--fg-secondary); border-color: var(--border); }
 
 .ob-alert,

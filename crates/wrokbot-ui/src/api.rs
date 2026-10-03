@@ -14,10 +14,10 @@ pub(crate) mod desktop_transport;
 
 #[path = "model_connections_api.rs"]
 pub(crate) mod model_connections;
-#[path = "preference_cas_api.rs"]
-pub(crate) mod preference_cas;
 #[path = "plugins_api.rs"]
 pub(crate) mod plugins;
+#[path = "preference_cas_api.rs"]
+pub(crate) mod preference_cas;
 #[path = "skills_api.rs"]
 pub(crate) mod skills;
 
