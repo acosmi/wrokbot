@@ -504,10 +504,14 @@ fn sync_content(context: MessageScrollerContext) {
             handled.extend(new_anchors.iter().map(|item| item.id.clone()));
         });
         if let Some(anchor) = new_anchors.last() {
-            if new_anchors.len() > 1 && context.mode.get_value() == ScrollMode::FollowingBottom {
-                scroll_to_end(context.clone());
-            } else {
-                scroll_to_anchor(context.clone(), anchor);
+            match context.mode.get_value() {
+                ScrollMode::FreeScrolling => {}
+                ScrollMode::FollowingBottom if new_anchors.len() > 1 => {
+                    scroll_to_end(context.clone());
+                }
+                _ => {
+                    scroll_to_anchor(context.clone(), anchor);
+                }
             }
         } else {
             match context.mode.get_value() {
