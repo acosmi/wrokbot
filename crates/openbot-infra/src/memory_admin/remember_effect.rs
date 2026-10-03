@@ -141,7 +141,20 @@ pub(super) async fn admit(
         .map_err(db)?;
     let generation = number(r.auth_generation().get())?;
     // First business row lock; direct UPDATE mode also serializes default-enabled control absence.
-    if tx.query_opt("SELECT u.id FROM public.users u WHERE u.id=$1 AND coalesce(u.auth_generation,0)=$2 AND EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=u.id AND ur.role IN ('user','admin')) AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)) FOR UPDATE OF u",
+    if tx
+        .query_opt(
+            "SELECT u.id FROM public.users u WHERE u.id=$1 FOR UPDATE OF u",
+            &[&r.actor().as_str()],
+        )
+        .await
+        .map_err(db)?
+        .is_none()
+    {
+        return Err(Error::NotVisible);
+    }
+    // After any actor-lock wait, a new RC statement observes committed role/deny changes.
+    // Preserve the tool's user/admin rule and check it before historical receipt observation.
+    if tx.query_opt("SELECT u.id FROM public.users u WHERE u.id=$1 AND coalesce(u.auth_generation,0)=$2 AND EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=u.id AND ur.role IN ('user','admin')) AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email))",
         &[&r.actor().as_str(),&generation]).await.map_err(db)?.is_none() { return Err(Error::NotVisible); }
     let locked = lock_original(
         tx,
