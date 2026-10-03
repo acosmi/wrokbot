@@ -66,7 +66,8 @@ pub fn DetailPanel(
     let labelled_by = heading_id.clone();
     let title = StoredValue::new(title);
     let return_focus_id = StoredValue::new(return_focus_id);
-    let route_owner = Owner::current().expect("detail route owner");
+    // The focus effect must not keep its own route alive after navigation.
+    let route_owner = Owner::current().expect("detail route owner").downgrade();
     let focus_generation = RwSignal::new(0_u64);
     let composing = StoredValue::new(false);
     #[cfg(target_arch = "wasm32")]
@@ -95,7 +96,9 @@ pub fn DetailPanel(
             } else {
                 return_focus_id.get_value().get().to_string()
             };
-            route_owner.with(|| focus_later(id, focus_generation, generation));
+            if let Some(route_owner) = route_owner.upgrade() {
+                route_owner.with(|| focus_later(id, focus_generation, generation));
+            }
         }
         visible
     });
