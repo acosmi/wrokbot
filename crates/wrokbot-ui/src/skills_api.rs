@@ -269,6 +269,7 @@ pub(crate) async fn save_existing(
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 fn decode_existing_reply(
     status: u16,
     body: &str,

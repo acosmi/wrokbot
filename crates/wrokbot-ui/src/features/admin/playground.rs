@@ -92,6 +92,7 @@ impl DraftSignals {
         })
     }
 
+    #[cfg(target_arch = "wasm32")]
     fn snapshot(self) -> [String; 8] {
         [
             self.slug,
@@ -342,7 +343,7 @@ enum RecoveryChoice {
 }
 
 fn dispatch_cas(
-    draft: DraftSignals,
+    _draft: DraftSignals,
     state: MutationState,
     editing: SandboxEditing,
     token: AttemptToken,
@@ -354,6 +355,7 @@ fn dispatch_cas(
     state.error.set(false);
     #[cfg(target_arch = "wasm32")]
     {
+        let draft = _draft;
         crate::editor_runtime::after(10_000, move || {
             let Some(mut core) = editing.core.try_get_untracked() else {
                 return;
