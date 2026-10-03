@@ -1,13 +1,15 @@
 //! Interactive current-actor approval page.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use openbot_contracts::command::{AppEvent, SubscriptionRequest};
 #[cfg(target_arch = "wasm32")]
 use openbot_contracts::tool::MAX_PENDING_TOOL_APPROVALS;
-use openbot_contracts::tool::{ToolApprovalClass, ToolApprovalDecision, ToolApprovalEffect};
+use openbot_contracts::tool::{
+    ToolApprovalClass, ToolApprovalDecision, ToolApprovalEffect, ToolApprovalResolved,
+};
 use time::format_description::well_known::Rfc3339;
 
 use super::ApprovalCardView;
@@ -50,29 +52,190 @@ impl ApprovalRefresh {
     fn request(self) {
         request_refresh(self);
     }
+
+    fn install(self, epoch: u64, result: Result<Vec<ApprovalCardView>, ApiError>) -> bool {
+        if self.epoch.try_get_untracked() != Some(epoch) {
+            return false;
+        }
+        match result {
+            Ok(cards) => {
+                self.approvals.set(cards);
+                self.load_error.set(None);
+            }
+            Err(error) => {
+                if matches!(
+                    error,
+                    ApiError::Unauthorized | ApiError::Forbidden | ApiError::NotFound
+                ) {
+                    self.approvals.set(Vec::new());
+                }
+                self.load_error.set(Some(error));
+            }
+        }
+        self.loading.set(false);
+        true
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecisionPhase {
+    Submitting,
+    Confirmed,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DecisionObservation {
+    decision: ToolApprovalDecision,
+    binding: [u8; 32],
+    phase: DecisionPhase,
+}
+
+/// One authentication owner supplies both current-actor and inline approval surfaces.
+#[derive(Clone, Copy)]
+pub(crate) struct ToolApprovalActions {
+    refresh: ApprovalRefresh,
+    now: RwSignal<i64>,
+    decisions: RwSignal<BTreeMap<String, DecisionObservation>>,
+    retained: RwSignal<BTreeMap<String, ApprovalCardView>>,
+}
+
+impl ToolApprovalActions {
+    pub(crate) fn has_for_run(self, run: Option<openbot_contracts::ids::RunId>) -> bool {
+        run.is_some_and(|run| self.cards().iter().any(|card| card.run_id == run))
+    }
+    pub(crate) fn new() -> Self {
+        let refresh = ApprovalRefresh {
+            approvals: RwSignal::new(Vec::new()),
+            loading: RwSignal::new(true),
+            load_error: RwSignal::new(None),
+            epoch: RwSignal::new(0),
+            #[cfg(target_arch = "wasm32")]
+            worker_owner: StoredValue::new(Owner::current()),
+        };
+        let actions = Self {
+            refresh,
+            now: RwSignal::new(now_epoch_seconds()),
+            decisions: RwSignal::new(BTreeMap::new()),
+            retained: RwSignal::new(BTreeMap::new()),
+        };
+        start_realtime(refresh, actions.now);
+        actions
+    }
+
+    fn cards(self) -> Vec<ApprovalCardView> {
+        if matches!(
+            self.refresh.load_error.get(),
+            Some(ApiError::Unauthorized | ApiError::Forbidden | ApiError::NotFound)
+        ) {
+            return Vec::new();
+        }
+        let mut cards = self.retained.get();
+        for card in self.refresh.approvals.get() {
+            cards.insert(card.approval_id.clone(), card);
+        }
+        cards.into_values().collect()
+    }
+
+    fn begin(self, card: &ApprovalCardView, decision: ToolApprovalDecision) -> bool {
+        if self.decisions.try_get_untracked().is_none()
+            || self.refresh.loading.get_untracked()
+            || self.refresh.load_error.get_untracked().is_some()
+            || self
+                .decisions
+                .with_untracked(|entries| entries.contains_key(&card.approval_id))
+            || remaining_seconds(card.expires_at.unix_timestamp(), now_epoch_seconds()) == 0
+            || !self
+                .refresh
+                .approvals
+                .with_untracked(|cards| cards.contains(card))
+        {
+            return false;
+        }
+        // Only minimal historical source identity is retained when current pending visibility ends.
+        let mut reference = card.clone();
+        reference.target_kind.clear();
+        reference.target_id.clear();
+        reference.arguments.clear();
+        reference.change = None;
+        self.retained.update(|cards| {
+            cards.insert(card.approval_id.clone(), reference);
+        });
+        self.decisions.update(|entries| {
+            entries.insert(
+                card.approval_id.clone(),
+                DecisionObservation {
+                    decision,
+                    binding: super::attention::binding(card),
+                    phase: DecisionPhase::Submitting,
+                },
+            );
+        });
+        true
+    }
+
+    fn complete(
+        self,
+        id: &str,
+        decision: ToolApprovalDecision,
+        result: Result<ToolApprovalResolved, ApiError>,
+    ) {
+        let Some(entries) = self.decisions.try_get_untracked() else {
+            return;
+        };
+        if !entries.get(id).is_some_and(|entry| {
+            entry.decision == decision && entry.phase == DecisionPhase::Submitting
+        }) {
+            return;
+        }
+        let confirmed = matches!(result, Ok(ref receipt) if receipt.approval_id == id && receipt.decision == decision);
+        if let Err(error @ (ApiError::Unauthorized | ApiError::Forbidden)) = result {
+            self.refresh.load_error.set(Some(error));
+            self.refresh.approvals.set(Vec::new());
+        }
+        self.decisions.update(|entries| {
+            if let Some(entry) = entries.get_mut(id) {
+                entry.phase = if confirmed {
+                    DecisionPhase::Confirmed
+                } else {
+                    DecisionPhase::Unknown
+                };
+            }
+        });
+        // A pending-list refresh is an observation, never permission to clear Unknown and resend.
+        self.refresh.request();
+    }
+
+    fn decide(self, card: ApprovalCardView, decision: ToolApprovalDecision) {
+        if !self.begin(&card, decision) {
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let start_worker = || {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let result = decide_tool_approval(&card.approval_id, decision).await;
+                    self.complete(&card.approval_id, decision, result);
+                })
+            };
+            match self.refresh.worker_owner.get_value() {
+                Some(owner) => owner.with(start_worker),
+                None => start_worker(),
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.complete(&card.approval_id, decision, Err(ApiError::Unavailable));
+    }
 }
 
 /// Current-actor list page for pending durable tool approvals.
 #[component]
 pub fn ApprovalPage() -> impl IntoView {
     let i18n = use_i18n();
-    let approvals = RwSignal::new(Vec::<ApprovalCardView>::new());
-    let loading = RwSignal::new(true);
-    let load_error = RwSignal::new(None::<ApiError>);
-    let decision_error = RwSignal::new(false);
-    let notice = RwSignal::new(None::<ToolApprovalDecision>);
-    let in_flight = RwSignal::new(BTreeSet::<String>::new());
-    let now = RwSignal::new(now_epoch_seconds());
-    let refresh = ApprovalRefresh {
-        approvals,
-        loading,
-        load_error,
-        epoch: RwSignal::new(0_u64),
-        #[cfg(target_arch = "wasm32")]
-        worker_owner: StoredValue::new(Owner::current()),
-    };
-
-    start_realtime(refresh, now);
+    let actions = expect_context::<ToolApprovalActions>();
+    let refresh = actions.refresh;
+    let loading = refresh.loading;
+    let load_error = refresh.load_error;
 
     let refresh_page = move |_| {
         refresh.request();
@@ -99,43 +262,17 @@ pub fn ApprovalPage() -> impl IntoView {
                 description=move || t_string!(i18n, admin.approvals_intro).to_owned()
             />
 
+            <super::attention::DecisionAttention/>
+
             <Show when=move || load_error.get().is_some()>
                 <div class="ob-alert" role="alert">
                     <IconView icon=Icon::TriangleAlert size=IconSize::Inline />
                     <span>{move || t!(i18n, admin.approval_load_error)}</span>
                 </div>
             </Show>
-            <Show when=move || decision_error.get()>
-                <div class="ob-alert" role="alert">
-                    <IconView icon=Icon::TriangleAlert size=IconSize::Inline />
-                    <span>{move || t!(i18n, admin.approval_decision_error)}</span>
-                    <button
-                        type="button"
-                        class="ob-alert-dismiss"
-                        aria-label=move || t_string!(i18n, common.dismiss).to_owned()
-                        on:click=move |_| decision_error.set(false)
-                    >
-                        <IconView icon=Icon::X size=IconSize::Inline />
-                    </button>
-                </div>
-            </Show>
-            <Show when=move || notice.get().is_some()>
-                <div class="ob-status" role="status">
-                    <IconView icon=Icon::CircleCheck size=IconSize::Inline />
-                    <span>{move || match notice.get() {
-                        Some(ToolApprovalDecision::Grant) => {
-                            t_string!(i18n, admin.approval_granted).to_owned()
-                        }
-                        Some(ToolApprovalDecision::Deny) => {
-                            t_string!(i18n, admin.approval_denied).to_owned()
-                        }
-                        None => String::new(),
-                    }}</span>
-                </div>
-            </Show>
 
             {move || {
-                if loading.get() && approvals.with(Vec::is_empty) {
+                if loading.get() && actions.cards().is_empty() {
                     view! {
                         <div class="ob-loading" role="status">
                             <IconView icon=Icon::LoaderCircle size=IconSize::Navigation />
@@ -143,7 +280,9 @@ pub fn ApprovalPage() -> impl IntoView {
                         </div>
                     }
                     .into_any()
-                } else if approvals.with(Vec::is_empty) {
+                } else if load_error.get().is_some() && actions.cards().is_empty() {
+                    ().into_any()
+                } else if actions.cards().is_empty() {
                     view! {
                         <EmptyState
                             heading_id="approval-empty-title"
@@ -156,18 +295,13 @@ pub fn ApprovalPage() -> impl IntoView {
                     view! {
                         <div class="ob-approval-list">
                             <For
-                                each=move || approvals.get()
-                                key=|card| card.approval_id.clone()
+                                each=move || actions.cards()
+                                key=|card| (card.approval_id.clone(), super::attention::binding(card))
                                 children=move |card| {
                                     view! {
                                         <ApprovalCard
                                             card
-                                            now
-                                            in_flight
-                                            approvals
-                                            decision_error
-                                            notice
-                                            refresh
+                                            actions
                                         />
                                     }
                                 }
@@ -181,64 +315,78 @@ pub fn ApprovalPage() -> impl IntoView {
     }
 }
 
+/// The conversation uses precisely the same objects and operation observations as the list page.
 #[component]
-fn ApprovalCard(
-    card: ApprovalCardView,
-    now: RwSignal<i64>,
-    in_flight: RwSignal<BTreeSet<String>>,
-    approvals: RwSignal<Vec<ApprovalCardView>>,
-    decision_error: RwSignal<bool>,
-    notice: RwSignal<Option<ToolApprovalDecision>>,
-    refresh: ApprovalRefresh,
+pub(crate) fn InlineToolApprovals(
+    run: Signal<Option<openbot_contracts::ids::RunId>>,
 ) -> impl IntoView {
+    let actions = expect_context::<ToolApprovalActions>();
+    view! {
+        <div class="ob-inline-approvals">
+            <For
+                each={move || actions.cards().into_iter().filter(|card| run.get().as_ref() == Some(&card.run_id)).collect::<Vec<_>>()}
+                key=|card| (card.approval_id.clone(), super::attention::binding(card))
+                children=move |card| view! { <ApprovalCard card actions /> }
+            />
+        </div>
+    }
+}
+
+#[component]
+fn ApprovalCard(card: ApprovalCardView, actions: ToolApprovalActions) -> impl IntoView {
     let i18n = use_i18n();
+    let current_binding = super::attention::binding(&card);
+    let current_details = !card.arguments.is_empty();
     let heading_id = approval_heading_id(&card.approval_id);
     let arguments_id = format!("{heading_id}-arguments");
     let article_heading_id = heading_id.clone();
     let payload_heading_id = arguments_id.clone();
     let approval_id = card.approval_id.clone();
-    let grant_id = approval_id.clone();
-    let deny_id = approval_id.clone();
+    let grant_card = card.clone();
+    let deny_card = card.clone();
     let expires_at = card.expires_at;
     let expires_datetime = card
         .expires_at
         .format(&Rfc3339)
         .unwrap_or_else(|_| card.expires_at.unix_timestamp().to_string());
     let pending_id = approval_id.clone();
-    let is_loading = Signal::derive(move || in_flight.with(|ids| ids.contains(&pending_id)));
-    let is_expired =
-        Signal::derive(move || remaining_seconds(expires_at.unix_timestamp(), now.get()) == 0);
-    let unavailable = Signal::derive(move || is_loading.get() || is_expired.get());
+    let observation = Signal::derive(move || {
+        actions.decisions.with(|entries| {
+            entries.get(&pending_id).copied().map(|mut row| {
+                if current_details && row.binding != current_binding {
+                    row.phase = DecisionPhase::Unknown;
+                }
+                row
+            })
+        })
+    });
+    let is_loading = Signal::derive(move || {
+        observation
+            .get()
+            .is_some_and(|value| value.phase == DecisionPhase::Submitting)
+    });
+    let is_expired = Signal::derive(move || {
+        remaining_seconds(expires_at.unix_timestamp(), actions.now.get()) == 0
+    });
+    let unavailable = Signal::derive(move || {
+        observation.get().is_some()
+            || is_expired.get()
+            || actions.refresh.loading.get()
+            || actions.refresh.load_error.get().is_some()
+    });
 
     let grant = move |_| {
-        dispatch_decision(
-            grant_id.clone(),
-            ToolApprovalDecision::Grant,
-            approvals,
-            in_flight,
-            decision_error,
-            notice,
-            refresh,
-        );
+        actions.decide(grant_card.clone(), ToolApprovalDecision::Grant);
     };
     let deny = move |_| {
-        dispatch_decision(
-            deny_id.clone(),
-            ToolApprovalDecision::Deny,
-            approvals,
-            in_flight,
-            decision_error,
-            notice,
-            refresh,
-        );
+        actions.decide(deny_card.clone(), ToolApprovalDecision::Deny);
     };
     let effect = card.effect;
     let approval_class = card.approval_class;
     let server = card.server.clone();
     let change = card.change.clone();
-
     view! {
-        <article class="ob-approval-card" aria-labelledby=article_heading_id>
+        <article class="ob-approval-card" aria-labelledby=article_heading_id data-approval-id=approval_id>
             <header class="ob-approval-card-header">
                 <div class="ob-approval-title-group">
                     <IconView icon=Icon::ShieldCheck size=IconSize::Navigation />
@@ -252,6 +400,18 @@ fn ApprovalCard(
                 </Badge>
             </header>
 
+            <p class="ob-approval-source"><code>{card.bot_id.as_str().to_owned()}</code><span>" · "</span><code>{card.run_id.as_str().to_owned()}</code> " · " <code>{card.call_id.as_str().to_owned()}</code> " · " <time>{card.requested_at.format(&Rfc3339).unwrap_or_default()}</time></p>
+            <Show when=move || observation.get().is_some()>
+                <p class="ob-approval-observation" role="status">{move || match observation.get() {
+                    Some(DecisionObservation { phase: DecisionPhase::Submitting, .. }) => t_string!(i18n, common.loading).to_owned(),
+                    Some(DecisionObservation { phase: DecisionPhase::Unknown, .. }) => t_string!(i18n, admin.approval_decision_error).to_owned(),
+                    Some(DecisionObservation { decision: ToolApprovalDecision::Grant, phase: DecisionPhase::Confirmed, .. }) => t_string!(i18n, admin.approval_granted).to_owned(),
+                    Some(DecisionObservation { decision: ToolApprovalDecision::Deny, phase: DecisionPhase::Confirmed, .. }) => t_string!(i18n, admin.approval_denied).to_owned(),
+                    None => String::new(),
+                }}</p>
+            </Show>
+
+            {current_details.then(|| view! {
             <dl class="ob-approval-facts">
                 <div class="ob-approval-fact">
                     <dt>{move || t!(i18n, admin.approval_effect)}</dt>
@@ -276,7 +436,7 @@ fn ApprovalCard(
                     <dd>
                         <time datetime=expires_datetime>
                             {move || {
-                                let seconds = remaining_seconds(expires_at.unix_timestamp(), now.get());
+                                let seconds = remaining_seconds(expires_at.unix_timestamp(), actions.now.get());
                                 if seconds == 0 {
                                     t_string!(i18n, admin.approval_expired).to_owned()
                                 } else {
@@ -299,6 +459,7 @@ fn ApprovalCard(
                     <h3>{move || t!(i18n, admin.approval_change)}</h3>
                     <pre><code>{change}</code></pre>
                 </section>
+            })}
             })}
 
             <footer class="ob-approval-actions">
@@ -327,62 +488,15 @@ fn ApprovalCard(
     }
 }
 
-fn dispatch_decision(
-    approval_id: String,
-    decision: ToolApprovalDecision,
-    approvals: RwSignal<Vec<ApprovalCardView>>,
-    in_flight: RwSignal<BTreeSet<String>>,
-    decision_error: RwSignal<bool>,
-    notice: RwSignal<Option<ToolApprovalDecision>>,
-    refresh: ApprovalRefresh,
-) {
-    if in_flight.with(|ids| ids.contains(&approval_id)) {
-        return;
-    }
-    in_flight.update(|ids| {
-        ids.insert(approval_id.clone());
-    });
-    decision_error.set(false);
-    notice.set(None);
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let start_worker = || {
-            leptos::task::spawn_local_scoped_with_cancellation(async move {
-                match decide_tool_approval(&approval_id, decision).await {
-                    Ok(_) => {
-                        notice.set(Some(decision));
-                        approvals
-                            .update(|cards| cards.retain(|card| card.approval_id != approval_id));
-                        refresh.request();
-                    }
-                    Err(_) => decision_error.set(true),
-                }
-                in_flight.update(|ids| {
-                    ids.remove(&approval_id);
-                });
-            });
-        };
-        match refresh.worker_owner.get_value() {
-            Some(owner) => owner.with(start_worker),
-            None => start_worker(),
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (decision, approvals, refresh);
-        in_flight.update(|ids| {
-            ids.remove(&approval_id);
-        });
-        decision_error.set(true);
-    }
-}
-
 fn request_refresh(refresh: ApprovalRefresh) {
-    let Some(request_epoch) = next_refresh_epoch(refresh.epoch.get_untracked()) else {
+    let Some(epoch) = refresh.epoch.try_get_untracked() else {
+        return;
+    };
+    let Some(request_epoch) = next_refresh_epoch(epoch) else {
         refresh.loading.set(false);
-        refresh.load_error.set(Some(ApiError::Unavailable));
+        if refresh.load_error.get_untracked().is_none() {
+            refresh.load_error.set(Some(ApiError::Unavailable));
+        }
         return;
     };
     refresh.epoch.set(request_epoch);
@@ -401,9 +515,11 @@ fn request_refresh(refresh: ApprovalRefresh) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = refresh.approvals;
-        refresh.loading.set(false);
-        refresh.load_error.set(Some(ApiError::Unavailable));
+        let error = refresh
+            .load_error
+            .get_untracked()
+            .unwrap_or(ApiError::Unavailable);
+        refresh.install(request_epoch, Err(error));
     }
 }
 
@@ -556,22 +672,15 @@ fn next_refresh_epoch(current: u64) -> Option<u64> {
 #[cfg(target_arch = "wasm32")]
 async fn refresh_page(refresh: ApprovalRefresh, request_epoch: u64) {
     let result = list_pending_tool_approvals().await;
-    if refresh.epoch.get_untracked() != request_epoch {
-        return;
-    }
-    match result {
-        Ok(page) => {
-            refresh.approvals.set(
-                page.approvals
-                    .iter()
-                    .map(ApprovalCardView::from_pending)
-                    .collect(),
-            );
-            refresh.load_error.set(None);
-        }
-        Err(error) => refresh.load_error.set(Some(error)),
-    }
-    refresh.loading.set(false);
+    refresh.install(
+        request_epoch,
+        result.map(|page| {
+            page.approvals
+                .iter()
+                .map(ApprovalCardView::from_pending)
+                .collect()
+        }),
+    );
 }
 
 fn effect_label(
@@ -625,6 +734,96 @@ fn now_epoch_seconds() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn card() -> ApprovalCardView {
+        ApprovalCardView::from_pending(&openbot_contracts::tool::PendingToolApproval {
+            approval_id: "approval-1".into(),
+            call_id: openbot_contracts::ids::ToolCallId::new("call-1"),
+            run_id: openbot_contracts::ids::RunId::new("run-1"),
+            bot_id: openbot_contracts::ids::BotId::new("bot-1"),
+            tool_name: "mcp__files__write_file".into(),
+            target_kind: "mcp_tool".into(),
+            target_id: "files/write_file".into(),
+            effect: ToolApprovalEffect::Write,
+            approval_class: ToolApprovalClass::EveryCall,
+            arguments_summary: serde_json::json!({"target":"original"}),
+            change_summary: None,
+            requested_at: time::OffsetDateTime::now_utc(),
+            expires_at: time::OffsetDateTime::now_utc() + time::Duration::minutes(5),
+        })
+    }
+
+    #[test]
+    fn tool_unknown_never_unlocks_on_absence_changed_target_or_failed_read() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let actions = ToolApprovalActions::new();
+            let card = card();
+            actions.refresh.install(
+                actions.refresh.epoch.get_untracked(),
+                Ok(vec![card.clone()]),
+            );
+            assert!(actions.begin(&card, ToolApprovalDecision::Grant));
+            assert!(!actions.begin(&card, ToolApprovalDecision::Deny));
+            actions.complete(
+                &card.approval_id,
+                ToolApprovalDecision::Grant,
+                Err(ApiError::Unavailable),
+            );
+            let epoch = actions.refresh.epoch.get_untracked();
+            actions.refresh.install(epoch, Ok(Vec::new()));
+            assert_eq!(actions.cards().len(), 1);
+            assert!(actions.cards()[0].arguments.is_empty());
+            assert_eq!(
+                actions.decisions.get_untracked()[&card.approval_id].phase,
+                DecisionPhase::Unknown
+            );
+            assert!(!actions.begin(&card, ToolApprovalDecision::Grant));
+            let mut changed = card.clone();
+            changed.target_id = "files/new_target".into();
+            actions.refresh.install(epoch, Ok(vec![changed.clone()]));
+            assert_ne!(
+                actions.decisions.get_untracked()[&card.approval_id].binding,
+                super::super::attention::binding(&changed)
+            );
+            assert!(!actions.begin(&changed, ToolApprovalDecision::Grant));
+            actions.refresh.install(epoch, Err(ApiError::Forbidden));
+            assert!(actions.cards().is_empty());
+            assert_eq!(
+                actions.decisions.get_untracked()[&card.approval_id].phase,
+                DecisionPhase::Unknown
+            );
+        });
+    }
+
+    #[test]
+    fn tool_write_denial_invalidates_pre_denial_pending_and_disposed_actor() {
+        for error in [ApiError::Unauthorized, ApiError::Forbidden] {
+            let owner = Owner::new();
+            let (actions, card, old_epoch) = owner.with(|| {
+                let actions = ToolApprovalActions::new();
+                let card = card();
+                let old_epoch = actions.refresh.epoch.get_untracked();
+                actions.refresh.install(old_epoch, Ok(vec![card.clone()]));
+                assert!(actions.begin(&card, ToolApprovalDecision::Grant));
+                actions.complete(&card.approval_id, ToolApprovalDecision::Grant, Err(error));
+                assert!(!actions.refresh.install(old_epoch, Ok(vec![card.clone()])));
+                assert!(actions.cards().is_empty());
+                assert!(!actions.begin(&card, ToolApprovalDecision::Deny));
+                (actions, card, old_epoch)
+            });
+            owner.cleanup();
+            assert!(!actions.refresh.install(old_epoch, Ok(vec![card.clone()])));
+            actions.complete(
+                &card.approval_id,
+                ToolApprovalDecision::Grant,
+                Ok(ToolApprovalResolved {
+                    approval_id: card.approval_id.clone(),
+                    decision: ToolApprovalDecision::Grant,
+                }),
+            );
+        }
+    }
 
     #[test]
     fn expiry_is_inclusive_and_dom_ids_are_closed() {

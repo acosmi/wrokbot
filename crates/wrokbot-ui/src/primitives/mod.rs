@@ -71,6 +71,7 @@ pub use select::{
     Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger,
 };
 pub use separator::{Separator, SeparatorOrientation};
+pub(crate) use sheet::ResponsiveSheet;
 pub use sheet::Sheet;
 pub use sidebar::{
     SIDEBAR_LARGE_BREAKPOINT_PX, SIDEBAR_MEDIUM_BREAKPOINT_PX, Sidebar, SidebarContent,

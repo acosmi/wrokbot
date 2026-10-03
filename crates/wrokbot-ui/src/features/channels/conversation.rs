@@ -6,7 +6,7 @@
 )]
 
 use core::fmt::Write as _;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use leptos::prelude::*;
 use openbot_contracts::agent::AgentProfile;
@@ -16,18 +16,15 @@ use openbot_contracts::command::{
     ChannelDetail, ThreadConversationSnapshot, ThreadForegroundRunState, ThreadHistoryMessage,
     ThreadHistoryRole, ThreadRunAnchor, ThreadRunEvent, ThreadRunEventKind,
 };
-use openbot_contracts::components::{
-    ComponentHumanDecisionAnswer, PendingComponentHumanDecision,
-    compiled_component_parameter_schema,
-};
+use openbot_contracts::components::compiled_component_parameter_schema;
+#[cfg(test)]
+use openbot_contracts::components::{ComponentHumanDecisionAnswer, PendingComponentHumanDecision};
 use openbot_contracts::ids::{BotId, RunId, ThreadId};
-use openbot_contracts::remote_interrupt::{
-    PendingRemoteInterrupt, RemoteInterruptAnswer, RemoteInterruptAnswerStatus,
-};
 use openbot_contracts::sandboxed::is_sandboxed_component_name;
 use openbot_contracts::text::trim_ecmascript;
 use sha2::{Digest, Sha256};
 
+use super::run_observation::{ObservedRunDirectory, OutputPhase, RunObservation};
 #[cfg(target_arch = "wasm32")]
 use crate::api::desktop_transport::{
     DesktopStructuredConnection, DesktopStructuredHandlers, is_tauri_host, open_desktop_structured,
@@ -35,9 +32,7 @@ use crate::api::desktop_transport::{
 use crate::api::mint_run_id;
 #[cfg(target_arch = "wasm32")]
 use crate::api::{
-    answer_component_human_decision, answer_remote_interrupt,
-    begin_thread_run_with_skills_and_model, cancel_thread_run,
-    list_pending_component_human_decisions, list_pending_remote_interrupts, load_agent,
+    begin_thread_run_with_skills_and_model, cancel_thread_run, load_agent,
     load_thread_conversation, mint_thread_id, thread_event_stream_path,
 };
 use crate::features::agents::{AgentPresence, AgentPresenceState};
@@ -51,8 +46,10 @@ use crate::features::channels::composer::queue::{QueueAction, QueuedMessage, red
 use crate::features::channels::composer::skills::{SkillComposer, SkillPicker};
 use crate::features::channels::markdown::{MarkdownBody, StreamingMarkdownBody};
 use crate::features::channels::new::{SubmissionNotice, model_notice};
-use crate::features::computer::workspace::{ComputerWorkspace, WorkspaceActivity};
-use crate::features::gallery::{ConversationComponent, GalleryFrame, HumanDecisionCard};
+use crate::features::computer::workspace::{
+    ComputerWorkspace, ConversationWorkspace, WorkspaceActivity, WorkspaceControls, WorkspaceTab,
+};
+use crate::features::gallery::ConversationComponent;
 use crate::features::memory::remember::{RememberDialog, RememberReview, RememberTarget};
 use crate::features::threads::tool_name::read_tool_name;
 use crate::features::threads::tool_result::for_display;
@@ -97,7 +94,17 @@ struct TranscriptLine {
     kind: TranscriptKind,
     content: String,
     component: Option<TranscriptComponent>,
+    tool: Option<TranscriptTool>,
     selected_skill_slugs: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TranscriptTool {
+    name: String,
+    call_id: Option<String>,
+    agent_id: Option<BotId>,
+    result: Option<String>,
+    error_code: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +134,7 @@ struct ConversationState {
     streaming_text: String,
     cursor: Option<u64>,
     terminal_notice: Option<TerminalNotice>,
+    observed_run: Option<RunObservation>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,7 +217,40 @@ const fn should_drain_queue(
 }
 
 impl ConversationState {
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn accepted_run(&mut self, run: RunId) {
+        self.active_run_id = Some(run.clone());
+        self.active_run_state = Some(ThreadForegroundRunState::Running);
+        self.active_run_cancellable = true;
+        self.streaming_text.clear();
+        self.terminal_notice = None;
+        self.observed_run = Some(RunObservation::running(run, String::new()));
+    }
+
     fn install_snapshot(&mut self, snapshot: ThreadConversationSnapshot) {
+        if let Some(run) = snapshot.active_run_id.clone() {
+            let mut observation = RunObservation::running(run, snapshot.active_run_text.clone());
+            if snapshot.active_run_state == Some(ThreadForegroundRunState::ReconciliationRequired) {
+                observation.phase = OutputPhase::Unknown;
+                if let Some(previous) = self
+                    .observed_run
+                    .as_ref()
+                    .filter(|previous| previous.run == observation.run)
+                {
+                    observation.terminal_sequence = previous.terminal_sequence;
+                    if observation.text.is_empty() {
+                        observation.text.clone_from(&previous.text);
+                    }
+                }
+            }
+            self.observed_run = Some(observation);
+        } else if let Some(previous) = self
+            .observed_run
+            .as_mut()
+            .filter(|previous| previous.phase == OutputPhase::Running)
+        {
+            previous.phase = OutputPhase::UnobservedTerminal;
+        }
         self.messages = project_history(&snapshot.messages);
         self.active_run_id = snapshot.active_run_id;
         self.active_run_state = snapshot.active_run_state;
@@ -250,6 +291,14 @@ fn apply_live_event(
     {
         return Ok(LiveEffect::ReloadSnapshot);
     }
+    if event.terminal
+        && state
+            .active_run_id
+            .as_ref()
+            .is_some_and(|run| run != &event.run_id)
+    {
+        return Ok(LiveEffect::ReloadSnapshot);
+    }
     state.cursor = Some(event.event_sequence);
     match event.event_type {
         ThreadRunEventKind::Started => {
@@ -259,6 +308,7 @@ fn apply_live_event(
             let already_tracked = state.active_run_id.as_ref() == Some(&event.run_id);
             state.active_run_id = Some(event.run_id.clone());
             state.active_run_state = Some(ThreadForegroundRunState::Running);
+            state.observed_run = Some(RunObservation::running(event.run_id.clone(), String::new()));
             state.streaming_text.clear();
             state.terminal_notice = None;
             if already_tracked {
@@ -289,7 +339,24 @@ fn apply_live_event(
                 return Err(());
             };
             match channel {
-                "text" => state.streaming_text.push_str(delta),
+                "text" => {
+                    state.streaming_text.push_str(delta);
+                    if state
+                        .observed_run
+                        .as_ref()
+                        .is_none_or(|row| row.run != event.run_id)
+                    {
+                        state.observed_run =
+                            Some(RunObservation::running(event.run_id.clone(), String::new()));
+                    }
+                    if let Some(observation) = state
+                        .observed_run
+                        .as_mut()
+                        .filter(|row| row.run == event.run_id)
+                    {
+                        observation.text.push_str(delta);
+                    }
+                }
                 "reasoning" => {}
                 _ => return Err(()),
             }
@@ -314,6 +381,7 @@ fn apply_live_event(
             }
         }
         ThreadRunEventKind::Completed => {
+            observe_terminal(state, event, OutputPhase::Succeeded);
             state.active_run_id = None;
             state.active_run_state = None;
             state.active_run_cancellable = false;
@@ -321,6 +389,7 @@ fn apply_live_event(
             Ok(LiveEffect::ReloadSnapshot)
         }
         ThreadRunEventKind::Failed => {
+            observe_terminal(state, event, OutputPhase::Failed);
             state.active_run_id = None;
             state.active_run_state = None;
             state.active_run_cancellable = false;
@@ -328,6 +397,7 @@ fn apply_live_event(
             Ok(LiveEffect::ReloadSnapshot)
         }
         ThreadRunEventKind::Cancelled => {
+            observe_terminal(state, event, OutputPhase::Cancelled);
             state.active_run_id = None;
             state.active_run_state = None;
             state.active_run_cancellable = false;
@@ -335,12 +405,31 @@ fn apply_live_event(
             Ok(LiveEffect::ReloadSnapshot)
         }
         ThreadRunEventKind::ReconciliationRequired => {
+            observe_terminal(state, event, OutputPhase::Unknown);
             state.active_run_id = Some(event.run_id.clone());
             state.active_run_state = Some(ThreadForegroundRunState::ReconciliationRequired);
             state.active_run_cancellable = false;
             state.terminal_notice = Some(TerminalNotice::ReconciliationRequired);
             Ok(LiveEffect::ReloadSnapshot)
         }
+    }
+}
+
+fn observe_terminal(state: &mut ConversationState, event: &ThreadRunEvent, phase: OutputPhase) {
+    // History has no per-message run identity. Never obtain this output from the last answer.
+    if state
+        .observed_run
+        .as_ref()
+        .is_some_and(|row| row.run != event.run_id)
+    {
+        state.observed_run = None;
+    }
+    let observation = state
+        .observed_run
+        .get_or_insert_with(|| RunObservation::running(event.run_id.clone(), String::new()));
+    if observation.run == event.run_id {
+        observation.phase = phase;
+        observation.terminal_sequence = Some(event.event_sequence);
     }
 }
 
@@ -388,8 +477,9 @@ fn remote_projection_is_quarantined(payload: &serde_json::Value) -> bool {
 }
 
 fn project_history(messages: &[ThreadHistoryMessage]) -> Vec<TranscriptLine> {
-    let mut projected = Vec::new();
-    let mut pending_components = BTreeMap::<String, usize>::new();
+    let mut projected = Vec::<TranscriptLine>::new();
+    let mut pending = BTreeMap::<String, usize>::new();
+    let mut seen = std::collections::BTreeSet::new();
     for message in messages {
         match message.role {
             ThreadHistoryRole::System => {}
@@ -398,6 +488,7 @@ fn project_history(messages: &[ThreadHistoryMessage]) -> Vec<TranscriptLine> {
                 kind: TranscriptKind::User,
                 content: message.content.clone(),
                 component: None,
+                tool: None,
                 selected_skill_slugs: message.selected_skill_slugs.clone(),
             }),
             ThreadHistoryRole::Assistant => {
@@ -407,75 +498,150 @@ fn project_history(messages: &[ThreadHistoryMessage]) -> Vec<TranscriptLine> {
                         kind: TranscriptKind::Assistant,
                         content: message.content.clone(),
                         component: None,
+                        tool: None,
                         selected_skill_slugs: Vec::new(),
                     });
                 }
-                if let Some(tool_calls) = &message.tool_calls {
-                    let mut names = Vec::new();
-                    for call in tool_calls {
-                        let Some((call_id, name, arguments)) = durable_tool_call(call) else {
-                            continue;
-                        };
-                        if compiled_component_parameter_schema(&name).is_some()
-                            || is_sandboxed_component_name(&name)
-                        {
-                            let index = projected.len();
-                            projected.push(TranscriptLine {
-                                id: format!("{}:{call_id}", message.id),
-                                kind: TranscriptKind::Component,
-                                content: name.clone(),
-                                selected_skill_slugs: Vec::new(),
-                                component: Some(TranscriptComponent {
-                                    name,
-                                    provider_call_id: call_id.clone(),
-                                    arguments,
-                                    result: None,
-                                    error_code: Some("component_result_missing".to_owned()),
-                                    agent_id: message.agent_id.clone(),
-                                }),
-                            });
-                            pending_components.insert(call_id, index);
-                        } else {
-                            let display = read_tool_name(&name);
-                            names.push(display.detail.map_or(display.label.clone(), |detail| {
-                                format!("{} · {detail}", display.label)
-                            }));
-                        }
-                    }
-                    if !names.is_empty() {
+                for (ordinal, call) in message
+                    .tool_calls
+                    .as_ref()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    let index = projected.len();
+                    let Some((call_id, name, arguments)) = durable_tool_call(call) else {
                         projected.push(TranscriptLine {
-                            id: format!("{}:tools", message.id),
+                            id: format!("{}:invalid:{ordinal}", message.id),
                             kind: TranscriptKind::ToolCall,
-                            content: names.join("\n"),
+                            content: String::new(),
                             component: None,
+                            tool: Some(TranscriptTool {
+                                name: String::new(),
+                                call_id: None,
+                                agent_id: message.agent_id.clone(),
+                                result: None,
+                                error_code: Some("tool_payload_invalid".to_owned()),
+                            }),
                             selected_skill_slugs: Vec::new(),
                         });
+                        continue;
+                    };
+                    let duplicate = !seen.insert(call_id.clone());
+                    if duplicate && let Some(original) = pending.remove(&call_id) {
+                        if let Some(tool) = projected[original].tool.as_mut() {
+                            tool.error_code = Some("tool_call_duplicate".to_owned());
+                        }
+                        if let Some(component) = projected[original].component.as_mut() {
+                            component.error_code = Some("component_call_duplicate".to_owned());
+                        }
+                    }
+                    if compiled_component_parameter_schema(&name).is_some()
+                        || is_sandboxed_component_name(&name)
+                    {
+                        projected.push(TranscriptLine {
+                            id: format!("{}:{call_id}:{ordinal}", message.id),
+                            kind: TranscriptKind::Component,
+                            content: name.clone(),
+                            tool: None,
+                            selected_skill_slugs: Vec::new(),
+                            component: Some(TranscriptComponent {
+                                name,
+                                provider_call_id: call_id.clone(),
+                                arguments,
+                                result: None,
+                                error_code: Some(
+                                    if duplicate {
+                                        "component_call_duplicate"
+                                    } else {
+                                        "component_result_missing"
+                                    }
+                                    .to_owned(),
+                                ),
+                                agent_id: message.agent_id.clone(),
+                            }),
+                        });
+                    } else {
+                        projected.push(TranscriptLine {
+                            id: format!("{}:{call_id}:{ordinal}", message.id),
+                            kind: TranscriptKind::ToolCall,
+                            content: name.clone(),
+                            component: None,
+                            tool: Some(TranscriptTool {
+                                name,
+                                call_id: Some(call_id.clone()),
+                                agent_id: message.agent_id.clone(),
+                                result: None,
+                                error_code: duplicate.then(|| "tool_call_duplicate".to_owned()),
+                            }),
+                            selected_skill_slugs: Vec::new(),
+                        });
+                    }
+                    if !duplicate {
+                        pending.insert(call_id, index);
                     }
                 }
             }
             ThreadHistoryRole::Tool => {
+                // Provider pairing identities are only unique among outstanding calls.
+                // The durable history does not carry a global provider-call / Run namespace.
+                if let Some(id) = message.tool_call_id.as_ref() {
+                    seen.remove(id);
+                }
+                let mut paired = false;
+                let mut mismatch = false;
                 if let Some(index) = message
                     .tool_call_id
                     .as_ref()
-                    .and_then(|call_id| pending_components.remove(call_id))
+                    .and_then(|id| pending.remove(id))
                 {
                     if let Some(component) = projected[index].component.as_mut() {
-                        component.error_code = if message.tool_name.as_deref()
-                            == Some(component.name.as_str())
+                        if message.tool_name.as_deref() == Some(component.name.as_str())
                             && message.agent_id == component.agent_id
                         {
                             component.result = Some(message.content.clone());
-                            message.tool_error_code.clone()
+                            component.error_code = message.tool_error_code.clone();
+                            paired = true;
                         } else {
-                            Some("component_result_mismatch".to_owned())
-                        };
+                            component.error_code = Some("component_result_mismatch".to_owned());
+                            mismatch = true;
+                        }
                     }
-                } else {
+                    if let Some(tool) = projected[index].tool.as_mut() {
+                        if message.tool_name.as_deref() == Some(tool.name.as_str())
+                            && message.agent_id == tool.agent_id
+                        {
+                            tool.result = Some(for_display(&message.content));
+                            tool.error_code = message.tool_error_code.clone();
+                            paired = true;
+                        } else {
+                            tool.error_code = Some("tool_result_mismatch".to_owned());
+                            mismatch = true;
+                        }
+                    }
+                }
+                if !paired {
                     projected.push(TranscriptLine {
                         id: message.id.clone(),
                         kind: TranscriptKind::ToolResult,
                         content: for_display(&message.content),
                         component: None,
+                        tool: Some(TranscriptTool {
+                            name: message.tool_name.clone().unwrap_or_default(),
+                            call_id: message.tool_call_id.clone(),
+                            agent_id: message.agent_id.clone(),
+                            result: Some(for_display(&message.content)),
+                            error_code: message.tool_error_code.clone().or_else(|| {
+                                Some(
+                                    if mismatch {
+                                        "tool_result_mismatch"
+                                    } else {
+                                        "tool_result_unpaired"
+                                    }
+                                    .to_owned(),
+                                )
+                            }),
+                        }),
                         selected_skill_slugs: Vec::new(),
                     });
                 }
@@ -487,8 +653,14 @@ fn project_history(messages: &[ThreadHistoryMessage]) -> Vec<TranscriptLine> {
 
 fn durable_tool_call(call: &serde_json::Value) -> Option<(String, String, serde_json::Value)> {
     let call_id = call.get("id")?.as_str()?.to_owned();
+    if call_id.is_empty() || call_id.len() > 512 || call_id.chars().any(char::is_control) {
+        return None;
+    }
     let function = call.get("function")?.as_object()?;
     let name = function.get("name")?.as_str()?.to_owned();
+    if name.is_empty() || name.len() > 512 || name.chars().any(char::is_control) {
+        return None;
+    }
     let arguments = function.get("arguments")?.clone();
     Some((call_id, name, arguments))
 }
@@ -587,11 +759,23 @@ fn ConversationSurface(
     let streaming_agent_name = StoredValue::new(agent_name.clone());
     let thread_id = RwSignal::new(thread);
     let allow_missing_snapshot = RwSignal::new(fresh_thread);
-    let state = RwSignal::new(ConversationState::default());
+    let observed_runs = expect_context::<ObservedRunDirectory>();
+    let state = RwSignal::new(ConversationState {
+        observed_run: observed_runs.latest(thread_id.get_untracked().as_ref()),
+        ..Default::default()
+    });
     let loading = RwSignal::new(true);
     let snapshot_error = RwSignal::new(false);
     let stream_error = RwSignal::new(false);
     let reload_generation = RwSignal::new(0_u64);
+    Effect::new(move |_| {
+        if !loading.get()
+            && !snapshot_error.get()
+            && let (Some(thread), Some(observation)) = (thread_id.get(), state.get().observed_run)
+        {
+            observed_runs.record(thread, observation);
+        }
+    });
     install_conversation_sync(
         thread_id,
         state,
@@ -601,62 +785,11 @@ fn ConversationSurface(
         reload_generation,
         allow_missing_snapshot,
     );
-    let human_decisions = RwSignal::new(Vec::<PendingComponentHumanDecision>::new());
-    let human_decision_answers =
-        RwSignal::new(BTreeMap::<String, ComponentHumanDecisionAnswer>::new());
-    let human_decision_in_flight = RwSignal::new(BTreeSet::<String>::new());
-    let human_decision_failures = RwSignal::new(BTreeSet::<String>::new());
-    let human_decision_load_error = RwSignal::new(false);
-    install_component_human_decision_sync(
-        human_decisions,
-        human_decision_answers,
-        human_decision_load_error,
-    );
-    let remote_interrupts = RwSignal::new(Vec::<PendingRemoteInterrupt>::new());
-    let remote_interrupt_in_flight = RwSignal::new(BTreeSet::<String>::new());
-    let remote_interrupt_failures = RwSignal::new(BTreeSet::<String>::new());
-    let remote_interrupt_load_error = RwSignal::new(false);
-    install_remote_interrupt_sync(remote_interrupts, remote_interrupt_load_error);
-    Effect::new(move |_| {
-        let snapshot = state.get();
-        let durable_provider_calls = snapshot
-            .messages
-            .iter()
-            .filter_map(|message| {
-                message.component.as_ref().and_then(|component| {
-                    component
-                        .result
-                        .as_ref()
-                        .map(|_| &component.provider_call_id)
-                })
-            })
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let answered = human_decision_answers.get();
-        if answered.is_empty() {
-            return;
-        }
-        let remove = human_decisions
-            .get()
-            .into_iter()
-            .filter(|decision| {
-                answered.contains_key(&decision.decision_id)
-                    && (durable_provider_calls.contains(&decision.provider_call_id)
-                        || snapshot.active_run_id.as_ref() != Some(&decision.run_id))
-            })
-            .map(|decision| decision.decision_id)
-            .collect::<BTreeSet<_>>();
-        if remove.is_empty() {
-            return;
-        }
-        human_decisions.update(|decisions| {
-            decisions.retain(|decision| !remove.contains(&decision.decision_id));
-        });
-        human_decision_answers.update(|answers| answers.retain(|id, _| !remove.contains(id)));
-        human_decision_in_flight.update(|ids| ids.retain(|id| !remove.contains(id)));
-        human_decision_failures.update(|ids| ids.retain(|id| !remove.contains(id)));
-    });
-
+    let component_attention =
+        expect_context::<crate::features::approvals::attention::ComponentDecisionActions>();
+    let remote_attention =
+        expect_context::<crate::features::approvals::attention::RemoteInterruptActions>();
+    let tool_attention = expect_context::<crate::features::approvals::ToolApprovalActions>();
     let remember_review = RememberReview::new();
     let on_remember = UnsyncCallback::new(move |(message_id, content): (String, String)| {
         if let Some(thread) = thread_id.get_untracked() {
@@ -851,11 +984,7 @@ fn ConversationSurface(
                     allow_missing_snapshot.set(false);
                     thread_id.set(attempt.thread_id.clone());
                     state.update(|state| {
-                        state.active_run_id = Some(attempt.run_id.clone());
-                        state.active_run_state = Some(ThreadForegroundRunState::Running);
-                        state.active_run_cancellable = true;
-                        state.streaming_text.clear();
-                        state.terminal_notice = None;
+                        state.accepted_run(attempt.run_id.clone());
                     });
                     if draft.get_untracked() == attempt.message
                         && skill_composer.selected.get_untracked() == attempt.selected_skill_slugs
@@ -937,84 +1066,6 @@ fn ConversationSurface(
             model_selection: None,
         });
     });
-    let answer_human_decision = UnsyncCallback::new(
-        move |(decision_id, answer): (String, ComponentHumanDecisionAnswer)| {
-            if human_decision_in_flight.with_untracked(|ids| ids.contains(&decision_id)) {
-                return;
-            }
-            human_decision_in_flight.update(|ids| {
-                ids.insert(decision_id.clone());
-            });
-            human_decision_failures.update(|ids| {
-                ids.remove(&decision_id);
-            });
-            #[cfg(target_arch = "wasm32")]
-            leptos::task::spawn_local_scoped_with_cancellation(async move {
-                match answer_component_human_decision(&decision_id, &answer).await {
-                    Ok(resolved) => {
-                        human_decision_answers.update(|answers| {
-                            answers.insert(decision_id.clone(), resolved.answer);
-                        });
-                    }
-                    Err(_) => {
-                        human_decision_failures.update(|ids| {
-                            ids.insert(decision_id.clone());
-                        });
-                    }
-                }
-                human_decision_in_flight.update(|ids| {
-                    ids.remove(&decision_id);
-                });
-            });
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let _ = answer;
-                human_decision_failures.update(|ids| {
-                    ids.insert(decision_id.clone());
-                });
-                human_decision_in_flight.update(|ids| {
-                    ids.remove(&decision_id);
-                });
-            }
-        },
-    );
-    let answer_remote = UnsyncCallback::new(
-        move |(request_id, answer): (String, RemoteInterruptAnswer)| {
-            if remote_interrupt_in_flight.with_untracked(|ids| ids.contains(&request_id)) {
-                return;
-            }
-            remote_interrupt_in_flight.update(|ids| {
-                ids.insert(request_id.clone());
-            });
-            remote_interrupt_failures.update(|ids| {
-                ids.remove(&request_id);
-            });
-            #[cfg(target_arch = "wasm32")]
-            leptos::task::spawn_local_scoped_with_cancellation(async move {
-                match answer_remote_interrupt(&request_id, &answer).await {
-                    Ok(_) => remote_interrupts.update(|interrupts| {
-                        interrupts.retain(|interrupt| interrupt.request_id != request_id);
-                    }),
-                    Err(_) => remote_interrupt_failures.update(|ids| {
-                        ids.insert(request_id.clone());
-                    }),
-                }
-                remote_interrupt_in_flight.update(|ids| {
-                    ids.remove(&request_id);
-                });
-            });
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let _ = answer;
-                remote_interrupt_failures.update(|ids| {
-                    ids.insert(request_id.clone());
-                });
-                remote_interrupt_in_flight.update(|ids| {
-                    ids.remove(&request_id);
-                });
-            }
-        },
-    );
     let submit = UnsyncCallback::new(move |_| {
         if send_disabled.get_untracked() {
             return;
@@ -1156,28 +1207,9 @@ fn ConversationSurface(
     let retry_snapshot = move |_| {
         reload_generation.update(|value| *value = value.saturating_add(1));
     };
-    let visible_human_decisions = Signal::derive(move || {
-        let active = state.get().active_run_id;
-        human_decisions
-            .get()
-            .into_iter()
-            .filter(|decision| active.as_ref() == Some(&decision.run_id))
-            .collect::<Vec<_>>()
-    });
-    let visible_remote_interrupts = Signal::derive(move || {
-        let active = state.get().active_run_id;
-        remote_interrupts
-            .get()
-            .into_iter()
-            .filter(|interrupt| {
-                active
-                    .as_ref()
-                    .is_some_and(|run| run.as_str() == interrupt.run_id)
-            })
-            .collect::<Vec<_>>()
-    });
 
     view! {
+        <ConversationWorkspace>
         <div class="ob-channel-conversation">
             <super::composer::presentation::AssistantIdentity
                 profile=Signal::derive(move || identity_profile.get())
@@ -1204,30 +1236,26 @@ fn ConversationSurface(
                     <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=retry_snapshot>{move || t!(i18n, channels.reread)}</Button>
                 </div>
             </Show>
-            <Show when=move || human_decision_load_error.get() && state.get().active_run_id.is_some()>
-                <p class="ob-alert" role="status">{move || t!(i18n, gallery.decision_load_error)}</p>
-            </Show>
-            <Show when=move || remote_interrupt_load_error.get() && state.get().active_run_id.is_some()>
-                <p class="ob-alert" role="status">{move || t!(i18n, channels.remote_interrupt_load_error)}</p>
-            </Show>
             <MessageScroller
                 id="channel-transcript"
                 aria_label=move || t_string!(i18n, channels.transcript_label).to_owned()
             >
                 <MessageScrollerViewport>
                     <MessageScrollerContent busy=busy>
+                        <crate::features::approvals::InlineToolApprovals run=Signal::derive(move || { let state = state.get(); state.active_run_id.or_else(||state.observed_run.map(|row| row.run)) }) />
                         <Show when=move || {
                             !loading.get()
                                 && state.get().messages.is_empty()
                                 && state.get().streaming_text.is_empty()
-                                && visible_human_decisions.get().is_empty()
-                                && visible_remote_interrupts.get().is_empty()
+                                && !component_attention.has_for_run(state.get().active_run_id)
+                                && !remote_attention.has_for_run(state.get().active_run_id)
+                                && !tool_attention.has_for_run(state.get().active_run_id)
                         }>
                             <p class="ob-page-empty">{move || t!(i18n, channels.conversation_empty)}</p>
                         </Show>
                         <For
                             each=move || state.get().messages
-                            key=|message| (message.id.clone(), message.content.clone(), message.component.as_ref().and_then(|c| c.result.clone()), message.component.as_ref().and_then(|c| c.error_code.clone()))
+                            key=|message| (message.id.clone(), message.content.clone(), message.component.as_ref().and_then(|c| c.result.clone()), message.component.as_ref().and_then(|c| c.error_code.clone()), message.tool.as_ref().map(|tool| (tool.call_id.clone(),tool.agent_id.clone(),tool.result.clone(),tool.error_code.clone())))
                             children={
                                 let agent_seed = agent_seed.clone();
                                 let agent_name = agent_name.clone();
@@ -1244,39 +1272,7 @@ fn ConversationSurface(
                                 }
                             }
                         />
-                        <For
-                            each=move || visible_human_decisions.get()
-                            key=|decision| decision.decision_id.clone()
-                            children={
-                                let agent_name = agent_name.clone();
-                                move |decision| view! {
-                                    <PendingHumanDecisionMessage
-                                        decision
-                                        agent_name=agent_name.clone()
-                                        answers=human_decision_answers
-                                        in_flight=human_decision_in_flight
-                                        failures=human_decision_failures
-                                        on_answer=answer_human_decision
-                                    />
-                                }
-                            }
-                        />
-                        <For
-                            each=move || visible_remote_interrupts.get()
-                            key=|interrupt| interrupt.request_id.clone()
-                            children={
-                                let agent_name = agent_name.clone();
-                                move |interrupt| view! {
-                                    <PendingRemoteInterruptMessage
-                                        interrupt
-                                        agent_name=agent_name.clone()
-                                        in_flight=remote_interrupt_in_flight
-                                        failures=remote_interrupt_failures
-                                        on_answer=answer_remote
-                                    />
-                                }
-                            }
-                        />
+                        <crate::features::approvals::attention::DecisionAttention run=Signal::derive(move || { let state = state.get(); state.active_run_id.or_else(||state.observed_run.map(|row| row.run)) }) inline=true/>
                         <Show when=move || !state.get().streaming_text.is_empty()>
                             {move || state.get().active_run_id.map(|run_id| view! {
                                 <MessageScrollerItem
@@ -1309,8 +1305,9 @@ fn ConversationSurface(
                         <Show when=move || {
                             busy.get()
                                 && state.get().streaming_text.is_empty()
-                                && visible_human_decisions.get().is_empty()
-                                && visible_remote_interrupts.get().is_empty()
+                                && !component_attention.has_for_run(state.get().active_run_id)
+                                && !remote_attention.has_for_run(state.get().active_run_id)
+                                && !tool_attention.has_for_run(state.get().active_run_id)
                                 && !matches!(
                                     state.get().active_run_state,
                                     Some(
@@ -1405,10 +1402,10 @@ fn ConversationSurface(
             <ComputerWorkspace activity=Signal::derive(move || {
                 state.get().messages.into_iter().filter(|m| matches!(m.kind, TranscriptKind::ToolCall | TranscriptKind::ToolResult | TranscriptKind::Component)).rev().take(100).map(|m| {
                     let label = if m.kind == TranscriptKind::ToolResult { t_string!(i18n, channels.tool_result_label).to_owned() } else { m.content.chars().take(160).collect() };
-                    let output = m.component.and_then(|c| c.result).unwrap_or(m.content).chars().take(32768).collect();
+                    let output = m.tool.and_then(|tool|match (tool.error_code,tool.result) { (Some(code),result)=>Some(format!("{code}\n{}",result.unwrap_or_default())),(None,result)=>result }).or_else(||m.component.and_then(|c| c.result)).unwrap_or(m.content);
                     WorkspaceActivity { id: m.id, label, output }
                 }).collect()
-            }) running=Signal::derive(move || state.get().active_run_id.is_some())/>
+            }) observation=Signal::derive(move || state.get().observed_run) thread=thread_id.into()/>
             <RememberDialog review=remember_review/>
             <div class="ob-conversation-input">
                 <super::composer::presentation::ComposerFrame active=true busy=Signal::derive(move || submitting.get())>
@@ -1501,175 +1498,34 @@ fn ConversationSurface(
                 <p class="ob-page-empty">{move || t!(i18n, channels.detail_inactive)}</p>
             </Show>
         </div>
+        </ConversationWorkspace>
     }
 }
 
 #[component]
-fn PendingRemoteInterruptMessage(
-    interrupt: PendingRemoteInterrupt,
-    agent_name: String,
-    in_flight: RwSignal<BTreeSet<String>>,
-    failures: RwSignal<BTreeSet<String>>,
-    on_answer: UnsyncCallback<(String, RemoteInterruptAnswer)>,
-) -> impl IntoView {
+fn ToolTranscriptCard(tool: TranscriptTool) -> impl IntoView {
     let i18n = use_i18n();
-    let request_id = interrupt.request_id.clone();
-    let submitting_id = interrupt.request_id.clone();
-    let failure_id = interrupt.request_id.clone();
-    let resolve_id = interrupt.request_id.clone();
-    let cancel_id = interrupt.request_id.clone();
-    let title = interrupt.untrusted_reason;
-    let message = interrupt.untrusted_message.unwrap_or_default();
-    let has_message = !message.is_empty();
-    let message = StoredValue::new(message);
-    let agent_seed = interrupt.agent_id;
-    let payload = RwSignal::new("{}".to_owned());
-    let invalid_payload = RwSignal::new(false);
-    let submitting = Signal::derive(move || in_flight.get().contains(&submitting_id));
-    let failed = Signal::derive(move || failures.get().contains(&failure_id));
-    let resolve = on_answer;
-    let cancel = on_answer;
-    let avatar_name = StoredValue::new(agent_name);
-    view! {
-        <MessageScrollerItem message_id=transcript_dom_id(&format!("interrupt:{request_id}"))>
-            <Message aria_label=move || t_string!(i18n, channels.assistant_message_label).to_owned()>
-                <MessageAvatar>
-                    <span aria-hidden="true">
-                        <Avatar
-                            principal_id=agent_seed.clone()
-                            name=avatar_name.get_value()
-                            size=AvatarSize::Small
-                        />
-                    </span>
-                </MessageAvatar>
-                <MessageContent>
-                    <MessageHeader>{avatar_name.get_value()}</MessageHeader>
-                    <div data-remote-interrupt="" data-untrusted-remote-content="">
-                        <GalleryFrame
-                            title=title
-                            caption=move || t_string!(i18n, channels.remote_interrupt_caption).to_owned()
-                        >
-                            <Show when=move || has_message>
-                                <p class="ob-gallery-decision-summary">{message.get_value()}</p>
-                            </Show>
-                            <div class="ob-gallery-decision-controls">
-                                <Textarea
-                                    value=payload
-                                    aria_label=move || t_string!(i18n, channels.remote_interrupt_payload_label).to_owned()
-                                    disabled=submitting
-                                    invalid=invalid_payload
-                                />
-                                <Show when=move || invalid_payload.get()>
-                                    <p class="ob-gallery-decision-error" role="alert">
-                                        {move || t!(i18n, channels.remote_interrupt_payload_invalid)}
-                                    </p>
-                                </Show>
-                                <Show when=move || failed.get()>
-                                    <p class="ob-gallery-decision-error" role="alert">
-                                        {move || t!(i18n, channels.remote_interrupt_answer_error)}
-                                    </p>
-                                </Show>
-                                <div class="ob-gallery-decision-actions">
-                                    <Button
-                                        variant=ButtonVariant::Primary
-                                        size=ButtonSize::Small
-                                        disabled=submitting
-                                        loading=submitting
-                                        on_activate=move |_| {
-                                            let raw = trim_ecmascript(&payload.get_untracked()).to_owned();
-                                            let parsed = if raw.is_empty() {
-                                                Ok(None)
-                                            } else {
-                                                serde_json::from_str::<serde_json::Value>(&raw).map(Some)
-                                            };
-                                            match parsed {
-                                                Ok(value) => {
-                                                    invalid_payload.set(false);
-                                                    resolve.run((
-                                                        resolve_id.clone(),
-                                                        RemoteInterruptAnswer {
-                                                            status: RemoteInterruptAnswerStatus::Resolved,
-                                                            payload: value,
-                                                        },
-                                                    ));
-                                                }
-                                                Err(_) => invalid_payload.set(true),
-                                            }
-                                        }
-                                    >{move || t!(i18n, channels.remote_interrupt_submit)}</Button>
-                                    <Button
-                                        variant=ButtonVariant::Ghost
-                                        size=ButtonSize::Small
-                                        disabled=submitting
-                                        on_activate=move |_| cancel.run((
-                                            cancel_id.clone(),
-                                            RemoteInterruptAnswer {
-                                                status: RemoteInterruptAnswerStatus::Cancelled,
-                                                payload: None,
-                                            },
-                                        ))
-                                    >{move || t!(i18n, channels.remote_interrupt_cancel)}</Button>
-                                </div>
-                            </div>
-                        </GalleryFrame>
-                    </div>
-                </MessageContent>
-            </Message>
-        </MessageScrollerItem>
-    }
-}
-
-#[component]
-fn PendingHumanDecisionMessage(
-    decision: PendingComponentHumanDecision,
-    agent_name: String,
-    answers: RwSignal<BTreeMap<String, ComponentHumanDecisionAnswer>>,
-    in_flight: RwSignal<BTreeSet<String>>,
-    failures: RwSignal<BTreeSet<String>>,
-    on_answer: UnsyncCallback<(String, ComponentHumanDecisionAnswer)>,
-) -> impl IntoView {
-    let i18n = use_i18n();
-    let decision_id = StoredValue::new(decision.decision_id.clone());
-    let answer_id = decision.decision_id.clone();
-    let submitting_id = decision.decision_id.clone();
-    let failure_id = decision.decision_id.clone();
-    let callback_id = decision.decision_id.clone();
-    let answer = Signal::derive(move || answers.get().get(&answer_id).cloned());
-    let submitting = Signal::derive(move || in_flight.get().contains(&submitting_id));
-    let error = Signal::derive(move || failures.get().contains(&failure_id));
-    let answer_callback = UnsyncCallback::new(move |answer| {
-        on_answer.run((callback_id.clone(), answer));
-    });
-    let avatar_seed = StoredValue::new(decision.agent_id.as_str().to_owned());
-    let avatar_name = StoredValue::new(agent_name);
-    view! {
-        <MessageScrollerItem
-            message_id=transcript_dom_id(&format!("decision:{}", decision_id.get_value()))
-        >
-            <Message aria_label=move || t_string!(i18n, channels.assistant_message_label).to_owned()>
-                <MessageAvatar>
-                    <span aria-hidden="true">
-                        <Avatar
-                            principal_id=avatar_seed.get_value()
-                            name=avatar_name.get_value()
-                            size=AvatarSize::Small
-                        />
-                    </span>
-                </MessageAvatar>
-                <MessageContent>
-                    <MessageHeader>{avatar_name.get_value()}</MessageHeader>
-                    <HumanDecisionCard
-                        name=decision.component_name
-                        arguments=decision.arguments
-                        answer
-                        submitting
-                        error
-                        on_answer=answer_callback
-                    />
-                </MessageContent>
-            </Message>
-        </MessageScrollerItem>
-    }
+    let display = read_tool_name(&tool.name);
+    let controls = expect_context::<WorkspaceControls>();
+    let recorded = tool.result.is_some();
+    let error = tool.error_code.clone();
+    let failed = error.is_some();
+    let data_call = tool.call_id.clone();
+    let computer = tool.name.starts_with("computer_");
+    let label = if tool.name.is_empty() {
+        t_string!(i18n, channels.tool_unrecognized).to_owned()
+    } else {
+        display.label
+    };
+    view! { <article class="ob-tool-card" data-tool-call=data_call data-tool-state=if failed { "review" } else if recorded { "recorded" } else { "waiting" }>
+        <header><strong>{label}</strong>{display.detail.map(|detail| view! { <span>{detail}</span> })}
+            <span class="ob-tool-state">{if failed { t_string!(i18n, channels.tool_record_error).to_owned() } else if recorded { t_string!(i18n, channels.tool_result_recorded).to_owned() } else { t_string!(i18n, channels.tool_waiting_result).to_owned() }}</span>
+            <Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=move |_| controls.show(if computer { WorkspaceTab::Computer } else { WorkspaceTab::Results })>{move || t!(i18n, gallery.details)}</Button>
+        </header>
+        <p class="ob-tool-source">{tool.call_id.map(|id| view! { <code>{id}</code> })} " · " {tool.agent_id.map(|id| view! { <code>{id.as_str().to_owned()}</code> })}</p>
+        {error.map(|code| view! { <p class="ob-tool-error" role="status"><code>{code}</code></p> })}
+        {tool.result.map(|result| view! { <details><summary>{move || t!(i18n, channels.tool_result_label)}</summary><pre>{result}</pre></details> })}
+    </article> }
 }
 
 #[component]
@@ -1693,6 +1549,7 @@ fn TranscriptMessage(
     let user = message.kind == TranscriptKind::User;
     let kind = message.kind;
     let content = message.content;
+    let tool = message.tool;
     let body = match message.component {
         Some(component) => view! {
             <ConversationComponent
@@ -1708,6 +1565,7 @@ fn TranscriptMessage(
             />
         }
         .into_any(),
+        None if tool.is_some() => view! { <ToolTranscriptCard tool=tool.expect("present tool projection")/> }.into_any(),
         None => view! {
             <Bubble kind=if user { BubbleKind::User } else { BubbleKind::Assistant }>
                 <div class="ob-skill-chips">{message.selected_skill_slugs.into_iter().map(|slug| view! { <code>{format!("/{slug}")}</code> }).collect_view()}</div>
@@ -1761,58 +1619,7 @@ fn TranscriptMessage(
     }
 }
 
-fn install_component_human_decision_sync(
-    decisions: RwSignal<Vec<PendingComponentHumanDecision>>,
-    answers: RwSignal<BTreeMap<String, ComponentHumanDecisionAnswer>>,
-    load_error: RwSignal<bool>,
-) {
-    #[cfg(target_arch = "wasm32")]
-    leptos::task::spawn_local_scoped_with_cancellation(async move {
-        loop {
-            match list_pending_component_human_decisions().await {
-                Ok(page) => {
-                    let local_answers = answers.get_untracked();
-                    decisions.update(|current| {
-                        merge_component_human_decisions(current, page.decisions, &local_answers);
-                    });
-                    load_error.set(false);
-                }
-                Err(_) => load_error.set(true),
-            }
-            component_human_decision_poll_delay().await;
-        }
-    });
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (decisions, answers);
-        load_error.set(true);
-    }
-}
-
-fn install_remote_interrupt_sync(
-    interrupts: RwSignal<Vec<PendingRemoteInterrupt>>,
-    load_error: RwSignal<bool>,
-) {
-    #[cfg(target_arch = "wasm32")]
-    leptos::task::spawn_local_scoped_with_cancellation(async move {
-        loop {
-            match list_pending_remote_interrupts().await {
-                Ok(page) => {
-                    interrupts.set(page.interrupts);
-                    load_error.set(false);
-                }
-                Err(_) => load_error.set(true),
-            }
-            component_human_decision_poll_delay().await;
-        }
-    });
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = interrupts;
-        load_error.set(true);
-    }
-}
-
+#[cfg(test)]
 fn merge_component_human_decisions(
     current: &mut Vec<PendingComponentHumanDecision>,
     mut incoming: Vec<PendingComponentHumanDecision>,
@@ -1831,17 +1638,6 @@ fn merge_component_human_decisions(
         (left.requested_at, &left.decision_id).cmp(&(right.requested_at, &right.decision_id))
     });
     *current = incoming;
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn component_human_decision_poll_delay() {
-    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-        web_sys::window()
-            .expect("CSR component decision polling requires Window")
-            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 1_000)
-            .expect("browser rejected component decision polling timer");
-    });
-    _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 fn transcript_dom_id(source: &str) -> String {
@@ -1904,6 +1700,7 @@ fn install_conversation_sync(
 ) {
     #[cfg(target_arch = "wasm32")]
     {
+        let observed_runs = expect_context::<ObservedRunDirectory>();
         let connection = StoredValue::new_local(None::<EventConnection>);
         let desktop_connection = StoredValue::new_local(None::<DesktopStructuredConnection>);
         Effect::new(move |_| {
@@ -1937,7 +1734,16 @@ fn install_conversation_sync(
                 }
                 let snapshot = match snapshot {
                     Ok(snapshot) => snapshot,
-                    Err(_) => {
+                    Err(error) => {
+                        if matches!(
+                            error,
+                            crate::api::ApiError::Unauthorized
+                                | crate::api::ApiError::Forbidden
+                                | crate::api::ApiError::NotFound
+                        ) {
+                            observed_runs.forget(&thread);
+                            state.set(ConversationState::default());
+                        }
                         loading.set(false);
                         snapshot_error.set(true);
                         return;
@@ -2139,6 +1945,166 @@ mod tests {
 
     use super::*;
 
+    fn current_snapshot(run: Option<RunId>, text: &str) -> ThreadConversationSnapshot {
+        ThreadConversationSnapshot {
+            messages: Vec::new(),
+            active_run_state: run.as_ref().map(|_| ThreadForegroundRunState::Running),
+            active_run_id: run,
+            active_run_cancellable: true,
+            active_run_text: text.into(),
+            last_event_sequence: None,
+        }
+    }
+
+    fn tool_history(id: &str, role: ThreadHistoryRole) -> ThreadHistoryMessage {
+        ThreadHistoryMessage {
+            id: id.into(),
+            role,
+            content: String::new(),
+            selected_skill_slugs: Vec::new(),
+            agent_id: Some(BotId::new("bot-1")),
+            tool_call_id: None,
+            tool_name: None,
+            tool_error_code: None,
+            tool_calls: None,
+        }
+    }
+
+    #[test]
+    fn all_tool_pairs_keep_results_and_reused_completed_provider_ids_are_legal() {
+        let mut call = tool_history("call-message-1", ThreadHistoryRole::Assistant);
+        call.tool_calls = Some(vec![
+            serde_json::json!({"id":"provider-call","function":{"name":"mcp__files__write_file","arguments":{}}}),
+        ]);
+        let mut result = tool_history("result-message-1", ThreadHistoryRole::Tool);
+        result.tool_call_id = Some("provider-call".into());
+        result.tool_name = Some("mcp__files__write_file".into());
+        result.content = "first result".into();
+        let mut second_call = call.clone();
+        second_call.id = "call-message-2".into();
+        let mut second_result = result.clone();
+        second_result.id = "result-message-2".into();
+        second_result.content = "second refusal".into();
+        second_result.tool_error_code = Some("write_refused".into());
+        let projected = project_history(&[
+            call.clone(),
+            result.clone(),
+            second_call.clone(),
+            second_result,
+        ]);
+        assert_eq!(projected.len(), 2);
+        assert_eq!(
+            projected[0].tool.as_ref().unwrap().result.as_deref(),
+            Some("first result")
+        );
+        assert_eq!(projected[0].tool.as_ref().unwrap().error_code, None);
+        assert_eq!(
+            projected[1].tool.as_ref().unwrap().result.as_deref(),
+            Some("second refusal")
+        );
+        assert_eq!(
+            projected[1].tool.as_ref().unwrap().error_code.as_deref(),
+            Some("write_refused")
+        );
+        let duplicate = project_history(&[call.clone(), second_call, result.clone()]);
+        assert_eq!(duplicate.len(), 3);
+        assert_eq!(
+            duplicate[0].tool.as_ref().unwrap().error_code.as_deref(),
+            Some("tool_call_duplicate")
+        );
+        assert_eq!(
+            duplicate[2].tool.as_ref().unwrap().error_code.as_deref(),
+            Some("tool_result_unpaired")
+        );
+        result.agent_id = Some(BotId::new("other"));
+        let mismatch = project_history(&[call, result]);
+        assert_eq!(mismatch.len(), 2);
+        assert_eq!(
+            mismatch[0].tool.as_ref().unwrap().error_code.as_deref(),
+            Some("tool_result_mismatch")
+        );
+    }
+
+    #[test]
+    fn new_accepted_run_excludes_previous_results_before_stream_or_snapshot() {
+        let mut state = ConversationState {
+            observed_run: Some(RunObservation {
+                run: RunId::new("old"),
+                phase: OutputPhase::Succeeded,
+                text: "old answer".into(),
+                terminal_sequence: Some(1),
+            }),
+            ..Default::default()
+        };
+        state.accepted_run(RunId::new("new"));
+        assert_eq!(state.observed_run.as_ref().unwrap().run, RunId::new("new"));
+        assert!(state.observed_run.as_ref().unwrap().text.is_empty());
+        assert_eq!(
+            state.active_run_id,
+            state.observed_run.as_ref().map(|row| row.run.clone())
+        );
+    }
+
+    #[test]
+    fn missed_terminal_recovery_is_unobserved_and_never_guesses_rr_or_success() {
+        let mut state = ConversationState::default();
+        state.install_snapshot(current_snapshot(
+            Some(RunId::new("run-1")),
+            "current partial",
+        ));
+        state.install_snapshot(current_snapshot(None, ""));
+        let observed = state.observed_run.as_ref().unwrap();
+        assert_eq!(observed.phase, OutputPhase::UnobservedTerminal);
+        assert_eq!(observed.text, "current partial");
+        assert!(state.active_run_id.is_none());
+        assert!(state.terminal_notice.is_none());
+    }
+
+    #[test]
+    fn terminal_output_is_only_observed_current_run_and_partial_survives_rr_snapshot() {
+        for kind in [
+            ThreadRunEventKind::Completed,
+            ThreadRunEventKind::Failed,
+            ThreadRunEventKind::Cancelled,
+            ThreadRunEventKind::ReconciliationRequired,
+        ] {
+            let mut state = ConversationState::default();
+            assert_eq!(
+                apply_live_event(
+                    &mut state,
+                    &ThreadId::new("thread-1"),
+                    &event(1, kind, serde_json::json!({}))
+                )
+                .unwrap(),
+                LiveEffect::ReloadSnapshot
+            );
+            assert!(state.observed_run.as_ref().unwrap().text.is_empty());
+        }
+        let mut state = ConversationState::default();
+        state.install_snapshot(current_snapshot(
+            Some(RunId::new("run-1")),
+            "current partial",
+        ));
+        let mut snapshot = current_snapshot(Some(RunId::new("run-1")), "");
+        snapshot.active_run_state = Some(ThreadForegroundRunState::ReconciliationRequired);
+        state.install_snapshot(snapshot);
+        assert_eq!(state.observed_run.as_ref().unwrap().text, "current partial");
+        assert_eq!(
+            state.observed_run.as_ref().unwrap().phase,
+            OutputPhase::Unknown
+        );
+        let mut foreign = event(1, ThreadRunEventKind::Completed, serde_json::json!({}));
+        foreign.run_id = RunId::new("other");
+        assert_eq!(
+            apply_live_event(&mut state, &ThreadId::new("thread-1"), &foreign).unwrap(),
+            LiveEffect::ReloadSnapshot
+        );
+        assert_eq!(
+            state.observed_run.as_ref().unwrap().run,
+            RunId::new("run-1")
+        );
+    }
+
     fn event(
         sequence: u64,
         kind: ThreadRunEventKind,
@@ -2232,10 +2198,16 @@ mod tests {
                 tool_calls: None,
             },
         ]);
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].kind, TranscriptKind::User);
-        assert_eq!(lines[1].content, "Search notes");
-        assert_eq!(lines[2].content, "found it");
+        assert_eq!(
+            lines[1].tool.as_ref().unwrap().name,
+            "mcp__notes__search_notes"
+        );
+        assert_eq!(
+            lines[1].tool.as_ref().unwrap().result.as_deref(),
+            Some("found it")
+        );
         assert!(!format!("{lines:?}").contains("secret standing instruction"));
     }
 

@@ -38,6 +38,7 @@ pub fn HumanDecisionCard(
     answer: Signal<Option<ComponentHumanDecisionAnswer>>,
     submitting: Signal<bool>,
     error: Signal<bool>,
+    #[prop(default=Signal::derive(|| false))] blocked: Signal<bool>,
     #[prop(optional)] on_answer: Option<UnsyncCallback<ComponentHumanDecisionAnswer>>,
 ) -> AnyView {
     let i18n = use_i18n();
@@ -58,8 +59,12 @@ pub fn HumanDecisionCard(
         .as_object()
         .expect("validated decision arguments are an object");
     match name.as_str() {
-        ASK_APPROVAL_COMPONENT_NAME => approval_card(object, answer, submitting, error, on_answer),
-        ASK_CHOICE_COMPONENT_NAME => choice_card(object, answer, submitting, error, on_answer),
+        ASK_APPROVAL_COMPONENT_NAME => {
+            approval_card(object, answer, submitting, error, blocked, on_answer)
+        }
+        ASK_CHOICE_COMPONENT_NAME => {
+            choice_card(object, answer, submitting, error, blocked, on_answer)
+        }
         _ => view! {
             <RefusedCard
                 title=t_string!(i18n, gallery.decisions).to_owned()
@@ -75,6 +80,7 @@ fn approval_card(
     answer: Signal<Option<ComponentHumanDecisionAnswer>>,
     submitting: Signal<bool>,
     error: Signal<bool>,
+    blocked: Signal<bool>,
     on_answer: Option<UnsyncCallback<ComponentHumanDecisionAnswer>>,
 ) -> AnyView {
     let i18n = use_i18n();
@@ -106,8 +112,9 @@ fn approval_card(
     let note_too_long = Signal::derive(move || {
         trim_ecmascript(&note.get()).len() > COMPONENT_HUMAN_DECISION_NOTE_MAX_BYTES
     });
-    let disabled =
-        Signal::derive(move || submitting.get() || answer.get().is_some() || note_too_long.get());
+    let disabled = Signal::derive(move || {
+        blocked.get() || submitting.get() || answer.get().is_some() || note_too_long.get()
+    });
     let answer_for_badge = answer;
     let action = view! {
         <div>
@@ -159,7 +166,7 @@ fn approval_card(
                         value=note
                         aria_label=move || t_string!(i18n, gallery.decision_note_label).to_owned()
                         placeholder=move || t_string!(i18n, gallery.decision_note_placeholder).to_owned()
-                        disabled=submitting
+                        disabled
                         invalid=note_too_long
                     />
                     <Show when=move || note_too_long.get()>
@@ -238,6 +245,7 @@ fn choice_card(
     answer: Signal<Option<ComponentHumanDecisionAnswer>>,
     submitting: Signal<bool>,
     error: Signal<bool>,
+    blocked: Signal<bool>,
     on_answer: Option<UnsyncCallback<ComponentHumanDecisionAnswer>>,
 ) -> AnyView {
     let i18n = use_i18n();
@@ -311,7 +319,7 @@ fn choice_card(
                                             || selected.get().as_deref() == Some(selected_id.as_str()))
                                             .then_some("true")
                                     }
-                                    disabled=move || answer_value.get().is_some() || submitting.get()
+                                    disabled=move || blocked.get() || answer_value.get().is_some() || submitting.get()
                                     on:click=move |_| {
                                         let Some(callback) = callback.as_ref() else { return; };
                                         selected.set(Some(callback_id.clone()));
@@ -326,6 +334,7 @@ fn choice_card(
                                         if !matches!(event.key().as_str(), "Enter" | " ")
                                             || answer_value.get_untracked().is_some()
                                             || submitting.get_untracked()
+                                            || blocked.get_untracked()
                                         {
                                             return;
                                         }

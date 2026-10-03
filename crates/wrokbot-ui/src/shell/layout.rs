@@ -15,6 +15,9 @@ use crate::primitives::{IconSize, IconView};
 use crate::primitives::{Sidebar, SidebarProvider, SidebarTrigger, use_sidebar};
 use crate::shell::AppSidebar;
 
+#[derive(Clone, Copy)]
+pub(crate) struct WorkspaceToolbarMount(pub NodeRef<leptos::html::Div>);
+
 /// Root layout shared by sign-in and every authenticated route.
 #[component]
 pub fn RootLayout(children: Children) -> impl IntoView {
@@ -34,6 +37,8 @@ pub fn AppLayout(children: Children) -> impl IntoView {
         RwSignal::new(0),
     ));
     let collapsed = RwSignal::new(false);
+    let workspace_toolbar = NodeRef::<leptos::html::Div>::new();
+    provide_context(WorkspaceToolbarMount(workspace_toolbar));
     view! {
         <a class="ob-skip-link" href="#main-content">
             {move || t!(i18n, shell.skip_to_content)}
@@ -54,6 +59,7 @@ pub fn AppLayout(children: Children) -> impl IntoView {
                     <header class="ob-shell-topbar" on:mousedown=crate::api::desktop_chrome::start_drag>
                         <SidebarTrigger aria_label=move || t_string!(i18n, shell.sidebar_toggle).to_owned() />
                         <ShellContext />
+                        <div id="workspace-toolbar-slot" class="ob-workspace-tools" node_ref=workspace_toolbar></div>
                     </header>
                     <main id="main-content" class="ob-main" tabindex="-1">
                         {children()}
