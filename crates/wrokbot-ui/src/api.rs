@@ -19,6 +19,9 @@ pub(crate) mod plugins;
 #[path = "skills_api.rs"]
 pub(crate) mod skills;
 
+#[path = "reconciliation_api.rs"]
+pub(crate) mod reconciliation;
+
 #[path = "credentials_api.rs"]
 pub(crate) mod credentials;
 
@@ -2462,7 +2465,7 @@ pub async fn list_pending_tool_approvals() -> Result<PendingToolApprovals, ApiEr
             .send()
             .await
             .map_err(|_| ApiError::Network)?;
-        if !response.ok() {
+        if response.status() != 200 {
             return Err(status_error(response.status()));
         }
         let page = response
@@ -2499,7 +2502,7 @@ pub async fn decide_tool_approval(
             .json(&body)
             .map_err(|_| ApiError::InvalidResponse)?;
         let response = request.send().await.map_err(|_| ApiError::Network)?;
-        if !response.ok() {
+        if response.status() != 200 {
             return Err(status_error(response.status()));
         }
         let receipt = response

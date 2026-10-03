@@ -6,6 +6,7 @@ pub mod detail;
 pub(crate) mod markdown;
 pub mod new;
 pub mod recipient_field;
+pub(crate) mod run_observation;
 
 pub use conversation::ChannelConversation;
 pub use detail::ChannelDetailPage;

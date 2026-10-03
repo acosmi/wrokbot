@@ -6,19 +6,29 @@
 
 use core::fmt;
 
+use openbot_contracts::ids::{BotId, RunId, ToolCallId};
 use openbot_contracts::tool::{PendingToolApproval, ToolApprovalClass, ToolApprovalEffect};
 
 use crate::features::threads::tool_name::read_tool_name;
 
+pub(crate) mod attention;
 mod component;
+pub(crate) mod unknown;
 
 pub use component::ApprovalPage;
+pub(crate) use component::{InlineToolApprovals, ToolApprovalActions};
 
 /// Authority-only view model for one approval card.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ApprovalCardView {
     /// Durable approval id used by the typed decision command.
     pub approval_id: String,
+    /// Original trusted source identities, never chosen by the renderer.
+    pub run_id: RunId,
+    /// Bot bound by the pending approval authority.
+    pub bot_id: BotId,
+    /// Original tool call, separate from compiled/remote decision identities.
+    pub call_id: ToolCallId,
     /// Humanized catalog tool name.
     pub tool_title: String,
     /// Optional server label for MCP/Drive tools.
@@ -35,6 +45,8 @@ pub struct ApprovalCardView {
     pub change: Option<String>,
     /// Reuse class shown in details.
     pub approval_class: ToolApprovalClass,
+    /// Database-clock request time of the original operation.
+    pub requested_at: time::OffsetDateTime,
     /// Inclusive expiry for the visible countdown.
     pub expires_at: time::OffsetDateTime,
 }
@@ -46,6 +58,9 @@ impl ApprovalCardView {
         let display = read_tool_name(&pending.tool_name);
         Self {
             approval_id: pending.approval_id.clone(),
+            run_id: pending.run_id.clone(),
+            bot_id: pending.bot_id.clone(),
+            call_id: pending.call_id.clone(),
             tool_title: display.label,
             server: display.detail,
             effect: pending.effect,
@@ -54,6 +69,7 @@ impl ApprovalCardView {
             arguments: pretty(&pending.arguments_summary),
             change: pending.change_summary.as_ref().map(pretty),
             approval_class: pending.approval_class,
+            requested_at: pending.requested_at,
             expires_at: pending.expires_at,
         }
     }
@@ -64,6 +80,8 @@ impl fmt::Debug for ApprovalCardView {
         formatter
             .debug_struct("ApprovalCardView")
             .field("approval_id", &self.approval_id)
+            .field("run_id", &self.run_id)
+            .field("bot_id", &self.bot_id)
             .field("tool_title", &self.tool_title)
             .field("server", &self.server)
             .field("effect", &self.effect)

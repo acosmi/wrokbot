@@ -46,6 +46,10 @@ pub fn App() -> impl IntoView {
 /// Authenticated-mount-owned projections cannot survive a session boundary or accept its late reads.
 #[component]
 fn AuthenticatedWorkspace() -> impl IntoView {
+    provide_context(crate::features::channels::run_observation::ObservedRunDirectory::new());
+    provide_context(crate::features::approvals::ToolApprovalActions::new());
+    provide_context(crate::features::approvals::attention::ComponentDecisionActions::new());
+    provide_context(crate::features::approvals::attention::RemoteInterruptActions::new());
     provide_context(crate::features::admin::plugins::PluginActions::new());
     provide_context(crate::features::memory::remember::RememberActions::new());
     let model_actions = crate::features::settings::models::ModelActions::new();

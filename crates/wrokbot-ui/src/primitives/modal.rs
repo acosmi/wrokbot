@@ -282,7 +282,7 @@ fn install_modal_lifecycle(context: ModalContext) {
     let previous_focus = StoredValue::new_local(None::<web_sys::HtmlElement>);
     let effect_context = context.clone();
     Effect::new(move |_| {
-        let open = effect_context.open.get();
+        let open = effect_context.open.get() && !effect_context.inline.get();
         let previous = was_open.get_value();
         if open == previous {
             return;
