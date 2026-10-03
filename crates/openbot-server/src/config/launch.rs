@@ -12,6 +12,7 @@ pub const LOCAL_PACKAGE_DIRECTORY: &str = "examples/wrok-bot";
 
 /// 新品牌配置与兼容解析器字段的唯一映射。厂商自己的 OPENAI/BOT 变量保持原协议。
 const VARIABLES: &[(&str, &str)] = &[
+    ("WROK_BOT_ARTIFACT_ROOT", "OPENBOT_ARTIFACT_ROOT"),
     ("WROK_BOT_APP_DIST_DIR", "APP_DIST_DIR"),
     ("WROK_BOT_APP_URL", "OPENBOT_APP_URL"),
     ("WROK_BOT_DATABASE_URL", "DATABASE_URL"),

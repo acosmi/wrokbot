@@ -334,14 +334,47 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "tenant package 已经由 Application use case 同步"
     );
 
-    // Adopt only during trusted startup after database/package verification. The registry
-    // remains owned until shutdown and grants no artifact producer or byte-read capability.
-    let artifact_datasets = openbot_infra::artifact_registry::ArtifactDatasetRegistry::from_server(
-        pool.clone(),
-        &deployment,
-        &tenant,
-    )
-    .await?;
+    // Adopt only during trusted startup after database/package verification.
+    let artifact_datasets = Arc::new(
+        openbot_infra::artifact_registry::ArtifactDatasetRegistry::from_server(
+            pool.clone(),
+            &deployment,
+            &tenant,
+        )
+        .await?,
+    );
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> =
+        if let Some(root_path) = server.artifact_root.clone() {
+            let root = tokio::task::spawn_blocking(move || {
+                openbot_infra::artifact_store::open_trusted_host_root(&root_path)
+            })
+            .await
+            .map_err(|_| startup_error("artifact_root_unavailable"))??;
+            let policy = openbot_domain::artifact::ArtifactQuotaPolicy::default();
+            let store = Arc::new(
+                openbot_infra::artifact_store::DatasetBoundArtifactStore::bind_host_root(
+                    root,
+                    Arc::clone(&artifact_datasets),
+                    policy,
+                )
+                .await?,
+            );
+            Some(Arc::new(
+                openbot_infra::artifact_administration::PostgresArtifactAdministration::new(
+                    Arc::clone(&artifact_datasets),
+                    store,
+                    policy,
+                    SecretBytes::new(audit_key.expose().to_vec()),
+                )
+                .map_err(|_| startup_error("artifact_administration_unavailable"))?,
+            ))
+        } else {
+            None
+        };
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> = None;
 
     let PackageOpenAiProviderConfig {
         base_url: channel_base_url,
@@ -384,6 +417,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             SecretBytes::new(audit_key.expose().to_vec()),
         )?),
         screen_sessions,
+        artifacts,
         remote_agent_probe,
         managed_slot_available: managed_provider_for_slot(&server).is_some(),
         channel_routing_provider: ChannelRoutingProviderInput {

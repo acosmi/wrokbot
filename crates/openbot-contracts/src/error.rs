@@ -29,6 +29,7 @@
 
 use core::fmt;
 
+use crate::artifacts::ArtifactGoneStatus;
 use crate::auth::Role;
 use crate::ids::{ActorId, ComputerGeneration, DocumentGeneration, PolicyDecisionId};
 
@@ -47,6 +48,8 @@ impl ErrorCode {
     pub const FORBIDDEN_ROLE: Self = Self("forbidden_role");
     /// 资源对当前 actor 不可见（404，统一码，防枚举）。
     pub const NOT_VISIBLE: Self = Self("not_visible");
+    /// Authorized artifact metadata is deleted or expired (410).
+    pub const ARTIFACT_GONE: Self = Self("artifact_gone");
     /// 请求体畸形（400），不产生 acting decision。
     pub const MALFORMED_PAYLOAD: Self = Self("malformed_payload");
     /// policy 拒绝（403），必带 rule id。
@@ -119,6 +122,8 @@ pub enum AuditKind {
     AuthorizationDenied,
     /// 资源不可见。
     ResourceNotVisible,
+    /// Authorized resource has a content-free gone state.
+    ResourceGone,
     /// 输入被拒（未产生 acting decision）。
     InputRejected,
     /// policy 拒绝。
@@ -141,6 +146,7 @@ impl AuditKind {
             Self::AuthFailure => "auth_failure",
             Self::AuthorizationDenied => "authorization_denied",
             Self::ResourceNotVisible => "resource_not_visible",
+            Self::ResourceGone => "resource_gone",
             Self::InputRejected => "input_rejected",
             Self::PolicyRefusal => "policy_refusal",
             Self::DependencyFailure => "dependency_failure",
@@ -305,6 +311,13 @@ pub enum AppError {
     #[error("not_visible")]
     NotVisible,
 
+    /// Authorized artifact deletion/expiration, with no resource ID or content facts.
+    #[error("artifact_gone status={status}")]
+    ArtifactGone {
+        /// Only the closed gone state may leave the application boundary.
+        status: ArtifactGoneStatus,
+    },
+
     /// 请求体畸形（400）。不产生 acting decision（§15.3）。
     #[error("malformed_payload field={field}")]
     MalformedPayload {
@@ -401,6 +414,7 @@ impl AppError {
             Self::Unauthenticated => ErrorCode::UNAUTHENTICATED,
             Self::ForbiddenRole { .. } => ErrorCode::FORBIDDEN_ROLE,
             Self::NotVisible => ErrorCode::NOT_VISIBLE,
+            Self::ArtifactGone { .. } => ErrorCode::ARTIFACT_GONE,
             Self::MalformedPayload { .. } => ErrorCode::MALFORMED_PAYLOAD,
             Self::PolicyRefused { .. } => ErrorCode::POLICY_REFUSED,
             Self::DependencyUnavailable { .. } => ErrorCode::DEPENDENCY_UNAVAILABLE,
@@ -426,6 +440,7 @@ impl AppError {
             } => 401,
             Self::ForbiddenRole { .. } | Self::PolicyRefused { .. } => 403,
             Self::NotVisible => 404,
+            Self::ArtifactGone { .. } => 410,
             Self::MalformedPayload { .. } => 400,
             Self::DependencyUnavailable { .. } => 503,
             Self::VendorFailure { .. } => 502,
@@ -453,6 +468,7 @@ impl AppError {
             Self::Unauthenticated => AuditKind::AuthFailure,
             Self::ForbiddenRole { .. } => AuditKind::AuthorizationDenied,
             Self::NotVisible => AuditKind::ResourceNotVisible,
+            Self::ArtifactGone { .. } => AuditKind::ResourceGone,
             Self::MalformedPayload { .. } => AuditKind::InputRejected,
             Self::PolicyRefused { .. } => AuditKind::PolicyRefusal,
             Self::DependencyUnavailable { .. } => AuditKind::DependencyFailure,
@@ -475,7 +491,7 @@ impl AppError {
 /// §15.3 允许出现的全部 HTTP 状态码（含成功侧的 200：空 thread history 是 200 + 空列表）。
 ///
 /// 任何落在此集合之外的状态码都说明有人在错误映射里发明了新语义。
-pub const HTTP_STATUS_DOMAIN: &[u16] = &[200, 202, 400, 401, 403, 404, 409, 502, 503];
+pub const HTTP_STATUS_DOMAIN: &[u16] = &[200, 202, 400, 401, 403, 404, 409, 410, 502, 503];
 
 #[cfg(test)]
 mod tests {
@@ -483,9 +499,21 @@ mod tests {
     use crate::ids::{ComputerGeneration, DocumentGeneration};
     use std::collections::BTreeSet;
 
+    #[test]
+    fn gone_status_is_closed_and_keeps_stable_410_code_and_audit_kind() {
+        for status in [ArtifactGoneStatus::Deleted, ArtifactGoneStatus::Expired] {
+            let error = AppError::ArtifactGone { status };
+            assert_eq!(error.http_status(), 410);
+            assert_eq!(error.code().as_str(), "artifact_gone");
+            assert_eq!(error.audit_kind().as_str(), "resource_gone");
+            assert!(HTTP_STATUS_DOMAIN.contains(&410));
+        }
+        assert!(serde_json::from_str::<ArtifactGoneStatus>("\"available\"").is_err());
+    }
+
     /// 变体总数。新增变体必须同 PR 改这里 —— 它与 [`variant_index`] 和
     /// [`all_variants_for_test`] 三者互相咬合，见下方三条测试。
-    const VARIANT_COUNT: usize = 13;
+    const VARIANT_COUNT: usize = 14;
 
     /// 无通配 `_` 的穷举 match：**新增变体在这里编译失败**，逼作者同 PR 更新下面的变体台账。
     ///
@@ -507,6 +535,7 @@ mod tests {
             AppError::IdentityConflict { .. } => 10,
             AppError::SensitiveWriteRefused { .. } => 11,
             AppError::ReconciliationRequired { .. } => 12,
+            AppError::ArtifactGone { .. } => 13,
         }
     }
 
@@ -525,6 +554,9 @@ mod tests {
                 required: Role::Admin,
             },
             AppError::NotVisible,
+            AppError::ArtifactGone {
+                status: ArtifactGoneStatus::Deleted,
+            },
             AppError::MalformedPayload { field: "body" },
             AppError::PolicyRefused {
                 rule: "browser.navigate.deny_private_hosts".to_owned(),
@@ -627,6 +659,12 @@ mod tests {
                 403,
             ),
             (AppError::NotVisible, 404),
+            (
+                AppError::ArtifactGone {
+                    status: ArtifactGoneStatus::Deleted,
+                },
+                410,
+            ),
             (AppError::MalformedPayload { field: "body" }, 400),
             (
                 AppError::PolicyRefused {

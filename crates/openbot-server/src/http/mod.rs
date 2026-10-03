@@ -47,6 +47,7 @@ pub mod admin;
 pub mod agent_tools;
 pub mod agents;
 pub mod approvals;
+pub mod artifacts;
 pub mod auth_oidc;
 pub mod auth_sso;
 pub mod channels;
@@ -668,6 +669,19 @@ pub fn router(state: ServerState) -> Router {
             axum::routing::put(memories::correct).delete(memories::delete),
         )
         .route("/api/memories/{memory_id}/forbid", post(memories::forbid))
+        .route(
+            "/api/artifacts/save-run-message-text",
+            post(artifacts::save),
+        )
+        .route(
+            "/api/artifacts/{artifact_id}",
+            get(artifacts::metadata).head(|| async {
+                (
+                    axum::http::StatusCode::METHOD_NOT_ALLOWED,
+                    [(axum::http::header::CACHE_CONTROL, "no-store")],
+                )
+            }),
+        )
         .route("/api/threads/mint", post(threads::mint))
         .route(
             "/api/threads/{thread_id}/conversation",

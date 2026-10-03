@@ -87,11 +87,21 @@ pub mod agent_callback;
 pub mod agent_tools;
 #[cfg(feature = "server-runtime")]
 pub mod application_assembly;
+#[cfg(all(
+    feature = "server-runtime",
+    any(target_os = "macos", target_os = "linux")
+))]
+pub mod artifact_administration;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod artifact_bytes;
 pub mod artifact_registry;
 #[cfg(feature = "server-runtime")]
 pub mod artifact_source;
+#[cfg(all(
+    feature = "server-runtime",
+    any(target_os = "macos", target_os = "linux")
+))]
+pub mod artifact_store;
 pub mod auth;
 pub mod backup;
 #[cfg(feature = "server-runtime")]
