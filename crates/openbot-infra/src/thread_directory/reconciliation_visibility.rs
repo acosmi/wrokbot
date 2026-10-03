@@ -1,6 +1,6 @@
 //! One static authority CTE, composed into each single-statement Unknown read.
 
-pub(super) const VISIBLE_RUN: &str = r"
+pub(crate) const VISIBLE_RUN: &str = r"
 WITH visible_run AS (
   SELECT r.run_id,r.thread_id,r.status,r.foreground,r.terminal_event_seq,r.actor_id,r.bot_id
   FROM public.runs r

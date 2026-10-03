@@ -1,4 +1,4 @@
-//! 成果记录的纯输入形状与有界算术（R414）。
+//! 成果记录的纯输入形状、有界算术与 workspace 值（R414 / R423）。
 //!
 //! 本模块不读时钟、文件或数据库。来源序号、保存者和时间通过形状检查，不证明这些
 //! 事实确实发生；标识检查也不证明对象存在、当前可见或可读。引用解析与当前授权必须
@@ -60,6 +60,9 @@ pub enum ArtifactInvariantError {
     /// 保存者标识不满足有界身份文本规则。
     #[error("artifact saving actor invalid")]
     InvalidSavingActor,
+    /// Workspace 身份不满足有界身份文本规则。
+    #[error("artifact workspace identity invalid")]
+    InvalidWorkspaceIdentity,
     /// 引用列表超过冻结数量上限。
     #[error("artifact reference count limit exceeded")]
     ReferenceCountLimitExceeded,
@@ -81,6 +84,72 @@ pub enum ArtifactInvariantError {
     /// 文本字节合计超过冻结总上限。
     #[error("artifact text total byte limit exceeded")]
     TextTotalByteLimitExceeded,
+}
+
+/// R423 workspace 的封闭种类；同一身份文本在两个种类下属于不同键。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ArtifactWorkspaceKind {
+    /// Channel 来源使用其当前 anchor_id。
+    Channel,
+    /// direct_bot 来源使用其当前 thread_id，不使用 Bot anchor_id。
+    Thread,
+}
+
+impl ArtifactWorkspaceKind {
+    /// 物理配额键中的封闭 kind 文本；不解析自由字符串。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Channel => "channel",
+            Self::Thread => "thread",
+        }
+    }
+}
+
+/// R423 的有界 workspace 值；相等、排序与 hash 同时包含 kind 和原始身份文本。
+///
+/// 只保证身份文本为 1–512 UTF-8 bytes 且无控制字符，不做 trim 或归一化。
+/// 私有字段阻止绕过构造校验；本类型不实现 Serde，也不证明来源、dataset 或当前权限。
+/// 来源种类和身份必须由外层按当前 PG 事实解析，不能从客户端提交值取得权限。
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArtifactWorkspaceKey {
+    kind: ArtifactWorkspaceKind,
+    id: String,
+}
+
+impl ArtifactWorkspaceKey {
+    /// 先校验身份边界，再原样复制；kind 与文本共同组成键，不推断任何来源事实。
+    pub fn new(kind: ArtifactWorkspaceKind, id: &str) -> Result<Self, ArtifactInvariantError> {
+        if !is_valid_artifact_identity(id) {
+            return Err(ArtifactInvariantError::InvalidWorkspaceIdentity);
+        }
+        Ok(Self {
+            kind,
+            id: id.to_owned(),
+        })
+    }
+
+    /// 构造 Channel(anchor_id) 的有界值；不证明 anchor 属于当前可见来源。
+    pub fn channel(anchor_id: &str) -> Result<Self, ArtifactInvariantError> {
+        Self::new(ArtifactWorkspaceKind::Channel, anchor_id)
+    }
+
+    /// 构造 Thread(thread_id) 的有界值；不把 direct_bot 的 Bot anchor 当 workspace。
+    pub fn thread(thread_id: &str) -> Result<Self, ArtifactInvariantError> {
+        Self::new(ArtifactWorkspaceKind::Thread, thread_id)
+    }
+
+    /// 借出键的封闭种类。
+    #[must_use]
+    pub const fn kind(&self) -> ArtifactWorkspaceKind {
+        self.kind
+    }
+
+    /// 借出原始身份文本；不附加 kind 前缀、不修剪、不归一化。
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 /// Host 成果配额；私有字段保证构造时只能收紧 R414 冻结上限。
@@ -290,6 +359,114 @@ pub fn validate_artifact_text_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_kind_separates_identical_channel_and_thread_ids() {
+        let channel = ArtifactWorkspaceKey::channel("shared-text").unwrap();
+        let thread = ArtifactWorkspaceKey::thread("shared-text").unwrap();
+        assert_eq!(channel.id(), thread.id());
+        assert_ne!(channel, thread);
+        assert_eq!(channel.kind(), ArtifactWorkspaceKind::Channel);
+        assert_eq!(thread.kind(), ArtifactWorkspaceKind::Thread);
+        assert_eq!(channel.kind().as_str(), "channel");
+        assert_eq!(thread.kind().as_str(), "thread");
+        assert_eq!(
+            channel,
+            ArtifactWorkspaceKey::new(ArtifactWorkspaceKind::Channel, "shared-text").unwrap()
+        );
+        assert_eq!(
+            thread,
+            ArtifactWorkspaceKey::new(ArtifactWorkspaceKind::Thread, "shared-text").unwrap()
+        );
+        let distinct = std::collections::BTreeSet::from([channel.clone(), thread, channel]);
+        assert_eq!(distinct.len(), 2);
+    }
+
+    #[test]
+    fn workspace_identity_bounds_count_utf8_bytes_for_both_kinds() {
+        let chinese_boundary = "界".repeat(170) + "ab";
+        let emoji_boundary = "😀".repeat(128);
+        assert_eq!(chinese_boundary.len(), 512);
+        assert_eq!(emoji_boundary.len(), 512);
+        for kind in [
+            ArtifactWorkspaceKind::Channel,
+            ArtifactWorkspaceKind::Thread,
+        ] {
+            for id in [
+                "a".to_owned(),
+                "a".repeat(511),
+                "a".repeat(512),
+                chinese_boundary.clone(),
+                emoji_boundary.clone(),
+            ] {
+                let key = ArtifactWorkspaceKey::new(kind, &id).unwrap();
+                assert_eq!(key.kind(), kind);
+                assert_eq!(key.id(), id);
+            }
+            for id in [
+                "".to_owned(),
+                "a".repeat(513),
+                "界".repeat(171),
+                emoji_boundary.clone() + "a",
+            ] {
+                assert_eq!(
+                    ArtifactWorkspaceKey::new(kind, &id),
+                    Err(ArtifactInvariantError::InvalidWorkspaceIdentity)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_constructors_reject_unicode_controls_with_sanitized_errors() {
+        for code in (0..=0x1f).chain(0x7f..=0x9f) {
+            let control = char::from_u32(code).unwrap();
+            let id = format!("private-workspace{control}private-path");
+            for result in [
+                ArtifactWorkspaceKey::channel(&id),
+                ArtifactWorkspaceKey::thread(&id),
+            ] {
+                let error = result.unwrap_err();
+                assert_eq!(error, ArtifactInvariantError::InvalidWorkspaceIdentity);
+                assert_eq!(error.to_string(), "artifact workspace identity invalid");
+                assert_eq!(format!("{error:?}"), "InvalidWorkspaceIdentity");
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_identity_remains_raw_without_normalization_or_inferred_kind() {
+        for kind in [
+            ArtifactWorkspaceKind::Channel,
+            ArtifactWorkspaceKind::Thread,
+        ] {
+            for id in [
+                " ",
+                " anchor ",
+                "opaque:not-uuid",
+                "thread:anchor",
+                "é",
+                "e\u{301}",
+                "值\u{200d}名",
+            ] {
+                let key = ArtifactWorkspaceKey::new(kind, id).unwrap();
+                assert_eq!(key.id(), id);
+                assert_eq!(key.kind(), kind);
+            }
+            assert_ne!(
+                ArtifactWorkspaceKey::new(kind, "anchor").unwrap(),
+                ArtifactWorkspaceKey::new(kind, " anchor ").unwrap()
+            );
+            assert_ne!(
+                ArtifactWorkspaceKey::new(kind, "é").unwrap(),
+                ArtifactWorkspaceKey::new(kind, "e\u{301}").unwrap()
+            );
+            assert_ne!(
+                ArtifactWorkspaceKey::new(kind, "Anchor").unwrap(),
+                ArtifactWorkspaceKey::new(kind, "anchor").unwrap()
+            );
+        }
+    }
 
     #[test]
     fn quota_default_uses_frozen_budgets() {

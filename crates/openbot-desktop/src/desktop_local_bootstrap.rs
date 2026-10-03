@@ -10,6 +10,7 @@
 use openbot_application::tenant::package::LoadedTenantPackage;
 use openbot_contracts::auth::AuthContext;
 use openbot_domain::vault::secret::SecretBytes;
+use openbot_infra::artifact_registry::ArtifactDatasetRegistry;
 use openbot_infra::auth::single_user::desktop_local::{
     DesktopLocalAuthority, DesktopLocalBootstrapError, DesktopLocalBootstrapReport,
     DesktopLocalInstallation,
@@ -38,6 +39,7 @@ pub struct RunningDesktopLocalDataPlane {
     installation: DesktopLocalInstallation,
     runtime_auth: AuthContext,
     report: DesktopLocalBootstrapReport,
+    artifact_datasets: ArtifactDatasetRegistry,
 }
 
 /// PG-attested data plane that exposes no runtime authority before Vault canary verification.
@@ -85,6 +87,13 @@ impl RunningDesktopLocalDataPlane {
     #[must_use]
     pub const fn bootstrap_report(&self) -> &DesktopLocalBootstrapReport {
         &self.report
+    }
+
+    /// Trusted namespace observation retained by this running database owner.
+    /// This registry does not provide artifact bytes or product readiness.
+    #[must_use]
+    pub const fn artifact_dataset_registry(&self) -> &ArtifactDatasetRegistry {
+        &self.artifact_datasets
     }
 
     /// Build a redacted dedicated LISTEN config directly from the owned SCRAM bytes, without a
@@ -328,12 +337,35 @@ impl PreparedDesktopLocalDataPlane {
         if let Err(error) = self.ensure_owner_current() {
             return Err(self.cleanup_with(error).await);
         }
+        let artifact_datasets = match tokio::time::timeout(
+            STARTUP_DB_STEP_TIMEOUT,
+            ArtifactDatasetRegistry::from_desktop(&self.database, proof),
+        )
+        .await
+        {
+            Ok(Ok(registry)) => registry,
+            Ok(Err(_)) | Err(_) => {
+                return Err(self
+                    .cleanup_with(DesktopLocalCompositionError::Bootstrap(
+                        DesktopLocalBootstrapError::Principal(
+                            openbot_infra::db::InfraError::repository_invariant(
+                                "desktop_artifact_dataset_binding_unavailable",
+                            ),
+                        ),
+                    ))
+                    .await);
+            }
+        };
+        if let Err(error) = self.ensure_owner_current() {
+            return Err(self.cleanup_with(error).await);
+        }
         Ok(RunningDesktopLocalDataPlane {
             database: self.database,
             sidecar: self.sidecar.take(),
             installation: self.installation,
             runtime_auth,
             report,
+            artifact_datasets,
         })
     }
 
