@@ -119,6 +119,56 @@ impl VerifiedDesktopVaultCanary {
             && row.canary_schema == 1
             && Sha256Digest::of(row.encrypted_canary.as_bytes()) == self.encrypted_canary_digest)
     }
+
+    /// Recheck this already verified proof on the registry's owned Desktop transaction.
+    /// The caller retains the current canary lock; no SQL value can construct this proof.
+    pub(crate) async fn matches_transaction(
+        &self,
+        database: &DesktopLocalDatabase,
+        transaction: &tokio_postgres::Transaction<'_>,
+    ) -> Result<bool, DesktopVaultCanaryError> {
+        if !database.owns_token(&self.database_owner) {
+            return Ok(false);
+        }
+        let identity = transaction
+            .query_one(
+                "SELECT pcs.system_identifier::text,d.oid FROM pg_control_system() pcs JOIN pg_database d ON d.datname=current_database()",
+                &[],
+            )
+            .await
+            .map_err(|source| InfraError::query("核验成果 Desktop canary 数据库身份", source))?;
+        let system_identifier: String = identity.try_get(0).map_err(|source| {
+            InfraError::from(RowDecodeError::column(
+                "(pg_control_system)",
+                "system_identifier",
+                source,
+            ))
+        })?;
+        let database_oid: u32 = identity.try_get(1).map_err(|source| {
+            InfraError::from(RowDecodeError::column("(pg_database)", "oid", source))
+        })?;
+        if system_identifier != self.system_identifier || database_oid != self.database_oid {
+            return Ok(false);
+        }
+        let Some(row) = transaction
+            .query_opt(
+                "SELECT dataset_id,deployment_id,tenant_id,key_id,key_version,canary_schema,encrypted_canary FROM openbot_internal.desktop_vault_canaries WHERE deployment_id=$1 AND tenant_id=$2 AND key_version=1",
+                &[&self.deployment_id, &self.tenant_id],
+            )
+            .await
+            .map_err(|source| InfraError::query("核验成果当前 Desktop canary", source))?
+        else {
+            return Ok(false);
+        };
+        let row = decode_row(row)?;
+        Ok(row.dataset_id == self.dataset_id
+            && row.deployment_id == self.deployment_id
+            && row.tenant_id == self.tenant_id
+            && row.key_id == self.key_id
+            && row.key_version == self.key_version
+            && row.canary_schema == 1
+            && Sha256Digest::of(row.encrypted_canary.as_bytes()) == self.encrypted_canary_digest)
+    }
 }
 
 impl core::fmt::Debug for VerifiedDesktopVaultCanary {
@@ -350,6 +400,8 @@ fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraErr
         native::NATIVE_0038_VERSION => PUBLIC_0038,
         native::NATIVE_0039_VERSION => PUBLIC_0039,
         native::NATIVE_0040_VERSION => PUBLIC_0040,
+        //0041 adds only the internal dataset registry; public facts remain exactly0040.
+        native::NATIVE_0041_VERSION => PUBLIC_0040,
         _ => {
             return Err(InfraError::repository_invariant(
                 "desktop_vault_native_schema_unregistered",

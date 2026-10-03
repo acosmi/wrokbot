@@ -1,0 +1,172 @@
+{
+  "columns": [
+    {
+      "collation": "C",
+      "collationSchema": "pg_catalog",
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "deployment_id",
+      "notNull": true,
+      "ordinal": 1,
+      "type": "text"
+    },
+    {
+      "collation": "C",
+      "collationSchema": "pg_catalog",
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "tenant_id",
+      "notNull": true,
+      "ordinal": 2,
+      "type": "text"
+    },
+    {
+      "collation": "C",
+      "collationSchema": "pg_catalog",
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "dataset_id",
+      "notNull": true,
+      "ordinal": 3,
+      "type": "text"
+    },
+    {
+      "collation": null,
+      "collationSchema": null,
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "binding_schema",
+      "notNull": true,
+      "ordinal": 4,
+      "type": "smallint"
+    },
+    {
+      "collation": "default",
+      "collationSchema": "pg_catalog",
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "initial_origin",
+      "notNull": true,
+      "ordinal": 5,
+      "type": "text"
+    },
+    {
+      "collation": null,
+      "collationSchema": null,
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": true,
+      "ordinal": 6,
+      "type": "timestamp with time zone"
+    }
+  ],
+  "constraints": [
+    {
+      "deferrable": false,
+      "deferred": false,
+      "definition": "CHECK ((((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND (dataset_id !~ '[\u0001-\u001f-]'::text)))",
+      "kind": "c",
+      "name": "artifact_dataset_bindings_dataset_shape",
+      "validated": true
+    },
+    {
+      "deferrable": false,
+      "deferred": false,
+      "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND (deployment_id !~ '[\u0001-\u001f-]'::text)))",
+      "kind": "c",
+      "name": "artifact_dataset_bindings_deployment_shape",
+      "validated": true
+    },
+    {
+      "deferrable": false,
+      "deferred": false,
+      "definition": "CHECK ((initial_origin = ANY (ARRAY['desktop_canary'::text, 'server_first_adoption'::text])))",
+      "kind": "c",
+      "name": "artifact_dataset_bindings_origin_known",
+      "validated": true
+    },
+    {
+      "deferrable": false,
+      "deferred": false,
+      "definition": "PRIMARY KEY (deployment_id, tenant_id)",
+      "kind": "p",
+      "name": "artifact_dataset_bindings_pkey",
+      "validated": true
+    },
+    {
+      "deferrable": false,
+      "deferred": false,
+      "definition": "CHECK ((binding_schema = 1))",
+      "kind": "c",
+      "name": "artifact_dataset_bindings_schema_known",
+      "validated": true
+    },
+    {
+      "deferrable": false,
+      "deferred": false,
+      "definition": "CHECK ((((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND (tenant_id !~ '[\u0001-\u001f-]'::text)))",
+      "kind": "c",
+      "name": "artifact_dataset_bindings_tenant_shape",
+      "validated": true
+    }
+  ],
+  "guard": {
+    "arguments": "",
+    "configuration": null,
+    "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_append_only_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'append-only relation refuses mutation';\nEND;\n$function$\n",
+    "language": "plpgsql",
+    "name": "prevent_append_only_mutation",
+    "returnType": "trigger",
+    "schema": "openbot_internal",
+    "securityDefiner": false
+  },
+  "indexes": [
+    {
+      "definition": "CREATE UNIQUE INDEX artifact_dataset_bindings_pkey ON openbot_internal.artifact_dataset_bindings USING btree (deployment_id, tenant_id)",
+      "expressions": null,
+      "keys": "1 2",
+      "name": "artifact_dataset_bindings_pkey",
+      "predicate": null,
+      "primary": true,
+      "ready": true,
+      "unique": true,
+      "valid": true
+    }
+  ],
+  "relation": {
+    "accessMethod": "heap",
+    "forceRowSecurity": false,
+    "kind": "r",
+    "partition": false,
+    "persistence": "p",
+    "rowSecurity": false
+  },
+  "rules": [],
+  "triggers": [
+    {
+      "definition": "CREATE TRIGGER artifact_dataset_bindings_append_only BEFORE DELETE OR UPDATE ON openbot_internal.artifact_dataset_bindings FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+      "enabled": "O",
+      "functionArguments": "",
+      "functionName": "prevent_append_only_mutation",
+      "functionSchema": "openbot_internal",
+      "name": "artifact_dataset_bindings_append_only",
+      "type": 27
+    },
+    {
+      "definition": "CREATE TRIGGER artifact_dataset_bindings_no_truncate BEFORE TRUNCATE ON openbot_internal.artifact_dataset_bindings FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+      "enabled": "O",
+      "functionArguments": "",
+      "functionName": "prevent_append_only_mutation",
+      "functionSchema": "openbot_internal",
+      "name": "artifact_dataset_bindings_no_truncate",
+      "type": 34
+    }
+  ]
+}

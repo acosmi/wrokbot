@@ -334,6 +334,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "tenant package 已经由 Application use case 同步"
     );
 
+    // Adopt only during trusted startup after database/package verification. The registry
+    // remains owned until shutdown and grants no artifact producer or byte-read capability.
+    let artifact_datasets = openbot_infra::artifact_registry::ArtifactDatasetRegistry::from_server(
+        pool.clone(),
+        &deployment,
+        &tenant,
+    )
+    .await?;
+
     let PackageOpenAiProviderConfig {
         base_url: channel_base_url,
         environment_api_key: channel_environment_api_key,
@@ -519,6 +528,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     mcp_revocation_reconciler.stop().await;
     policy_listener.stop().await;
+    drop(artifact_datasets);
     serve_result?;
     pool.close();
     Ok(())
