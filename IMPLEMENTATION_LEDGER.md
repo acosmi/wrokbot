@@ -522,3 +522,16 @@ Web使用现有隔离合成HTTP/ApplicationService宿主，模型目录与保存
 十二组面板观察覆盖七个展开与五个折叠侧栏场景；两tab/标题的Range与命中、遮罩覆盖、实际关闭操作、焦点返回和草稿保持通过。QA中一个Range定位重复命中Computer，未将其声称为Close文字测量；每组另有点击关闭或Escape关闭及焦点返回证据。既有发送/FIFO/Unknown的38项回归在P3 bundle上通过。全部仍是隔离合成ApplicationService/具名DTO transport fixture，不能替代生产PG、模型、Tauri、实机L3/L4或独立oracle。
 
 最终CSS131030/131072仍预警，WASM gzip3640187/3670016、字体740216/819200、external1/inline0，守卫与限额未改；P4先删除退休页面规则。自有native缓存第三次清理2247979474字节，工具/host SHA未变、空闲15892480000字节；QA/必要产物/其它窗口保留。PR #105当前source head为c912，追加本段只改执行台账，发布前核编译输入除该文件外逐项等价并复核差量，再按既有授权正常合并。oracle missing、最终像素、native56/真实200%/读屏、生产Computer/Artifact及通用回读等依赖继续open，当前不关闭P3规定全量验收或持续总目标。
+
+
+## V7-COMP-004 已交付沙箱编辑 CAS 补全与独立源码复核
+
+2026-10-03 UTC：按现行v7/R422仅补既有沙箱save/publish/delete的并发编辑缺口，独立PR #106。原revision继续表示发布次数；新增editingRevision:i64/updatedAt，None保存只创建、Some仅更新已知版本，发布/删除要求准确expectedRevision，stale返回当前授权范围的三字段快照与no-store。每次写入显式ReadCommitted/5s锁超时，当前DB actor generation/admin/deny SHARE先于治理及来源UPDATE锁，无自动重试；来源、治理、审计同事务。永久retired名称防删除后重建ABA，孤立治理行fail-closed；新身份初始1，旧NULL读1、实际更新消费2。新增component_editing_revision审计事实，原component_revision与Agent publication/grant语义保持。
+
+native0038追加nullable编辑列和最小retired名称表，保留旧SQL/schema与typed baseline19列，current20列。schema0038由准备时点的自有隔离PG实际生成；之后生成器fmt及checksum函数位置调整有原始记录/差量依据，最终当前候选的真实PG两例独立逐项核全部schema facts与fixture，未倒填生成输入。26路径旧/新预像一致，API与fixture在实际main dd91601d095a0faccf8eba8fe91aaf45a1bd4fd8整合；fixture去除合入UI新增的重复NULL pair而保留原pair，最终11份检查都绑定修正后实际字节。
+
+准确源码bf74a6ead6834767a363c30c98306e03362c6fb9/tree f21f81b45feac3b951b3f7cb983c82b4d204c524，28产品路径正常commit/push及hooks通过。11新定向记录全部exit0，1151非ledger产品输入逐项before/after/current核同；1114不同Rust通过：core726、Infra lib360+真实PG20、两宿主3、同Application transport1、既有UI过滤4；四组严格Clippy、WASM/fmt通过。PG覆盖双旧写者/双创建者、create/delete双顺序真实wait chain、当前授权先于stale元数据、无效果/审计rollback、永久名称退役、legacy NULL兼容及既有publication/schema/grant；自有PG实际停止、密码移除、无postmaster.pid。六次初期编译/测试失败与旧相位记录保留，不冒充当前base验收。
+
+精确源码及11份新证据经独立复核GO，摘要2859758e0b5d159f76df1f0d762c3b9f074b03cbdf603bf4f61fe57cb3b198b7；生成证据独立补充摘要fc6c46ac6137352f2f40fe30653abfde07841f8edc8585adf51baf8a52a4ef88。Axum管理员/Origin检查在body前；Desktop在body前只校验窗口authority/freshness，角色在Application、DB当前权限在对象锁/冲突快照前。现有最小UI传递已加载revision，删除只在确认时取列表版本，不认证打开弹窗冻结、保存三份状态/代次/800ms/10s或整个UI5-P6/R415。其余CAS对象与074–077/能力/精确目标反例继续开放；新能力不启动，完整M0 A0–A7仍0/8。旧PR与历史验收身份保留。
+
+本段仅记录源码GO与真实验证；最终台账增量仍需独立GO，PR #106此时未合并，合并须绑定最终准确head、正常admin执行并核实际GitHub回执后才进入下一任务。用户要求及时清理编译垃圾：仅删除可再生成过期缓存，五次累计2329170160逻辑字节，源码/QA/历史验收/数据库及必要产物保持。
