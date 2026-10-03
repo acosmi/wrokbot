@@ -31,17 +31,26 @@ async fn lock_actor_with_mode(
 ) -> Result<(), MemoryAdministrationError> {
     let generation =
         i64::try_from(auth_generation.get()).map_err(|_| MemoryAdministrationError::NotVisible)?;
-    let current = transaction
+    // A locking statement keeps its original snapshot while waiting. Lock the actor alone,
+    // then read roles/deny in a new RC statement so their committed changes are current.
+    transaction
         .query_opt(
             &format!(
-                "SELECT u.id FROM public.users u
-              WHERE u.id=$1 AND coalesce(u.auth_generation,0)=$2
-                AND EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=u.id)
-                AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra
-                                WHERE ra.email=lower(u.email))
-              {} OF u",
+                "SELECT u.id FROM public.users u WHERE u.id=$1 {} OF u",
                 if exclusive { "FOR UPDATE" } else { "FOR SHARE" }
             ),
+            &[&actor.as_str()],
+        )
+        .await
+        .map_err(|error| super::unavailable("验证 memory actor 失败", error))?
+        .ok_or(MemoryAdministrationError::NotVisible)?;
+    let current = transaction
+        .query_opt(
+            "SELECT u.id FROM public.users u
+             WHERE u.id=$1 AND coalesce(u.auth_generation,0)=$2
+               AND EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=u.id)
+               AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra
+                               WHERE ra.email=lower(u.email))",
             &[&actor.as_str(), &generation],
         )
         .await
