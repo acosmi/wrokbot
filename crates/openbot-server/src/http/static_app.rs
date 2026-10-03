@@ -397,6 +397,7 @@ mod tests {
             UiPreferences {
                 theme: Some(UiTheme::Light),
                 locale: None,
+                ..UiPreferences::default()
             },
             &headers,
             true,

@@ -2555,10 +2555,12 @@ pub async fn load_ui_preferences() -> Result<UiPreferences, ApiError> {
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        response
+        let stored = response
             .json::<UiPreferences>()
             .await
-            .map_err(|_| ApiError::InvalidResponse)
+            .map_err(|_| ApiError::InvalidResponse)?;
+        validate_ui_preference_projection(stored)?;
+        Ok(stored)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -2568,7 +2570,11 @@ pub async fn load_ui_preferences() -> Result<UiPreferences, ApiError> {
 
 /// Merge one or both closed preference fields through the authenticated same-origin API.
 pub async fn save_ui_preferences(update: UpdateUiPreferences) -> Result<UiPreferences, ApiError> {
-    if update.is_empty() {
+    if update.is_empty()
+        || update
+            .expected_revision
+            .is_some_and(|revision| revision <= 0)
+    {
         return Err(ApiError::InvalidResponse);
     }
     #[cfg(target_arch = "wasm32")]
@@ -2590,16 +2596,96 @@ pub async fn save_ui_preferences(update: UpdateUiPreferences) -> Result<UiPrefer
             .json::<UiPreferences>()
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
-        if update.theme.is_some() && stored.theme != update.theme
-            || update.locale.is_some() && stored.locale != update.locale
-        {
-            return Err(ApiError::InvalidResponse);
-        }
+        validate_ui_preference_receipt(update, stored)?;
         Ok(stored)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         Err(ApiError::Unavailable)
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn validate_ui_preference_projection(stored: UiPreferences) -> Result<(), ApiError> {
+    let valid = match (stored.revision, stored.updated_at) {
+        (None, None) => stored.theme.is_none() && stored.locale.is_none(),
+        (Some(_), Some(_)) => stored.revision_snapshot().is_ok(),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ApiError::InvalidResponse)
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn validate_ui_preference_receipt(
+    update: UpdateUiPreferences,
+    stored: UiPreferences,
+) -> Result<(), ApiError> {
+    validate_ui_preference_projection(stored)?;
+    let expected_revision = update
+        .expected_revision
+        .map_or(Some(1), |r| r.checked_add(1));
+    if expected_revision.is_none()
+        || stored.revision != expected_revision
+        || update.theme.is_some() && stored.theme != update.theme
+        || update.locale.is_some() && stored.locale != update.locale
+    {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod ui_preference_receipt_tests {
+    use super::*;
+    use openbot_contracts::ui::UiTheme;
+
+    #[test]
+    fn preference_get_and_save_require_committed_metadata_and_exact_expected_revision() {
+        let update = UpdateUiPreferences {
+            theme: Some(UiTheme::Dark),
+            locale: None,
+            expected_revision: Some(2),
+        };
+        let stored = UiPreferences {
+            theme: Some(UiTheme::Dark),
+            locale: None,
+            revision: Some(3),
+            updated_at: Some(time::OffsetDateTime::UNIX_EPOCH),
+        };
+        assert!(validate_ui_preference_projection(UiPreferences::default()).is_ok());
+        assert!(validate_ui_preference_receipt(update, stored).is_ok());
+        for invalid in [
+            UiPreferences::default(),
+            UiPreferences {
+                revision: Some(2),
+                ..stored
+            },
+            UiPreferences {
+                updated_at: None,
+                ..stored
+            },
+            UiPreferences {
+                theme: Some(UiTheme::Light),
+                ..stored
+            },
+        ] {
+            assert_eq!(
+                validate_ui_preference_receipt(update, invalid),
+                Err(ApiError::InvalidResponse)
+            );
+        }
+        assert!(
+            validate_ui_preference_projection(UiPreferences {
+                revision: None,
+                updated_at: None,
+                ..stored
+            })
+            .is_err()
+        );
     }
 }
 

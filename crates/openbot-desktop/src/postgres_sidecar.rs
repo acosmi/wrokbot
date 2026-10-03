@@ -3899,6 +3899,7 @@ mod tests {
                 AppCommand::UpdateUiPreferences(UpdateUiPreferences {
                     theme: Some(UiTheme::Light),
                     locale: None,
+                    expected_revision: None,
                 }),
             )
             .await

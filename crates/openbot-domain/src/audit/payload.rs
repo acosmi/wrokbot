@@ -285,6 +285,8 @@ pub enum AuditFact {
     ComponentEditingRevision(u64),
     /// Committed skill editing version; Agent grant changes are recorded separately.
     SkillRevision(u64),
+    /// Committed actor-scoped UI preference editing version.
+    UiPreferencesRevision(u64),
     /// 该次工具调用的权威 Bot；绝不取自模型或 callback body。
     Bot(AuditIdentifier),
     /// Canonical remote Agent origin; path, query, fragment, userinfo, and credential are absent.
@@ -414,6 +416,7 @@ impl AuditFact {
             Self::ComponentRevision(_) => "component_revision",
             Self::ComponentEditingRevision(_) => "component_editing_revision",
             Self::SkillRevision(_) => "skill_revision",
+            Self::UiPreferencesRevision(_) => "ui_preferences_revision",
             Self::Bot(_) => "bot",
             Self::AgentEndpointOrigin(_) => "agent_endpoint_origin",
             Self::EffectClass(_) => "effect_class",
@@ -516,6 +519,7 @@ impl AuditFact {
             | Self::ComponentRevision(value)
             | Self::ComponentEditingRevision(value)
             | Self::SkillRevision(value)
+            | Self::UiPreferencesRevision(value)
             | Self::DurationMs(value)
             | Self::InputBytes(value)
             | Self::OutputBytes(value) => Value::Number((*value).into()),
@@ -609,6 +613,7 @@ impl AuditFact {
             | Self::ComponentRevision(value)
             | Self::ComponentEditingRevision(value)
             | Self::SkillRevision(value)
+            | Self::UiPreferencesRevision(value)
             | Self::DurationMs(value)
             | Self::InputBytes(value)
             | Self::OutputBytes(value) => writer.u64(*value),
@@ -656,6 +661,7 @@ pub const AUDIT_FIELD_LEDGER: &[&str] = &[
     "component_revision",
     "component_editing_revision",
     "skill_revision",
+    "ui_preferences_revision",
     "bot",
     "agent_endpoint_origin",
     "effect_class",
@@ -838,6 +844,7 @@ mod tests {
             AuditFact::ComponentRevision(7),
             AuditFact::ComponentEditingRevision(9),
             AuditFact::SkillRevision(3),
+            AuditFact::UiPreferencesRevision(2),
             AuditFact::Bot(identifier("bot-1")),
             AuditFact::AgentEndpointOrigin(
                 AuditEndpointOrigin::new("https://agent.example:8443").unwrap(),
