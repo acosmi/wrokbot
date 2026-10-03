@@ -240,6 +240,9 @@ pub struct ServerConfig {
     /// 容器镜像里设，开发态不设 —— 开发态由 Vite 托管前端并反代 API，
     /// 于是 server 保持纯 API，没有任何东西会遮住一条路由。
     pub app_dist_dir: Option<String>,
+    /// Explicit trusted startup-only artifact byte directory, verified by its real descriptor.
+    /// Absence leaves the saving dependency unavailable; no root is inferred from a tenant.
+    pub artifact_root: Option<std::path::PathBuf>,
     /// 租户包目录。缺省 [`DEFAULT_TENANT_PACKAGE_DIR`]。
     pub tenant_package_directory: String,
     /// 审计留存窗口。
@@ -327,6 +330,8 @@ impl ServerConfig {
             tls_proxy_secret,
             app_url,
             app_dist_dir: env::optional(env_map, "APP_DIST_DIR").map(str::to_owned),
+            artifact_root: env::optional(env_map, "OPENBOT_ARTIFACT_ROOT")
+                .map(std::path::PathBuf::from),
             tenant_package_directory: env::optional(env_map, "TENANT_PACKAGE_DIR")
                 .unwrap_or(DEFAULT_TENANT_PACKAGE_DIR)
                 .to_owned(),

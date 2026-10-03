@@ -39,7 +39,7 @@ pub struct RunningDesktopLocalDataPlane {
     installation: DesktopLocalInstallation,
     runtime_auth: AuthContext,
     report: DesktopLocalBootstrapReport,
-    artifact_datasets: ArtifactDatasetRegistry,
+    artifact_datasets: std::sync::Arc<ArtifactDatasetRegistry>,
 }
 
 /// PG-attested data plane that exposes no runtime authority before Vault canary verification.
@@ -92,8 +92,61 @@ impl RunningDesktopLocalDataPlane {
     /// Trusted namespace observation retained by this running database owner.
     /// This registry does not provide artifact bytes or product readiness.
     #[must_use]
-    pub const fn artifact_dataset_registry(&self) -> &ArtifactDatasetRegistry {
-        &self.artifact_datasets
+    pub fn artifact_dataset_registry(&self) -> &ArtifactDatasetRegistry {
+        self.artifact_datasets.as_ref()
+    }
+
+    /// Retain this exact live registry owner for the trusted local store composition.
+    #[cfg(all(
+        feature = "desktop-local-runtime",
+        any(target_os = "macos", target_os = "linux")
+    ))]
+    pub(crate) fn artifact_dataset_owner(&self) -> std::sync::Arc<ArtifactDatasetRegistry> {
+        std::sync::Arc::clone(&self.artifact_datasets)
+    }
+
+    /// Adopt only the fixed artifacts child of this current installation and sidecar owner.
+    #[cfg(all(
+        feature = "desktop-local-runtime",
+        any(target_os = "macos", target_os = "linux")
+    ))]
+    pub(crate) async fn open_artifact_store(
+        &self,
+        policy: openbot_domain::artifact::ArtifactQuotaPolicy,
+    ) -> Result<
+        std::sync::Arc<openbot_infra::artifact_store::DatasetBoundArtifactStore>,
+        DesktopLocalCompositionError,
+    > {
+        let current = || {
+            self.sidecar
+                .as_ref()
+                .ok_or(DesktopLocalCompositionError::InstallationMismatch)?
+                .ensure_owner_current()
+                .map_err(|_| DesktopLocalCompositionError::InstallationMismatch)
+        };
+        current()?;
+        let parent = self
+            .installation
+            .sidecar_data_dir()
+            .parent()
+            .ok_or(DesktopLocalCompositionError::InstallationMismatch)?
+            .to_path_buf();
+        let root = tokio::task::spawn_blocking(move || {
+            openbot_infra::artifact_store::open_trusted_installation_artifact_root(&parent)
+        })
+        .await
+        .map_err(|_| DesktopLocalCompositionError::ArtifactStore)?
+        .map_err(|_| DesktopLocalCompositionError::ArtifactStore)?;
+        current()?;
+        let store = openbot_infra::artifact_store::DatasetBoundArtifactStore::bind_host_root(
+            root,
+            self.artifact_dataset_owner(),
+            policy,
+        )
+        .await
+        .map_err(|_| DesktopLocalCompositionError::ArtifactStore)?;
+        current()?;
+        Ok(std::sync::Arc::new(store))
     }
 
     /// Build a redacted dedicated LISTEN config directly from the owned SCRAM bytes, without a
@@ -365,7 +418,7 @@ impl PreparedDesktopLocalDataPlane {
             installation: self.installation,
             runtime_auth,
             report,
-            artifact_datasets,
+            artifact_datasets: std::sync::Arc::new(artifact_datasets),
         })
     }
 
@@ -417,6 +470,10 @@ impl Drop for RunningDesktopLocalDataPlane {
 /// Stable pre-window composition failures; path, package contents and SCRAM bytes are never kept.
 #[derive(Debug, thiserror::Error)]
 pub enum DesktopLocalCompositionError {
+    /// The current installation could not adopt its actual exclusive artifact byte root.
+    #[cfg(feature = "desktop-local-runtime")]
+    #[error("desktop_local_artifact_store_unavailable")]
+    ArtifactStore,
     /// The running child belongs to a different app-instance data directory.
     #[error("desktop_local_sidecar_installation_mismatch")]
     InstallationMismatch,

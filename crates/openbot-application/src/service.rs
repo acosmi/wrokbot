@@ -99,6 +99,8 @@ pub const TRACE_ONLY_SPAN_FIELDS: &[&str] = &["actor_id", "operation", "error.co
 #[must_use]
 pub const fn command_kind(command: &AppCommand) -> &'static str {
     match command {
+        AppCommand::SaveRunMessageTextArtifact(_) => "save_run_message_text_artifact",
+        AppCommand::GetArtifactMetadata(_) => "get_artifact_metadata",
         AppCommand::Health => "health",
         AppCommand::ListVisibleChannels { .. } => "list_visible_channels",
         AppCommand::GetVisibleChannel { .. } => "get_visible_channel",
@@ -238,6 +240,22 @@ mod tests {
     #[test]
     fn operation_names_are_closed_and_stable() {
         let commands = [
+            (
+                AppCommand::SaveRunMessageTextArtifact(openbot_contracts::artifacts::SaveRunMessageTextArtifact {
+                    request_id: "019a7777-abcd-7abc-8abc-0123456789ab".into(),
+                    source_thread_id: openbot_contracts::ids::ThreadId::new("00000000-0000-8000-8000-000000000000"),
+                    source_run_id: RunId::new("source-run"),
+                    source_message_id: "source-message".to_owned(),
+                    expected_sha256: "a".repeat(64),
+                }),
+                "save_run_message_text_artifact",
+            ),
+            (
+                AppCommand::GetArtifactMetadata(openbot_contracts::artifacts::GetArtifactMetadata {
+                    artifact_id: "019a7778-abcd-7abc-8abc-0123456789ab".into(),
+                }),
+                "get_artifact_metadata",
+            ),
             (AppCommand::Health, "health"),
             (
                 AppCommand::ListVisibleChannels {

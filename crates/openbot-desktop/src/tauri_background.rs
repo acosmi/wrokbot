@@ -1193,6 +1193,34 @@ pub(crate) async fn prepare_desktop_local_runtime(
                 );
             }
         };
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> = {
+        let artifact_policy = openbot_domain::artifact::ArtifactQuotaPolicy::default();
+        let artifact_store = match data_plane.open_artifact_store(artifact_policy).await {
+            Ok(store) => store,
+            Err(_) => {
+                return Err(
+                    cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
+                );
+            }
+        };
+        let port = match openbot_infra::artifact_administration::PostgresArtifactAdministration::new(
+            data_plane.artifact_dataset_owner(),
+            artifact_store,
+            artifact_policy,
+            openbot_domain::vault::SecretBytes::new(audit_key.expose().to_vec()),
+        ) {
+            Ok(port) => Arc::new(port),
+            Err(_) => {
+                return Err(
+                    cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
+                );
+            }
+        };
+        Some(port)
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> = None;
     let assembly = match assemble_postgres_application(PostgresApplicationAssemblyInput {
         pool: pool.clone(),
         listener_database: listener_database.clone(),
@@ -1212,6 +1240,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
             app_data_root.as_path().join(DESKTOP_UI_PREFERENCES_FILE),
         )),
         screen_sessions: Arc::new(ScreenSessionService::new(screen_hub)),
+        artifacts,
         remote_agent_probe: remote_agent_probe.clone(),
         managed_slot_available: false,
         channel_routing_provider,

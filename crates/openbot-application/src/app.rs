@@ -29,6 +29,10 @@ use crate::approval_admin::{
     NoToolApprovalAdministration, ToolApprovalAdministration, decide_tool_approval,
     list_pending_tool_approvals, subscribe_tool_approval_activity,
 };
+use crate::artifacts::{
+    ArtifactAdministration, NoArtifactAdministration, get_artifact_metadata,
+    save_run_message_text_artifact,
+};
 use crate::components::{
     ComponentAdministration, NoComponentAdministration, await_component_human_decision,
     call_component_function, decide_component, list_component_data_functions, list_components,
@@ -120,6 +124,7 @@ pub struct OpenBotApplication<
     run_cost_budgets: std::sync::Arc<dyn RunCostBudgetAdministration>,
     remote_interrupts: std::sync::Arc<dyn RemoteInterruptCoordinator>,
     screen_sessions: std::sync::Arc<dyn ScreenSessionAdministration>,
+    artifacts: std::sync::Arc<dyn ArtifactAdministration>,
     heartbeat_period: Duration,
 }
 
@@ -164,6 +169,7 @@ impl<R>
             run_cost_budgets: std::sync::Arc::new(NoRunCostBudgetAdministration),
             remote_interrupts: std::sync::Arc::new(NoRemoteInterruptCoordinator),
             screen_sessions: std::sync::Arc::new(NoScreenSessionAdministration),
+            artifacts: std::sync::Arc::new(NoArtifactAdministration),
             heartbeat_period: DEFAULT_HEARTBEAT_PERIOD,
         }
     }
@@ -197,6 +203,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             run_cost_budgets: self.run_cost_budgets,
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
+            artifacts: self.artifacts,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -228,6 +235,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             run_cost_budgets: self.run_cost_budgets,
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
+            artifacts: self.artifacts,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -259,6 +267,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             run_cost_budgets: self.run_cost_budgets,
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
+            artifacts: self.artifacts,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -294,6 +303,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             run_cost_budgets: self.run_cost_budgets,
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
+            artifacts: self.artifacts,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -325,6 +335,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             run_cost_budgets: self.run_cost_budgets,
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
+            artifacts: self.artifacts,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -356,6 +367,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             run_cost_budgets: self.run_cost_budgets,
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
+            artifacts: self.artifacts,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -390,6 +402,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             run_cost_budgets: self.run_cost_budgets,
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
+            artifacts: self.artifacts,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -531,6 +544,13 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
         self
     }
 
+    /// Attach the authoritative dataset-bound artifact repository.
+    #[must_use]
+    pub fn with_artifacts(mut self, artifacts: std::sync::Arc<dyn ArtifactAdministration>) -> Self {
+        self.artifacts = artifacts;
+        self
+    }
+
     /// 覆盖心跳间隔。
     ///
     /// 存在的理由只有一个：让测试不必与 30 秒的默认节拍赛跑。生产侧应当用默认值 ——
@@ -563,6 +583,14 @@ where
         command: AppCommand,
     ) -> Result<AppReply, AppError> {
         match command {
+            AppCommand::SaveRunMessageTextArtifact(input) => {
+                Ok(AppReply::ArtifactRegistrationReceipt(
+                    save_run_message_text_artifact(self.artifacts.as_ref(), auth, input).await?,
+                ))
+            }
+            AppCommand::GetArtifactMetadata(input) => Ok(AppReply::ArtifactMetadata(
+                get_artifact_metadata(self.artifacts.as_ref(), auth, input).await?,
+            )),
             AppCommand::Health => Ok(AppReply::Health(health())),
             AppCommand::ListVisibleChannels { limit, cursor } => {
                 let page =
