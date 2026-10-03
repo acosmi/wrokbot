@@ -129,6 +129,8 @@ mod tests {
             instructions: "Keep sources".into(),
             origin: "yours".into(),
             installed_by: None,
+            revision: 1,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             granted_to: Vec::new(),
         };
         assert!(!in_scope(&row, false, "admin"));
