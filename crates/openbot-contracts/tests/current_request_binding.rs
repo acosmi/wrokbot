@@ -5,7 +5,7 @@ use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
@@ -16,14 +16,8 @@ use openbot_contracts::request_binding::{
 };
 use time::OffsetDateTime;
 
-struct NoopWake;
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
-    let waker = Waker::from(Arc::new(NoopWake));
-    future.poll(&mut Context::from_waker(&waker))
+    future.poll(&mut Context::from_waker(Waker::noop()))
 }
 
 fn ready<F: Future>(future: F) -> F::Output {

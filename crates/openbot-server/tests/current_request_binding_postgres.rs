@@ -1042,13 +1042,8 @@ async fn minted_single_user_refuses_current_canonical_deny_without_repair() {
     .await;
 }
 
-struct NoopWake;
-impl std::task::Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
 fn poll_current_once<F: Future>(future: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
-    let waker = std::task::Waker::from(Arc::new(NoopWake));
-    future.poll(&mut std::task::Context::from_waker(&waker))
+    future.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
 }
 
 async fn last_actual_owner_drop_while_guard_waits_for_own_pool(tag: &str, mode: Mode) {

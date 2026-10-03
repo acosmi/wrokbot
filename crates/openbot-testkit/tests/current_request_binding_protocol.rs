@@ -875,13 +875,8 @@ async fn unbound_generic_source_and_rowless_single_user_source_are_missing_befor
     }
 }
 
-struct NoopWake;
-impl std::task::Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
 fn poll_current_once<F: Future>(future: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
-    let waker = std::task::Waker::from(Arc::new(NoopWake));
-    future.poll(&mut std::task::Context::from_waker(&waker))
+    future.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
 }
 
 #[tokio::test]

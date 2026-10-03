@@ -10,6 +10,7 @@
 use core::fmt;
 use core::str::FromStr;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -259,13 +260,13 @@ pub struct AuthContext {
     roles: BTreeSet<Role>,
     auth_generation: AuthGeneration,
     single_user: bool,
-    request_binding: Option<crate::request_binding::VerifiedHostRequestBinding>,
+    request_binding: Option<Arc<crate::request_binding::VerifiedHostRequestBinding>>,
 }
 
 impl AuthContext {
     /// 非 Serde 宿主绑定；getter 本身不证明当前权限。
     pub fn request_binding(&self) -> Option<&crate::request_binding::VerifiedHostRequestBinding> {
-        self.request_binding.as_ref()
+        self.request_binding.as_deref()
     }
 
     /// 受信 host 在 builder 完成后消费式附加，核原六项身份。
@@ -277,7 +278,7 @@ impl AuthContext {
         if !binding.matches_auth(&self) {
             return Err(crate::request_binding::RequestBindingAttachError::IdentityMismatch);
         }
-        self.request_binding = Some(binding);
+        self.request_binding = Some(Arc::new(binding));
         Ok(self)
     }
     /// 部署身份。
