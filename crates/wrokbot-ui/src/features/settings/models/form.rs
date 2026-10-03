@@ -53,6 +53,7 @@ pub(super) fn ModelEditor(target: EditTarget, close: UnsyncCallback<()>) -> impl
     view! {
                 <Suspense fallback=move || view! {<div class="ob-library-form"><p role="status">{move ||t!(i18n, common.loading)}</p></div>}>
                     {move || current.get().map(|result| match result {
+                        Ok(Some(base)) if !deleting && base.has_credential => view! { <super::revision::ModelRevisionEditor base close/> }.into_any(),
                         Ok(base) => view! { <ModelForm base deleting close/> }.into_any(),
                         Err(_) => view! { <div class="ob-library-form"><p class="ob-alert" role="alert">{move ||t!(i18n, models.load_failed)}</p><Button on_activate=move |_| current.refetch()>{move ||t!(i18n, models.refresh)}</Button><Button on_activate=move |_|close.run(())>{move ||t!(i18n, common.close)}</Button></div> }.into_any()
                     })}
@@ -61,7 +62,7 @@ pub(super) fn ModelEditor(target: EditTarget, close: UnsyncCallback<()>) -> impl
 }
 
 #[component]
-fn ModelForm(
+pub(super) fn ModelForm(
     base: Option<ModelConnection>,
     deleting: bool,
     close: UnsyncCallback<()>,
@@ -89,6 +90,10 @@ fn ModelForm(
     let invalid = RwSignal::new(false);
     let blocked = Signal::derive(move || {
         actions.status.get().locked()
+            || original.with_value(|row| {
+                row.as_ref()
+                    .is_some_and(|row| actions.metadata_hold(&row.id).is_some())
+            })
             || matches!(
                 actions.status.get(),
                 Status::Failed(WriteError::Rejected(_))

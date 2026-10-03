@@ -1,4 +1,26 @@
 {
+  "revision_editor": {
+    "saved": "已保存",
+    "dirty": "有未保存的修改",
+    "saving": "正在保存，可继续编辑。",
+    "error": "保存结果未确认，草稿已保留。",
+    "conflict": "服务器版本已变化，草稿已保留。",
+    "paused": "自动保存已暂停。请先读取当前版本，再选择如何处理。",
+    "compare": "保留草稿并比较",
+    "load": "加载服务器版本",
+    "retry": "回读并重试原修改",
+    "reapply": "将草稿重新应用到当前版本",
+    "discard_confirm": "加载服务器版本会放弃当前本地草稿，是否继续？",
+    "confirm_load": "放弃草稿并加载",
+    "reapply_confirm": "读取当前版本，并将此草稿作为新修改应用？",
+    "confirm_reapply": "回读并应用草稿",
+    "local_draft": "本地草稿",
+    "server_version": "当前服务器版本",
+    "read_failed": "无法核实当前版本，草稿已保留。",
+    "sensitive_mode": "修改连接设置或密钥",
+    "sensitive_boundary": "连接设置和密钥需要明确保存，自动保存已暂停。",
+    "metadata_boundary": "名称与模型修改会自动保存，连接设置与密钥使用明确操作。"
+  },
   "common": {
     "configuration_publication_unknown": "草稿保存已确认，但发布尚未确认。该对象继续禁止写入，请勿再次提交保存。",
     "configuration_write_pending": "一项更改正在等待回执，离开此页不会取消已提交的操作。",

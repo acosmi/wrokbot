@@ -10,6 +10,24 @@ use serde_json::json;
 
 use super::{ApiError, encode_url_component};
 
+/// Payload-free exact identity used only by the authenticated skill CAS owner.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SkillBinding {
+    pub id: String,
+    pub slug: String,
+    pub owner: Option<String>,
+}
+
+impl SkillBinding {
+    pub(crate) fn of(row: &McpAdminSkill) -> Self {
+        Self {
+            id: row.id.clone(),
+            slug: row.slug.clone(),
+            owner: row.owner_user_id.clone(),
+        }
+    }
+}
+
 /// Shared server limits (mcp_connections::prepare_skill_mutation), mirrored without widening.
 pub(crate) fn valid_slug(slug: &str) -> bool {
     (2..=40).contains(&slug.len())
@@ -156,23 +174,171 @@ pub(crate) async fn save(
         .await?,
     )
     .map_err(|_| ApiError::InvalidResponse)?;
-    validate_skills(&skills.skills)?;
+    matching_ack(&skills.skills, &mutation, &expected_owner, None)?;
+    Ok(())
+}
+
+fn matching_ack(
+    skills: &[McpAdminSkill],
+    mutation: &PluginSkillMutation,
+    expected_owner: &Option<String>,
+    existing: Option<&McpAdminSkill>,
+) -> Result<McpAdminSkill, ApiError> {
+    validate_skills(skills)?;
     let expected_revision = mutation
         .expected_revision
         .map_or(Some(1), |r| r.checked_add(1))
         .ok_or(ApiError::InvalidResponse)?;
     // A 200 response with no matching authoritative row is not a successful save.
-    if !skills.skills.iter().any(|skill| {
+    let matching = skills.iter().find(|skill| {
         skill.slug == mutation.slug
             && skill.title == mutation.title
             && skill.summary == mutation.summary
             && skill.instructions == mutation.instructions
-            && skill.owner_user_id == expected_owner
+            && &skill.owner_user_id == expected_owner
             && skill.revision == expected_revision
-    }) {
-        return Err(ApiError::InvalidResponse);
+            && existing.is_none_or(|old| {
+                skill.id == old.id
+                    && skill.slug == old.slug
+                    && skill.owner_user_id == old.owner_user_id
+                    && skill.origin == old.origin
+                    && skill.installed_by == old.installed_by
+            })
+    });
+    matching.cloned().ok_or(ApiError::InvalidResponse)
+}
+
+/// A closed stale-snapshot receipt belongs only to this existing-object CAS attempt.
+/// Generic plugin operations retain their original error and Unknown classifications.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SkillWriteError {
+    Conflict(openbot_contracts::revision::RevisionSnapshot),
+    Rejected(ApiError),
+    Unknown(ApiError),
+}
+
+/// Save only metadata of a captured, already-authorized existing skill. Creation is explicit.
+pub(crate) async fn save_existing(
+    mutation: PluginSkillMutation,
+    existing: McpAdminSkill,
+) -> Result<McpAdminSkill, SkillWriteError> {
+    validate_mutation(&mutation).map_err(SkillWriteError::Rejected)?;
+    if mutation.expected_revision != Some(existing.revision)
+        || mutation.slug != existing.slug
+        || mutation.deployment_wide != existing.owner_user_id.is_none()
+        || existing.revision <= 0
+    {
+        return Err(SkillWriteError::Rejected(ApiError::NotSubmitted));
     }
-    Ok(())
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::api::request::Request;
+        let request = Request::post("/api/plugins/skills")
+            .json(&mutation)
+            .map_err(|_| SkillWriteError::Rejected(ApiError::NotSubmitted))?;
+        let response = Request::send(request).await.map_err(|error| match error {
+            ApiError::NotSubmitted => SkillWriteError::Rejected(error),
+            _ => SkillWriteError::Unknown(error),
+        })?;
+        if response.status() == 409 {
+            let body = response
+                .text()
+                .await
+                .map_err(|_| SkillWriteError::Unknown(ApiError::InvalidResponse))?;
+            return decode_existing_reply(409, &body, &mutation, &existing);
+        }
+        if response.status() != 200 {
+            let error = super::status_error(response.status());
+            return Err(match error {
+                ApiError::Unauthorized | ApiError::Forbidden | ApiError::NotFound => {
+                    SkillWriteError::Rejected(error)
+                }
+                _ => SkillWriteError::Unknown(error),
+            });
+        }
+        let body = response
+            .text()
+            .await
+            .map_err(|_| SkillWriteError::Unknown(ApiError::InvalidResponse))?;
+        decode_existing_reply(200, &body, &mutation, &existing)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (mutation, existing);
+        Err(SkillWriteError::Rejected(ApiError::Unavailable))
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn decode_existing_reply(
+    status: u16,
+    body: &str,
+    mutation: &PluginSkillMutation,
+    existing: &McpAdminSkill,
+) -> Result<McpAdminSkill, SkillWriteError> {
+    // Preserve the existing Plugins 8 MiB post-read bound; this is not a preallocation cap.
+    if body.len() > 8 * 1024 * 1024 {
+        return Err(SkillWriteError::Unknown(ApiError::InvalidResponse));
+    }
+    match status {
+        409 => {
+            let snapshot: openbot_contracts::revision::RevisionSnapshot =
+                serde_json::from_str(body)
+                    .map_err(|_| SkillWriteError::Unknown(ApiError::InvalidResponse))?;
+            if snapshot.current_revision() <= existing.revision {
+                return Err(SkillWriteError::Unknown(ApiError::InvalidResponse));
+            }
+            Err(SkillWriteError::Conflict(snapshot))
+        }
+        200 => {
+            let skills: PluginSkills = serde_json::from_str(body)
+                .map_err(|_| SkillWriteError::Unknown(ApiError::InvalidResponse))?;
+            matching_ack(
+                &skills.skills,
+                mutation,
+                &existing.owner_user_id,
+                Some(existing),
+            )
+            .map_err(SkillWriteError::Unknown)
+        }
+        _ => Err(SkillWriteError::Unknown(super::status_error(status))),
+    }
+}
+
+/// Fresh explicit recovery read uses the real Plugins list and rechecks current scope authority.
+pub(crate) async fn read_existing(existing: &McpAdminSkill) -> Result<McpAdminSkill, ApiError> {
+    if existing.owner_user_id.is_none() {
+        let status: openbot_contracts::people::AdminStatus = serde_json::from_value(
+            super::plugins::request("GET", "/api/admin/status", None).await?,
+        )
+        .map_err(|_| ApiError::InvalidResponse)?;
+        if status.status != openbot_contracts::people::AdminState::Ok {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    let envelope: openbot_contracts::people::CurrentUserResponse =
+        serde_json::from_value(super::plugins::request("GET", "/api/me", None).await?)
+            .map_err(|_| ApiError::InvalidResponse)?;
+    let actor = envelope.user;
+    if existing
+        .owner_user_id
+        .as_deref()
+        .is_some_and(|owner| owner != actor.id.as_str())
+        || (existing.owner_user_id.is_none() && actor.role != openbot_contracts::auth::Role::Admin)
+    {
+        return Err(ApiError::Forbidden);
+    }
+    load_skills()
+        .await?
+        .into_iter()
+        .find(|row| {
+            row.id == existing.id
+                && row.slug == existing.slug
+                && row.owner_user_id == existing.owner_user_id
+                && row.origin == existing.origin
+                && row.installed_by == existing.installed_by
+        })
+        .ok_or(ApiError::NotFound)
 }
 
 pub(crate) async fn remove(slug: &str, expected_revision: i64) -> Result<(), ApiError> {
@@ -293,5 +459,87 @@ mod tests {
         assert!(validate_mutation(&m).is_err());
         m.instructions = "  \n".to_owned();
         assert!(validate_mutation(&m).is_err());
+    }
+
+    #[test]
+    fn existing_skill_ack_requires_same_identity_and_next_revision_not_merely_same_content() {
+        let known = skill("review", Some("actor"));
+        let mutation = PluginSkillMutation {
+            slug: known.slug.clone(),
+            title: "New title".into(),
+            summary: known.summary.clone(),
+            instructions: known.instructions.clone(),
+            deployment_wide: false,
+            expected_revision: Some(1),
+        };
+        let mut row = known.clone();
+        row.title = mutation.title.clone();
+        row.revision = 2;
+        assert!(
+            matching_ack(
+                &[row.clone()],
+                &mutation,
+                &known.owner_user_id,
+                Some(&known)
+            )
+            .is_ok()
+        );
+        for field in 0..5 {
+            let mut forged = row.clone();
+            match field {
+                0 => forged.id = "another-row".into(),
+                1 => forged.owner_user_id = None,
+                2 => forged.revision = 3,
+                3 => forged.origin = "another-source".into(),
+                _ => forged.installed_by = Some("another-actor".into()),
+            }
+            assert!(
+                matching_ack(&[forged], &mutation, &known.owner_user_id, Some(&known)).is_err()
+            );
+        }
+        let receipt = serde_json::to_string(&PluginSkills {
+            skills: vec![row.clone()],
+        })
+        .unwrap();
+        assert!(matches!(
+            decode_existing_reply(202, &receipt, &mutation, &known),
+            Err(SkillWriteError::Unknown(_))
+        ));
+        for revision in [3, 4] {
+            let mut newer_base = known.clone();
+            newer_base.revision = 4;
+            let mut newer_mutation = mutation.clone();
+            newer_mutation.expected_revision = Some(newer_base.revision);
+            let mut inconsistent = row.clone();
+            inconsistent.revision = revision;
+            let body = serde_json::to_string(&inconsistent.revision_snapshot().unwrap()).unwrap();
+            assert!(
+                matches!(
+                    decode_existing_reply(409, &body, &newer_mutation, &newer_base),
+                    Err(SkillWriteError::Unknown(_))
+                ),
+                "equal or regressed conflict metadata is not a no-write receipt"
+            );
+        }
+        let snapshot = row.revision_snapshot().unwrap();
+        let conflict = serde_json::to_string(&snapshot).unwrap();
+        assert!(
+            matches!(decode_existing_reply(409, &conflict, &mutation, &known), Err(SkillWriteError::Conflict(actual)) if actual == snapshot)
+        );
+        let mut extra = serde_json::to_value(snapshot).unwrap();
+        extra["ok"] = json!(true);
+        assert!(matches!(
+            decode_existing_reply(409, &extra.to_string(), &mutation, &known),
+            Err(SkillWriteError::Unknown(_))
+        ));
+        row.granted_to.push("other-agent".into());
+        assert_eq!(
+            row.revision_snapshot().unwrap(),
+            snapshot,
+            "grant membership is excluded from editing metadata"
+        );
+        let wire = serde_json::to_value(&mutation).unwrap();
+        assert_eq!(wire["global"], json!(false));
+        assert!(wire.get("deploymentWide").is_none());
     }
 }

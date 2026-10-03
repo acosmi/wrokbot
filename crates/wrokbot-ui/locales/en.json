@@ -1,4 +1,26 @@
 {
+  "revision_editor": {
+    "saved": "Saved",
+    "dirty": "Unsaved changes",
+    "saving": "Saving… You can continue editing.",
+    "error": "Saving was not confirmed. Your draft is retained.",
+    "conflict": "The server version changed. Your draft is retained.",
+    "paused": "Automatic saving is paused. Read the current version before choosing what to do.",
+    "compare": "Keep draft and compare",
+    "load": "Load server version",
+    "retry": "Read and retry original change",
+    "reapply": "Reapply draft to current version",
+    "discard_confirm": "Loading the server version discards this local draft. Continue?",
+    "confirm_load": "Discard draft and load",
+    "reapply_confirm": "Read the current version and apply this draft as a new change?",
+    "confirm_reapply": "Read and apply draft",
+    "local_draft": "Local draft",
+    "server_version": "Current server version",
+    "read_failed": "The current version could not be verified. Your draft is retained.",
+    "sensitive_mode": "Change connection settings or key",
+    "sensitive_boundary": "Connection settings and keys require an explicit save. Automatic saving is paused.",
+    "metadata_boundary": "Name and model changes save automatically. Connection settings and keys use an explicit action."
+  },
   "common": {
     "configuration_publication_unknown": "The draft save was confirmed, but publication has not been confirmed. This object remains blocked; do not submit the save again.",
     "configuration_write_pending": "A change is awaiting its receipt. Leaving this page does not cancel it.",
