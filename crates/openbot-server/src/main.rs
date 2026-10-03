@@ -512,6 +512,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     });
+    // Retain the actual resolver owner for lifecycle closure, not in a request guard.
+    let auth_owner = Arc::clone(&auth);
     let mut builder = ServerBuilder::new(application, auth)
         .with_transport_policy(server.transport_policy(single_user))
         .with_sensitive_write_security(sensitive)
@@ -554,8 +556,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .into_router()
             .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown({
+        let shutdown_auth = Arc::clone(&auth_owner);
+        async move {
+            shutdown_signal().await;
+            // Revoke current observations before axum waits for in-flight requests to drain.
+            shutdown_auth.close_request_bindings();
+        }
+    })
     .await;
+    // A serving error or normal completion also closes the owner before other resources stop.
+    auth_owner.close_request_bindings();
     run_relay.stop().await;
     if let Some(agent) = built_in_agent {
         agent.stop().await;

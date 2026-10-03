@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64 as HostAtomicU64, Ordering as HostAtomicOrdering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE};
@@ -57,6 +57,10 @@ use openbot_contracts::reconciliation::{
     MAX_RUN_RECONCILIATION_RESPONSE_BYTES, RunReconciliationQuery,
 };
 use openbot_contracts::remote_interrupt::{RemoteInterruptAnswer, RemoteInterruptResolved};
+use openbot_contracts::request_binding::{
+    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind, RequestBindingIssuer,
+    RequestBindingOwnerLease, RequestBindingOwnerObservation, VerifiedHostRequestBinding,
+};
 use openbot_contracts::sandboxed::{
     SandboxedComponentRevisionRequest, SaveSandboxedComponentRequest,
 };
@@ -383,14 +387,88 @@ fn component_governance_route(path: &str) -> Option<ComponentGovernanceRoute<'_>
     }
 }
 
+/// Window observations kept separately from the actual protocol owner's lifecycle lease.
+struct WindowBindingRegistry {
+    next_window_binding_id: HostAtomicU64,
+    windows: Arc<RwLock<BTreeMap<String, WindowAuthority>>>,
+}
+/// Recheck this original window and its actual identity source without retaining the owner lease.
+struct WindowRequestBindingGuard {
+    registry: Weak<WindowBindingRegistry>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    label: String,
+    id: u64,
+    expected: AuthContext,
+    source: Option<Arc<dyn HostRequestBindingGuard>>,
+    upstream: Option<VerifiedHostRequestBinding>,
+}
+impl WindowRequestBindingGuard {
+    fn check_window(&self, auth: &AuthContext) -> Result<(), HostRequestBindingError> {
+        if !self.owner.is_current() || auth != &self.expected {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if !self.issuer.owns_identity(binding.identity()) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let registry = self
+            .registry
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let windows = registry
+            .windows
+            .try_read()
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
+        match windows.get(&self.label) {
+            Some(current)
+                if current.binding_id == self.id
+                    && !current.closed.is_cancelled()
+                    && current.auth == self.expected =>
+            {
+                Ok(())
+            }
+            _ => Err(HostRequestBindingError::NotCurrent),
+        }
+    }
+}
+impl HostRequestBindingGuard for WindowRequestBindingGuard {
+    fn verify_current<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            self.check_window(auth)?;
+            let result = tokio::time::timeout(Duration::from_secs(5), async {
+                match (&self.source, &self.upstream) {
+                    (Some(source), _) => source.verify_current(&self.expected).await,
+                    (None, Some(upstream)) => upstream.verify_current(&self.expected).await,
+                    (None, None) => Err(HostRequestBindingError::Missing),
+                }
+            })
+            .await
+            .unwrap_or(Err(HostRequestBindingError::Unavailable));
+            self.check_window(auth)?;
+            result
+        })
+    }
+}
+
 /// Validated bundle, typed in-process application and window authority registry.
 pub struct DesktopTauriProtocol {
     assets: StaticAssets,
     index: Arc<str>,
     transport: Arc<InProcessTransport>,
     structured_events: DesktopStructuredEventBridge,
-    next_window_binding_id: HostAtomicU64,
-    windows: RwLock<BTreeMap<String, WindowAuthority>>,
+    window_registry: Arc<WindowBindingRegistry>,
+    windows: Arc<RwLock<BTreeMap<String, WindowAuthority>>>,
+    request_binding_lease: RequestBindingOwnerLease,
+    request_binding_issuer: RequestBindingIssuer,
+    current_identity_source: Option<Arc<dyn HostRequestBindingGuard>>,
     os_locale: UiLocale,
     first_frame_projection: Option<crate::DesktopUiPreferenceStore>,
     #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
@@ -484,14 +562,24 @@ impl DesktopTauriProtocol {
         transport: Arc<InProcessTransport>,
     ) -> Self {
         let structured_events = DesktopStructuredEventBridge::new(Arc::clone(&transport));
+        let (request_binding_lease, request_binding_issuer) =
+            RequestBindingOwnerLease::for_trusted_host(HostRequestBindingKind::DesktopWindow);
+        // Existing Local-confirmation helpers and the weak request registry share the exact map.
+        let windows = Arc::new(RwLock::new(BTreeMap::new()));
         Self {
             assets,
             index,
             transport,
             structured_events,
             // Zero is not a verified Desktop Screen binding identity.
-            next_window_binding_id: HostAtomicU64::new(1),
-            windows: RwLock::new(BTreeMap::new()),
+            window_registry: Arc::new(WindowBindingRegistry {
+                next_window_binding_id: HostAtomicU64::new(1),
+                windows: Arc::clone(&windows),
+            }),
+            windows,
+            request_binding_lease,
+            request_binding_issuer,
+            current_identity_source: None,
             os_locale: detect_os_locale(),
             first_frame_projection: None,
             #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
@@ -507,6 +595,20 @@ impl DesktopTauriProtocol {
         self
     }
 
+    /// Close the actual protocol owner before resource teardown; Arc allocation is not liveness.
+    pub fn close_request_bindings(&self) {
+        self.request_binding_lease.close();
+    }
+
+    #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+    pub(crate) fn with_current_identity_source(
+        mut self,
+        source: Arc<crate::local_confirmation_authority::PostgresLocalConfirmationAuthority>,
+    ) -> Self {
+        self.current_identity_source = Some(source);
+        self
+    }
+
     /// Bind one host-created webview label to verified local session authority.
     pub fn bind_window(
         &self,
@@ -514,8 +616,12 @@ impl DesktopTauriProtocol {
         auth: AuthContext,
         fresh_for: Option<Duration>,
     ) -> Result<(), TauriHostError> {
+        if !self.request_binding_issuer.observation().is_current() {
+            return Err(TauriHostError::AuthorityUnavailable);
+        }
         let label = label.into();
         let mut windows = self
+            .window_registry
             .windows
             .write()
             .map_err(|_| TauriHostError::AuthorityUnavailable)?;
@@ -530,6 +636,7 @@ impl DesktopTauriProtocol {
             return Err(TauriHostError::InvalidFreshness);
         }
         let binding_id = self
+            .window_registry
             .next_window_binding_id
             .fetch_update(
                 HostAtomicOrdering::SeqCst,
@@ -558,6 +665,27 @@ impl DesktopTauriProtocol {
                     })
             })
             .transpose()
+            .map_err(|_| TauriHostError::AuthorityUnavailable)?;
+        let upstream = auth
+            .request_binding()
+            .filter(|binding| binding.kind() == HostRequestBindingKind::ServerSession)
+            .cloned();
+        let guard = Arc::new(WindowRequestBindingGuard {
+            registry: Arc::downgrade(&self.window_registry),
+            owner: self.request_binding_issuer.observation(),
+            issuer: self.request_binding_issuer.clone(),
+            label: label.clone(),
+            id: binding_id,
+            expected: auth.clone(),
+            source: self.current_identity_source.clone(),
+            upstream,
+        });
+        let binding = self
+            .request_binding_issuer
+            .bind_desktop_window(&auth, label.clone(), binding_id, guard)
+            .map_err(|_| TauriHostError::AuthorityUnavailable)?;
+        let auth = auth
+            .with_verified_request_binding(binding)
             .map_err(|_| TauriHostError::AuthorityUnavailable)?;
         windows.insert(
             label,
@@ -604,7 +732,8 @@ impl DesktopTauriProtocol {
 
     /// Whether this exact host window label currently owns verified authority.
     pub fn is_window_bound(&self, label: &str) -> Result<bool, TauriHostError> {
-        self.windows
+        self.window_registry
+            .windows
             .read()
             .map(|windows| windows.contains_key(label))
             .map_err(|_| TauriHostError::AuthorityUnavailable)
@@ -612,7 +741,8 @@ impl DesktopTauriProtocol {
 
     /// Number of host window labels currently carrying verified authority.
     pub fn bound_window_count(&self) -> Result<usize, TauriHostError> {
-        self.windows
+        self.window_registry
+            .windows
             .read()
             .map(|windows| windows.len())
             .map_err(|_| TauriHostError::AuthorityUnavailable)
@@ -928,7 +1058,8 @@ impl DesktopTauriProtocol {
     }
 
     fn authority(&self, label: &str) -> Result<Option<WindowAuthority>, TauriHostError> {
-        self.windows
+        self.window_registry
+            .windows
             .read()
             .map(|windows| windows.get(label).cloned())
             .map_err(|_| TauriHostError::AuthorityUnavailable)
@@ -3183,6 +3314,10 @@ const fn hex(byte: u8) -> Option<u8> {
 #[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
 #[path = "tauri_host/local_confirmation_tests.rs"]
 mod local_confirmation_tests;
+
+#[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
+#[path = "tauri_host/current_request_binding_local_tests.rs"]
+mod current_request_binding_local_tests;
 
 #[cfg(test)]
 mod tests {
@@ -5494,6 +5629,7 @@ mod tests {
     fn window_binding_identity_exhaustion_fails_without_authority() {
         let (protocol, root) = protocol();
         protocol
+            .window_registry
             .next_window_binding_id
             .store(u64::MAX, Ordering::SeqCst);
         assert!(matches!(
