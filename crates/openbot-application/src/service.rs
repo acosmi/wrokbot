@@ -468,12 +468,14 @@ mod tests {
                     summary: "Review".to_owned(),
                     instructions: "Review the notes.".to_owned(),
                     deployment_wide: false,
+                    expected_revision: None,
                 }),
                 "save_plugin_skill",
             ),
             (
                 AppCommand::RemovePluginSkill {
                     slug: "review-notes".to_owned(),
+                    expected_revision: 1,
                 },
                 "remove_plugin_skill",
             ),

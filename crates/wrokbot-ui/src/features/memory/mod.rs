@@ -521,7 +521,7 @@ fn MemorySearch(
             <Show when=move || results.get().is_some_and(|records| records.is_empty())>
                 <PageEmpty>{move || t!(i18n, common.no_results)}</PageEmpty>
             </Show>
-            <div id="memory-search-results" aria-live="polite" aria-busy=move || pending.get()>
+            <div id="memory-search-results" aria-live="polite" aria-busy=move || if pending.get() { "true" } else { "false" }>
                 <PageRows>
                     <For each=move || results.get().unwrap_or_default()
                         key=|record| record.memory_id.clone()

@@ -59,6 +59,7 @@ fn personal_skill(slug: &str, title: &str) -> PluginSkillMutation {
         summary: "Bounded summary".to_owned(),
         instructions: format!("Use this instruction without logging {INSTRUCTION_CANARY}."),
         deployment_wide: false,
+        expected_revision: None,
     }
 }
 
@@ -232,14 +233,14 @@ async fn skills_grants_and_actor_specific_projection_are_transactional_and_audit
             )?;
             require(
                 matches!(
-                    connections.remove_skill(&user_b, "review-notes").await,
+                    connections.remove_skill(&user_b, "review-notes", 1).await,
                     Err(McpConnectionError::NotVisible)
                 ),
                 "another actor removed a personal skill",
             )?;
             require(
                 matches!(
-                    connections.remove_skill(&user_a, "missing-skill").await,
+                    connections.remove_skill(&user_a, "missing-skill", 1).await,
                     Err(McpConnectionError::NotVisible)
                 ),
                 "non-admin received an idempotent delete oracle for an unknown skill",
@@ -247,6 +248,7 @@ async fn skills_grants_and_actor_specific_projection_are_transactional_and_audit
 
             review.title = "Admin-reviewed notes".to_owned();
             review.deployment_wide = true;
+            review.expected_revision = Some(1);
             connections
                 .save_skill(&admin, &review)
                 .await
@@ -654,7 +656,7 @@ async fn skills_grants_and_actor_specific_projection_are_transactional_and_audit
             drop(pg);
 
             connections
-                .remove_skill(&user_a, "review-notes")
+                .remove_skill(&user_a, "review-notes", 2)
                 .await
                 .map_err(|error| error.to_string())?;
             let pg = pool.get().await.map_err(|error| error.to_string())?;
@@ -770,9 +772,16 @@ async fn skills_grants_and_actor_specific_projection_are_transactional_and_audit
                     .and_then(Value::as_str)
                     .ok_or_else(|| "plugin audit is missing its closed change".to_owned())?;
                 *changes.entry(change.to_owned()).or_default() += 1;
+                let editing = matches!(change, "skill_saved" | "skill_removed");
                 require(
-                    object.keys().all(|key| key == "change" || key == "bot")
-                        && object.len() == if object.contains_key("bot") { 2 } else { 1 },
+                    object.keys().all(|key| key == "change" || key == "bot"
+                        || (editing && key == "skill_revision"))
+                        && object.len() == 1 + usize::from(object.contains_key("bot"))
+                            + usize::from(editing)
+                        && (if editing {
+                            target_type == "skill" && object.get("skill_revision")
+                                .and_then(Value::as_u64).is_some_and(|revision| revision > 0)
+                        } else { !object.contains_key("skill_revision") }),
                     format!("plugin audit payload escaped its allowlist: {payload}"),
                 )?;
                 require(

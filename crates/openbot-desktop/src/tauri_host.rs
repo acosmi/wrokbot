@@ -49,7 +49,7 @@ use openbot_contracts::error::{AppError, SensitiveWriteReason};
 use openbot_contracts::ids::{BotId, ChannelId, RunId, ThreadId};
 use openbot_contracts::mcp::{
     McpCuratedServerSelection, McpCustomServerRegistration, PluginGrantKind, PluginGrantMutation,
-    PluginSkillMutation,
+    PluginSkillMutation, PluginSkillRevisionRequest,
 };
 use openbot_contracts::people::CurrentUserResponse;
 use openbot_contracts::reconciliation::{
@@ -1256,21 +1256,41 @@ impl DesktopTauriProtocol {
         authority: WindowAuthority,
         raw_slug: &str,
     ) -> Response<Vec<u8>> {
-        if request.method() != Method::DELETE || !request.body().is_empty() {
+        if request.method() != Method::DELETE {
             request.body_mut().fill(0);
             return empty_response(StatusCode::METHOD_NOT_ALLOWED);
         }
         if !authority.is_fresh() {
+            request.body_mut().fill(0);
             return error_response(AppError::SensitiveWriteRefused {
                 reason: SensitiveWriteReason::SessionNotFresh,
             });
         }
         let Some(slug) = percent_decode_segment(raw_slug) else {
+            request.body_mut().fill(0);
             return error_response(AppError::MalformedPayload { field: "slug" });
         };
+        if request.body().len() > 1024 {
+            request.body_mut().fill(0);
+            return payload_too_large();
+        }
+        let revision = match serde_json::from_slice::<PluginSkillRevisionRequest>(request.body()) {
+            Ok(revision) => revision,
+            Err(_) => {
+                request.body_mut().fill(0);
+                return error_response(AppError::MalformedPayload { field: "body" });
+            }
+        };
+        request.body_mut().fill(0);
         match self
             .transport
-            .execute(authority.auth, AppCommand::RemovePluginSkill { slug })
+            .execute(
+                authority.auth,
+                AppCommand::RemovePluginSkill {
+                    slug,
+                    expected_revision: revision.expected_revision,
+                },
+            )
             .await
         {
             Ok(AppReply::PluginMutationAcknowledged(receipt)) => json_response(&receipt),
@@ -4449,17 +4469,49 @@ mod tests {
 
         async fn save_skill(
             &self,
-            _auth: &AuthContext,
-            _mutation: &PluginSkillMutation,
+            auth: &AuthContext,
+            mutation: &PluginSkillMutation,
         ) -> Result<PluginSkills, McpConnectionError> {
-            Ok(PluginSkills { skills: Vec::new() })
+            let skill = openbot_contracts::mcp::McpAdminSkill {
+                id: mutation.slug.clone(),
+                slug: mutation.slug.clone(),
+                owner_user_id: (!mutation.deployment_wide)
+                    .then(|| auth.actor().as_str().to_owned()),
+                title: mutation.title.clone(),
+                summary: mutation.summary.clone(),
+                instructions: mutation.instructions.clone(),
+                origin: "yours".into(),
+                installed_by: None,
+                revision: mutation.expected_revision.map_or(1, |r| r + 1),
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
+                granted_to: Vec::new(),
+            };
+            if mutation.expected_revision == Some(9) {
+                return Err(McpConnectionError::StaleSnapshot(
+                    skill.revision_snapshot().unwrap(),
+                ));
+            }
+            Ok(PluginSkills {
+                skills: vec![skill],
+            })
         }
 
         async fn remove_skill(
             &self,
             _auth: &AuthContext,
-            _slug: &str,
+            slug: &str,
+            expected_revision: i64,
         ) -> Result<PluginMutationAcknowledged, McpConnectionError> {
+            if expected_revision == 9 {
+                return Err(McpConnectionError::StaleSnapshot(
+                    openbot_contracts::revision::RevisionSnapshot::from_public(
+                        10,
+                        time::OffsetDateTime::UNIX_EPOCH,
+                        &serde_json::json!({"slug": slug, "revision": 10}),
+                    )
+                    .unwrap(),
+                ));
+            }
             Ok(PluginMutationAcknowledged::success())
         }
 
@@ -7161,11 +7213,12 @@ mod tests {
             .await;
         assert_eq!(skill.status(), StatusCode::OK);
         assert_eq!(skill.headers()[CACHE_CONTROL], "no-store");
-        assert!(
+        assert_eq!(
             serde_json::from_slice::<PluginSkills>(skill.body())
                 .unwrap()
-                .skills
-                .is_empty()
+                .skills[0]
+                .revision,
+            1
         );
         let smuggled_skill = protocol
             .handle(
@@ -7246,7 +7299,7 @@ mod tests {
                 Request::builder()
                     .method(Method::DELETE)
                     .uri("/api/plugins/skills/review%2Dnotes")
-                    .body(Vec::new())
+                    .body(br#"{"expectedRevision":1}"#.to_vec())
                     .unwrap(),
             )
             .await;
@@ -7279,6 +7332,65 @@ mod tests {
             )
             .await;
         assert_eq!(removed_legacy_call.status(), StatusCode::NOT_FOUND);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn skill_editing_desktop_requires_revision_and_returns_closed_stale_metadata() {
+        let (protocol, root) = protocol_with_mcp(Arc::new(FakeMcpConnections::default()));
+        protocol
+            .bind_window("fresh-skill", auth(), Some(Duration::from_secs(60)))
+            .unwrap();
+        protocol.bind_window("stale-skill", auth(), None).unwrap();
+        let request = |method: Method, uri: &str, body: &[u8]| {
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(body.to_vec())
+                .unwrap()
+        };
+        let stale = protocol
+            .handle(
+                "stale-skill",
+                request(Method::DELETE, "/api/plugins/skills/review", b"malformed"),
+            )
+            .await;
+        assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+        for body in [
+            "",
+            "{}",
+            r#"{"expectedRevision":0}"#,
+            r#"{"expectedRevision":"1"}"#,
+            r#"{"expectedRevision":1,"actor":"forged"}"#,
+        ] {
+            assert_eq!(
+                protocol
+                    .handle(
+                        "fresh-skill",
+                        request(
+                            Method::DELETE,
+                            "/api/plugins/skills/review",
+                            body.as_bytes()
+                        )
+                    )
+                    .await
+                    .status(),
+                StatusCode::BAD_REQUEST,
+                "{body}"
+            );
+        }
+        for response in [
+            protocol.handle("fresh-skill", request(Method::POST, "/api/plugins/skills", br#"{"slug":"review","title":"Review","instructions":"Sources","expectedRevision":9}"#)).await,
+            protocol.handle("fresh-skill", request(Method::DELETE, "/api/plugins/skills/review", br#"{"expectedRevision":9}"#)).await,
+        ] {
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+            assert_eq!(body.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["currentRevision", "currentSha256", "updatedAt"]);
+            assert_eq!(body["currentRevision"], 10);
+            assert_eq!(body["currentSha256"].as_str().unwrap().len(), 64);
+            assert_eq!(body["updatedAt"], "1970-01-01T00:00:00Z");
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

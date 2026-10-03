@@ -1015,8 +1015,17 @@ where
             AppCommand::SavePluginSkill(mutation) => Ok(AppReply::PluginSkills(
                 save_plugin_skill(self.mcp_connections.as_ref(), auth, &mutation).await?,
             )),
-            AppCommand::RemovePluginSkill { slug } => Ok(AppReply::PluginMutationAcknowledged(
-                remove_plugin_skill(self.mcp_connections.as_ref(), auth, &slug).await?,
+            AppCommand::RemovePluginSkill {
+                slug,
+                expected_revision,
+            } => Ok(AppReply::PluginMutationAcknowledged(
+                remove_plugin_skill(
+                    self.mcp_connections.as_ref(),
+                    auth,
+                    &slug,
+                    expected_revision,
+                )
+                .await?,
             )),
             AppCommand::GrantPlugin(mutation) => Ok(AppReply::PluginMutationAcknowledged(
                 grant_plugin(self.mcp_connections.as_ref(), auth, &mutation).await?,

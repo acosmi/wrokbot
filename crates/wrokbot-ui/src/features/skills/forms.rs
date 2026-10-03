@@ -54,6 +54,8 @@ pub fn SkillDialogs(
     let invalid = RwSignal::new(false);
     let collision = RwSignal::new(false);
     let attempted = RwSignal::new(false);
+    // Capture the first readable version opened by this editor; reloads cannot rebase its draft.
+    let opened_revision = RwSignal::new(None::<(String, i64)>);
     let generation = RwSignal::new(0_u64);
     let initialized = RwSignal::new(false);
     let readable = Memo::new(move |_| {
@@ -72,7 +74,15 @@ pub fn SkillDialogs(
     let return_focus = RwSignal::new("skill-create".to_owned());
     Effect::new(move |_| {
         let selected = dialog.get();
-        generation.update(|value| *value = value.wrapping_add(1));
+        let Some(next) = generation.get_untracked().checked_add(1) else {
+            initialized.set(false);
+            opened_revision.set(None);
+            open.set(false);
+            invalid.set(true);
+            return;
+        };
+        generation.set(next);
+        opened_revision.set(None);
         if selected.is_some() {
             return_focus.set("skill-create".to_owned());
         }
@@ -101,6 +111,7 @@ pub fn SkillDialogs(
         if let Some(selected) = selected
             && let Some(row) = current.and_then(|d| d.selected(selected.slug()?, deployment))
         {
+            opened_revision.set(Some((row.slug.clone(), row.revision)));
             title.set(row.title);
             summary.set(row.summary);
             instructions.set(row.instructions);
@@ -125,10 +136,17 @@ pub fn SkillDialogs(
         };
         invalid.set(false);
         collision.set(false);
-        let started = generation.get_untracked();
+        let submitted_generation = generation.get_untracked();
+        let submitted_dialog = selected.clone();
         let finish = move |ok| {
-            if ok && generation.try_get_untracked() == Some(started) {
-                editor.close();
+            if ok {
+                close_saved_dialog(
+                    dialog,
+                    generation,
+                    submitted_generation,
+                    &submitted_dialog,
+                    move || editor.close(),
+                );
             }
         };
         match selected {
@@ -139,6 +157,22 @@ pub fn SkillDialogs(
                     summary: summary.get_untracked(),
                     instructions: instructions.get_untracked(),
                     deployment_wide: deployment,
+                    expected_revision: match &selected {
+                        SkillDialog::Create => None,
+                        SkillDialog::Edit(original) => {
+                            let Some((opened_slug, revision)) = opened_revision.get_untracked()
+                            else {
+                                invalid.set(true);
+                                return;
+                            };
+                            if &opened_slug != original || revision <= 0 {
+                                invalid.set(true);
+                                return;
+                            }
+                            Some(revision)
+                        }
+                        _ => return,
+                    },
                 };
                 if api::validate_mutation(&mutation).is_err() {
                     invalid.set(true);
@@ -170,10 +204,18 @@ pub fn SkillDialogs(
                     invalid.set(true);
                     return;
                 }
+                let Some((opened_slug, expected_revision)) = opened_revision.get_untracked() else {
+                    invalid.set(true);
+                    return;
+                };
+                if opened_slug != target || expected_revision <= 0 {
+                    invalid.set(true);
+                    return;
+                }
                 attempted.set(true);
                 actions.launch(
                     format!("skill:{target}"),
-                    async move { api::remove(&target).await },
+                    async move { api::remove(&target, expected_revision).await },
                     finish,
                 );
             }
@@ -244,5 +286,42 @@ pub fn SkillDialogs(
                 </div>
                 </Show>
         </LibraryEditorFrame>
+    }
+}
+
+fn close_saved_dialog(
+    dialog: RwSignal<Option<SkillDialog>>,
+    generation: RwSignal<u64>,
+    submitted_generation: u64,
+    submitted_dialog: &SkillDialog,
+    close: impl FnOnce(),
+) {
+    if generation.try_get_untracked() == Some(submitted_generation)
+        && dialog.try_get_untracked().flatten().as_ref() == Some(submitted_dialog)
+    {
+        close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_reply_cannot_close_another_or_reopened_skill_editor() {
+        Owner::new().with(|| {
+            let first = SkillDialog::Edit("review".into());
+            let dialog = RwSignal::new(Some(first.clone()));
+            let generation = RwSignal::new(1);
+            dialog.set(Some(SkillDialog::Edit("other".into())));
+            close_saved_dialog(dialog, generation, 1, &first, || dialog.set(None));
+            assert!(dialog.get_untracked().is_some());
+            dialog.set(Some(first.clone()));
+            generation.set(3);
+            close_saved_dialog(dialog, generation, 1, &first, || dialog.set(None));
+            assert!(dialog.get_untracked().is_some());
+            close_saved_dialog(dialog, generation, 3, &first, || dialog.set(None));
+            assert!(dialog.get_untracked().is_none());
+        });
     }
 }

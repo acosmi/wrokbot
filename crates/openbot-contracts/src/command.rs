@@ -560,6 +560,8 @@ pub enum AppCommand {
     RemovePluginSkill {
         /// Stable skill slug.
         slug: String,
+        /// Editing revision known when the skill was opened.
+        expected_revision: i64,
     },
 
     /// Grant one current MCP tool or skill to one authorized Agent.
