@@ -766,12 +766,30 @@ pub const NATIVE_0036_TABLES: &[TableSpec] = &[TableSpec {
     column_specs: thread_run_occupancy::COLUMN_SPECS,
 }];
 
+pub mod sandboxed_component_retired_names;
+pub mod sandboxed_editing_components;
+
+/// Native0038 overrides the upstream sandbox row only for the current schema registry.
+pub const NATIVE_0038_TABLES: &[TableSpec] = &[
+    TableSpec {
+        name: sandboxed_editing_components::TABLE_NAME,
+        columns: sandboxed_editing_components::COLUMNS,
+        column_specs: sandboxed_editing_components::COLUMN_SPECS,
+    },
+    TableSpec {
+        name: sandboxed_component_retired_names::TABLE_NAME,
+        columns: sandboxed_component_retired_names::COLUMNS,
+        column_specs: sandboxed_component_retired_names::COLUMN_SPECS,
+    },
+];
+
 /// Complete current public-table registry: fixed upstream 0012 plus every Rust-owned native table.
 /// Historical callers that specifically compare the upstream boundary must continue using
 /// [`ALL_TABLES`] instead.
 pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
     ALL_TABLES
         .iter()
+        .filter(|table| table.name != sandboxed_components::TABLE_NAME)
         .chain(NATIVE_0013_TABLES.iter())
         .chain(NATIVE_0016_TABLES.iter())
         .chain(NATIVE_0020_TABLES.iter())
@@ -786,6 +804,7 @@ pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
         .chain(NATIVE_0034_TABLES.iter())
         .chain(NATIVE_0035_TABLES.iter())
         .chain(NATIVE_0036_TABLES.iter())
+        .chain(NATIVE_0038_TABLES.iter())
 }
 
 #[cfg(test)]

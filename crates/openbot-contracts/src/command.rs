@@ -282,12 +282,16 @@ pub enum AppCommand {
     PublishSandboxedComponent {
         /// Untrusted path identity; application requires the server-owned namespace.
         component_name: String,
+        /// Known editing version; publication version is a separate sequence.
+        expected_revision: i64,
     },
 
     /// Delete one sandboxed source and its shared governance row atomically.
     DeleteSandboxedComponent {
         /// Untrusted path identity; compiled component names are never accepted.
         component_name: String,
+        /// Known editing version consumed by the delete action.
+        expected_revision: i64,
     },
 
     /// Internal Agent-host call-time authorization for one published sandboxed renderer.

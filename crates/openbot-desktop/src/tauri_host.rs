@@ -56,7 +56,9 @@ use openbot_contracts::reconciliation::{
     MAX_RUN_RECONCILIATION_RESPONSE_BYTES, RunReconciliationQuery,
 };
 use openbot_contracts::remote_interrupt::{RemoteInterruptAnswer, RemoteInterruptResolved};
-use openbot_contracts::sandboxed::SaveSandboxedComponentRequest;
+use openbot_contracts::sandboxed::{
+    SandboxedComponentRevisionRequest, SaveSandboxedComponentRequest,
+};
 use openbot_contracts::tool::ToolApprovalDecision;
 use openbot_contracts::ui::{UiLocale, UiPreferences, UiTheme, UpdateUiPreferences};
 use serde::de::DeserializeOwned;
@@ -2110,7 +2112,7 @@ impl DesktopTauriProtocol {
         authority: WindowAuthority,
         raw_name: &str,
     ) -> Response<Vec<u8>> {
-        if request.method() != Method::POST || !request.body().is_empty() {
+        if request.method() != Method::POST {
             return empty_response(StatusCode::METHOD_NOT_ALLOWED);
         }
         if !authority.is_fresh() {
@@ -2118,6 +2120,11 @@ impl DesktopTauriProtocol {
                 reason: SensitiveWriteReason::SessionNotFresh,
             });
         }
+        let revision =
+            match serde_json::from_slice::<SandboxedComponentRevisionRequest>(request.body()) {
+                Ok(value) => value,
+                Err(_) => return error_response(AppError::MalformedPayload { field: "body" }),
+            };
         let component_name = match percent_decode_segment(raw_name) {
             Some(name) => name,
             None => {
@@ -2130,7 +2137,10 @@ impl DesktopTauriProtocol {
             .transport
             .execute(
                 authority.auth,
-                AppCommand::PublishSandboxedComponent { component_name },
+                AppCommand::PublishSandboxedComponent {
+                    component_name,
+                    expected_revision: revision.expected_revision,
+                },
             )
             .await
         {
@@ -2146,7 +2156,7 @@ impl DesktopTauriProtocol {
         authority: WindowAuthority,
         raw_name: &str,
     ) -> Response<Vec<u8>> {
-        if request.method() != Method::DELETE || !request.body().is_empty() {
+        if request.method() != Method::DELETE {
             return empty_response(StatusCode::METHOD_NOT_ALLOWED);
         }
         if !authority.is_fresh() {
@@ -2154,6 +2164,11 @@ impl DesktopTauriProtocol {
                 reason: SensitiveWriteReason::SessionNotFresh,
             });
         }
+        let revision =
+            match serde_json::from_slice::<SandboxedComponentRevisionRequest>(request.body()) {
+                Ok(value) => value,
+                Err(_) => return error_response(AppError::MalformedPayload { field: "body" }),
+            };
         let component_name = match percent_decode_segment(raw_name) {
             Some(name) => name,
             None => {
@@ -2166,7 +2181,10 @@ impl DesktopTauriProtocol {
             .transport
             .execute(
                 authority.auth,
-                AppCommand::DeleteSandboxedComponent { component_name },
+                AppCommand::DeleteSandboxedComponent {
+                    component_name,
+                    expected_revision: revision.expected_revision,
+                },
             )
             .await
         {
@@ -4566,6 +4584,8 @@ mod tests {
             draft: &SandboxedComponentDraft,
         ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError> {
             Ok(SandboxedComponentRecord {
+                editing_revision: 1,
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
                 name: draft.name.clone(),
                 title: draft.title.clone(),
                 draft_description: draft.description.clone(),
@@ -4590,12 +4610,24 @@ mod tests {
             &self,
             auth: &AuthContext,
             _component_name: &str,
+            expected_revision: i64,
         ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError> {
             let mut record = sandboxed_draft_record(auth.actor().as_str());
             record.published_html = Some(record.draft_html.clone());
             record.published_css = Some(record.draft_css.clone());
             record.published_js_functions = Some(record.draft_js_functions.clone());
             record.published_argument_schema = Some(record.draft_argument_schema.clone());
+            if expected_revision != record.editing_revision {
+                return Err(SandboxedComponentAdministrationError::StaleSnapshot(
+                    openbot_contracts::revision::RevisionSnapshot::from_public(
+                        record.editing_revision,
+                        record.updated_at,
+                        &record,
+                    )
+                    .unwrap(),
+                ));
+            }
+            record.editing_revision = 2;
             record.revision = 1;
             record.published = true;
             record.published_at = Some(time::OffsetDateTime::UNIX_EPOCH);
@@ -4606,6 +4638,7 @@ mod tests {
             &self,
             _auth: &AuthContext,
             _component_name: &str,
+            _expected_revision: i64,
         ) -> Result<(), SandboxedComponentAdministrationError> {
             Ok(())
         }
@@ -4613,6 +4646,8 @@ mod tests {
 
     fn sandboxed_draft_record(actor: &str) -> SandboxedComponentRecord {
         SandboxedComponentRecord {
+            editing_revision: 1,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             name: "custom_delivery_eta".to_owned(),
             title: "Delivery ETA".to_owned(),
             draft_description: "Delivery estimate".to_owned(),
@@ -7371,6 +7406,7 @@ mod tests {
             .bind_window("main", admin_auth(), Some(Duration::from_secs(60)))
             .unwrap();
         let draft = SaveSandboxedComponentRequest {
+            expected_revision: None,
             slug: "delivery_eta".to_owned(),
             title: "Delivery ETA".to_owned(),
             description: "Delivery estimate".to_owned(),
@@ -7405,7 +7441,7 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri("/api/sandboxed/custom_delivery_eta/publish")
-                    .body(Vec::new())
+                    .body(br#"{"expectedRevision":1}"#.to_vec())
                     .unwrap(),
             )
             .await;
@@ -7424,7 +7460,7 @@ mod tests {
                 Request::builder()
                     .method(Method::DELETE)
                     .uri("/api/sandboxed/custom_delivery_eta")
-                    .body(Vec::new())
+                    .body(br#"{"expectedRevision":2}"#.to_vec())
                     .unwrap(),
             )
             .await;

@@ -674,26 +674,30 @@ where
             AppCommand::SaveSandboxedComponent(request) => Ok(AppReply::SandboxedComponent(
                 save_sandboxed_component(self.sandboxed_components.as_ref(), auth, request).await?,
             )),
-            AppCommand::PublishSandboxedComponent { component_name } => {
-                Ok(AppReply::SandboxedComponent(
-                    publish_sandboxed_component(
-                        self.sandboxed_components.as_ref(),
-                        auth,
-                        component_name,
-                    )
-                    .await?,
-                ))
-            }
-            AppCommand::DeleteSandboxedComponent { component_name } => {
-                Ok(AppReply::SandboxedComponentDeleted(
-                    delete_sandboxed_component(
-                        self.sandboxed_components.as_ref(),
-                        auth,
-                        component_name,
-                    )
-                    .await?,
-                ))
-            }
+            AppCommand::PublishSandboxedComponent {
+                component_name,
+                expected_revision,
+            } => Ok(AppReply::SandboxedComponent(
+                publish_sandboxed_component(
+                    self.sandboxed_components.as_ref(),
+                    auth,
+                    component_name,
+                    expected_revision,
+                )
+                .await?,
+            )),
+            AppCommand::DeleteSandboxedComponent {
+                component_name,
+                expected_revision,
+            } => Ok(AppReply::SandboxedComponentDeleted(
+                delete_sandboxed_component(
+                    self.sandboxed_components.as_ref(),
+                    auth,
+                    component_name,
+                    expected_revision,
+                )
+                .await?,
+            )),
             AppCommand::AuthorizeSandboxedComponent {
                 component_name,
                 agent_id,

@@ -1314,14 +1314,30 @@ impl ComponentAdministration for FixtureComponents {
 
 #[derive(Clone)]
 struct FixtureSandboxed {
+    retired: Arc<Mutex<std::collections::BTreeSet<String>>>,
     rows: Arc<Mutex<Vec<SandboxedComponentRecord>>>,
     now: OffsetDateTime,
+}
+
+fn fixture_sandbox_stale(
+    row: &SandboxedComponentRecord,
+) -> Result<SandboxedComponentAdministrationError, SandboxedComponentAdministrationError> {
+    openbot_contracts::revision::RevisionSnapshot::from_public(
+        row.editing_revision,
+        row.updated_at,
+        row,
+    )
+    .map(SandboxedComponentAdministrationError::StaleSnapshot)
+    .map_err(|_| SandboxedComponentAdministrationError::Unavailable)
 }
 
 impl FixtureSandboxed {
     fn new(now: OffsetDateTime) -> Self {
         Self {
+            retired: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
             rows: Arc::new(Mutex::new(vec![SandboxedComponentRecord {
+                editing_revision: 1,
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
                 name: "custom_delivery_eta".to_owned(),
                 title: "Delivery ETA".to_owned(),
                 draft_description: "Show a delivery estimate.".to_owned(),
@@ -1402,7 +1418,24 @@ impl SandboxedComponentAdministration for FixtureSandboxed {
             .rows
             .lock()
             .map_err(|_| SandboxedComponentAdministrationError::Unavailable)?;
+        if self
+            .retired
+            .lock()
+            .map_err(|_| SandboxedComponentAdministrationError::Unavailable)?
+            .contains(&draft.name)
+        {
+            return Err(SandboxedComponentAdministrationError::Conflict);
+        }
         if let Some(row) = rows.iter_mut().find(|row| row.name == draft.name) {
+            if draft.expected_revision != Some(row.editing_revision) {
+                return Err(fixture_sandbox_stale(row)?);
+            }
+            let next = row
+                .editing_revision
+                .checked_add(1)
+                .ok_or(SandboxedComponentAdministrationError::Conflict)?;
+            row.editing_revision = next;
+            row.updated_at = self.now;
             row.title = draft.title.clone();
             row.draft_description = draft.description.clone();
             row.draft_html = draft.html.clone();
@@ -1418,7 +1451,12 @@ impl SandboxedComponentAdministration for FixtureSandboxed {
                         != Some(row.draft_js_functions.as_str()));
             return Ok(row.clone());
         }
+        if draft.expected_revision.is_some() {
+            return Err(SandboxedComponentAdministrationError::NotVisible);
+        }
         let row = SandboxedComponentRecord {
+            editing_revision: 1,
+            updated_at: self.now,
             name: draft.name.clone(),
             title: draft.title.clone(),
             draft_description: draft.description.clone(),
@@ -1445,6 +1483,7 @@ impl SandboxedComponentAdministration for FixtureSandboxed {
         &self,
         _auth: &AuthContext,
         component_name: &str,
+        expected_revision: i64,
     ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError> {
         let mut rows = self
             .rows
@@ -1454,11 +1493,24 @@ impl SandboxedComponentAdministration for FixtureSandboxed {
             .iter_mut()
             .find(|row| row.name == component_name)
             .ok_or(SandboxedComponentAdministrationError::NotVisible)?;
+        if row.editing_revision != expected_revision {
+            return Err(fixture_sandbox_stale(row)?);
+        }
+        let next = row
+            .editing_revision
+            .checked_add(1)
+            .ok_or(SandboxedComponentAdministrationError::Conflict)?;
+        let publication = row
+            .revision
+            .checked_add(1)
+            .ok_or(SandboxedComponentAdministrationError::Conflict)?;
+        row.editing_revision = next;
+        row.updated_at = self.now;
         row.published_html = Some(row.draft_html.clone());
         row.published_css = Some(row.draft_css.clone());
         row.published_js_functions = Some(row.draft_js_functions.clone());
         row.published_argument_schema = Some(row.draft_argument_schema.clone());
-        row.revision = row.revision.saturating_add(1);
+        row.revision = publication;
         row.published = true;
         row.published_at = Some(self.now);
         row.has_unpublished_changes = false;
@@ -1469,11 +1521,23 @@ impl SandboxedComponentAdministration for FixtureSandboxed {
         &self,
         _auth: &AuthContext,
         component_name: &str,
+        expected_revision: i64,
     ) -> Result<(), SandboxedComponentAdministrationError> {
         let mut rows = self
             .rows
             .lock()
             .map_err(|_| SandboxedComponentAdministrationError::Unavailable)?;
+        let row = rows
+            .iter()
+            .find(|r| r.name == component_name)
+            .ok_or(SandboxedComponentAdministrationError::NotVisible)?;
+        if row.editing_revision != expected_revision {
+            return Err(fixture_sandbox_stale(row)?);
+        }
+        self.retired
+            .lock()
+            .map_err(|_| SandboxedComponentAdministrationError::Unavailable)?
+            .insert(component_name.to_owned());
         let before = rows.len();
         rows.retain(|row| row.name != component_name);
         if rows.len() == before {
@@ -1526,8 +1590,6 @@ impl FixtureMemory {
                 };
                 MemoryRecord {
                     memory_id: format!("memory-{index:02}"),
-                    source_run_id: None,
-                    source_authorization_snapshot: None,
                     owner_user_id: actor.as_str().to_owned(),
                     scope,
                     memory_kind,

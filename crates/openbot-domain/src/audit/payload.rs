@@ -281,6 +281,8 @@ pub enum AuditFact {
     ComponentKind(AuditLabel),
     /// Monotonic published source revision for a sandboxed component.
     ComponentRevision(u64),
+    /// Monotonic editing version consumed by a sandbox draft, publish or delete action.
+    ComponentEditingRevision(u64),
     /// 该次工具调用的权威 Bot；绝不取自模型或 callback body。
     Bot(AuditIdentifier),
     /// Canonical remote Agent origin; path, query, fragment, userinfo, and credential are absent.
@@ -408,6 +410,7 @@ impl AuditFact {
             Self::ComponentReads(_) => "reads",
             Self::ComponentKind(_) => "component_kind",
             Self::ComponentRevision(_) => "component_revision",
+            Self::ComponentEditingRevision(_) => "component_editing_revision",
             Self::Bot(_) => "bot",
             Self::AgentEndpointOrigin(_) => "agent_endpoint_origin",
             Self::EffectClass(_) => "effect_class",
@@ -508,6 +511,7 @@ impl AuditFact {
             | Self::CatalogGeneration(value)
             | Self::DocumentGeneration(value)
             | Self::ComponentRevision(value)
+            | Self::ComponentEditingRevision(value)
             | Self::DurationMs(value)
             | Self::InputBytes(value)
             | Self::OutputBytes(value) => Value::Number((*value).into()),
@@ -599,6 +603,7 @@ impl AuditFact {
             | Self::CatalogGeneration(value)
             | Self::DocumentGeneration(value)
             | Self::ComponentRevision(value)
+            | Self::ComponentEditingRevision(value)
             | Self::DurationMs(value)
             | Self::InputBytes(value)
             | Self::OutputBytes(value) => writer.u64(*value),
@@ -644,6 +649,7 @@ pub const AUDIT_FIELD_LEDGER: &[&str] = &[
     "reads",
     "component_kind",
     "component_revision",
+    "component_editing_revision",
     "bot",
     "agent_endpoint_origin",
     "effect_class",
@@ -824,6 +830,7 @@ mod tests {
             AuditFact::ComponentReads(AuditLabel::new("audit_trail")),
             AuditFact::ComponentKind(AuditLabel::new("sandboxed")),
             AuditFact::ComponentRevision(7),
+            AuditFact::ComponentEditingRevision(9),
             AuditFact::Bot(identifier("bot-1")),
             AuditFact::AgentEndpointOrigin(
                 AuditEndpointOrigin::new("https://agent.example:8443").unwrap(),
