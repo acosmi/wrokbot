@@ -1111,3 +1111,12 @@ The candidate is based on actualPR123 maind3f909baf6c4d571d16d2afe986ef9a32cbb0d
 - No new backend interface, dependency, observer, timer, effect authority, router or mobile change. A local pending-gesture value records input causality; it does not authorize server operations.
 - Exact new candidate nine directed checks, bounded actual runtime and independent source/QA/publication review remain pending. Four direct handlers have only static entry GO on their original source, with no runtime result yet.
 - CSS and original evidence limits remain unchanged. Independent oracle/pixels, native/production, full business matrices and overallP9/goal remain open. Current backend capabilities API remains a separate owner dependency.
+
+
+## UI5-P9 reading-anchor continuation — native layout-clamp candidate
+
+- Exact5ebe completed nine actual directed checks with287UI tests and unchanged1217inputs; retained default24 artifacts. Its strict actual long journey still failed, so no final runtime or publication GO was given.
+- Actual200→202 reading held fixed; after explicit latest,204actual messages reached. First1440inline panel opening kept the same reading ID within0.5CSSpx. Closing reduced content height and native scroll was clamped to the end, changed readingID and failed original1CSSpx gate. Completed20panel/20SPA/Home checks remain unreached. All actual source/host/QA inputs unchanged and owned processes closed.
+- Complete original QA05 native trace36291552B remains retained and fails the original8MiB cap. Actual stream also contains undeclared default categories; requested category metadata is not proof of actual scope. A separately registered native collector correction must preserve original raw/caps/functional/cleanup gates.
+- This new source continuation records already measured viewport/content geometry. A layout-induced scroll arriving before ResizeObserver schedules existing content synchronization; pending layout cannot become implicit follow-bottom or overwrite reading offset. Explicit existing user scroll intent retains priority and explicit latest remains available. No new listener, timer, observer, backend API, authority, dependency or mobile change.
+- New exact candidate nine checks, actual runtime and independent source/QA/publication review remain pending. Original failures retained; fullP9/native/production/oracle/pixel and overallgoal remain open.

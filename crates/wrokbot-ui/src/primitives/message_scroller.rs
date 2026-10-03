@@ -54,6 +54,7 @@ struct MessageScrollerContext {
     programmatic_scroll: StoredValue<bool>,
     programmatic_generation: StoredValue<u64>,
     user_scroll_pending: StoredValue<bool>,
+    layout_geometry: StoredValue<(i32, i32, i32)>,
     content_change_pending: StoredValue<bool>,
     initialized: StoredValue<bool>,
     resize_scheduled: StoredValue<bool>,
@@ -130,6 +131,7 @@ pub fn MessageScroller(
         programmatic_scroll: StoredValue::new(false),
         programmatic_generation: StoredValue::new(0),
         user_scroll_pending: StoredValue::new(false),
+        layout_geometry: StoredValue::new((0, 0, 0)),
         content_change_pending: StoredValue::new(false),
         initialized: StoredValue::new(false),
         resize_scheduled: StoredValue::new(false),
@@ -436,6 +438,7 @@ fn sync_content(context: MessageScrollerContext) {
         context.reading_item_id.set_value(None);
         context.anchor_id.set_value(None);
         set_spacer_height(context.clone(), 0);
+        record_layout_geometry(&context);
         sync_scroll_state(context);
         return;
     }
@@ -536,7 +539,26 @@ fn sync_content(context: MessageScrollerContext) {
     context.previous_first_id.set_value(first_id);
     capture_reading_position(&context, &items);
     context.user_scroll_pending.set_value(false);
+    record_layout_geometry(&context);
     sync_scroll_state(context);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn layout_geometry(context: &MessageScrollerContext) -> Option<(i32, i32, i32)> {
+    let viewport = context.viewport_ref.get()?;
+    let content = context.content_ref.get()?;
+    Some((
+        viewport.client_width(),
+        viewport.client_height(),
+        content.scroll_height(),
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn record_layout_geometry(context: &MessageScrollerContext) {
+    if let Some(geometry) = layout_geometry(context) {
+        context.layout_geometry.set_value(geometry);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -665,6 +687,7 @@ fn scroll_to_end(context: MessageScrollerContext) -> bool {
         set_scroll_top(&context, target);
         let items = message_items(context.content_ref, context.spacer_ref);
         capture_reading_position(&context, &items);
+        record_layout_geometry(&context);
         sync_scroll_state(context);
         true
     }
@@ -691,10 +714,18 @@ fn handle_user_scroll_intent(context: MessageScrollerContext) {
 fn handle_scroll(context: MessageScrollerContext) {
     #[cfg(target_arch = "wasm32")]
     if let Some(viewport) = context.viewport_ref.get() {
+        if layout_geometry(&context)
+            .is_some_and(|geometry| geometry != context.layout_geometry.get_value())
+        {
+            // A layout clamp can dispatch scroll before ResizeObserver runs.
+            note_content_change(context.clone());
+        }
+        let user_scroll = context.user_scroll_pending.get_value();
+        let layout_pending = context.content_change_pending.get_value();
         let current = viewport.scroll_top();
         if (current - context.last_scroll_top.get_value()).abs() > 1
             && !context.programmatic_scroll.get_value()
-            && !context.content_change_pending.get_value()
+            && (!layout_pending || user_scroll)
         {
             context.mode.set_value(ScrollMode::FreeScrolling);
             context.anchor_id.set_value(None);
@@ -706,11 +737,15 @@ fn handle_scroll(context: MessageScrollerContext) {
             viewport.client_height(),
             context.spacer_height.get_value(),
         ) <= context.edge_threshold;
-        if at_end && context.auto_scroll && context.mode.get_value() == ScrollMode::FreeScrolling {
+        if at_end
+            && context.auto_scroll
+            && context.mode.get_value() == ScrollMode::FreeScrolling
+            && (!layout_pending || user_scroll)
+        {
             context.mode.set_value(ScrollMode::FollowingBottom);
         }
         let items = message_items(context.content_ref, context.spacer_ref);
-        if !context.content_change_pending.get_value() || context.user_scroll_pending.get_value() {
+        if !layout_pending || user_scroll {
             capture_reading_position(&context, &items);
             context.user_scroll_pending.set_value(false);
         }
