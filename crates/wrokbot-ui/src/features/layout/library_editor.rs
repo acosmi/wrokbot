@@ -20,7 +20,8 @@ pub(crate) fn LibraryEditorFrame(
     let caption = StoredValue::new(title.clone());
     let form = StoredValue::new(children.clone());
     let return_focus = StoredValue::new(return_focus_id.clone());
-    let owner = Owner::current().expect("library route owner");
+    // The focus effect must not keep its own route alive after navigation.
+    let owner = Owner::current().expect("library route owner").downgrade();
     let focus_generation = RwSignal::new(0_u64);
     Effect::new(move |previous: Option<bool>| {
         let visible = modal.get();
@@ -28,7 +29,9 @@ pub(crate) fn LibraryEditorFrame(
         if previous == Some(true) && !visible {
             let id = return_focus.get_value().get().to_string();
             let generation = focus_generation.get_untracked();
-            owner.with(|| super::detail_panel::focus_later(id, focus_generation, generation));
+            if let Some(owner) = owner.upgrade() {
+                owner.with(|| super::detail_panel::focus_later(id, focus_generation, generation));
+            }
         }
         visible
     });

@@ -4,7 +4,7 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 use crate::{
     features::computer::ComputerPlaceholder,
-    i18n::{t, t_string, use_i18n},
+    i18n::{Locale, t, t_string, use_i18n},
     primitives::{Button, ButtonSize, ButtonVariant},
 };
 use leptos::prelude::*;
@@ -30,6 +30,18 @@ struct ImageIdentity {
 struct ViewerImage {
     identity: ImageIdentity,
     src: String,
+    captured_at_ms: i64,
+}
+
+struct ScreenImagePayload {
+    jpeg: Vec<u8>,
+    captured_at_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LoadedSourceFrame {
+    identity: ImageIdentity,
+    captured_at_ms: i64,
 }
 
 fn image_callback_matches(
@@ -51,18 +63,94 @@ struct ViewerState {
     received_sequence: RwSignal<u64>,
     received_at_ms: RwSignal<f64>,
     displayed_at_ms: RwSignal<f64>,
+    loaded_source: RwSignal<Option<LoadedSourceFrame>>,
     #[cfg(target_arch = "wasm32")]
     renderer: StoredValue<Option<std::rc::Rc<ImageRenderer>>, LocalStorage>,
 }
 impl ViewerState {
+    fn new() -> Self {
+        Self {
+            status: RwSignal::new(ScreenStatus::Waiting),
+            image: RwSignal::new(None),
+            connection: RwSignal::new(0),
+            generation: RwSignal::new(0),
+            sequence: RwSignal::new(0),
+            received_sequence: RwSignal::new(0),
+            received_at_ms: RwSignal::new(0.0),
+            displayed_at_ms: RwSignal::new(0.0),
+            loaded_source: RwSignal::new(None),
+            #[cfg(target_arch = "wasm32")]
+            renderer: StoredValue::new_local(None),
+        }
+    }
+
     fn clear(self, status: ScreenStatus) {
         self.status.set(status);
         self.image.set(None);
+        self.loaded_source.set(None);
         self.generation.set(0);
         self.sequence.set(0);
         self.received_sequence.set(0);
         self.received_at_ms.set(0.0);
         self.displayed_at_ms.set(0.0);
+    }
+
+    fn clear_connection(self, connection: u64, status: Option<ScreenStatus>) -> bool {
+        if self.connection.try_get_untracked() != Some(connection) {
+            return false;
+        }
+        self.clear(status.unwrap_or_else(|| self.status.get_untracked()));
+        true
+    }
+
+    fn source_for_completion(
+        self,
+        connection: u64,
+        closed: bool,
+        identity: ImageIdentity,
+    ) -> Option<LoadedSourceFrame> {
+        let image = self.image.try_get_untracked().flatten()?;
+        (connection == identity.connection
+            && image_callback_matches(
+                self.connection.try_get_untracked(),
+                closed,
+                Some(image.identity),
+                identity,
+            ))
+        .then_some(LoadedSourceFrame {
+            identity,
+            captured_at_ms: image.captured_at_ms,
+        })
+    }
+
+    fn confirm_loaded(
+        self,
+        source: LoadedSourceFrame,
+        displayed: super::latest_frame::DisplayedFrame,
+    ) -> bool {
+        if displayed.received.sequence != source.identity.sequence
+            || self.source_for_completion(source.identity.connection, false, source.identity)
+                != Some(source)
+        {
+            return false;
+        }
+        self.sequence.set(displayed.received.sequence);
+        self.displayed_at_ms.set(displayed.loaded_at_ms);
+        self.loaded_source.set(Some(source));
+        self.status.set(ScreenStatus::Live);
+        true
+    }
+
+    /// The next decode may already have replaced the DOM image after the preceding load.
+    /// Only an exact loaded identity can contribute the current image's source timestamp.
+    fn visible_source(self) -> Option<LoadedSourceFrame> {
+        let source = self.loaded_source.get()?;
+        let image = self.image.get()?;
+        (source.identity.connection == self.connection.get()
+            && source.identity.sequence == self.sequence.get()
+            && source.identity == image.identity
+            && source.captured_at_ms == image.captured_at_ms)
+            .then_some(source)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -86,18 +174,7 @@ pub(crate) fn ScreenViewer(
     active: Signal<bool>,
 ) -> impl IntoView {
     let i18n = use_i18n();
-    let state = ViewerState {
-        status: RwSignal::new(ScreenStatus::Waiting),
-        image: RwSignal::new(None),
-        connection: RwSignal::new(0),
-        generation: RwSignal::new(0),
-        sequence: RwSignal::new(0),
-        received_sequence: RwSignal::new(0),
-        received_at_ms: RwSignal::new(0.0),
-        displayed_at_ms: RwSignal::new(0.0),
-        #[cfg(target_arch = "wasm32")]
-        renderer: StoredValue::new_local(None),
-    };
+    let state = ViewerState::new();
     let reload = RwSignal::new(0_u64);
     install_viewer(target, active, reload, state);
     let can_retry = Signal::derive(move || {
@@ -130,6 +207,18 @@ pub(crate) fn ScreenViewer(
                     }/> }
                 }/>
             </div>
+            <p class="ob-page-intro" data-screen-frame-caption="">{move || match state.visible_source() {
+                Some(source) => match format_source_capture(source.captured_at_ms, i18n.get_locale()) {
+                    Some((datetime, label)) => view! {
+                        <span>{move || t!(i18n, computer.screen_last_loaded)} " · " {move || t!(i18n, computer.screen_source_capture)} " "
+                            <time datetime=datetime data-frame-source-connection=source.identity.connection
+                                data-frame-source-sequence=source.identity.sequence data-frame-source-captured-at-ms=source.captured_at_ms>{label}</time>
+                        </span>
+                    }.into_any(),
+                    None => view! { <span>{move || t!(i18n, computer.screen_last_loaded)} " · " {move || t!(i18n, computer.screen_source_time_unavailable)}</span> }.into_any(),
+                },
+                None => view! { <span>{move || t!(i18n, computer.screen_frame_loading)}</span> }.into_any(),
+            }}</p>
         </Show>
         <p class="ob-page-intro" role="status">{move || match state.status.get() {
             ScreenStatus::Waiting => t_string!(i18n, computer.no_target_body).to_owned(),
@@ -142,6 +231,75 @@ pub(crate) fn ScreenViewer(
             ScreenStatus::Failed => t_string!(i18n, computer.screen_failed).to_owned(),
         }}</p>
         <Show when=move || can_retry.get()><Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=move |_| { reload.update(|n| *n = n.saturating_add(1)); }>{move || t!(i18n, common.retry)}</Button></Show>
+    }
+}
+
+fn source_capture_millis(ms: i64) -> Option<f64> {
+    // JS Date's range is narrower than i64 and remains within exact integer f64 milliseconds.
+    (ms > 0 && ms <= 8_640_000_000_000_000).then_some(ms as f64)
+}
+
+fn format_source_capture(ms: i64, locale: Locale) -> Option<(String, String)> {
+    let millis = source_capture_millis(ms)?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsValue;
+        let date = js_sys::Date::new(&JsValue::from_f64(millis));
+        if !date.get_time().is_finite() {
+            return None;
+        }
+        let options = js_sys::Object::new();
+        for (key, value) in [
+            ("year", "numeric"),
+            ("month", "2-digit"),
+            ("day", "2-digit"),
+            ("hour", "2-digit"),
+            ("minute", "2-digit"),
+            ("second", "2-digit"),
+            ("timeZoneName", "short"),
+        ] {
+            js_sys::Reflect::set(&options, &JsValue::from_str(key), &JsValue::from_str(value))
+                .ok()?;
+        }
+        let locale = match locale {
+            Locale::en => "en",
+            Locale::zh_CN => "zh-CN",
+        };
+        Some((
+            date.to_iso_string().as_string()?,
+            date.to_locale_string(locale, options.as_ref())
+                .as_string()?,
+        ))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = millis;
+        let date =
+            time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).ok()?;
+        let datetime = date
+            .format(&time::format_description::well_known::Rfc3339)
+            .ok()?;
+        let label = match locale {
+            Locale::en => format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                date.year(),
+                u8::from(date.month()),
+                date.day(),
+                date.hour(),
+                date.minute(),
+                date.second(),
+            ),
+            Locale::zh_CN => format!(
+                "{:04}年{:02}月{:02}日 {:02}:{:02}:{:02} UTC",
+                date.year(),
+                u8::from(date.month()),
+                date.day(),
+                date.hour(),
+                date.minute(),
+                date.second(),
+            ),
+        };
+        Some((datetime, label))
     }
 }
 
@@ -318,7 +476,7 @@ struct ImageRenderer {
     state: ViewerState,
     connection: u64,
     socket: web_sys::WebSocket,
-    frames: std::cell::RefCell<super::latest_frame::LatestFrame<Vec<u8>>>,
+    frames: std::cell::RefCell<super::latest_frame::LatestFrame<ScreenImagePayload>>,
     urls: std::cell::RefCell<ObjectUrls>,
     connected_at_ms: f64,
     closed: std::cell::Cell<bool>,
@@ -350,15 +508,19 @@ impl ImageRenderer {
             .map_or(0, |frame| frame.sequence)
     }
 
-    fn receive(&self, sequence: u64, jpeg: &[u8]) {
+    fn receive(&self, sequence: u64, captured_at_ms: i64, jpeg: &[u8]) {
         if !self.is_current() {
             return;
         }
         let now = monotonic_ms();
-        let accepted = self
-            .frames
-            .borrow_mut()
-            .receive(sequence, now, jpeg.to_vec());
+        let accepted = self.frames.borrow_mut().receive(
+            sequence,
+            now,
+            ScreenImagePayload {
+                jpeg: jpeg.to_vec(),
+                captured_at_ms,
+            },
+        );
         let Ok(next) = accepted else {
             self.close(Some(ScreenStatus::Failed));
             return;
@@ -370,11 +532,11 @@ impl ImageRenderer {
         }
     }
 
-    fn start_image(&self, frame: super::latest_frame::Frame<Vec<u8>>) {
+    fn start_image(&self, frame: super::latest_frame::Frame<ScreenImagePayload>) {
         if !self.is_current() {
             return;
         }
-        let data = js_sys::Uint8Array::from(frame.payload.as_slice());
+        let data = js_sys::Uint8Array::from(frame.payload.jpeg.as_slice());
         let parts = js_sys::Array::new();
         parts.push(&data);
         let options = web_sys::BlobPropertyBag::new();
@@ -392,13 +554,17 @@ impl ImageRenderer {
                 sequence: frame.received.sequence,
             },
             src,
+            captured_at_ms: frame.payload.captured_at_ms,
         }));
     }
 
     fn image_loaded(&self, identity: ImageIdentity) {
-        if !self.owns_image(identity) {
+        let Some(source) =
+            self.state
+                .source_for_completion(self.connection, self.closed.get(), identity)
+        else {
             return;
-        }
+        };
         let completed = self
             .frames
             .borrow_mut()
@@ -406,13 +572,9 @@ impl ImageRenderer {
         let Some(completed) = completed else {
             return;
         };
-        self.state
-            .sequence
-            .set(completed.displayed.received.sequence);
-        self.state
-            .displayed_at_ms
-            .set(completed.displayed.loaded_at_ms);
-        self.state.status.set(ScreenStatus::Live);
+        if !self.state.confirm_loaded(source, completed.displayed) {
+            return;
+        }
         if let Some(next) = completed.next {
             self.start_image(next);
         }
@@ -436,10 +598,7 @@ impl ImageRenderer {
         }
         self.frames.borrow_mut().close();
         self.urls.borrow_mut().replace(None);
-        if self.state.connection.try_get_untracked() == Some(self.connection) {
-            self.state
-                .clear(status.unwrap_or_else(|| self.state.status.get_untracked()));
-        }
+        self.state.clear_connection(self.connection, status);
         _ = self.socket.close();
     }
 }
@@ -557,7 +716,7 @@ async fn connect_screen(
             reject();
             return;
         };
-        message_renderer.receive(frame.sequence, frame.jpeg);
+        message_renderer.receive(frame.sequence, frame.captured_at_ms, frame.jpeg);
     }) as Box<dyn FnMut(_)>);
     socket.set_onmessage(Some(message.as_ref().unchecked_ref()));
     let close_renderer = renderer.clone();
@@ -592,7 +751,135 @@ fn monotonic_ms() -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::latest_frame::{Frame, LatestFrame};
     use super::*;
+
+    fn payload(captured_at_ms: i64) -> ScreenImagePayload {
+        ScreenImagePayload {
+            jpeg: vec![1, 2, 3],
+            captured_at_ms,
+        }
+    }
+
+    fn install_image(
+        state: ViewerState,
+        connection: u64,
+        frame: Frame<ScreenImagePayload>,
+    ) -> ImageIdentity {
+        let identity = ImageIdentity {
+            connection,
+            sequence: frame.received.sequence,
+        };
+        state.image.set(Some(ViewerImage {
+            identity,
+            src: format!("fixture-{}-{}", connection, identity.sequence),
+            captured_at_ms: frame.payload.captured_at_ms,
+        }));
+        identity
+    }
+
+    #[test]
+    fn source_time_waits_for_exact_final_pending_image_load() {
+        Owner::new().with(|| {
+            let state = ViewerState::new();
+            state.connection.set(1);
+            let mut frames = LatestFrame::default();
+            let first = frames.receive(1, 10.0, payload(1_000)).unwrap().unwrap();
+            let first = install_image(state, 1, first);
+            assert_eq!(state.visible_source(), None);
+            assert!(frames.receive(2, 20.0, payload(2_000)).unwrap().is_none());
+            assert!(frames.receive(3, 25.0, payload(3_000)).unwrap().is_none());
+            let final_identity = ImageIdentity {
+                connection: 1,
+                sequence: 3,
+            };
+            assert_eq!(state.source_for_completion(1, false, final_identity), None);
+            assert!(frames.complete(3, 26.0).is_none());
+
+            let first_source = state.source_for_completion(1, false, first).unwrap();
+            let completed = frames.complete(1, 30.0).unwrap();
+            assert!(state.confirm_loaded(first_source, completed.displayed));
+            assert_eq!(state.visible_source().unwrap().captured_at_ms, 1_000);
+            let next = completed.next.unwrap();
+            assert_eq!(next.received.sequence, 3);
+            assert_eq!(next.payload.captured_at_ms, 3_000);
+            let final_image = install_image(state, 1, next);
+            // The preceding loaded receipt remains A, while the actual DOM image is now C.
+            assert_eq!(state.sequence.get_untracked(), 1);
+            assert_eq!(state.loaded_source.get_untracked(), Some(first_source));
+            assert_eq!(state.visible_source(), None);
+            assert_eq!(state.source_for_completion(1, false, first), None);
+            assert!(!state.confirm_loaded(first_source, completed.displayed));
+            assert!(frames.complete(1, 31.0).is_none());
+
+            // No further receive is needed to load and confirm the final pending image.
+            let final_source = state.source_for_completion(1, false, final_image).unwrap();
+            let completed = frames.complete(3, 40.0).unwrap();
+            assert!(completed.next.is_none());
+            assert!(state.confirm_loaded(final_source, completed.displayed));
+            assert_eq!(
+                state.visible_source(),
+                Some(LoadedSourceFrame {
+                    identity: final_identity,
+                    captured_at_ms: 3_000,
+                })
+            );
+            assert_eq!(state.displayed_at_ms.get_untracked(), 40.0);
+        });
+    }
+
+    #[test]
+    fn cleared_source_time_cannot_return_from_old_connection_with_same_sequence() {
+        Owner::new().with(|| {
+            let state = ViewerState::new();
+            state.connection.set(1);
+            let mut old_frames = LatestFrame::default();
+            let old_frame = old_frames
+                .receive(7, 10.0, payload(1_000))
+                .unwrap()
+                .unwrap();
+            let old_image = install_image(state, 1, old_frame);
+            let old_source = state.source_for_completion(1, false, old_image).unwrap();
+            let old_completed = old_frames.complete(7, 20.0).unwrap();
+            assert!(state.confirm_loaded(old_source, old_completed.displayed));
+            assert_eq!(state.visible_source(), Some(old_source));
+
+            // A target change increments the connection before clearing the old projection.
+            state.connection.set(2);
+            state.clear(ScreenStatus::Waiting);
+            old_frames.close();
+            assert_eq!(state.loaded_source.get_untracked(), None);
+            assert!(state.image.get_untracked().is_none());
+            assert_eq!(state.visible_source(), None);
+            assert!(old_frames.complete(7, 30.0).is_none());
+            assert!(old_frames.receive(8, 30.0, payload(1_500)).is_err());
+
+            let mut new_frames = LatestFrame::default();
+            let new_frame = new_frames
+                .receive(7, 40.0, payload(2_000))
+                .unwrap()
+                .unwrap();
+            let new_image = install_image(state, 2, new_frame);
+            assert_eq!(state.source_for_completion(1, false, old_image), None);
+            assert_eq!(state.source_for_completion(2, true, new_image), None);
+            assert!(!state.confirm_loaded(old_source, old_completed.displayed));
+            assert_eq!(state.visible_source(), None);
+            let new_source = state.source_for_completion(2, false, new_image).unwrap();
+            let new_completed = new_frames.complete(7, 50.0).unwrap();
+            assert!(state.confirm_loaded(new_source, new_completed.displayed));
+            assert_eq!(state.visible_source().unwrap().captured_at_ms, 2_000);
+            assert!(!state.confirm_loaded(old_source, old_completed.displayed));
+            assert!(!state.clear_connection(1, Some(ScreenStatus::Disconnected)));
+            assert_eq!(state.visible_source(), Some(new_source));
+
+            assert!(state.clear_connection(2, Some(ScreenStatus::Disconnected)));
+            assert_eq!(state.loaded_source.get_untracked(), None);
+            assert!(state.image.get_untracked().is_none());
+            assert_eq!(state.visible_source(), None);
+            assert_eq!(state.source_for_completion(2, false, new_image), None);
+        });
+    }
+
     #[test]
     fn image_callbacks_are_bound_to_connection_and_exact_image() {
         let old = ImageIdentity {
