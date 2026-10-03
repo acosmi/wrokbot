@@ -1981,3 +1981,232 @@ async fn actual_foreign_message_update_lock_with_owned_run_remains_not_visible()
     )
     .await;
 }
+
+#[derive(Clone, Copy)]
+enum SavedMessageMutation {
+    HardDelete,
+    ForeignActor,
+    AssistantRole,
+    LogicalText,
+}
+
+async fn current_run_thread_owner_facts(fixture: &Fixture) -> Result<Value, String> {
+    fixture
+        .pool
+        .get()
+        .await
+        .map_err(|error| error.to_string())?
+        .query_one(
+            "SELECT jsonb_build_object(
+               'run',to_jsonb(r),'thread',to_jsonb(t),'owner',to_jsonb(u),
+               'roles',(SELECT coalesce(jsonb_agg(to_jsonb(ur) ORDER BY ur.role),'[]')
+                        FROM public.user_roles ur WHERE ur.user_id=u.id))
+             FROM public.runs r JOIN public.threads t ON t.thread_id=r.thread_id
+             JOIN public.users u ON u.id=r.actor_id
+             WHERE r.run_id=$1 AND r.thread_id=$2 AND r.actor_id=$3",
+            &[
+                &fixture.begin.command.run_id.as_str(),
+                &fixture.begin.command.thread_id.as_str(),
+                &OWNER,
+            ],
+        )
+        .await
+        .map_err(|error| error.to_string())?
+        .try_get(0)
+        .map_err(|error| error.to_string())
+}
+
+async fn actual_saved_message_current_relation_controls_visibility(
+    tag: &str,
+    mutation: SavedMessageMutation,
+) {
+    with_fixture(tag, false, |fixture| async move {
+        let administration = fixture
+            .administration(ArtifactQuotaPolicy::default())
+            .await?;
+        let auth = fixture.auth();
+        let request = fixture.request();
+        let receipt = fixture.save(&administration, request.clone()).await?;
+        let metadata = administration
+            .get_metadata(&auth, &receipt.artifact_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let ArtifactMetadata::Available(record) = &metadata else {
+            return Err("actual saved message did not initially have available metadata".to_owned());
+        };
+        let object = object_fingerprint(&fixture, &receipt.artifact_id)?;
+        let actual_sha256 = format!("{:x}", Sha256::digest(&object.bytes));
+        require(
+            object.bytes == EXACT_TEXT.as_bytes()
+                && object.byte_length == EXACT_TEXT.len() as u64
+                && record.byte_length == object.byte_length
+                && record.sha256 == actual_sha256
+                && record.retention_class == ArtifactRetentionClass::ExplicitSaved,
+            "initial saved metadata was not bound to independently observed actual bytes",
+        )?;
+        let artifact_facts = fixture.facts().await?;
+        // These are the six named registration fact sets. Source Run quota identity remains
+        // occupied once against the lifetime 32 limit; deletion is not an artifact producer.
+        for table in ["operations", "records", "receipts", "workspaces", "runs", "audit"] {
+            require(
+                fact_count(&artifact_facts, table)? == 1,
+                "initial actual save did not create exactly one of each named artifact fact",
+            )?;
+        }
+        require(
+            artifact_facts["records"][0]["status"] == "available"
+                && artifact_facts["records"][0]["source_message_id"] == fixture.message_id()
+                && artifact_facts["records"][0]["sha256"] == actual_sha256
+                && artifact_facts["receipts"][0]["operation_id"] == receipt.operation_id
+                && artifact_facts["receipts"][0]["artifact_id"] == receipt.artifact_id
+                && artifact_facts["runs"][0]["identity_count"] == 1
+                && artifact_facts["workspaces"][0]["charged_bytes"] == object.byte_length
+                && fixture.object_count()? == 1,
+            "initial saved source identities, receipt, lifetime charge or object count differ",
+        )?;
+        let authority_facts = current_run_thread_owner_facts(&fixture).await?;
+        require(
+            authority_facts["run"]["actor_id"] == OWNER
+                && authority_facts["run"]["thread_id"] == fixture.begin.command.thread_id.as_str()
+                && authority_facts["thread"]["created_by"] == OWNER
+                && authority_facts["owner"]["id"] == OWNER
+                && authority_facts["owner"]["auth_generation"] == 0,
+            "real source Run, Thread and current owner were not present before message mutation",
+        )?;
+        let controller = fixture
+            .pool
+            .get()
+            .await
+            .map_err(|error| error.to_string())?;
+        let changed_text = "q".repeat(EXACT_TEXT.len());
+        let affected = match mutation {
+            SavedMessageMutation::HardDelete => {
+                controller
+                    .execute(
+                        "DELETE FROM public.messages WHERE message_id=$1",
+                        &[&fixture.message_id()],
+                    )
+                    .await
+            }
+            SavedMessageMutation::ForeignActor => {
+                controller
+                    .execute(
+                        "UPDATE public.messages SET actor_id=$2 WHERE message_id=$1",
+                        &[&fixture.message_id(), &OTHER],
+                    )
+                    .await
+            }
+            SavedMessageMutation::AssistantRole => {
+                controller
+                    .execute(
+                        "UPDATE public.messages SET role='assistant' WHERE message_id=$1",
+                        &[&fixture.message_id()],
+                    )
+                    .await
+            }
+            SavedMessageMutation::LogicalText => {
+                // Only this actual Begin message is changed. Equal UTF-8 byte length isolates
+                // source content from the original immutable artifact's byte/hash metadata.
+                controller
+                    .execute(
+                        "UPDATE public.messages SET content=jsonb_set(content,'{text}',to_jsonb($2::text)),
+                         search_text=$2 WHERE message_id=$1",
+                        &[&fixture.message_id(), &changed_text],
+                    )
+                    .await
+            }
+        }
+        .map_err(|error| error.to_string())?;
+        require(affected == 1, "controller did not mutate exactly the actual source message")?;
+        let source = controller
+            .query_opt(
+                "SELECT to_jsonb(m) FROM public.messages m WHERE message_id=$1",
+                &[&fixture.message_id()],
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .map(|row| row.try_get::<_, Value>(0))
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        match mutation {
+            SavedMessageMutation::HardDelete => require(source.is_none(), "source message was not really harddeleted")?,
+            SavedMessageMutation::ForeignActor => require(source.as_ref().is_some_and(|m| m["actor_id"]==OTHER && m["role"]=="user"), "source message actor mutation was not observed")?,
+            SavedMessageMutation::AssistantRole => require(source.as_ref().is_some_and(|m| m["actor_id"]==OWNER && m["role"]=="assistant"), "source message role mutation was not observed")?,
+            SavedMessageMutation::LogicalText => require(source.as_ref().is_some_and(|m| m["actor_id"]==OWNER && m["role"]=="user" && m["content"]["text"]==changed_text), "source message logical text mutation was not observed")?,
+        }
+        drop(controller);
+        require(
+            current_run_thread_owner_facts(&fixture).await? == authority_facts,
+            "message-only mutation changed the actual source Run, Thread or current owner",
+        )?;
+        let current_metadata = administration.get_metadata(&auth, &receipt.artifact_id).await;
+        if matches!(mutation, SavedMessageMutation::LogicalText) {
+            require(
+                current_metadata == Ok(metadata),
+                "metadata re-read mutable source text instead of the original saved byte facts",
+            )?;
+        } else {
+            require(
+                current_metadata == Err(ArtifactAdministrationError::NotVisible),
+                "metadata exposed a deleted, foreign-actor or non-user source message",
+            )?;
+        }
+        require(
+            administration.save_run_message_text(&auth, request).await
+                == Err(ArtifactAdministrationError::NotVisible),
+            "original save replay bypassed the current exact source-message relation or digest",
+        )?;
+        require(
+            fixture.facts().await? == artifact_facts
+                && fixture.object_count()? == 1
+                && object_fingerprint(&fixture, &receipt.artifact_id)? == object
+                && current_run_thread_owner_facts(&fixture).await? == authority_facts,
+            "message mutation or denied replay changed saved records, receipt, once-audit, quota or actual object fingerprint",
+        )?;
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires an owned disposable PostgreSQL through OPENBOT_TEST_DATABASE_URL"]
+async fn only_actual_source_message_harddelete_hides_metadata_and_replay_without_erasing_saved_facts()
+ {
+    actual_saved_message_current_relation_controls_visibility(
+        "ar_saved_message_delete",
+        SavedMessageMutation::HardDelete,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires an owned disposable PostgreSQL through OPENBOT_TEST_DATABASE_URL"]
+async fn actual_source_message_foreign_actor_hides_metadata_and_replay_without_changing_saved_facts()
+ {
+    actual_saved_message_current_relation_controls_visibility(
+        "ar_saved_message_actor",
+        SavedMessageMutation::ForeignActor,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires an owned disposable PostgreSQL through OPENBOT_TEST_DATABASE_URL"]
+async fn actual_source_message_assistant_role_hides_metadata_and_replay_without_changing_saved_facts()
+ {
+    actual_saved_message_current_relation_controls_visibility(
+        "ar_saved_message_role",
+        SavedMessageMutation::AssistantRole,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires an owned disposable PostgreSQL through OPENBOT_TEST_DATABASE_URL"]
+async fn actual_source_message_text_change_keeps_original_saved_metadata_and_bytes() {
+    actual_saved_message_current_relation_controls_visibility(
+        "ar_saved_message_text",
+        SavedMessageMutation::LogicalText,
+    )
+    .await;
+}

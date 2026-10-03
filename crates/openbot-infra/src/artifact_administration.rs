@@ -885,6 +885,9 @@ impl ArtifactAdministration for PostgresArtifactAdministration {
         let generation=i64::try_from(auth.auth_generation().get()).map_err(|_| ArtifactAdministrationError::NotVisible)?;
         let sql=format!("{VISIBLE_RUN} SELECT a.* FROM visible_run r JOIN openbot_internal.artifact_records a \
             ON a.source_thread_id=r.thread_id AND a.source_run_id=r.run_id \
+            JOIN public.messages m ON m.message_id=a.source_message_id \
+              AND m.thread_id=a.source_thread_id AND m.run_id=a.source_run_id \
+              AND m.actor_id=a.owner_actor_id AND m.role='user' \
             WHERE a.owner_actor_id=$3 AND a.deployment_id=$4 AND a.tenant_id=$5 AND a.artifact_id=$7 AND a.dataset_id=$8");
         let row=tx.query_opt(&sql,&[&thread,&run,&auth.actor().as_str(),&auth.deployment().as_str(),&auth.tenant().as_str(),&generation,&id,&b.dataset_id()])
             .await.map_err(|_| unavailable())?.ok_or(ArtifactAdministrationError::NotVisible)?;
