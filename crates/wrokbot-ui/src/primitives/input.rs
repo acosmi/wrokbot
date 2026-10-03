@@ -69,6 +69,12 @@ pub fn Input(
     /// Optional Enter activation owned by the surrounding use case; IME composition never submits.
     #[prop(optional)]
     on_submit: Option<UnsyncCallback<()>>,
+    /// Notify the owner after a real user input; controlled hydration does not emit an edit.
+    #[prop(optional)]
+    on_edit: Option<UnsyncCallback<()>>,
+    /// Notify revision editors of IME composition without stealing keyboard submission.
+    #[prop(optional)]
+    on_composition: Option<UnsyncCallback<bool>>,
 ) -> impl IntoView {
     let field = field_context();
     let control_id = resolve_control_id(field.as_ref(), id);
@@ -119,9 +125,18 @@ pub fn Input(
                 is_invalid.get(),
                 is_disabled.get(),
             )
-            on:input=move |event| value.set(event_target_value(&event))
-            on:compositionstart=move |_| composing.set_value(true)
-            on:compositionend=move |_| composing.set_value(false)
+            on:input=move |event| {
+                value.set(event_target_value(&event));
+                if let Some(callback) = on_edit { let _ = callback.try_run(()); }
+            }
+            on:compositionstart=move |_| {
+                composing.set_value(true);
+                if let Some(callback) = on_composition { let _ = callback.try_run(true); }
+            }
+            on:compositionend=move |_| {
+                composing.set_value(false);
+                if let Some(callback) = on_composition { let _ = callback.try_run(false); }
+            }
             on:keydown=move |event: KeyboardEvent| {
                 if event.key() == "Enter"
                     && !composing.get_value()

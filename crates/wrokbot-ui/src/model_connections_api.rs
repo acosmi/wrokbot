@@ -142,6 +142,100 @@ pub(crate) async fn get(id: &str) -> Result<ModelConnection, ApiError> {
     Ok(row)
 }
 
+/// A nonsensitive frozen intent. It never contains a key or changes connection authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MetadataChange {
+    pub(crate) base: ModelConnection,
+    pub(crate) name: String,
+    pub(crate) model: String,
+}
+
+impl MetadataChange {
+    pub(crate) fn valid(&self) -> bool {
+        validate_row(&self.base).is_ok()
+            && self.base.has_credential
+            && self.base.revision.checked_add(1).is_some()
+            && valid_metadata(&self.name, &self.base.endpoint, &self.model)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MetadataError {
+    InvalidInput,
+    Rejected(ApiError),
+    Conflict(openbot_contracts::revision::RevisionSnapshot),
+    Unknown,
+}
+
+fn validate_metadata_ack(change: &MetadataChange, row: &ModelConnection) -> bool {
+    change.valid()
+        && validate_row(row).is_ok()
+        && row.id == change.base.id
+        && row.source == change.base.source
+        && row.revision == change.base.revision.checked_add(1).unwrap_or(0)
+        && row.name == change.name
+        && row.model == change.model
+        && row.endpoint == change.base.endpoint
+        && row.protocol == change.base.protocol
+        && row.enabled == change.base.enabled
+        && row.has_credential
+        && row.created_at == change.base.created_at
+}
+
+pub(crate) async fn write_metadata(
+    change: MetadataChange,
+) -> Result<ModelConnection, MetadataError> {
+    if !change.valid() {
+        return Err(MetadataError::InvalidInput);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let route = path(&change.base.id).map_err(|_| MetadataError::InvalidInput)?;
+        let input = UpdateModelConnection {
+            expected_revision: change.base.revision,
+            name: change.name.clone(),
+            model: change.model.clone(),
+            protocol: change.base.protocol,
+            endpoint: change.base.endpoint.clone(),
+            enabled: change.base.enabled,
+            api_key: None,
+        };
+        let request = super::secret_json(builder(&route, "PUT"), &input)
+            .map_err(|_| MetadataError::InvalidInput)?;
+        drop(input);
+        let response = super::request::Request::send(request)
+            .await
+            .map_err(|_| MetadataError::Unknown)?;
+        if response.status() == 409 {
+            let snapshot: openbot_contracts::revision::RevisionSnapshot =
+                decode(response).await.map_err(|_| MetadataError::Unknown)?;
+            if snapshot.current_revision() <= change.base.revision {
+                return Err(MetadataError::Unknown);
+            }
+            return Err(MetadataError::Conflict(snapshot));
+        }
+        if response.status() != 200 {
+            return Err(match response.status() {
+                400 | 422 => MetadataError::InvalidInput,
+                401 => MetadataError::Rejected(ApiError::Unauthorized),
+                403 => MetadataError::Rejected(ApiError::Forbidden),
+                404 => MetadataError::Rejected(ApiError::NotFound),
+                _ => MetadataError::Unknown,
+            });
+        }
+        let row: ModelConnection = decode(response).await.map_err(|_| MetadataError::Unknown)?;
+        if !validate_metadata_ack(&change, &row) {
+            return Err(MetadataError::Unknown);
+        }
+        Ok(row)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = change;
+        Err(MetadataError::Rejected(ApiError::Unavailable))
+    }
+}
+
 /// No input payload is retained by the caller after this operation is dispatched.
 pub(crate) enum Write {
     Create(CreateModelConnection),
@@ -291,6 +385,65 @@ mod tests {
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
         }
+    }
+
+    #[test]
+    fn metadata_ack_binds_exact_revision_and_every_unchanged_sensitive_field() {
+        let base = row(1);
+        let change = MetadataChange {
+            base: base.clone(),
+            name: "New label".into(),
+            model: "new-model".into(),
+        };
+        let good = ModelConnection {
+            name: change.name.clone(),
+            model: change.model.clone(),
+            revision: 2,
+            ..base.clone()
+        };
+        assert!(validate_metadata_ack(&change, &good));
+        for bad in [
+            ModelConnection {
+                revision: 3,
+                ..good.clone()
+            },
+            ModelConnection {
+                id: row(2).id,
+                ..good.clone()
+            },
+            ModelConnection {
+                endpoint: "https://other.test/v1".into(),
+                ..good.clone()
+            },
+            ModelConnection {
+                protocol: CustomModelProtocol::AnthropicMessages,
+                ..good.clone()
+            },
+            ModelConnection {
+                enabled: false,
+                ..good.clone()
+            },
+            ModelConnection {
+                has_credential: false,
+                ..good.clone()
+            },
+            ModelConnection {
+                created_at: time::OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1),
+                ..good.clone()
+            },
+        ] {
+            assert!(!validate_metadata_ack(&change, &bad));
+        }
+        assert!(
+            !MetadataChange {
+                base: ModelConnection {
+                    revision: i64::MAX,
+                    ..base
+                },
+                ..change
+            }
+            .valid()
+        );
     }
 
     #[test]
