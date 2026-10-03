@@ -20,6 +20,38 @@ use uuid::{Uuid, Variant};
 pub use openbot_contracts::artifacts::{MAX_ARTIFACT_BYTES, MAX_ARTIFACT_READ_CHUNK_BYTES};
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 
+#[cfg(all(test, feature = "server-runtime"))]
+#[path = "artifact_bytes/registration_tests.rs"]
+mod registration_tests;
+
+#[cfg(feature = "server-runtime")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArtifactByteStorageLocation {
+    Staging,
+    Object,
+}
+
+#[cfg(feature = "server-runtime")]
+impl ArtifactByteStorageLocation {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Staging => "staging",
+            Self::Object => "object",
+        }
+    }
+}
+
+#[cfg(feature = "server-runtime")]
+pub(crate) enum ArtifactByteProbe {
+    Absent,
+    Retained {
+        location: ArtifactByteStorageLocation,
+        byte_length: u64,
+        sha256: [u8; 32],
+    },
+    Indeterminate,
+}
+
 /// 内部磁盘错误；不携本机路径、正文或底层 OS 错误消息。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ArtifactByteError {
@@ -338,6 +370,124 @@ impl ArtifactByteStore {
             remaining: blob.byte_length,
             failed: false,
         })
+    }
+
+    /// Reobserve the original stable object after synchronous IO has ended. Expected bytes are
+    /// deliberately absent from this interface; this is no actor or operation authorization.
+    #[cfg(feature = "server-runtime")]
+    pub(crate) fn probe_actual(&self, id: Uuid) -> ArtifactByteProbe {
+        self.probe_actual_inner(id)
+            .unwrap_or(ArtifactByteProbe::Indeterminate)
+    }
+
+    #[cfg(feature = "server-runtime")]
+    fn probe_actual_inner(&self, id: Uuid) -> Result<ArtifactByteProbe, ArtifactByteError> {
+        if id.get_version_num() != 7 || id.get_variant() != Variant::RFC4122 {
+            return Err(ArtifactByteError::InvalidBinding);
+        }
+        self.directories.check_private()?;
+        let name = id.to_string();
+        let staging = probe_open(&self.directories.staging, &name)?;
+        let object = probe_open(&self.directories.objects, &name)?;
+        let retained = match (staging, object) {
+            (None, None) => None,
+            (Some(file), None) => Some((ArtifactByteStorageLocation::Staging, file)),
+            (None, Some(file)) => Some((ArtifactByteStorageLocation::Object, file)),
+            (Some(_), Some(_)) => return Err(ArtifactByteError::UnsafeObject),
+        };
+        let observation = if let Some((location, mut file)) = retained {
+            let before = file.metadata().map_err(|_| ArtifactByteError::Io)?;
+            if !before.is_file()
+                || before.uid() != self.directories.owner
+                || before.nlink() != 1
+                || !matches!(before.mode() & 0o7777, 0o400 | 0o600)
+                || before.len() > self.max_byte_length
+                || before.dev()
+                    != self
+                        .directories
+                        .root
+                        .metadata()
+                        .map_err(|_| ArtifactByteError::Io)?
+                        .dev()
+            {
+                return Err(ArtifactByteError::UnsafeObject);
+            }
+            let mut remaining = before.len();
+            let mut hash = Sha256::new();
+            let mut buffer = [0u8; COPY_BUFFER_BYTES];
+            while remaining > 0 {
+                let length = remaining.min(COPY_BUFFER_BYTES as u64) as usize;
+                file.read_exact(&mut buffer[..length])
+                    .map_err(|_| ArtifactByteError::Io)?;
+                hash.update(&buffer[..length]);
+                remaining -= length as u64;
+            }
+            if file
+                .read(&mut buffer[..1])
+                .map_err(|_| ArtifactByteError::Io)?
+                != 0
+            {
+                return Err(ArtifactByteError::UnsafeObject);
+            }
+            file.sync_all().map_err(|_| ArtifactByteError::Io)?;
+            if FileObservation::of(&before)
+                != FileObservation::of(&file.metadata().map_err(|_| ArtifactByteError::Io)?)
+            {
+                return Err(ArtifactByteError::UnsafeObject);
+            }
+            // Verify the directory still selects this exact file, including after its fsync.
+            let directory = match location {
+                ArtifactByteStorageLocation::Staging => &self.directories.staging,
+                ArtifactByteStorageLocation::Object => &self.directories.objects,
+            };
+            let current = probe_open(directory, &name)?.ok_or(ArtifactByteError::UnsafeObject)?;
+            if FileObservation::of(&before)
+                != FileObservation::of(&current.metadata().map_err(|_| ArtifactByteError::Io)?)
+            {
+                return Err(ArtifactByteError::UnsafeObject);
+            }
+            ArtifactByteProbe::Retained {
+                location,
+                byte_length: before.len(),
+                sha256: hash.finalize().into(),
+            }
+        } else {
+            ArtifactByteProbe::Absent
+        };
+        self.directories
+            .staging
+            .sync_all()
+            .map_err(|_| ArtifactByteError::Io)?;
+        self.directories
+            .objects
+            .sync_all()
+            .map_err(|_| ArtifactByteError::Io)?;
+        self.directories
+            .root
+            .sync_all()
+            .map_err(|_| ArtifactByteError::Io)?;
+        self.directories.check_private()?;
+        if matches!(observation, ArtifactByteProbe::Absent)
+            && (probe_open(&self.directories.staging, &name)?.is_some()
+                || probe_open(&self.directories.objects, &name)?.is_some())
+        {
+            return Err(ArtifactByteError::UnsafeObject);
+        }
+        Ok(observation)
+    }
+}
+
+#[cfg(feature = "server-runtime")]
+fn probe_open(directory: &File, name: &str) -> Result<Option<File>, ArtifactByteError> {
+    match rustix::fs::openat(
+        directory,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(file) => Ok(Some(File::from(file))),
+        Err(rustix::io::Errno::NOENT) => Ok(None),
+        Err(error) => Err(map_open_error(error)),
     }
 }
 

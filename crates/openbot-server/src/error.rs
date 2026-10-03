@@ -6,13 +6,15 @@
 //! `ActorId`、policy decision id。这些是给日志与审计的，不是给客户端的。所以本模块做的
 //! 事是**挑出可以出边界的那几样**，而不是把错误 serde 出去。
 //!
-//! 普通错误出边界的恰好两样；配置 CAS 冲突另投影封闭的当前版本快照：
+//! 普通错误出边界为稳定码与 policy rule；artifact gone 另带封闭 deleted/expired status。
+//! 配置 CAS 冲突另投影封闭的当前版本快照：
 //! `{currentRevision, currentSha256, updatedAt}`，由已授权的 Application 路径构造。
 //!
 //! | 字段 | 为什么可以出去 |
 //! | --- | --- |
 //! | `code` | §15.3 逐字要求它是稳定契约；GUI 按 code 本地化文案（repository contract §4a） |
 //! | `rule`（仅 `PolicyRefused`） | §15.3 逐字要求「policy refusal 403 + stable error code/rule ID」；它是管理员编写的**标识符**，不随 locale 变化 |
+//! | `status`（仅 `ArtifactGone`） | R424 的封闭 deleted/expired 状态，不带内容或来源身份 |
 //!
 //! 逐条说明**没有**出去的：
 //!
@@ -36,6 +38,7 @@
 use axum::Json;
 use axum::response::{IntoResponse, Response};
 use http::StatusCode;
+use openbot_contracts::artifacts::ArtifactGoneStatus;
 use openbot_contracts::error::AppError;
 use serde::Serialize;
 
@@ -61,7 +64,7 @@ impl From<AppError> for HttpError {
     }
 }
 
-/// 出边界的错误载荷。**只有这两个键**。
+/// 出边界的错误载荷：code，或 policy rule，或 artifact 的封闭 gone status。
 ///
 /// `deny_unknown_fields` 在这里没有意义（它只出不进），但字段的**私有性**有：本结构体
 /// 不 `pub`，外部无法在别处构造一个多带几项的变体。
@@ -72,6 +75,9 @@ struct ErrorBody<'a> {
     /// policy 规则 ID，仅 `PolicyRefused` 有。
     #[serde(skip_serializing_if = "Option::is_none")]
     rule: Option<&'a str>,
+    /// Only a current-authorized deleted/expired artifact exposes this closed state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<ArtifactGoneStatus>,
 }
 
 /// 把 §15.3 的状态码值域翻译成 `StatusCode`。
@@ -111,8 +117,9 @@ impl IntoResponse for HttpError {
             return response;
         }
 
-        let rule = match &self.0 {
-            AppError::PolicyRefused { rule, .. } => Some(rule.as_str()),
+        let (rule, gone_status) = match &self.0 {
+            AppError::PolicyRefused { rule, .. } => (Some(rule.as_str()), None),
+            AppError::ArtifactGone { status } => (None, Some(*status)),
             AppError::Unauthenticated
             | AppError::ForbiddenRole { .. }
             | AppError::NotVisible
@@ -124,12 +131,13 @@ impl IntoResponse for HttpError {
             | AppError::LeaseConflict { .. }
             | AppError::IdentityConflict { .. }
             | AppError::SensitiveWriteRefused { .. }
-            | AppError::ReconciliationRequired { .. } => None,
+            | AppError::ReconciliationRequired { .. } => (None, None),
         };
 
         let body = ErrorBody {
             code: self.0.code().as_str(),
             rule,
+            status: gone_status,
         };
         let mut response = (status, Json(body)).into_response();
         response.headers_mut().insert(
@@ -177,6 +185,12 @@ mod tests {
                 required: Role::Admin,
             },
             AppError::NotVisible,
+            AppError::ArtifactGone {
+                status: ArtifactGoneStatus::Deleted,
+            },
+            AppError::ArtifactGone {
+                status: ArtifactGoneStatus::Expired,
+            },
             AppError::MalformedPayload { field: "cursor" },
             AppError::PolicyRefused {
                 rule: "browser.navigate.deny_private_hosts".to_owned(),
@@ -311,7 +325,7 @@ mod tests {
         assert!(body.contains("malformed_payload"), "{body}");
     }
 
-    /// `PolicyRefused` 是唯一带第二个字段的变体：rule 出去，decision 不出去。
+    /// `PolicyRefused` 的 rule 出去，decision 不出去。
     #[tokio::test]
     async fn policy_refusal_projects_the_rule_id_but_not_the_decision_id() {
         let (status, body) = render(AppError::PolicyRefused {
@@ -328,6 +342,20 @@ mod tests {
         assert!(body.contains(ErrorCode::POLICY_REFUSED.as_str()), "{body}");
         // 负向：decision id 属于审计面。
         assert!(!body.contains("pd-secret-1"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn artifact_gone_projects_only_closed_state_and_no_store() {
+        for status in [ArtifactGoneStatus::Deleted, ArtifactGoneStatus::Expired] {
+            let response = HttpError::from(AppError::ArtifactGone { status }).into_response();
+            assert_eq!(response.status(), StatusCode::GONE);
+            assert_eq!(response.headers()[http::header::CACHE_CONTROL], "no-store");
+            let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                serde_json::json!({"code":"artifact_gone","status":status})
+            );
+        }
     }
 
     /// 只有 `PolicyRefused` 带 `rule` 键；其余变体连键都不出现（不是 `"rule":null`）。

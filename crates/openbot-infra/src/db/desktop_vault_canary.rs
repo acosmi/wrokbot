@@ -402,6 +402,8 @@ fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraErr
         native::NATIVE_0040_VERSION => PUBLIC_0040,
         //0041 adds only the internal dataset registry; public facts remain exactly0040.
         native::NATIVE_0041_VERSION => PUBLIC_0040,
+        //0042 registers real artifacts only in the internal schema.
+        native::NATIVE_0042_VERSION => PUBLIC_0040,
         _ => {
             return Err(InfraError::repository_invariant(
                 "desktop_vault_native_schema_unregistered",

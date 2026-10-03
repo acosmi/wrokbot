@@ -54,13 +54,13 @@ async fn register(
 
 #[tokio::test]
 #[ignore = "requires owned isolated PostgreSQL and frozen artifact dataset oracle"]
-async fn fresh_0041_has_exact_internal_schema_and_unchanged_public_0040() {
+async fn fresh_current_native_preserves_exact_0041_registry_and_public_0040() {
     harness::with_temp_database(
         &harness::admin_config("artifact41fresh"),
         "artifact41fresh",
         |config| async move {
             let p = fresh_pool(&config).await?;
-            assert_eq!(native::NATIVE_LATEST_VERSION, 41);
+            assert_eq!(native::NATIVE_LATEST_VERSION, 42);
             let mut c = p.get().await.map_err(|e| e.to_string())?;
             let facts = schema_facts::fetch(&c).await.map_err(|e| e.to_string())?;
             let expected: schema_facts::SchemaFacts =
@@ -79,7 +79,7 @@ async fn fresh_0041_has_exact_internal_schema_and_unchanged_public_0040() {
                 .await
                 .map_err(|e| e.to_string())?
                 .get(0);
-            assert_eq!(latest, 41);
+            assert_eq!(latest, 42);
             drop(c);
             assert_eq!(
                 capture_artifact_registry_schema(&p).await.unwrap(),

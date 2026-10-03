@@ -1,5 +1,7 @@
 //! Owned PG + TLS integration for actual personal provider starts, without vendor accounts.
 mod harness;
+#[path = "custom_model_provider_runtime/target_identity.rs"]
+mod target_identity;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use openbot_application::model_connections::ModelConnectionAdministration;

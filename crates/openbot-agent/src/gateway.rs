@@ -408,6 +408,8 @@ impl AgentToolGateway {
                 | AppReply::PendingToolApprovals(_)
                 | AppReply::ToolApprovalResolved(_)
                 | AppReply::UiPreferences(_)
+                | AppReply::ArtifactRegistrationReceipt(_)
+                | AppReply::ArtifactMetadata(_)
                 | AppReply::RunCostBudget(_)
                 | AppReply::ScreenSession(_),
             ) => Err(AppError::DependencyUnavailable {
@@ -589,6 +591,7 @@ impl AuthorizedAgentToolGateway {
             }
             Err(
                 AppError::Unauthenticated
+                | AppError::ArtifactGone { .. }
                 | AppError::DependencyUnavailable { .. }
                 | AppError::VendorFailure { .. }
                 | AppError::PolicyRefused { .. }
@@ -668,6 +671,7 @@ impl AuthorizedAgentToolGateway {
             }
             Err(
                 AppError::Unauthenticated
+                | AppError::ArtifactGone { .. }
                 | AppError::DependencyUnavailable { .. }
                 | AppError::VendorFailure { .. }
                 | AppError::StaleGeneration { .. }
@@ -731,6 +735,7 @@ impl AuthorizedAgentToolGateway {
             }
             Err(
                 AppError::Unauthenticated
+                | AppError::ArtifactGone { .. }
                 | AppError::DependencyUnavailable { .. }
                 | AppError::VendorFailure { .. }
                 | AppError::PolicyRefused { .. }
@@ -850,6 +855,7 @@ fn map_application_reply(
         }
         Err(
             AppError::Unauthenticated
+            | AppError::ArtifactGone { .. }
             | AppError::DependencyUnavailable { .. }
             | AppError::VendorFailure { .. }
             | AppError::StaleGeneration { .. }

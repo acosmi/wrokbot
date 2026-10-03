@@ -321,6 +321,10 @@ pub enum AuditFact {
     DecisionId(AuditIdentifier),
     /// Original tool attempt bound to a same-transaction business receipt.
     ToolAttemptId(AuditIdentifier),
+    /// New artifact UUID only; source identities and content are excluded.
+    ArtifactId(AuditIdentifier),
+    /// Stable artifact operation UUID only; never an intent digest.
+    ArtifactOperationId(AuditIdentifier),
     /// Original business memory event sequence, never current content.
     MemoryEventSequence(u64),
     /// 做出该 decision 时生效的 policy 版本（§8.3：多副本下用旧版本做出的 decision 必须可辨认）。
@@ -432,6 +436,8 @@ impl AuditFact {
             Self::RoutingCandidates(_) => "candidates",
             Self::DecisionId(_) => "decision_id",
             Self::ToolAttemptId(_) => "tool_attempt_id",
+            Self::ArtifactId(_) => "artifact_id",
+            Self::ArtifactOperationId(_) => "artifact_operation_id",
             Self::MemoryEventSequence(_) => "memory_event_sequence",
             Self::PolicyVersion(_) => "policy_version",
             Self::RefusedByRule(_) => "refused_by_rule",
@@ -478,6 +484,8 @@ impl AuditFact {
             | Self::RoutingChosen(value)
             | Self::DecisionId(value)
             | Self::ToolAttemptId(value)
+            | Self::ArtifactId(value)
+            | Self::ArtifactOperationId(value)
             | Self::ApprovalId(value)
             | Self::PolicyVersion(value)
             | Self::RefusedByRule(value)
@@ -572,6 +580,8 @@ impl AuditFact {
             | Self::RoutingChosen(value)
             | Self::DecisionId(value)
             | Self::ToolAttemptId(value)
+            | Self::ArtifactId(value)
+            | Self::ArtifactOperationId(value)
             | Self::ApprovalId(value)
             | Self::PolicyVersion(value)
             | Self::RefusedByRule(value)
@@ -677,6 +687,8 @@ pub const AUDIT_FIELD_LEDGER: &[&str] = &[
     "candidates",
     "decision_id",
     "tool_attempt_id",
+    "artifact_id",
+    "artifact_operation_id",
     "memory_event_sequence",
     "policy_version",
     "refused_by_rule",
@@ -806,6 +818,33 @@ pub enum AuditPayloadError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_saved_fact_shape_contains_only_two_new_object_id_fields() {
+        let artifact = "019a0300-0000-7000-8000-000000000001";
+        let operation = "019a0300-0000-7000-8000-000000000002";
+        let payload = AuditPayload::from_facts([
+            AuditFact::ArtifactId(AuditIdentifier::new(artifact).unwrap()),
+            AuditFact::ArtifactOperationId(AuditIdentifier::new(operation).unwrap()),
+        ])
+        .unwrap();
+        assert_eq!(
+            payload.to_json(),
+            serde_json::json!({"artifact_id":artifact,"artifact_operation_id":operation})
+        );
+        assert_eq!(payload.len(), 2);
+        for key in [
+            "source_run_id",
+            "source_thread_id",
+            "body",
+            "sha256",
+            "byte_length",
+            "media_type",
+            "path",
+        ] {
+            assert!(payload.get(key).is_none());
+        }
+    }
     use std::collections::BTreeSet;
 
     fn identifier(value: &str) -> AuditIdentifier {
@@ -865,6 +904,8 @@ mod tests {
             ),
             AuditFact::DecisionId(identifier("pd-1")),
             AuditFact::ToolAttemptId(identifier("attempt-1")),
+            AuditFact::ArtifactId(identifier("019a0300-0000-7000-8000-000000000001")),
+            AuditFact::ArtifactOperationId(identifier("019a0300-0000-7000-8000-000000000002")),
             AuditFact::MemoryEventSequence(0),
             AuditFact::PolicyVersion(identifier("pv-7")),
             AuditFact::RefusedByRule(identifier("deny.private_hosts")),

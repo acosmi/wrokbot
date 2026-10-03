@@ -1,0 +1,603 @@
+//! R424 trusted local root, independent store identity and actual IO observations.
+//! All synchronous filesystem methods run on a blocking worker. Tokens here carry no actor
+//! authorization. Same-UID hostile writers/ACL and atomic compare-unlink remain unproved.
+
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::unix::fs::MetadataExt;
+use std::sync::{Arc, Mutex};
+
+use openbot_domain::artifact::ArtifactQuotaPolicy;
+use rustix::fs::{Mode, OFlags};
+use serde::{Deserialize, Serialize};
+use tokio_postgres::IsolationLevel;
+use uuid::Uuid;
+
+pub(crate) use crate::artifact_bytes::ArtifactByteStorageLocation;
+use crate::artifact_bytes::{ArtifactBlob, ArtifactByteProbe, ArtifactByteStore};
+use crate::artifact_registry::ArtifactDatasetRegistry;
+
+const MARKER_NAME: &str = ".artifact-store-v1";
+const MAX_MARKER_BYTES: u64 = 4096;
+
+#[cfg(test)]
+#[path = "artifact_store/tests.rs"]
+mod tests;
+
+/// Open an explicit trusted host root with every absolute path component refusing symlinks.
+/// This helper is for startup configuration; no application command accepts this path.
+pub fn open_trusted_host_root(path: &std::path::Path) -> Result<File, ArtifactStoreError> {
+    use std::path::Component;
+    if !path.is_absolute() {
+        return Err(ArtifactStoreError::UnsafeRoot);
+    }
+    let mut file = File::open("/").map_err(|_| ArtifactStoreError::Unavailable)?;
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => {
+                file = File::from(
+                    rustix::fs::openat(
+                        &file,
+                        name,
+                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )
+                    .map_err(|_| ArtifactStoreError::UnsafeRoot)?,
+                );
+            }
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
+                return Err(ArtifactStoreError::UnsafeRoot);
+            }
+        }
+    }
+    ArtifactRootPhysicalBinding::observe(&file)?;
+    Ok(file)
+}
+
+/// Create/open only the fixed artifacts child of a current trusted private installation root.
+pub fn open_trusted_installation_artifact_root(
+    parent: &std::path::Path,
+) -> Result<File, ArtifactStoreError> {
+    let parent = open_trusted_host_root(parent)?;
+    match rustix::fs::mkdirat(&parent, "artifacts", Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+        Ok(()) => parent
+            .sync_all()
+            .map_err(|_| ArtifactStoreError::Unavailable)?,
+        Err(rustix::io::Errno::EXIST) => {}
+        Err(_) => return Err(ArtifactStoreError::Unavailable),
+    }
+    let file = File::from(
+        rustix::fs::openat(
+            &parent,
+            "artifacts",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|_| ArtifactStoreError::UnsafeRoot)?,
+    );
+    ArtifactRootPhysicalBinding::observe(&file)?;
+    if file
+        .metadata()
+        .map_err(|_| ArtifactStoreError::Unavailable)?
+        .dev()
+        != parent
+            .metadata()
+            .map_err(|_| ArtifactStoreError::Unavailable)?
+            .dev()
+    {
+        return Err(ArtifactStoreError::UnsafeRoot);
+    }
+    Ok(file)
+}
+
+/// Redacted trusted-store startup failures, never paths or marker contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ArtifactStoreError {
+    /// IO/database/schema observation was unavailable.
+    #[error("artifact_store_unavailable")]
+    Unavailable,
+    /// A descriptor or actual private object was unsafe.
+    #[error("artifact_store_unsafe_root")]
+    UnsafeRoot,
+    /// Namespace, dataset, marker or current physical root differs.
+    #[error("artifact_store_binding_mismatch")]
+    BindingMismatch,
+    /// Another current kernel owner holds this root.
+    #[error("artifact_store_busy")]
+    Busy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ArtifactRootPhysicalBinding {
+    device: String,
+    inode: String,
+    uid: String,
+}
+impl ArtifactRootPhysicalBinding {
+    pub(crate) fn device(&self) -> &str {
+        &self.device
+    }
+    pub(crate) fn inode(&self) -> &str {
+        &self.inode
+    }
+    pub(crate) fn uid(&self) -> &str {
+        &self.uid
+    }
+    fn observe(root: &File) -> Result<Self, ArtifactStoreError> {
+        let metadata = root
+            .metadata()
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        if !metadata.is_dir()
+            || metadata.mode() & 0o7777 != 0o700
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+        {
+            return Err(ArtifactStoreError::UnsafeRoot);
+        }
+        Ok(Self {
+            device: metadata.dev().to_string(),
+            inode: metadata.ino().to_string(),
+            uid: metadata.uid().to_string(),
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoreMarker {
+    schema: u16,
+    deployment_id: String,
+    tenant_id: String,
+    dataset_id: String,
+    store_id: String,
+}
+
+struct PreparedRoot {
+    root: File,
+    marker: StoreMarker,
+    marker_bytes: Vec<u8>,
+    physical: ArtifactRootPhysicalBinding,
+    fresh_marker: bool,
+}
+
+/// Current same-Pool dataset and actual exclusive local root owner. Private construction and
+/// per-request current checks, rather than a marker string, establish this binding.
+pub struct DatasetBoundArtifactStore {
+    registry: Arc<ArtifactDatasetRegistry>,
+    root: File,
+    marker_bytes: Vec<u8>,
+    physical: ArtifactRootPhysicalBinding,
+    store_id: Uuid,
+    bytes: ArtifactByteStore,
+    owner: Arc<()>,
+    io: Mutex<()>,
+}
+
+impl core::fmt::Debug for DatasetBoundArtifactStore {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DatasetBoundArtifactStore")
+            .field("binding", &"<redacted>")
+            .finish()
+    }
+}
+
+impl DatasetBoundArtifactStore {
+    /// Trusted host provides a no-symlink private directory descriptor, never a renderer path.
+    /// Ordinary reopen is immutable; changed-root restore requires a separate future producer.
+    pub async fn bind_host_root(
+        root: File,
+        registry: Arc<ArtifactDatasetRegistry>,
+        policy: ArtifactQuotaPolicy,
+    ) -> Result<Self, ArtifactStoreError> {
+        registry
+            .validate_current()
+            .await
+            .map_err(|_| ArtifactStoreError::BindingMismatch)?;
+        crate::artifact_administration::verify_artifact_registration_schema(registry.pool())
+            .await
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        let binding = registry.binding();
+        let namespace = (
+            binding.deployment_id().to_owned(),
+            binding.tenant_id().to_owned(),
+            binding.dataset_id().to_owned(),
+        );
+        let prepared = tokio::task::spawn_blocking(move || prepare_root(root, namespace))
+            .await
+            .map_err(|_| ArtifactStoreError::Unavailable)??;
+        let mut client = registry
+            .pool()
+            .get()
+            .await
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        // The transaction originates here from this exact registry Pool. No external transaction
+        // or caller-supplied owner token is accepted as same-database evidence.
+        let transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        transaction
+            .batch_execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='5s'")
+            .await
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        let actual = transaction.query_opt(
+            "SELECT dataset_id,binding_schema,initial_origin,created_at FROM openbot_internal.artifact_dataset_bindings WHERE deployment_id=$1 AND tenant_id=$2",
+            &[&binding.deployment_id(), &binding.tenant_id()],
+        ).await.map_err(|_| ArtifactStoreError::Unavailable)?.ok_or(ArtifactStoreError::BindingMismatch)?;
+        if actual
+            .try_get::<_, String>(0)
+            .map_err(|_| ArtifactStoreError::BindingMismatch)?
+            != binding.dataset_id()
+            || actual
+                .try_get::<_, i16>(1)
+                .map_err(|_| ArtifactStoreError::BindingMismatch)?
+                != 1
+            || actual
+                .try_get::<_, String>(2)
+                .map_err(|_| ArtifactStoreError::BindingMismatch)?
+                != binding.initial_origin()
+            || actual
+                .try_get::<_, time::OffsetDateTime>(3)
+                .map_err(|_| ArtifactStoreError::BindingMismatch)?
+                != binding.created_at()
+        {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        if prepared.fresh_marker {
+            transaction.execute(
+                "INSERT INTO openbot_internal.artifact_store_bindings(deployment_id,tenant_id,dataset_id,store_id,root_device,root_inode,root_uid) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING",
+                &[&binding.deployment_id(), &binding.tenant_id(), &binding.dataset_id(), &prepared.marker.store_id,
+                  &prepared.physical.device, &prepared.physical.inode, &prepared.physical.uid],
+            ).await.map_err(|_| ArtifactStoreError::Unavailable)?;
+        }
+        let row = transaction.query_opt(
+            "SELECT store_id,root_device,root_inode,root_uid FROM openbot_internal.artifact_store_bindings WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3",
+            &[&binding.deployment_id(), &binding.tenant_id(), &binding.dataset_id()],
+        ).await.map_err(|_| ArtifactStoreError::Unavailable)?.ok_or(ArtifactStoreError::BindingMismatch)?;
+        let expected = [
+            &prepared.marker.store_id,
+            &prepared.physical.device,
+            &prepared.physical.inode,
+            &prepared.physical.uid,
+        ];
+        for (index, value) in expected.into_iter().enumerate() {
+            if row
+                .try_get::<_, String>(index)
+                .map_err(|_| ArtifactStoreError::BindingMismatch)?
+                != *value
+            {
+                return Err(ArtifactStoreError::BindingMismatch);
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        drop(client);
+        registry
+            .validate_current()
+            .await
+            .map_err(|_| ArtifactStoreError::BindingMismatch)?;
+        let store_id = Uuid::parse_str(&prepared.marker.store_id)
+            .map_err(|_| ArtifactStoreError::BindingMismatch)?;
+        tokio::task::spawn_blocking(move || {
+            if ArtifactRootPhysicalBinding::observe(&prepared.root)? != prepared.physical
+                || read_marker(&prepared.root)? != Some(prepared.marker_bytes.clone())
+            {
+                return Err(ArtifactStoreError::BindingMismatch);
+            }
+            let bytes = ArtifactByteStore::bind_private_root(
+                prepared
+                    .root
+                    .try_clone()
+                    .map_err(|_| ArtifactStoreError::Unavailable)?,
+                policy.max_artifact_bytes(),
+            )
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+            Ok(Self {
+                registry,
+                root: prepared.root,
+                marker_bytes: prepared.marker_bytes,
+                physical: prepared.physical,
+                store_id,
+                bytes,
+                owner: Arc::new(()),
+                io: Mutex::new(()),
+            })
+        })
+        .await
+        .map_err(|_| ArtifactStoreError::Unavailable)?
+    }
+
+    /// Durable local-store identity, a locator rather than authority.
+    #[must_use]
+    pub const fn store_id(&self) -> Uuid {
+        self.store_id
+    }
+    pub(crate) const fn physical_binding(&self) -> &ArtifactRootPhysicalBinding {
+        &self.physical
+    }
+    pub(crate) fn matches_registry_owner(&self, registry: &ArtifactDatasetRegistry) -> bool {
+        Arc::ptr_eq(&self.registry.owner(), &registry.owner())
+            && std::ptr::eq(self.registry.pool().manager(), registry.pool().manager())
+    }
+    fn check_current(&self) -> Result<(), ArtifactStoreError> {
+        if ArtifactRootPhysicalBinding::observe(&self.root)? != self.physical
+            || read_marker(&self.root)? != Some(self.marker_bytes.clone())
+        {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        Ok(())
+    }
+    /// Current disk-space observation, not an allocation guarantee. Call on a blocking worker.
+    pub fn available_bytes(&self) -> Result<u64, ArtifactStoreError> {
+        self.check_current()?;
+        let space =
+            rustix::fs::fstatvfs(&self.root).map_err(|_| ArtifactStoreError::Unavailable)?;
+        space
+            .f_bavail
+            .checked_mul(space.f_frsize)
+            .ok_or(ArtifactStoreError::Unavailable)
+    }
+
+    pub(crate) fn write_text_once(
+        &self,
+        id: Uuid,
+        expected: [u8; 32],
+        text: &[u8],
+    ) -> VerifiedArtifactByteObservation {
+        let mut phase = ArtifactByteWritePhase::BeforeWrite;
+        let Ok(_guard) = self.io.lock() else {
+            return self.observation(id, phase, ArtifactByteObservationState::Indeterminate);
+        };
+        if self.check_current().is_err()
+            || !matches!(self.bytes.probe_actual(id), ArtifactByteProbe::Absent)
+        {
+            return self.observation(id, phase, ArtifactByteObservationState::Indeterminate);
+        }
+        let Ok(blob) = ArtifactBlob::from_record(id, text.len() as u64, expected) else {
+            return self.observation(id, phase, ArtifactByteObservationState::DurableAbsent);
+        };
+        phase = ArtifactByteWritePhase::Staging;
+        let mut reader = std::io::Cursor::new(text);
+        let installed = match self.bytes.stage_for(&mut reader, &blob) {
+            Ok(stage) => {
+                phase = ArtifactByteWritePhase::Installing;
+                self.bytes.install(stage).is_ok()
+            }
+            Err(_) => false,
+        };
+        if installed {
+            phase = ArtifactByteWritePhase::Installed;
+        }
+        let state = match self.bytes.probe_actual(id) {
+            ArtifactByteProbe::Absent => ArtifactByteObservationState::DurableAbsent,
+            ArtifactByteProbe::Retained {
+                location,
+                byte_length,
+                sha256,
+            } => {
+                if installed
+                    && location == ArtifactByteStorageLocation::Object
+                    && byte_length == text.len() as u64
+                    && sha256 == expected
+                {
+                    ArtifactByteObservationState::DurableInstalled {
+                        byte_length,
+                        sha256,
+                    }
+                } else {
+                    ArtifactByteObservationState::RetainedPartial {
+                        location,
+                        byte_length,
+                        sha256,
+                    }
+                }
+            }
+            ArtifactByteProbe::Indeterminate => ArtifactByteObservationState::Indeterminate,
+        };
+        if self.check_current().is_err() {
+            return self.observation(id, phase, ArtifactByteObservationState::Indeterminate);
+        }
+        self.observation(id, phase, state)
+    }
+    fn observation(
+        &self,
+        id: Uuid,
+        phase: ArtifactByteWritePhase,
+        state: ArtifactByteObservationState,
+    ) -> VerifiedArtifactByteObservation {
+        VerifiedArtifactByteObservation {
+            artifact_id: id,
+            phase,
+            state,
+            owner: Arc::clone(&self.owner),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArtifactByteWritePhase {
+    BeforeWrite,
+    Staging,
+    Installing,
+    Installed,
+}
+impl ArtifactByteWritePhase {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::BeforeWrite => "before_write",
+            Self::Staging => "staging",
+            Self::Installing => "installing",
+            Self::Installed => "installed",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArtifactByteObservationState {
+    DurableInstalled {
+        byte_length: u64,
+        sha256: [u8; 32],
+    },
+    DurableAbsent,
+    RetainedPartial {
+        location: ArtifactByteStorageLocation,
+        byte_length: u64,
+        sha256: [u8; 32],
+    },
+    Indeterminate,
+}
+pub(crate) struct VerifiedArtifactByteObservation {
+    artifact_id: Uuid,
+    phase: ArtifactByteWritePhase,
+    state: ArtifactByteObservationState,
+    owner: Arc<()>,
+}
+impl VerifiedArtifactByteObservation {
+    pub(crate) const fn artifact_id(&self) -> Uuid {
+        self.artifact_id
+    }
+    pub(crate) const fn state(&self) -> &ArtifactByteObservationState {
+        &self.state
+    }
+    pub(crate) const fn phase(&self) -> ArtifactByteWritePhase {
+        self.phase
+    }
+    pub(crate) fn matches_store(&self, store: &DatasetBoundArtifactStore) -> bool {
+        Arc::ptr_eq(&self.owner, &store.owner)
+    }
+}
+
+fn prepare_root(
+    root: File,
+    namespace: (String, String, String),
+) -> Result<PreparedRoot, ArtifactStoreError> {
+    let physical = ArtifactRootPhysicalBinding::observe(&root)?;
+    root.try_lock().map_err(|_| ArtifactStoreError::Busy)?;
+    let original = read_marker(&root)?;
+    let fresh_marker = original.is_none();
+    let (marker, marker_bytes) = if let Some(bytes) = original {
+        let marker: StoreMarker =
+            serde_json::from_slice(&bytes).map_err(|_| ArtifactStoreError::BindingMismatch)?;
+        (marker, bytes)
+    } else {
+        let directory =
+            rustix::fs::Dir::read_from(&root).map_err(|_| ArtifactStoreError::Unavailable)?;
+        for entry in directory {
+            let entry = entry.map_err(|_| ArtifactStoreError::Unavailable)?;
+            if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+                return Err(ArtifactStoreError::BindingMismatch);
+            }
+        }
+        let marker = StoreMarker {
+            schema: 1,
+            deployment_id: namespace.0.clone(),
+            tenant_id: namespace.1.clone(),
+            dataset_id: namespace.2.clone(),
+            store_id: Uuid::now_v7().to_string(),
+        };
+        let bytes = serde_json::to_vec(&marker).map_err(|_| ArtifactStoreError::Unavailable)?;
+        let mut file = File::from(
+            rustix::fs::openat(
+                &root,
+                MARKER_NAME,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(|_| ArtifactStoreError::Unavailable)?,
+        );
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        rustix::fs::fchmod(&file, Mode::RUSR).map_err(|_| ArtifactStoreError::Unavailable)?;
+        file.sync_all()
+            .and_then(|()| root.sync_all())
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        (marker, bytes)
+    };
+    let id = Uuid::parse_str(&marker.store_id).map_err(|_| ArtifactStoreError::BindingMismatch)?;
+    if marker.schema != 1
+        || (
+            marker.deployment_id.as_str(),
+            marker.tenant_id.as_str(),
+            marker.dataset_id.as_str(),
+        ) != (
+            namespace.0.as_str(),
+            namespace.1.as_str(),
+            namespace.2.as_str(),
+        )
+        || id.get_version_num() != 7
+        || id.get_variant() != uuid::Variant::RFC4122
+        || id.to_string() != marker.store_id
+        || serde_json::to_vec(&marker).map_err(|_| ArtifactStoreError::Unavailable)? != marker_bytes
+        || ArtifactRootPhysicalBinding::observe(&root)? != physical
+        || read_marker(&root)? != Some(marker_bytes.clone())
+    {
+        return Err(ArtifactStoreError::BindingMismatch);
+    }
+    Ok(PreparedRoot {
+        root,
+        marker,
+        marker_bytes,
+        physical,
+        fresh_marker,
+    })
+}
+
+fn read_marker(root: &File) -> Result<Option<Vec<u8>>, ArtifactStoreError> {
+    let mut file = match rustix::fs::openat(
+        root,
+        MARKER_NAME,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(file) => File::from(file),
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(_) => return Err(ArtifactStoreError::UnsafeRoot),
+    };
+    let before = file
+        .metadata()
+        .map_err(|_| ArtifactStoreError::Unavailable)?;
+    if !before.is_file()
+        || before.mode() & 0o7777 != 0o400
+        || before.nlink() != 1
+        || before.uid() != rustix::process::geteuid().as_raw()
+        || before.dev()
+            != root
+                .metadata()
+                .map_err(|_| ArtifactStoreError::Unavailable)?
+                .dev()
+        || before.len() == 0
+        || before.len() > MAX_MARKER_BYTES
+    {
+        return Err(ArtifactStoreError::UnsafeRoot);
+    }
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(MAX_MARKER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ArtifactStoreError::Unavailable)?;
+    let after = file
+        .metadata()
+        .map_err(|_| ArtifactStoreError::Unavailable)?;
+    let stable = |m: &std::fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.uid(),
+            m.mode(),
+            m.nlink(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    if bytes.len() as u64 != before.len() || stable(&before) != stable(&after) {
+        return Err(ArtifactStoreError::UnsafeRoot);
+    }
+    Ok(Some(bytes))
+}

@@ -11,13 +11,16 @@
 use openbot_contracts::artifacts::{
     ArtifactRetentionClass, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_REFS, MAX_ARTIFACT_TEXT_BYTES,
     MAX_ARTIFACT_TOTAL_TEXT_BYTES, MAX_RUN_ARTIFACTS, MAX_WORKSPACE_ARTIFACT_BYTES,
-    is_valid_artifact_identity,
+    canonical_artifact_uuid_v7, is_valid_artifact_identity,
 };
 use time::OffsetDateTime;
 
 /// 成果纯不变量的脱敏错误；不保存标识、路径、正文或权限事实，也不映射 HTTP 状态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ArtifactInvariantError {
+    /// Operation value is not a standard UUIDv7; this is shape, not issuance proof.
+    #[error("artifact operation identity invalid")]
+    InvalidOperationIdentity,
     /// Host policy 提供的单成果上限扩大了冻结预算。
     #[error("artifact policy exceeds byte ceiling")]
     ArtifactPolicyExceedsCeiling,
@@ -84,6 +87,34 @@ pub enum ArtifactInvariantError {
     /// 文本字节合计超过冻结总上限。
     #[error("artifact text total byte limit exceeded")]
     TextTotalByteLimitExceeded,
+}
+
+/// Canonical operation value; does not mint an identity or prove admission/commit/authority.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArtifactSaveOperationId(String);
+
+impl ArtifactSaveOperationId {
+    /// Parse a standard UUIDv7 identity, merging hexadecimal case aliases only.
+    ///
+    /// # Errors
+    /// Returns a sanitized shape error for nonstandard or non-v7 input.
+    pub fn new(value: &str) -> Result<Self, ArtifactInvariantError> {
+        canonical_artifact_uuid_v7(value)
+            .map(Self)
+            .ok_or(ArtifactInvariantError::InvalidOperationIdentity)
+    }
+
+    /// Canonical lowercase hyphenated identity.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume the value without adding an authority constructor.
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
 }
 
 /// R423 workspace 的封闭种类；同一身份文本在两个种类下属于不同键。
@@ -359,6 +390,35 @@ pub fn validate_artifact_text_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operation_case_aliases_are_one_value_without_normalizing_opaque_source_ids() {
+        let canonical = "019a0300-abcd-7def-8abc-123456abcdef";
+        let first = ArtifactSaveOperationId::new(canonical).unwrap();
+        let alias = ArtifactSaveOperationId::new(&canonical.to_uppercase()).unwrap();
+        assert_eq!(first, alias);
+        assert_eq!(alias.as_str(), canonical);
+        assert_eq!(alias.into_inner(), canonical);
+        assert_ne!(
+            ArtifactWorkspaceKey::channel("OpaqueABC").unwrap(),
+            ArtifactWorkspaceKey::channel("opaqueabc").unwrap()
+        );
+    }
+
+    #[test]
+    fn operation_rejects_nonstandard_non_v7_and_control_aliases_without_input_echo() {
+        for invalid in [
+            "",
+            "source/opaque",
+            "019a0300-abcd-4def-8abc-123456abcdef",
+            " 019a0300-abcd-7def-8abc-123456abcdef",
+            "019a0300-abcd-7def-8abc-123456abcdef\n",
+        ] {
+            let error = ArtifactSaveOperationId::new(invalid).unwrap_err();
+            assert_eq!(error, ArtifactInvariantError::InvalidOperationIdentity);
+            assert_eq!(error.to_string(), "artifact operation identity invalid");
+        }
+    }
 
     #[test]
     fn workspace_kind_separates_identical_channel_and_thread_ids() {
