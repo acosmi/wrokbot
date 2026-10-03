@@ -22,8 +22,8 @@ use openbot_application::provider::{
     RemoteAguiEventStream, RemoteAguiTransport, RemoteAguiTransportError,
 };
 use openbot_application::runtime_capabilities::{
-    CapabilityDeadline, RuntimeCapabilitiesCollector, RuntimeCapabilitiesFuture,
-    RuntimeCapabilityObservationResult,
+    CapabilityDeadline, RuntimeCapabilitiesCollectionError, RuntimeCapabilitiesCollector,
+    RuntimeCapabilitiesFuture, RuntimeCapabilityObservationResult,
 };
 use openbot_application::{AppEventStream, ApplicationService, OpenBotApplication};
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder};
@@ -33,9 +33,12 @@ use openbot_contracts::ids::{DeploymentId, TenantId};
 use openbot_domain::identity::roles::AdminFloor;
 use openbot_domain::identity::session::{SessionHashKey, SessionToken, SessionTokenHash};
 use openbot_domain::remote_callback::RemoteRunAssertionSigner;
+use openbot_domain::runtime_capabilities::{
+    ConfigFact, ModelKeyFact, PolicyFact, ProviderFact, RuntimeCapabilityFacts,
+};
 use openbot_domain::vault::{
-    DataKey, KeyVersion, NONCE_BYTES, Nonce, RecordBinding, SecretBytes, SecretId, SecretKind,
-    SecretPrincipal, WrappingKey, seal_v2,
+    DataKey, EnvelopeV2, KeyVersion, NONCE_BYTES, Nonce, RecordBinding, SecretBytes, SecretId,
+    SecretKind, SecretPrincipal, WrappingKey, open_v2, seal_v2,
 };
 use openbot_infra::application_assembly::{
     ChannelRoutingProviderInput, PostgresApplicationAssemblyInput, assemble_postgres_application,
@@ -144,6 +147,60 @@ struct CountActualCollector {
     tail_calls: AtomicUsize,
     gate: Option<Arc<FinalizeGate>>,
     session_tail_clock: Mutex<Option<Arc<SessionTailClockSchedule>>>,
+    bounds_recorder: Mutex<Option<Arc<ActualBoundsRecorder>>>,
+}
+
+/// Disabled for all earlier cases. Copy only real, non-secret facts from the returned result;
+/// never reconstruct the SQL, consume a proof, replace a result or issue another App call.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActualBoundsPhase {
+    Observe,
+    Finalize,
+    Tail,
+}
+#[derive(Clone, Copy)]
+struct ActualBoundsRecord {
+    phase: ActualBoundsPhase,
+    facts: Option<RuntimeCapabilityFacts>,
+    error: Option<RuntimeCapabilitiesCollectionError>,
+    deadline: Instant,
+    sampled_at: Instant,
+    same_auth_scope: bool,
+    within_deadline: bool,
+}
+#[derive(Default)]
+struct ActualBoundsRecorder {
+    records: Mutex<Vec<ActualBoundsRecord>>,
+}
+impl ActualBoundsRecorder {
+    fn record(
+        &self,
+        phase: ActualBoundsPhase,
+        auth: &AuthContext,
+        deadline: CapabilityDeadline,
+        result: &RuntimeCapabilityObservationResult,
+    ) {
+        self.records
+            .lock()
+            .expect("private actual facts recorder poisoned")
+            .push(ActualBoundsRecord {
+                phase,
+                facts: result.as_ref().ok().map(|observation| *observation.facts()),
+                error: result.as_ref().err().copied(),
+                deadline: deadline.deadline(),
+                sampled_at: Instant::now(),
+                same_auth_scope: result
+                    .as_ref()
+                    .is_ok_and(|observation| observation.scope().matches_auth(auth)),
+                within_deadline: deadline.check().is_ok(),
+            });
+    }
+    fn snapshot(&self) -> Vec<ActualBoundsRecord> {
+        self.records
+            .lock()
+            .expect("private actual facts recorder poisoned")
+            .clone()
+    }
 }
 impl CountActualCollector {
     fn new(
@@ -157,6 +214,7 @@ impl CountActualCollector {
             tail_calls: AtomicUsize::new(0),
             gate,
             session_tail_clock: Mutex::new(None),
+            bounds_recorder: Mutex::new(None),
         })
     }
     fn calls(&self) -> (usize, usize, usize) {
@@ -174,7 +232,20 @@ impl RuntimeCapabilitiesCollector for CountActualCollector {
         deadline: CapabilityDeadline,
     ) -> RuntimeCapabilitiesFuture<'a> {
         self.observe_calls.fetch_add(1, Ordering::SeqCst);
-        self.actual.observe(auth, deadline)
+        let recorder = self
+            .bounds_recorder
+            .lock()
+            .expect("private bounds recorder poisoned")
+            .clone();
+        if let Some(recorder) = recorder {
+            Box::pin(async move {
+                let result = self.actual.observe(auth, deadline).await;
+                recorder.record(ActualBoundsPhase::Observe, auth, deadline, &result);
+                result
+            })
+        } else {
+            self.actual.observe(auth, deadline)
+        }
     }
     fn finalize<'a>(
         &'a self,
@@ -189,7 +260,16 @@ impl RuntimeCapabilitiesCollector for CountActualCollector {
                 // The App retains the same absolute five-second budget around this future.
                 gate.released.acquire().await.map_err(|_| openbot_application::runtime_capabilities::RuntimeCapabilitiesCollectionError::Unavailable)?.forget();
             }
-            self.actual.finalize(auth, observed, deadline).await
+            let result = self.actual.finalize(auth, observed, deadline).await;
+            if let Some(recorder) = self
+                .bounds_recorder
+                .lock()
+                .expect("private bounds recorder poisoned")
+                .as_ref()
+            {
+                recorder.record(ActualBoundsPhase::Finalize, auth, deadline, &result);
+            }
+            result
         })
     }
     fn tail_current(
@@ -207,6 +287,14 @@ impl RuntimeCapabilitiesCollector for CountActualCollector {
             .as_ref()
         {
             schedule.after_real_tail(result.is_ok(), deadline);
+        }
+        if let Some(recorder) = self
+            .bounds_recorder
+            .lock()
+            .expect("private bounds recorder poisoned")
+            .as_ref()
+        {
+            recorder.record(ActualBoundsPhase::Tail, auth, deadline, &result);
         }
         // Return the original production observation/error, never a minted stamp or witness.
         result
@@ -446,6 +534,14 @@ impl Fixture {
         mode: Mode,
         gate: Option<Arc<FinalizeGate>>,
     ) -> Result<(), String> {
+        self.install_actual_with_environment(mode, gate, None).await
+    }
+    async fn install_actual_with_environment(
+        &mut self,
+        mode: Mode,
+        gate: Option<Arc<FinalizeGate>>,
+        environment_api_key: Option<SecretBytes>,
+    ) -> Result<(), String> {
         let tenant = TenantId::new(TENANT);
         let sso = DynamicSsoService::new(
             self.pool.clone(),
@@ -503,7 +599,7 @@ impl Fixture {
             channel_routing_provider: ChannelRoutingProviderInput {
                 endpoint: Url::parse("http://127.0.0.1:9/v1/chat/completions")
                     .map_err(|_| "controlled unused endpoint invalid".to_owned())?,
-                environment_api_key: None,
+                environment_api_key,
                 egress_allow_cidrs: vec!["127.0.0.1/32".to_owned()],
                 allow_http: true,
             },
@@ -1706,4 +1802,835 @@ async fn actual_carried_session_idle_after_successful_real_tail_before_app_witne
 #[ignore = "requires root-owned isolated PostgreSQL; bounded real synchronous host-clock crossing"]
 async fn actual_carried_session_absolute_after_successful_real_tail_before_app_witness_is_401() {
     actual_session_tail_clock_crossing("captailabsolute", SessionTailBoundary::Absolute).await;
+}
+
+// E02: nine semantic bounds, each with three real under/equal/over database arms. These
+// numeric setup queries measure stored input; only original production observations are
+// the classification oracle. They do not duplicate JOINT_FACTS_SQL or claim PG memory use.
+#[derive(Clone, Copy)]
+enum ActualBoundsDimension {
+    PolicyCount,
+    PolicyBytes,
+    CustomCount,
+    SsoCount,
+    DefaultCipher,
+    CustomCipher,
+    SsoCipher,
+    CustomAggregate,
+    SsoAggregate,
+}
+impl ActualBoundsDimension {
+    fn limit(self) -> usize {
+        match self {
+            Self::PolicyCount | Self::CustomCount | Self::SsoCount => 256,
+            Self::PolicyBytes => 128 * 1024,
+            Self::DefaultCipher | Self::CustomCipher | Self::SsoCipher => 64 * 1024,
+            Self::CustomAggregate | Self::SsoAggregate => 1024 * 1024,
+        }
+    }
+    fn custom(self) -> bool {
+        matches!(
+            self,
+            Self::CustomCount | Self::CustomCipher | Self::CustomAggregate
+        )
+    }
+    fn sso(self) -> bool {
+        matches!(self, Self::SsoCount | Self::SsoCipher | Self::SsoAggregate)
+    }
+    fn policy(self) -> bool {
+        matches!(self, Self::PolicyCount | Self::PolicyBytes)
+    }
+}
+
+fn precise_current_cipher(mut stored: String, length: Option<usize>) -> Result<String, String> {
+    // Authenticated JSON is unchanged. Only legal trailing ASCII JSON whitespace is added;
+    // real v2 parse/open below proves this is not a bad-cipher or legacy-envelope fixture.
+    if let Some(length) = length {
+        require(
+            stored.len() <= length,
+            "current cipher cannot fit requested test length",
+        )?;
+        stored.push_str(&" ".repeat(length - stored.len()));
+        require(
+            stored.len() == length,
+            "current cipher byte calibration differs",
+        )?;
+    }
+    require(
+        EnvelopeV2::parse(&stored).is_ok(),
+        "padded current v2 JSON did not parse",
+    )?;
+    Ok(stored)
+}
+
+fn current_model_cipher(
+    fixture: &Fixture,
+    secret_id: Uuid,
+    owner: SecretPrincipal,
+    consumer: SecretPrincipal,
+    length: Option<usize>,
+) -> Result<String, String> {
+    let plaintext = SecretBytes::new(format!("owned-{}", Uuid::now_v7().simple()).into_bytes());
+    openbot_infra::provider::openai::OpenAiApiKey::from_bytes(plaintext.expose().to_vec())
+        .map_err(|_| "actual key validator refused legal bounded key".to_owned())?;
+    let stored = precise_current_cipher(
+        fixture
+            .vault
+            .seal(
+                &secret_id,
+                SecretKind::Model,
+                owner.clone(),
+                consumer.clone(),
+                &plaintext,
+            )
+            .map_err(|_| "actual current model vault seal failed".to_owned())?,
+        length,
+    )?;
+    let opened = fixture
+        .vault
+        .open(&secret_id, SecretKind::Model, owner, consumer, &stored)
+        .map_err(|_| "actual padded model vault roundtrip failed".to_owned())?;
+    require(
+        !opened.needs_migration() && opened.into_secret().ct_eq(&plaintext),
+        "padded model cipher changed key or required migration",
+    )?;
+    Ok(stored)
+}
+
+fn current_sso_cipher(provider: &str, length: Option<usize>) -> Result<String, String> {
+    let plaintext = serde_json::to_vec(&json!({
+        "protocol":"oidc", "version":2, "client_id":"owned-bounds-client",
+        "client_secret":format!("owned-{}", Uuid::now_v7().simple()),
+        "group_claim_path":null, "group_normalization":"trim_lowercase"
+    }))
+    .map_err(|_| "legal current SSO config encoding failed".to_owned())?;
+    let data_key = DataKey::from_bytes(
+        [
+            Uuid::now_v7().as_bytes().as_slice(),
+            Uuid::now_v7().as_bytes().as_slice(),
+        ]
+        .concat(),
+    )
+    .map_err(|_| "owned random SSO data key rejected".to_owned())?;
+    let key = WrappingKey::from_bytes(vec![0x42; 32])
+        .map_err(|_| "owned current SSO wrapping key rejected".to_owned())?;
+    let binding = RecordBinding::new(
+        TenantId::new(TENANT),
+        SecretId::new(format!("sso-provider/{provider}/oidc_config")),
+        SecretKind::Connector,
+        SecretPrincipal::Deployment,
+        SecretPrincipal::Deployment,
+        KeyVersion::new(1),
+    );
+    let stored = precise_current_cipher(
+        seal_v2(
+            &key,
+            &data_key,
+            &binding,
+            Nonce::from_array([0x44; NONCE_BYTES]),
+            Nonce::from_array([0x45; NONCE_BYTES]),
+            &plaintext,
+        )
+        .map_err(|_| "actual current SSO AEAD seal failed".to_owned())?
+        .to_column_value(),
+        length,
+    )?;
+    let parsed =
+        EnvelopeV2::parse(&stored).map_err(|_| "padded SSO v2 JSON rejected".to_owned())?;
+    let opened = open_v2(&key, &binding, &parsed)
+        .map_err(|_| "actual padded SSO AEAD roundtrip failed".to_owned())?;
+    require(
+        parsed.key_version() == KeyVersion::new(1) && opened.expose() == plaintext,
+        "padded current SSO cipher changed config or version",
+    )?;
+    // Actual read-only SSO decoder/validator is private. ConfigFact::Present in every
+    // below/equal arm proves that real producer accepts this exact current v2 config.
+    Ok(stored)
+}
+
+async fn seed_bounds_policy(fixture: &Fixture, lengths: &[usize]) -> Result<(), String> {
+    let mut rules = Vec::with_capacity(lengths.len());
+    for &length in lengths {
+        require(
+            (4..=4096).contains(&length),
+            "policy fixture violated original per-rule bound",
+        )?;
+        let rule = format!("true{}", " ".repeat(length - 4));
+        require(
+            openbot_domain::policy::CompiledRule::compile(&rule)
+                .compile_failure()
+                .is_none(),
+            "real CEL compiler refused policy bounds baseline",
+        )?;
+        rules.push(rule);
+    }
+    let c = fixture
+        .pool
+        .get()
+        .await
+        .map_err(|_| "policy bounds setup acquire failed".to_owned())?;
+    c.execute("INSERT INTO public.action_policy(id,mode,deny,allow) VALUES('current','enforce',ARRAY[]::text[],$1) ON CONFLICT(id) DO UPDATE SET mode='enforce',deny=ARRAY[]::text[],allow=excluded.allow",
+        &[&rules]).await.map_err(|_| "legal policy bounds setup failed".to_owned())?;
+    let row = c.query_one("SELECT cardinality(deny)::bigint,cardinality(allow)::bigint,(SELECT coalesce(sum(octet_length(rule)::bigint),0)::bigint FROM unnest(deny||allow) rule) FROM public.action_policy WHERE id='current'", &[])
+        .await.map_err(|_| "stored policy numeric calibration failed".to_owned())?;
+    require(
+        numeric_bound(&row, 0)? == 0
+            && numeric_bound(&row, 1)? == lengths.len()
+            && numeric_bound(&row, 2)? == lengths.iter().sum::<usize>(),
+        "stored policy count or byte sum differs from requested boundary",
+    )?;
+    Ok(())
+}
+
+fn numeric_bound(row: &tokio_postgres::Row, index: usize) -> Result<usize, String> {
+    let value: i64 = row
+        .try_get(index)
+        .map_err(|_| "stored numeric bound decode failed".to_owned())?;
+    usize::try_from(value).map_err(|_| "stored numeric bound was negative or oversized".to_owned())
+}
+
+struct StoredBoundsMetrics {
+    total: usize,
+    overhead: usize,
+    ciphers: Vec<usize>,
+}
+async fn stored_custom_metrics(fixture: &Fixture) -> Result<StoredBoundsMetrics, String> {
+    let c = fixture
+        .pool
+        .get()
+        .await
+        .map_err(|_| "custom numeric calibration acquire failed".to_owned())?;
+    let rows = c.query("SELECT octet_length(mc.id::text)::bigint,octet_length(mc.current_secret_id::text)::bigint,pg_column_size(mc.revision)::bigint,octet_length(mc.name)::bigint,octet_length(mc.protocol)::bigint,octet_length(mc.endpoint)::bigint,octet_length(mc.model)::bigint,octet_length(ms.encrypted_value)::bigint,(mc.deployment_id=$1 AND mc.tenant_id=$2 AND mc.owner_user_id=$3 AND mc.enabled AND mc.deleted_at IS NULL AND mc.current_secret_id=ms.id AND ms.deployment_id=mc.deployment_id AND ms.tenant_id=mc.tenant_id AND ms.owner_user_id=mc.owner_user_id AND ms.retired_at IS NULL) FROM public.model_connections mc JOIN public.model_connection_secrets ms ON ms.connection_id=mc.id AND ms.id=mc.current_secret_id ORDER BY mc.id",
+        &[&DEPLOYMENT, &TENANT, &OWNER]).await.map_err(|_| "stored custom field-length query failed".to_owned())?;
+    let mut metrics = StoredBoundsMetrics {
+        total: 0,
+        overhead: 0,
+        ciphers: Vec::new(),
+    };
+    for row in &rows {
+        require(
+            row.try_get::<_, bool>(8)
+                .map_err(|_| "custom scope calibration decode failed".to_owned())?,
+            "custom bounds fixture was foreign, inactive or did not reference current secret",
+        )?;
+        let overhead =
+            (0..7).try_fold(0, |sum, i| numeric_bound(row, i).map(|length| sum + length))?;
+        require(
+            numeric_bound(row, 0)? == 36
+                && numeric_bound(row, 1)? == 36
+                && numeric_bound(row, 2)? == 8,
+            "stored custom UUID or revision representation changed",
+        )?;
+        let cipher = numeric_bound(row, 7)?;
+        metrics.overhead += overhead;
+        metrics.total += overhead + cipher;
+        metrics.ciphers.push(cipher);
+    }
+    Ok(metrics)
+}
+async fn stored_sso_metrics(fixture: &Fixture) -> Result<StoredBoundsMetrics, String> {
+    let c = fixture
+        .pool
+        .get()
+        .await
+        .map_err(|_| "SSO numeric calibration acquire failed".to_owned())?;
+    let rows = c.query("SELECT octet_length(id)::bigint,octet_length(issuer)::bigint,octet_length(provider_id)::bigint,octet_length(domain)::bigint,coalesce(octet_length(organization_id),0)::bigint,octet_length(oidc_config)::bigint,coalesce(octet_length(saml_config),0)::bigint,(user_id=$1 AND organization_id IS NULL AND oidc_config IS NOT NULL AND saml_config IS NULL) FROM public.sso_providers ORDER BY id",
+        &[&OWNER]).await.map_err(|_| "stored SSO field-length query failed".to_owned())?;
+    let mut metrics = StoredBoundsMetrics {
+        total: 0,
+        overhead: 0,
+        ciphers: Vec::new(),
+    };
+    for row in &rows {
+        require(
+            row.try_get::<_, bool>(7)
+                .map_err(|_| "SSO scope calibration decode failed".to_owned())?,
+            "SSO bounds fixture was not a legal sole current owner OIDC source",
+        )?;
+        let overhead =
+            (0..5).try_fold(0, |sum, i| numeric_bound(row, i).map(|length| sum + length))?;
+        require(
+            numeric_bound(row, 6)? == 0,
+            "SSO fixture unexpectedly included another secret column",
+        )?;
+        let cipher = numeric_bound(row, 5)?;
+        metrics.overhead += overhead;
+        metrics.total += overhead + cipher;
+        metrics.ciphers.push(cipher);
+    }
+    Ok(metrics)
+}
+
+async fn seed_bounds_default(fixture: &Fixture, length: usize) -> Result<(), String> {
+    let id = Uuid::now_v7();
+    let stored = current_model_cipher(
+        fixture,
+        id,
+        SecretPrincipal::Deployment,
+        SecretPrincipal::Deployment,
+        Some(length),
+    )?;
+    let c = fixture
+        .pool
+        .get()
+        .await
+        .map_err(|_| "default bounds setup acquire failed".to_owned())?;
+    c.batch_execute("DELETE FROM public.credentials")
+        .await
+        .map_err(|_| "owned default bounds reset failed".to_owned())?;
+    let inserted = c.query_one("INSERT INTO public.credentials(id,provider,key_id,kind,encrypted_value,metadata,created_at) VALUES($1,'openai','capability-default-key','model',$2,'{}',$3) RETURNING encrypted_value=$2",
+        &[&id, &stored, &OffsetDateTime::now_utc()]).await.map_err(|_| "current default bounds insertion failed".to_owned())?;
+    require(
+        inserted
+            .try_get::<_, bool>(0)
+            .map_err(|_| "stored default equality decode failed".to_owned())?,
+        "stored default cipher differs from real roundtripped v2 bytes",
+    )?;
+    let row = c
+        .query_one(
+            "SELECT octet_length(encrypted_value)::bigint FROM public.credentials WHERE id=$1",
+            &[&id],
+        )
+        .await
+        .map_err(|_| "stored default cipher calibration failed".to_owned())?;
+    require(
+        numeric_bound(&row, 0)? == length,
+        "stored default cipher did not reach exact requested bound",
+    )?;
+    Ok(())
+}
+
+async fn seed_bounds_custom(
+    fixture: &Fixture,
+    count: usize,
+    cipher_length: Option<usize>,
+    aggregate: Option<usize>,
+) -> Result<(), String> {
+    use openbot_application::model_connections::normalize_model_configuration;
+    use openbot_contracts::model_connections::CustomModelProtocol;
+    use openbot_domain::vault::ServiceId;
+    let auth = fixture.auth(COOKIE_A).await?;
+    let mut c = fixture
+        .pool
+        .get()
+        .await
+        .map_err(|_| "custom bounds setup acquire failed".to_owned())?;
+    let tx = c
+        .transaction()
+        .await
+        .map_err(|_| "custom bounds setup transaction failed".to_owned())?;
+    tx.batch_execute("SET CONSTRAINTS ALL DEFERRED; DELETE FROM public.model_connections")
+        .await
+        .map_err(|_| "owned custom bounds reset failed".to_owned())?;
+    let mut ids = Vec::with_capacity(count);
+    for i in 0..count {
+        let id = Uuid::now_v7();
+        let secret_id = Uuid::now_v7();
+        let normalized = normalize_model_configuration(
+            &format!("Owned bounds {i:03}"),
+            CustomModelProtocol::OpenaiChatCompletions,
+            "https://provider.example.test/v1",
+            "owned-model",
+            true,
+        )
+        .map_err(|_| "actual custom configuration validator refused bounds fixture".to_owned())?;
+        let cipher = current_model_cipher(
+            fixture,
+            secret_id,
+            SecretPrincipal::Actor(auth.actor().clone()),
+            SecretPrincipal::Service(ServiceId::new(id.to_string())),
+            cipher_length,
+        )?;
+        let now = OffsetDateTime::now_utc();
+        tx.execute("INSERT INTO public.model_connections(id,deployment_id,tenant_id,owner_user_id,name,protocol,endpoint,model,enabled,revision,current_secret_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,true,1,$9,$10,$10)",
+            &[&id, &DEPLOYMENT, &TENANT, &OWNER, &normalized.name, &normalized.protocol.as_str(), &normalized.endpoint, &normalized.model, &secret_id, &now])
+            .await.map_err(|_| "legal custom metadata bounds insertion failed".to_owned())?;
+        let inserted = tx.query_one("INSERT INTO public.model_connection_secrets(id,connection_id,deployment_id,tenant_id,owner_user_id,encrypted_value,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING encrypted_value=$6",
+            &[&secret_id, &id, &DEPLOYMENT, &TENANT, &OWNER, &cipher, &now])
+            .await.map_err(|_| "current scoped custom secret bounds insertion failed".to_owned())?;
+        require(
+            inserted
+                .try_get::<_, bool>(0)
+                .map_err(|_| "stored custom equality decode failed".to_owned())?,
+            "stored custom cipher differs from real scoped roundtripped v2 bytes",
+        )?;
+        ids.push((id, secret_id));
+    }
+    tx.commit()
+        .await
+        .map_err(|_| "custom current joint-FK bounds commit failed".to_owned())?;
+    drop(c);
+    if let Some(target) = aggregate {
+        let measured = stored_custom_metrics(fixture).await?;
+        require(
+            measured.ciphers.len() == count && target > measured.overhead,
+            "custom aggregate calibration inventory differs",
+        )?;
+        let cipher_total = target - measured.overhead;
+        let mut c = fixture
+            .pool
+            .get()
+            .await
+            .map_err(|_| "custom aggregate setup acquire failed".to_owned())?;
+        let tx = c
+            .transaction()
+            .await
+            .map_err(|_| "custom aggregate setup transaction failed".to_owned())?;
+        for (i, (id, secret_id)) in ids.iter().enumerate() {
+            let length = cipher_total / count + usize::from(i < cipher_total % count);
+            require(
+                length <= 64 * 1024,
+                "aggregate fixture crossed per-custom-cipher bound",
+            )?;
+            let cipher = current_model_cipher(
+                fixture,
+                *secret_id,
+                SecretPrincipal::Actor(auth.actor().clone()),
+                SecretPrincipal::Service(ServiceId::new(id.to_string())),
+                Some(length),
+            )?;
+            let updated = tx.query_one("UPDATE public.model_connection_secrets SET encrypted_value=$2 WHERE id=$1 AND retired_at IS NULL RETURNING encrypted_value=$2", &[secret_id, &cipher])
+                .await.map_err(|_| "custom aggregate calibrated update failed".to_owned())?;
+            require(
+                updated
+                    .try_get::<_, bool>(0)
+                    .map_err(|_| "stored custom aggregate equality decode failed".to_owned())?,
+                "stored aggregate custom cipher differs from real roundtripped v2 bytes",
+            )?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| "custom aggregate calibrated commit failed".to_owned())?;
+    }
+    let measured = stored_custom_metrics(fixture).await?;
+    require(
+        measured.ciphers.len() == count,
+        "stored custom count differs",
+    )?;
+    if aggregate.is_none() {
+        require(
+            measured.total < 1024 * 1024,
+            "nonaggregate custom fixture also crossed aggregate bound",
+        )?;
+    }
+    if let Some(length) = cipher_length {
+        require(
+            measured.ciphers.iter().all(|stored| *stored == length),
+            "stored custom cipher boundary differs",
+        )?;
+    }
+    if let Some(target) = aggregate {
+        require(
+            measured.total == target && measured.ciphers.iter().all(|length| *length <= 64 * 1024),
+            "stored custom aggregate sum or separate cipher bound differs",
+        )?;
+    }
+    Ok(())
+}
+
+async fn seed_bounds_sso(
+    fixture: &Fixture,
+    count: usize,
+    cipher_length: Option<usize>,
+    aggregate: Option<usize>,
+) -> Result<(), String> {
+    let mut c = fixture
+        .pool
+        .get()
+        .await
+        .map_err(|_| "SSO bounds setup acquire failed".to_owned())?;
+    let tx = c
+        .transaction()
+        .await
+        .map_err(|_| "SSO bounds setup transaction failed".to_owned())?;
+    tx.batch_execute("DELETE FROM public.sso_providers")
+        .await
+        .map_err(|_| "owned SSO bounds reset failed".to_owned())?;
+    let mut providers = Vec::with_capacity(count);
+    for i in 0..count {
+        let provider = format!("owned-limit-{i:03}");
+        let domain = format!("owned-{i:03}.example.test");
+        let id = Uuid::now_v7().to_string();
+        let cipher = current_sso_cipher(&provider, cipher_length)?;
+        let inserted = tx.query_one("INSERT INTO public.sso_providers(id,issuer,oidc_config,user_id,provider_id,domain) VALUES($1,'https://idp.example.test',$2,$3,$4,$5) RETURNING oidc_config=$2",
+            &[&id, &cipher, &OWNER, &provider, &domain])
+            .await.map_err(|_| "legal current SSO bounds insertion failed".to_owned())?;
+        require(
+            inserted
+                .try_get::<_, bool>(0)
+                .map_err(|_| "stored SSO equality decode failed".to_owned())?,
+            "stored SSO cipher differs from real bound roundtripped v2 bytes",
+        )?;
+        providers.push(provider);
+    }
+    tx.commit()
+        .await
+        .map_err(|_| "SSO bounds setup commit failed".to_owned())?;
+    drop(c);
+    if let Some(target) = aggregate {
+        let measured = stored_sso_metrics(fixture).await?;
+        require(
+            measured.ciphers.len() == count && target > measured.overhead,
+            "SSO aggregate calibration inventory differs",
+        )?;
+        let cipher_total = target - measured.overhead;
+        let mut c = fixture
+            .pool
+            .get()
+            .await
+            .map_err(|_| "SSO aggregate setup acquire failed".to_owned())?;
+        let tx = c
+            .transaction()
+            .await
+            .map_err(|_| "SSO aggregate setup transaction failed".to_owned())?;
+        for (i, provider) in providers.iter().enumerate() {
+            let length = cipher_total / count + usize::from(i < cipher_total % count);
+            require(
+                length <= 64 * 1024,
+                "aggregate fixture crossed per-SSO-cipher bound",
+            )?;
+            let cipher = current_sso_cipher(provider, Some(length))?;
+            let updated = tx.query_one("UPDATE public.sso_providers SET oidc_config=$2 WHERE provider_id=$1 RETURNING oidc_config=$2", &[provider, &cipher])
+                .await.map_err(|_| "SSO aggregate calibrated update failed".to_owned())?;
+            require(
+                updated
+                    .try_get::<_, bool>(0)
+                    .map_err(|_| "stored SSO aggregate equality decode failed".to_owned())?,
+                "stored aggregate SSO cipher differs from real roundtripped v2 bytes",
+            )?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| "SSO aggregate calibrated commit failed".to_owned())?;
+    }
+    let measured = stored_sso_metrics(fixture).await?;
+    require(measured.ciphers.len() == count, "stored SSO count differs")?;
+    if aggregate.is_none() {
+        require(
+            measured.total < 1024 * 1024,
+            "nonaggregate SSO fixture also crossed aggregate bound",
+        )?;
+    }
+    if let Some(length) = cipher_length {
+        require(
+            measured.ciphers.iter().all(|stored| *stored == length),
+            "stored SSO cipher boundary differs",
+        )?;
+    }
+    if let Some(target) = aggregate {
+        require(
+            measured.total == target && measured.ciphers.iter().all(|length| *length <= 64 * 1024),
+            "stored SSO aggregate sum or separate cipher bound differs",
+        )?;
+    }
+    Ok(())
+}
+
+async fn actual_bounds_http_arm(
+    fixture: &Fixture,
+    recorder: &ActualBoundsRecorder,
+    dimension: ActualBoundsDimension,
+    above: bool,
+) -> Result<(), String> {
+    use openbot_contracts::runtime_capabilities::{
+        RuntimeCapabilitiesResponse, RuntimeCapabilityId as Id,
+        RuntimeCapabilityReasonCode as Reason, RuntimeCapabilityState as State,
+    };
+    let port = fixture
+        .port
+        .as_ref()
+        .ok_or("actual bounds collector missing")?;
+    let before_records = recorder.snapshot().len();
+    let before_calls = port.calls();
+    let before_app = fixture.application.calls.load(Ordering::SeqCst);
+    let fingerprint = fixture.fingerprint().await?;
+    let began = Instant::now();
+    let reply = fixture.http(Method::GET, PATH, Some(COOKIE_A), b"").await?;
+    let finished = Instant::now();
+    require(
+        finished.duration_since(began) < Duration::from_secs(5),
+        "actual bounds HTTP call exceeded original whole five-second budget",
+    )?;
+    require(
+        reply.status == StatusCode::OK,
+        "bounded actual facts did not produce a complete lawful projection",
+    )?;
+    let vector: RuntimeCapabilitiesResponse = serde_json::from_value(reply.value)
+        .map_err(|_| "actual bounds HTTP vector failed closed DTO validation".to_owned())?;
+    require(
+        entry(&vector, Id::Workspace).state() == State::Ready
+            && entry(&vector, Id::Workspace).reason_code() == Reason::CurrentChecksAvailable,
+        "bounded configuration changed independent workspace readiness",
+    )?;
+    let (id, reason) = if dimension.policy() {
+        (
+            Id::AgentTools,
+            if above {
+                Reason::PolicyUnproven
+            } else {
+                Reason::ProviderUnproven
+            },
+        )
+    } else if dimension.custom() {
+        (
+            Id::ModelCustomV1,
+            if above {
+                Reason::ModelKeyUnproven
+            } else {
+                Reason::ProviderUnproven
+            },
+        )
+    } else if dimension.sso() {
+        (
+            Id::DynamicSso,
+            if above {
+                Reason::ConfigurationUnproven
+            } else {
+                Reason::ProviderUnproven
+            },
+        )
+    } else {
+        (
+            Id::AgentTools,
+            if above {
+                Reason::ModelKeyUnproven
+            } else {
+                Reason::ProviderUnproven
+            },
+        )
+    };
+    require(
+        entry(&vector, id).state() == State::Unavailable
+            && entry(&vector, id).reason_code() == reason,
+        "bounds classification used Missing, Ready, wrong closed reason or invalid-cipher ambiguity",
+    )?;
+    require(
+        fixture
+            .application
+            .last_error
+            .lock()
+            .map_err(|_| "actual bounds App observer poisoned".to_owned())?
+            .is_none(),
+        "same actual App call reported an internal error instead of whole valid bounded facts",
+    )?;
+    let after_calls = port.calls();
+    require(
+        after_calls == (before_calls.0 + 1, before_calls.1 + 1, before_calls.2 + 1)
+            && fixture.application.calls.load(Ordering::SeqCst) == before_app + 1,
+        "bounds arm skipped or repeated real App/observe/finalize/tail",
+    )?;
+    let records = recorder.snapshot();
+    require(
+        records.len() == before_records + 3,
+        "actual three-phase facts recorder observed wrong count",
+    )?;
+    let arm = &records[before_records..];
+    require(
+        arm[0].phase == ActualBoundsPhase::Observe
+            && arm[1].phase == ActualBoundsPhase::Finalize
+            && arm[2].phase == ActualBoundsPhase::Tail,
+        "actual bounds stages were reordered",
+    )?;
+    for record in arm {
+        require(
+            record.error.is_none()
+                && record.same_auth_scope
+                && record.within_deadline
+                && record.deadline == arm[0].deadline
+                && record.deadline > finished,
+            "bounds evidence was not a successful original same-auth App deadline and scope",
+        )?;
+        require(
+            record.deadline.duration_since(record.sampled_at) <= Duration::from_secs(5),
+            "bounds decorator extended or independently minted the App budget",
+        )?;
+        let facts = record
+            .facts
+            .ok_or("actual bounds returned no production facts")?;
+        require(
+            record.facts == arm[0].facts,
+            "same current bounds inventory differed across real three phases",
+        )?;
+        require(
+            facts.model_provider == ProviderFact::Unknown
+                && facts.custom_model.provider == ProviderFact::Unknown
+                && facts.sso_provider == ProviderFact::Unknown,
+            "bounds fixture borrowed unobserved provider readiness",
+        )?;
+        let expected_policy = if dimension.policy() && above {
+            PolicyFact::Unknown
+        } else {
+            PolicyFact::Configured
+        };
+        let expected_default = if matches!(dimension, ActualBoundsDimension::DefaultCipher) && above
+        {
+            ModelKeyFact::Unknown
+        } else {
+            ModelKeyFact::Present
+        };
+        require(
+            facts.acting_policy == expected_policy && facts.model_key == expected_default,
+            "actual policy/default baseline did not distinguish legal present from limit Unknown",
+        )?;
+        if dimension.custom() {
+            let expected_config = if above {
+                ConfigFact::Unknown
+            } else {
+                ConfigFact::Present
+            };
+            let expected_key = if above {
+                ModelKeyFact::Unknown
+            } else {
+                ModelKeyFact::Present
+            };
+            require(
+                facts.custom_model_config == expected_config
+                    && facts.custom_model.key == expected_key,
+                "actual custom scope/key/config did not cross legal Present to bounds Unknown",
+            )?;
+        }
+        if dimension.sso() {
+            let expected_config = if above {
+                ConfigFact::Unknown
+            } else {
+                ConfigFact::Present
+            };
+            require(
+                facts.sso_config == expected_config,
+                "actual SSO current v2 validator did not cross legal Present to bounds Unknown",
+            )?;
+        }
+    }
+    require(
+        fixture.fingerprint().await? == fingerprint,
+        "bounds GET touched session, wrote configuration/key/policy, renewed, migrated or audited",
+    )?;
+    Ok(())
+}
+
+async fn actual_owned_bounds_scenario(tag: &str, dimension: ActualBoundsDimension) {
+    let admin = admin_config(tag);
+    with_temp_database(&admin, tag, |config| async move {
+        let mut fixture = Fixture::new(config, Mode::Sessions).await?;
+        let outcome: Result<(), String> = async {
+        if matches!(dimension, ActualBoundsDimension::DefaultCipher) {
+            let environment = format!("owned-env-{}", Uuid::now_v7().simple()).into_bytes();
+            openbot_infra::provider::openai::OpenAiApiKey::from_bytes(environment.clone())
+                .map_err(|_| "actual ENV key validator refused controlled positive source".to_owned())?;
+            fixture.install_actual_with_environment(Mode::Sessions, None, Some(SecretBytes::new(environment))).await?;
+        } else {
+            fixture.install_actual(Mode::Sessions, None).await?;
+            fixture.seed_default_key().await?;
+        }
+        seed_bounds_policy(&fixture, &[4]).await?;
+        let recorder = Arc::new(ActualBoundsRecorder::default());
+        let port = fixture.port.as_ref().ok_or("actual bounds collector not assembled")?;
+        require(port.calls() == (0, 0, 0), "bounds setup executed a capability query")?;
+        *port.bounds_recorder.lock().map_err(|_| "private bounds recorder poisoned".to_owned())? = Some(recorder.clone());
+        if matches!(dimension, ActualBoundsDimension::DefaultCipher) {
+            // Positive actual ENV-source control, before any DB credential exists. Once a
+            // DB row is present, the over-limit arm must return Unknown rather than ENV.
+            let row = fixture.pool.get().await.map_err(|_| "ENV positive inventory acquire failed".to_owned())?
+                .query_one("SELECT count(*)::bigint FROM public.credentials", &[]).await
+                .map_err(|_| "ENV positive inventory query failed".to_owned())?;
+            require(numeric_bound(&row, 0)? == 0, "ENV positive control already had a DB credential")?;
+            actual_bounds_http_arm(&fixture, &recorder, dimension, false).await?;
+        }
+        let limit = dimension.limit();
+        for target in [limit - 1, limit, limit + 1] {
+            match dimension {
+                ActualBoundsDimension::PolicyCount => {
+                    seed_bounds_policy(&fixture, &vec![4; target]).await?;
+                }
+                ActualBoundsDimension::PolicyBytes => {
+                    // 33 balanced rules keep all original expressions <=4096, including
+                    // above128KiB; no short/invalid last expression can mask the bound.
+                    let count = 33;
+                    let lengths = (0..count).map(|i| target / count + usize::from(i < target % count)).collect::<Vec<_>>();
+                    seed_bounds_policy(&fixture, &lengths).await?;
+                }
+                ActualBoundsDimension::CustomCount => seed_bounds_custom(&fixture, target, None, None).await?,
+                ActualBoundsDimension::SsoCount => seed_bounds_sso(&fixture, target, None, None).await?,
+                ActualBoundsDimension::DefaultCipher => seed_bounds_default(&fixture, target).await?,
+                ActualBoundsDimension::CustomCipher => seed_bounds_custom(&fixture, 1, Some(target), None).await?,
+                ActualBoundsDimension::SsoCipher => seed_bounds_sso(&fixture, 1, Some(target), None).await?,
+                ActualBoundsDimension::CustomAggregate => seed_bounds_custom(&fixture, 16, None, Some(target)).await?,
+                ActualBoundsDimension::SsoAggregate => seed_bounds_sso(&fixture, 16, None, Some(target)).await?,
+            }
+            actual_bounds_http_arm(&fixture, &recorder, dimension, target > limit).await?;
+        }
+        let expected_arms = if matches!(dimension, ActualBoundsDimension::DefaultCipher) { 4 } else { 3 };
+        require(fixture.application.calls.load(Ordering::SeqCst) == expected_arms
+            && port.calls() == (expected_arms, expected_arms, expected_arms)
+            && recorder.snapshot().len() == expected_arms * 3,
+            "bounded Rust case did not retain exactly three arms plus optional actual ENV control")?;
+        // Real source close/drain waits for actual admitted workers. Owned harness/Root
+        // runner separately attest stop/PID/socket/root receipts; Drop is not a stop claim.
+        Ok(())
+        }.await;
+        fixture.finish().await;
+        outcome
+    }).await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms"]
+async fn actual_policy_count_255_256_257_retains_legal_rules_and_bounds_unknown() {
+    actual_owned_bounds_scenario("capboundpolicycount", ActualBoundsDimension::PolicyCount).await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms"]
+async fn actual_policy_bytes_131071_131072_131073_retains_legal_rules_and_bounds_unknown() {
+    actual_owned_bounds_scenario("capboundpolicybytes", ActualBoundsDimension::PolicyBytes).await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms"]
+async fn actual_custom_count_255_256_257_retains_current_scoped_keys_and_bounds_unknown() {
+    actual_owned_bounds_scenario("capboundcustomcount", ActualBoundsDimension::CustomCount).await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms"]
+async fn actual_sso_count_255_256_257_retains_current_configs_and_bounds_unknown() {
+    actual_owned_bounds_scenario("capboundssocount", ActualBoundsDimension::SsoCount).await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms and positive ENV control"]
+async fn actual_default_cipher_65535_65536_65537_retains_v2_roundtrip_without_env_fallback() {
+    actual_owned_bounds_scenario(
+        "capbounddefaultcipher",
+        ActualBoundsDimension::DefaultCipher,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms"]
+async fn actual_custom_cipher_65535_65536_65537_retains_current_key_and_bounds_unknown() {
+    actual_owned_bounds_scenario("capboundcustomcipher", ActualBoundsDimension::CustomCipher).await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms"]
+async fn actual_sso_cipher_65535_65536_65537_retains_current_config_and_bounds_unknown() {
+    actual_owned_bounds_scenario("capboundssocipher", ActualBoundsDimension::SsoCipher).await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms"]
+async fn actual_custom_aggregate_1048575_1048576_1048577_preserves_each_cipher_bound() {
+    actual_owned_bounds_scenario(
+        "capboundcustomaggregate",
+        ActualBoundsDimension::CustomAggregate,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires root-owned isolated PostgreSQL; three real legal boundary arms"]
+async fn actual_sso_aggregate_1048575_1048576_1048577_preserves_each_cipher_bound() {
+    actual_owned_bounds_scenario("capboundssoaggregate", ActualBoundsDimension::SsoAggregate).await;
 }
