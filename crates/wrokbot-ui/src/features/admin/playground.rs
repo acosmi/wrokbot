@@ -165,7 +165,6 @@ struct MutationState {
     error: RwSignal<bool>,
     reload: RwSignal<u64>,
     write_lock: Signal<bool>,
-    worker_owner: StoredValue<Option<Owner>>,
 }
 
 #[derive(Clone)]
@@ -631,7 +630,6 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
         error: action_error,
         reload: reload_generation,
         write_lock,
-        worker_owner,
     };
     let editing = SandboxEditing::new();
     on_cleanup(move || {
@@ -1065,14 +1063,7 @@ fn dispatch_draft(
         }
     }
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = (
-        draft,
-        publish,
-        state.error,
-        state.reload,
-        state.worker_owner,
-        editing,
-    );
+    let _ = (draft, publish, state.error, state.reload, editing);
 }
 
 #[component]

@@ -437,13 +437,13 @@ impl EditorCore {
         Apply::Applied
     }
 
-    pub(crate) fn finish_failure(&mut self, token: AttemptToken, class: FailureClass) -> Apply {
+    pub(crate) fn finish_failure(&mut self, token: AttemptToken, failure: FailureClass) -> Apply {
         if self.current_attempt() != Some(token) {
             return Apply::Ignored;
         }
         self.current = None;
         self.failed = Some(token);
-        if class == FailureClass::Unknown {
+        if failure == FailureClass::Unknown {
             self.uncertain = Some(token);
             self.historical_uncertainty = true;
         }
