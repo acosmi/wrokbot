@@ -33,7 +33,7 @@ use crate::thread_listener::ThreadListenerDatabase;
 
 mod effect_receipts;
 mod reconciliation;
-mod reconciliation_visibility;
+pub(crate) mod reconciliation_visibility;
 mod skills;
 
 /// foreground writer lease 的新增默认值；每 30 秒失效，后续 runtime 必须在 10 秒内续租。
