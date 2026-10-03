@@ -90,6 +90,7 @@ pub mod application_assembly;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod artifact_bytes;
 pub mod artifact_registry;
+#[cfg(feature = "server-runtime")]
 pub mod artifact_source;
 pub mod auth;
 pub mod backup;

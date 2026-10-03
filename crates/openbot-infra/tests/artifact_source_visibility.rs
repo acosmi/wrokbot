@@ -3,6 +3,8 @@
 //! Materialized identity/membership rows and AuthContext snapshots are explicit local fixtures;
 //! they do not certify a live SSO login, permanent authority, artifact registration or readiness.
 
+#![cfg(feature = "server-runtime")]
+
 mod harness;
 
 use std::future::Future;
