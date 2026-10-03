@@ -387,7 +387,7 @@ fn ApprovalCard(card: ApprovalCardView, actions: ToolApprovalActions) -> impl In
     let approval_id = card.approval_id.clone();
     let grant_card = card.clone();
     let deny_card = card.clone();
-    let dismiss_id = approval_id.clone();
+    let dismiss_id = StoredValue::new(approval_id.clone());
     let expires_at = card.expires_at;
     let expires_datetime = card
         .expires_at
@@ -426,7 +426,9 @@ fn ApprovalCard(card: ApprovalCardView, actions: ToolApprovalActions) -> impl In
         actions.decide(deny_card.clone(), ToolApprovalDecision::Deny);
     };
     let dismiss_notice = move |_| {
-        actions.dismiss_notice(&dismiss_id, current_binding);
+        if let Some(id) = dismiss_id.try_get_value() {
+            actions.dismiss_notice(&id, current_binding);
+        }
     };
     let effect = card.effect;
     let approval_class = card.approval_class;
