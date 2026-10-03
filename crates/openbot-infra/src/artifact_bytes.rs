@@ -16,10 +16,8 @@ use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags};
 use sha2::{Digest, Sha256};
 use uuid::{Uuid, Variant};
 
-/// R414 单成果冻结上限，宿主只能收紧。
-pub const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
-/// R414 单个读取块冻结上限。
-pub const MAX_ARTIFACT_READ_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+// Same frozen limits across WASM-safe contracts, domain arithmetic and native byte storage.
+pub use openbot_contracts::artifacts::{MAX_ARTIFACT_BYTES, MAX_ARTIFACT_READ_CHUNK_BYTES};
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 
 /// 内部磁盘错误；不携本机路径、正文或底层 OS 错误消息。
