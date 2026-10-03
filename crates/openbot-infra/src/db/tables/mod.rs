@@ -800,6 +800,15 @@ pub const NATIVE_0039_TABLES: &[TableSpec] = &[
     },
 ];
 
+pub mod editing_ui_preferences;
+
+/// Native0040 current preference row; the native0021 six-column facts remain unchanged.
+pub const NATIVE_0040_TABLES: &[TableSpec] = &[TableSpec {
+    name: editing_ui_preferences::TABLE_NAME,
+    columns: editing_ui_preferences::COLUMNS,
+    column_specs: editing_ui_preferences::COLUMN_SPECS,
+}];
+
 /// Complete current public-table registry: fixed upstream 0012 plus every Rust-owned native table.
 /// Historical callers that specifically compare the upstream boundary must continue using
 /// [`ALL_TABLES`] instead.
@@ -812,7 +821,11 @@ pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
         .chain(NATIVE_0013_TABLES.iter())
         .chain(NATIVE_0016_TABLES.iter())
         .chain(NATIVE_0020_TABLES.iter())
-        .chain(NATIVE_0021_TABLES.iter())
+        .chain(
+            NATIVE_0021_TABLES
+                .iter()
+                .filter(|t| t.name != user_ui_preferences::TABLE_NAME),
+        )
         .chain(NATIVE_0022_TABLES.iter())
         .chain(NATIVE_0023_TABLES.iter())
         .chain(NATIVE_0026_TABLES.iter())
@@ -825,6 +838,7 @@ pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
         .chain(NATIVE_0036_TABLES.iter())
         .chain(NATIVE_0038_TABLES.iter())
         .chain(NATIVE_0039_TABLES.iter())
+        .chain(NATIVE_0040_TABLES.iter())
 }
 
 #[cfg(test)]

@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0039_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0040_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -256,6 +256,13 @@ pub const NATIVE_0039_VERSION: i32 = 39;
 pub const NATIVE_0039_NAME: &str = "native_0039_skill_editing_revision";
 /// Expand-only skill editing schema.
 pub const NATIVE_0039_SQL: &str = include_str!("../../sql/native_0039.sql");
+
+/// Actor-scoped UI preference CAS and audit version.
+pub const NATIVE_0040_VERSION: i32 = 40;
+/// Stable expand-only identity.
+pub const NATIVE_0040_NAME: &str = "native_0040_ui_preferences_revision";
+/// Nullable editing revision, with no historical rewrite.
+pub const NATIVE_0040_SQL: &str = include_str!("../../sql/native_0040.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -406,6 +413,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0039_VERSION,
         name: NATIVE_0039_NAME,
         sql: NATIVE_0039_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0040_VERSION,
+        name: NATIVE_0040_NAME,
+        sql: NATIVE_0040_SQL,
     },
 ];
 
@@ -615,6 +627,11 @@ pub fn native_0033_checksum() -> String {
 #[must_use]
 pub fn native_0039_checksum() -> String {
     Sha256Digest::of(NATIVE_0039_SQL.as_bytes()).to_hex()
+}
+
+/// Digest of the preference editing migration.
+pub fn native_0040_checksum() -> String {
+    Sha256Digest::of(NATIVE_0040_SQL.as_bytes()).to_hex()
 }
 
 /// SHA-256 of the registered sandbox editing migration.
@@ -1227,11 +1244,13 @@ mod tests {
         assert_ne!(native_0035_checksum(), native_0036_checksum());
         assert_eq!(native_0037_checksum().len(), 64);
         assert_ne!(native_0036_checksum(), native_0037_checksum());
-        assert_eq!(MIGRATIONS.len(), 27);
+        assert_eq!(MIGRATIONS.len(), 28);
         assert_eq!(native_0038_checksum().len(), 64);
         assert_ne!(native_0037_checksum(), native_0038_checksum());
         assert_eq!(native_0039_checksum().len(), 64);
         assert_ne!(native_0038_checksum(), native_0039_checksum());
-        assert_eq!(MIGRATIONS[26].version, NATIVE_LATEST_VERSION);
+        assert_eq!(native_0040_checksum().len(), 64);
+        assert_ne!(native_0039_checksum(), native_0040_checksum());
+        assert_eq!(MIGRATIONS[27].version, NATIVE_LATEST_VERSION);
     }
 }

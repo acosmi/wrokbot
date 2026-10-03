@@ -60,7 +60,9 @@ use openbot_contracts::sandboxed::{
     SandboxedComponentRevisionRequest, SaveSandboxedComponentRequest,
 };
 use openbot_contracts::tool::ToolApprovalDecision;
-use openbot_contracts::ui::{UiLocale, UiPreferences, UiTheme, UpdateUiPreferences};
+#[cfg(test)]
+use openbot_contracts::ui::UiPreferences;
+use openbot_contracts::ui::{UiLocale, UiTheme, UpdateUiPreferences};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use tauri::ipc::Channel;
@@ -389,6 +391,7 @@ pub struct DesktopTauriProtocol {
     next_window_binding_id: HostAtomicU64,
     windows: RwLock<BTreeMap<String, WindowAuthority>>,
     os_locale: UiLocale,
+    first_frame_projection: Option<crate::DesktopUiPreferenceStore>,
     #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
     local_confirmation: OnceLock<LocalConfirmationHost>,
 }
@@ -433,8 +436,7 @@ impl DesktopTauriProtocolSlot {
 }
 
 impl DesktopTauriProtocol {
-    /// Open a built Trunk bundle. The caller must inject an ApplicationService whose UI preference
-    /// port is [`crate::DesktopUiPreferenceStore`] in Desktop Local mode.
+    /// Open a built Trunk bundle with an authoritative ApplicationService preference port.
     pub fn open(
         dist: impl AsRef<Path>,
         transport: Arc<InProcessTransport>,
@@ -490,9 +492,18 @@ impl DesktopTauriProtocol {
             next_window_binding_id: HostAtomicU64::new(1),
             windows: RwLock::new(BTreeMap::new()),
             os_locale: detect_os_locale(),
+            first_frame_projection: None,
             #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
             local_confirmation: OnceLock::new(),
         }
+    }
+
+    /// Bind a host-selected, value-only cache for first paint when the authoritative row is absent.
+    /// This store is never consumed by API reads, writes or editing version checks.
+    #[must_use]
+    pub fn with_first_frame_projection(mut self, store: crate::DesktopUiPreferenceStore) -> Self {
+        self.first_frame_projection = Some(store);
+        self
     }
 
     /// Bind one host-created webview label to verified local session authority.
@@ -896,7 +907,18 @@ impl DesktopTauriProtocol {
                 Ok(_) => return dependency_response(),
                 Err(error) => return error_response(error),
             };
-            return index_response(&self.index, preferences, self.os_locale);
+            let mut values = (preferences.theme, preferences.locale);
+            if preferences.revision.is_none()
+                && let Some(store) = &self.first_frame_projection
+            {
+                let store = store.clone();
+                if let Ok(Ok(projection)) =
+                    tokio::task::spawn_blocking(move || store.read_first_frame_projection()).await
+                {
+                    values = (projection.theme, projection.locale);
+                }
+            }
+            return index_response(&self.index, values.0, values.1, self.os_locale);
         }
         self.asset(&path)
     }
@@ -2789,9 +2811,14 @@ fn validate_index(index: &str) -> Result<(), TauriHostError> {
     Ok(())
 }
 
-fn index_response(index: &str, stored: UiPreferences, os_locale: UiLocale) -> Response<Vec<u8>> {
-    let theme = stored.theme.unwrap_or(UiTheme::System);
-    let locale = stored.locale.unwrap_or(os_locale);
+fn index_response(
+    index: &str,
+    theme: Option<UiTheme>,
+    locale: Option<UiLocale>,
+    os_locale: UiLocale,
+) -> Response<Vec<u8>> {
+    let theme = theme.unwrap_or(UiTheme::System);
+    let locale = locale.unwrap_or(os_locale);
     let replacement = index_root(theme, locale, cfg!(target_os = "macos"));
     let body = index
         .replacen(HTML_ROOT_MARKER, &replacement, 1)
@@ -4323,6 +4350,33 @@ mod tests {
 
     struct FakePreferences(Mutex<UiPreferences>);
 
+    /// Synthetic authoritative port: this fixture makes no PostgreSQL coverage claim.
+    struct FirstFramePreferenceAuthority {
+        reply: Mutex<Result<UiPreferences, UiPreferenceAdministrationError>>,
+        reads: AtomicU64,
+        writes: AtomicU64,
+    }
+
+    #[async_trait]
+    impl UiPreferenceAdministration for FirstFramePreferenceAuthority {
+        async fn get(
+            &self,
+            _auth: &AuthContext,
+        ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            *self.reply.lock().unwrap()
+        }
+
+        async fn update(
+            &self,
+            _auth: &AuthContext,
+            _update: UpdateUiPreferences,
+        ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            Err(UiPreferenceAdministrationError::Unavailable)
+        }
+    }
+
     #[async_trait]
     impl UiPreferenceAdministration for FakePreferences {
         async fn get(
@@ -4338,8 +4392,24 @@ mod tests {
             update: UpdateUiPreferences,
         ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
             let mut stored = self.0.lock().unwrap();
+            let revision = match stored.revision {
+                Some(current) if update.expected_revision != Some(current) => {
+                    return Err(UiPreferenceAdministrationError::StaleSnapshot(
+                        stored.revision_snapshot().unwrap(),
+                    ));
+                }
+                Some(current) => current
+                    .checked_add(1)
+                    .ok_or(UiPreferenceAdministrationError::Corrupt { field: "revision" })?,
+                None if update.expected_revision.is_some() => {
+                    return Err(UiPreferenceAdministrationError::NotVisible);
+                }
+                None => 1,
+            };
             stored.theme = update.theme.or(stored.theme);
             stored.locale = update.locale.or(stored.locale);
+            stored.revision = Some(revision);
+            stored.updated_at = Some(time::OffsetDateTime::UNIX_EPOCH);
             Ok(*stored)
         }
     }
@@ -5156,6 +5226,8 @@ mod tests {
         let preferences = Arc::new(FakePreferences(Mutex::new(UiPreferences {
             theme: Some(UiTheme::Dark),
             locale: Some(UiLocale::ZhCn),
+            revision: Some(1),
+            updated_at: Some(time::OffsetDateTime::UNIX_EPOCH),
         })));
         let agents = Arc::new(FakeAgents::new());
         let channels = FakeChannelRuntime::new();
@@ -5286,6 +5358,93 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[tokio::test]
+    async fn legacy_preferences_only_fill_first_paint_after_authorized_no_row_read() {
+        let root = protocol_root();
+        let projection_path = root.join("first-frame-fixture");
+        let legacy = b"openbot-ui-preferences-v1\ntheme=dark\nlocale=zh-CN\n";
+        fs::write(&projection_path, legacy).unwrap();
+        let authority = Arc::new(FirstFramePreferenceAuthority {
+            reply: Mutex::new(Ok(UiPreferences::default())),
+            reads: AtomicU64::new(0),
+            writes: AtomicU64::new(0),
+        });
+        let authoritative: Arc<dyn UiPreferenceAdministration> = authority.clone();
+        let preferences = Arc::new(crate::DesktopUiPreferenceAdministration::new(
+            authoritative,
+            projection_path.clone(),
+        ));
+        let application = Arc::new(
+            OpenBotApplication::new(FakeChannelRuntime::new()).with_ui_preferences(preferences),
+        );
+        let protocol =
+            DesktopTauriProtocol::open(&root, Arc::new(InProcessTransport::new(application)))
+                .unwrap()
+                .with_first_frame_projection(crate::DesktopUiPreferenceStore::new(
+                    &projection_path,
+                ));
+        protocol.bind_window("main", auth(), None).unwrap();
+
+        for path in ["/", "/index.html", "/settings"] {
+            let response = protocol
+                .handle(
+                    "main",
+                    Request::builder().uri(path).body(Vec::new()).unwrap(),
+                )
+                .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(
+                std::str::from_utf8(response.body())
+                    .unwrap()
+                    .contains(&index_root(
+                        UiTheme::Dark,
+                        UiLocale::ZhCn,
+                        cfg!(target_os = "macos")
+                    ))
+            );
+        }
+        let api = protocol
+            .handle(
+                "main",
+                Request::builder()
+                    .uri("/api/me/preferences")
+                    .body(Vec::new())
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(api.status(), StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(api.body()).unwrap(),
+            serde_json::json!({"theme":null,"locale":null,"revision":null,"updatedAt":null})
+        );
+        assert_eq!(authority.reads.load(Ordering::SeqCst), 4);
+        assert_eq!(authority.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(fs::read(&projection_path).unwrap(), legacy);
+
+        // A cache cannot turn a failed authoritative read into a successful page or API reply.
+        *authority.reply.lock().unwrap() = Err(UiPreferenceAdministrationError::Unavailable);
+        for path in ["/", "/api/me/preferences"] {
+            let response = protocol
+                .handle(
+                    "main",
+                    Request::builder().uri(path).body(Vec::new()).unwrap(),
+                )
+                .await;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+        let unbound = protocol
+            .handle(
+                "unbound",
+                Request::builder().uri("/").body(Vec::new()).unwrap(),
+            )
+            .await;
+        assert_eq!(unbound.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(authority.reads.load(Ordering::SeqCst), 6);
+        assert_eq!(authority.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(fs::read(&projection_path).unwrap(), legacy);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn window_chrome_index_hint_preserves_all_themes_and_locales_only_for_macos() {
         for (locale, language) in [(UiLocale::En, "en"), (UiLocale::ZhCn, "zh-CN")] {
@@ -5306,10 +5465,8 @@ mod tests {
                 );
                 let response = index_response(
                     "<html lang=\"en\"></html>",
-                    UiPreferences {
-                        theme: Some(theme),
-                        locale: Some(locale),
-                    },
+                    Some(theme),
+                    Some(locale),
                     UiLocale::En,
                 );
                 let body = String::from_utf8(response.into_body()).unwrap();
@@ -6414,6 +6571,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preferences_cas_keeps_member_authority_without_new_freshness_and_closed_conflicts() {
+        let (protocol, root) = protocol();
+        protocol
+            .bind_window("preferences-member", auth(), None)
+            .unwrap();
+        let request = |method: Method, body: &[u8]| {
+            Request::builder()
+                .method(method)
+                .uri("/api/me/preferences")
+                .body(body.to_vec())
+                .unwrap()
+        };
+        let saved = protocol
+            .handle(
+                "preferences-member",
+                request(Method::PUT, br#"{"theme":"light","expectedRevision":1}"#),
+            )
+            .await;
+        assert_eq!(saved.status(), StatusCode::OK);
+        let current: UiPreferences = serde_json::from_slice(saved.body()).unwrap();
+        assert_eq!(current.revision, Some(2));
+        assert_eq!(current.theme, Some(UiTheme::Light));
+        assert_eq!(current.locale, Some(UiLocale::ZhCn));
+        for body in [
+            br#"{"theme":"dark"}"#.as_slice(),
+            br#"{"theme":"dark","expectedRevision":1}"#,
+            br#"{"theme":"dark","expectedRevision":9223372036854775807}"#,
+        ] {
+            let response = protocol
+                .handle("preferences-member", request(Method::PUT, body))
+                .await;
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+            assert_eq!(
+                body,
+                serde_json::to_value(current.revision_snapshot().unwrap()).unwrap()
+            );
+            assert_eq!(body.as_object().unwrap().len(), 3);
+        }
+        for body in [
+            br#"{"theme":"dark","expectedRevision":0}"#.as_slice(),
+            br#"{"theme":"dark","expectedRevision":"2"}"#,
+            br#"{"theme":"dark","expectedRevision":2,"actor":"forged"}"#,
+        ] {
+            assert_eq!(
+                protocol
+                    .handle("preferences-member", request(Method::PUT, body))
+                    .await
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let fetched = protocol
+            .handle("preferences-member", request(Method::GET, b""))
+            .await;
+        assert_eq!(
+            serde_json::from_slice::<UiPreferences>(fetched.body()).unwrap(),
+            current
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn bound_window_gets_rewritten_bundle_and_typed_preferences_and_approval() {
         let (protocol, root) = protocol();
         let unbound = protocol
@@ -6462,7 +6683,7 @@ mod tests {
                 Request::builder()
                     .method(Method::PUT)
                     .uri("/api/me/preferences")
-                    .body(br#"{"theme":"light"}"#.to_vec())
+                    .body(br#"{"theme":"light","expectedRevision":1}"#.to_vec())
                     .unwrap(),
             )
             .await;
@@ -6472,6 +6693,8 @@ mod tests {
             UiPreferences {
                 theme: Some(UiTheme::Light),
                 locale: Some(UiLocale::ZhCn),
+                revision: Some(2),
+                updated_at: Some(time::OffsetDateTime::UNIX_EPOCH),
             }
         );
 

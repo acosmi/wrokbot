@@ -1,4 +1,4 @@
-//! Desktop-local, bounded and atomically replaced UI preference file.
+//! Bounded Desktop first-frame projection; PostgreSQL owns every editing reply.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _, Write as _};
@@ -15,7 +15,7 @@ const FILE_HEADER: &str = "openbot-ui-preferences-v1";
 const FILE_MAX_BYTES: u64 = 256;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// Host-owned local preference storage used only by Desktop Local mode.
+/// Host-owned first-frame cache. It never implements the authoritative editing port.
 #[derive(Clone)]
 pub struct DesktopUiPreferenceStore {
     inner: Arc<StoreInner>,
@@ -38,51 +38,84 @@ impl DesktopUiPreferenceStore {
         }
     }
 
+    /// Read bounded host-selected values for first paint only, never for an editing reply.
+    /// Returned revision/time are absent; callers must not infer that a PG row is absent.
+    pub fn read_first_frame_projection(
+        &self,
+    ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
+        self.read()
+    }
+
     fn read(&self) -> Result<UiPreferences, UiPreferenceAdministrationError> {
         read_file(&self.inner.path)
     }
 
-    fn update_sync(
+    fn project_sync(
         &self,
-        update: UpdateUiPreferences,
-    ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
+        preferences: UiPreferences,
+    ) -> Result<(), UiPreferenceAdministrationError> {
         let _guard = self
             .inner
             .mutation
             .lock()
             .map_err(|_| UiPreferenceAdministrationError::Unavailable)?;
-        let mut preferences = self.read()?;
-        preferences.theme = update.theme.or(preferences.theme);
-        preferences.locale = update.locale.or(preferences.locale);
-        write_atomic(&self.inner.path, preferences)?;
-        Ok(preferences)
+        // Reject a malformed existing projection rather than replacing unrelated bytes.
+        self.read()?;
+        write_atomic(&self.inner.path, preferences)
+    }
+}
+
+/// Desktop editing delegates to the same PostgreSQL CAS and audit port as Server.
+#[derive(Clone)]
+pub struct DesktopUiPreferenceAdministration {
+    authority: Arc<dyn UiPreferenceAdministration>,
+    projection: DesktopUiPreferenceStore,
+}
+
+impl DesktopUiPreferenceAdministration {
+    /// A host-selected cache path carries values for first paint, never a revision or authority.
+    pub fn new(authority: Arc<dyn UiPreferenceAdministration>, path: impl Into<PathBuf>) -> Self {
+        Self {
+            authority,
+            projection: DesktopUiPreferenceStore::new(path),
+        }
+    }
+
+    async fn project(&self, preferences: UiPreferences) {
+        // An absent PG row must not erase the old first-frame projection or create a row.
+        if preferences.revision.is_none() {
+            return;
+        }
+        let store = self.projection.clone();
+        let result = tokio::task::spawn_blocking(move || store.project_sync(preferences)).await;
+        if !matches!(result, Ok(Ok(()))) {
+            tracing::warn!(
+                "Committed UI preferences remain authoritative; first-frame cache unavailable"
+            );
+        }
     }
 }
 
 #[async_trait]
-impl UiPreferenceAdministration for DesktopUiPreferenceStore {
+impl UiPreferenceAdministration for DesktopUiPreferenceAdministration {
     async fn get(
         &self,
-        _auth: &AuthContext,
+        auth: &AuthContext,
     ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || store.read())
-            .await
-            .map_err(|_| UiPreferenceAdministrationError::Unavailable)?
+        let preferences = self.authority.get(auth).await?;
+        self.project(preferences).await;
+        Ok(preferences)
     }
 
     async fn update(
         &self,
-        _auth: &AuthContext,
+        auth: &AuthContext,
         update: UpdateUiPreferences,
     ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
-        if update.is_empty() {
-            return Err(UiPreferenceAdministrationError::InvalidInput { field: "body" });
-        }
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || store.update_sync(update))
-            .await
-            .map_err(|_| UiPreferenceAdministrationError::Unavailable)?
+        // A failed/unknown/409 PG result never becomes a file fallback or a second PG request.
+        let preferences = self.authority.update(auth, update).await?;
+        self.project(preferences).await;
+        Ok(preferences)
     }
 }
 
@@ -145,7 +178,11 @@ fn parse(raw: &str) -> Result<UiPreferences, UiPreferenceAdministrationError> {
     if lines.next().is_some() {
         return Err(UiPreferenceAdministrationError::Corrupt { field: "file" });
     }
-    Ok(UiPreferences { theme, locale })
+    Ok(UiPreferences {
+        theme,
+        locale,
+        ..UiPreferences::default()
+    })
 }
 
 fn render(preferences: UiPreferences) -> String {
@@ -221,6 +258,7 @@ mod tests {
         let preferences = UiPreferences {
             theme: Some(UiTheme::Dark),
             locale: None,
+            ..UiPreferences::default()
         };
         assert_eq!(parse(&render(preferences)).unwrap(), preferences);
         assert!(parse("openbot-ui-preferences-v1\ntheme=sepia\nlocale=en\n").is_err());
@@ -307,6 +345,7 @@ mod tests {
         let preferences = UiPreferences {
             theme: Some(UiTheme::System),
             locale: Some(UiLocale::En),
+            ..UiPreferences::default()
         };
         assert_eq!(
             read_preferences(render(preferences).as_bytes()),
@@ -347,6 +386,7 @@ mod tests {
         let preferences = UiPreferences {
             theme: Some(UiTheme::Light),
             locale: Some(UiLocale::ZhCn),
+            ..UiPreferences::default()
         };
         fs::write(&path, render(preferences)).unwrap();
         assert_eq!(read_file(&path), Ok(preferences));
@@ -367,10 +407,10 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
-    async fn rejected_file_update_preserves_original_bytes_and_no_temporary_output() {
+    #[test]
+    fn rejected_projection_preserves_original_bytes_and_no_temporary_output() {
         let root = std::env::temp_dir().join(format!(
-            "openbot-desktop-ui-preferences-rejected-{}-{}",
+            "openbot-ui-projection-rejected-{}-{}",
             std::process::id(),
             TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
@@ -380,19 +420,11 @@ mod tests {
         fs::write(&path, &original).unwrap();
         let store = DesktopUiPreferenceStore::new(&path);
         assert_eq!(
-            store.get(&auth()).await,
+            store.read(),
             Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
         );
         assert_eq!(
-            store
-                .update(
-                    &auth(),
-                    UpdateUiPreferences {
-                        theme: Some(UiTheme::Dark),
-                        locale: None,
-                    },
-                )
-                .await,
+            store.project_sync(committed(1)),
             Err(UiPreferenceAdministrationError::Corrupt { field: "file" })
         );
         assert_eq!(fs::read(&path).unwrap(), original);
@@ -400,45 +432,105 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
-    async fn local_store_merges_and_replaces_without_leaving_temp_files() {
+    fn committed(revision: i64) -> UiPreferences {
+        UiPreferences {
+            theme: Some(UiTheme::Light),
+            locale: Some(UiLocale::ZhCn),
+            revision: Some(revision),
+            updated_at: Some(time::OffsetDateTime::UNIX_EPOCH),
+        }
+    }
+
+    #[test]
+    fn projection_replaces_without_revision_or_temporary_files() {
         let root = std::env::temp_dir().join(format!(
-            "openbot-desktop-ui-preferences-{}-{}",
+            "openbot-ui-projection-{}-{}",
             std::process::id(),
             TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&root).unwrap();
         let path = root.join("ui-preferences-v1");
         let store = DesktopUiPreferenceStore::new(&path);
-        assert_eq!(store.get(&auth()).await.unwrap(), UiPreferences::default());
-        store
-            .update(
-                &auth(),
-                UpdateUiPreferences {
-                    theme: Some(UiTheme::Light),
-                    locale: None,
-                },
-            )
-            .await
-            .unwrap();
-        let stored = store
-            .update(
-                &auth(),
-                UpdateUiPreferences {
-                    theme: None,
-                    locale: Some(UiLocale::ZhCn),
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            stored,
-            UiPreferences {
-                theme: Some(UiTheme::Light),
-                locale: Some(UiLocale::ZhCn),
-            }
-        );
+        assert_eq!(store.read().unwrap(), UiPreferences::default());
+        store.project_sync(committed(1)).unwrap();
+        store.project_sync(committed(2)).unwrap();
+        let cache = store.read().unwrap();
+        assert_eq!(cache.theme, Some(UiTheme::Light));
+        assert_eq!(cache.locale, Some(UiLocale::ZhCn));
+        assert_eq!(cache.revision, None);
+        assert_eq!(cache.updated_at, None);
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    struct Authority {
+        result: Mutex<Result<UiPreferences, UiPreferenceAdministrationError>>,
+        updates: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait]
+    impl UiPreferenceAdministration for Authority {
+        async fn get(
+            &self,
+            _auth: &AuthContext,
+        ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
+            *self.result.lock().unwrap()
+        }
+        async fn update(
+            &self,
+            _auth: &AuthContext,
+            _update: UpdateUiPreferences,
+        ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
+            self.updates.fetch_add(1, Ordering::Relaxed);
+            *self.result.lock().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn pg_reply_is_authoritative_and_cache_failure_never_replays() {
+        let root = std::env::temp_dir().join(format!(
+            "openbot-ui-authority-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("ui-preferences-v1");
+        let prior = render(UiPreferences {
+            theme: Some(UiTheme::Dark),
+            locale: None,
+            ..Default::default()
+        });
+        fs::write(&path, &prior).unwrap();
+        let authority = Arc::new(Authority {
+            result: Mutex::new(Ok(UiPreferences::default())),
+            updates: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let store = DesktopUiPreferenceAdministration::new(authority.clone(), &path);
+        assert_eq!(store.get(&auth()).await.unwrap(), UiPreferences::default());
+        assert_eq!(fs::read_to_string(&path).unwrap(), prior);
+        *authority.result.lock().unwrap() = Err(UiPreferenceAdministrationError::StaleSnapshot(
+            committed(2).revision_snapshot().unwrap(),
+        ));
+        let update = UpdateUiPreferences {
+            theme: Some(UiTheme::Light),
+            locale: None,
+            expected_revision: Some(1),
+        };
+        assert!(matches!(
+            store.update(&auth(), update).await,
+            Err(UiPreferenceAdministrationError::StaleSnapshot(_))
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), prior);
+        let corrupt = b"x".repeat(257);
+        fs::write(&path, &corrupt).unwrap();
+        *authority.result.lock().unwrap() = Ok(committed(3));
+        assert_eq!(store.update(&auth(), update).await.unwrap(), committed(3));
+        assert_eq!(fs::read(&path).unwrap(), corrupt);
+        assert_eq!(authority.updates.load(Ordering::Relaxed), 2);
+        fs::remove_file(&path).unwrap();
+        assert_eq!(store.get(&auth()).await.unwrap(), committed(3));
+        assert_eq!(read_file(&path).unwrap().revision, None);
+        assert_eq!(read_file(&path).unwrap().theme, Some(UiTheme::Light));
+        assert_eq!(authority.updates.load(Ordering::Relaxed), 2);
         fs::remove_dir_all(root).unwrap();
     }
 }

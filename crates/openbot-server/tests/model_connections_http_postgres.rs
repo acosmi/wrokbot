@@ -169,7 +169,15 @@ async fn assemble(
         ),
         mcp_oauth_state_key: SecretBytes::new(vec![0x74; 32]),
         policy_store: policies,
-        ui_preferences: Arc::new(PostgresUiPreferenceAdministration::new(pool.clone())),
+        ui_preferences: Arc::new(
+            PostgresUiPreferenceAdministration::new(
+                pool.clone(),
+                DeploymentId::new(DEPLOYMENT),
+                tenant.clone(),
+                SecretBytes::new(vec![0x72; 32]),
+            )
+            .map_err(|e| e.to_string())?,
+        ),
         screen_sessions: Arc::new(openbot_application::NoScreenSessionAdministration),
         remote_agent_probe: Arc::new(UnusedRemote),
         managed_slot_available: false,

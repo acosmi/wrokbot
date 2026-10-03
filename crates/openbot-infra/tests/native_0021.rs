@@ -136,47 +136,36 @@ async fn partial_updates_merge_atomically_and_scope_by_actor_tenant_deployment()
                 .await
                 .map_err(|error| error.to_string())?;
 
-            let store = PostgresUiPreferenceAdministration::new(pool.clone());
+            let store = PostgresUiPreferenceAdministration::new(pool.clone(),DeploymentId::new("deployment-a"),
+                TenantId::new("tenant-a"),openbot_domain::vault::SecretBytes::new(vec![0x21;32]))
+                .map_err(|error|error.to_string())?;
             let owner = auth("deployment-a", "tenant-a");
             if store.get(&owner).await.map_err(|error| error.to_string())?
                 != UiPreferences::default()
             {
                 return Err("unset preferences must preserve host fallback".to_owned());
             }
-            let (theme, locale) = tokio::join!(
-                store.update(
-                    &owner,
-                    UpdateUiPreferences {
-                        theme: Some(UiTheme::Dark),
-                        locale: None,
-                    }
-                ),
-                store.update(
-                    &owner,
-                    UpdateUiPreferences {
-                        theme: None,
-                        locale: Some(UiLocale::ZhCn),
-                    }
-                )
-            );
-            theme.map_err(|error| error.to_string())?;
-            locale.map_err(|error| error.to_string())?;
-            let stored = store.get(&owner).await.map_err(|error| error.to_string())?;
-            if stored
-                != (UiPreferences {
-                    theme: Some(UiTheme::Dark),
-                    locale: Some(UiLocale::ZhCn),
-                })
-            {
-                return Err(format!("partial updates did not merge: {stored:?}"));
+            // The original partial-field semantics survive only after an exact CAS.
+            // Historical concurrent upsert evidence is retained under its original identity.
+            let theme=store.update(&owner,UpdateUiPreferences {
+                theme:Some(UiTheme::Dark),locale:None,expected_revision:None,
+            }).await.map_err(|error|error.to_string())?;
+            let locale=store.update(&owner,UpdateUiPreferences {
+                theme:None,locale:Some(UiLocale::ZhCn),expected_revision:theme.revision,
+            }).await.map_err(|error|error.to_string())?;
+            let stored=store.get(&owner).await.map_err(|error|error.to_string())?;
+            if stored.theme!=Some(UiTheme::Dark) || stored.locale!=Some(UiLocale::ZhCn)
+                || stored.revision!=Some(2) || stored!=locale {
+                return Err(format!("authorized partial updates did not preserve values: {stored:?}"));
             }
-            for other in [
-                auth("deployment-b", "tenant-a"),
-                auth("deployment-a", "tenant-b"),
-            ] {
-                if store.get(&other).await.map_err(|error| error.to_string())?
-                    != UiPreferences::default()
-                {
+            for other in [auth("deployment-b","tenant-a"),auth("deployment-a","tenant-b")] {
+                if store.get(&other).await != Err(openbot_application::UiPreferenceAdministrationError::NotVisible) {
+                    return Err("host scope mismatch must not expose preferences".to_owned());
+                }
+                let scoped=PostgresUiPreferenceAdministration::new(pool.clone(),other.deployment().clone(),
+                    other.tenant().clone(),openbot_domain::vault::SecretBytes::new(vec![0x21;32]))
+                    .map_err(|error|error.to_string())?;
+                if scoped.get(&other).await.map_err(|error|error.to_string())?!=UiPreferences::default() {
                     return Err("cross-scope preference became visible".to_owned());
                 }
             }
