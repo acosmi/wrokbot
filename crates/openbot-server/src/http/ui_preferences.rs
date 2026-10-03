@@ -141,8 +141,24 @@ mod tests {
         ) -> Result<UiPreferences, UiPreferenceAdministrationError> {
             self.updates.lock().unwrap().push(update);
             let mut stored = self.stored.lock().unwrap();
+            let revision = match stored.revision {
+                Some(current) if update.expected_revision != Some(current) => {
+                    return Err(UiPreferenceAdministrationError::StaleSnapshot(
+                        stored.revision_snapshot().unwrap(),
+                    ));
+                }
+                Some(current) => current
+                    .checked_add(1)
+                    .ok_or(UiPreferenceAdministrationError::Corrupt { field: "revision" })?,
+                None if update.expected_revision.is_some() => {
+                    return Err(UiPreferenceAdministrationError::NotVisible);
+                }
+                None => 1,
+            };
             stored.theme = update.theme.or(stored.theme);
             stored.locale = update.locale.or(stored.locale);
+            stored.revision = Some(revision);
+            stored.updated_at = Some(OffsetDateTime::UNIX_EPOCH);
             Ok(*stored)
         }
     }
@@ -281,6 +297,8 @@ mod tests {
             UiPreferences {
                 theme: Some(UiTheme::Dark),
                 locale: None,
+                revision: Some(1),
+                updated_at: Some(OffsetDateTime::UNIX_EPOCH),
             }
         );
         assert_eq!(
@@ -288,6 +306,7 @@ mod tests {
             &[UpdateUiPreferences {
                 theme: Some(UiTheme::Dark),
                 locale: None,
+                expected_revision: None,
             }]
         );
 
@@ -297,7 +316,7 @@ mod tests {
             Some("https://app.example.test"),
             None,
             Some("en"),
-            r#"{"locale":"en"}"#,
+            r#"{"locale":"en","expectedRevision":1}"#,
         )
         .await;
         assert_eq!(locale.status(), StatusCode::OK);
@@ -311,5 +330,65 @@ mod tests {
             preferences.stored.lock().unwrap().locale,
             Some(UiLocale::En)
         );
+    }
+
+    #[tokio::test]
+    async fn preference_stale_snapshot_is_closed_uncached_and_does_not_mutate_cookie_or_values() {
+        let preferences = FakePreferences::default();
+        let current = UiPreferences {
+            theme: Some(UiTheme::Dark),
+            locale: Some(UiLocale::ZhCn),
+            revision: Some(3),
+            updated_at: Some(OffsetDateTime::UNIX_EPOCH),
+        };
+        *preferences.stored.lock().unwrap() = current;
+        for body in [
+            r#"{"theme":"light"}"#,
+            r#"{"theme":"light","expectedRevision":2}"#,
+            r#"{"theme":"light","expectedRevision":9223372036854775807}"#,
+        ] {
+            let response = send(
+                router(preferences.clone()),
+                Method::PUT,
+                Some("https://app.example.test"),
+                None,
+                None,
+                body,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            assert!(response.headers().get(SET_COOKIE).is_none());
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                body,
+                serde_json::to_value(current.revision_snapshot().unwrap()).unwrap()
+            );
+            assert_eq!(body.as_object().unwrap().len(), 3);
+            assert_eq!(*preferences.stored.lock().unwrap(), current);
+        }
+        let calls = preferences.updates.lock().unwrap().len();
+        for body in [
+            r#"{"theme":"light","expectedRevision":0}"#,
+            r#"{"theme":"light","expectedRevision":"3"}"#,
+            r#"{"theme":"light","expectedRevision":3,"revision":99}"#,
+        ] {
+            assert_eq!(
+                send(
+                    router(preferences.clone()),
+                    Method::PUT,
+                    Some("https://app.example.test"),
+                    None,
+                    None,
+                    body
+                )
+                .await
+                .status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert_eq!(preferences.updates.lock().unwrap().len(), calls);
     }
 }

@@ -231,7 +231,7 @@ pub use postgres_sidecar::{
     PostgresSidecarConnection, PostgresSidecarOrigin, PostgresSidecarSupervisor,
     RunningPostgresSidecar,
 };
-pub use preferences::DesktopUiPreferenceStore;
+pub use preferences::{DesktopUiPreferenceAdministration, DesktopUiPreferenceStore};
 pub use session::{DesktopSession, event_of};
 pub use transport::{InProcessTransport, OpenSessionError, ShutdownReport};
 pub use window::{

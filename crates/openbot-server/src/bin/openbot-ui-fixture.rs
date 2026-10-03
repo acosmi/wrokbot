@@ -3076,8 +3076,28 @@ impl UiPreferenceAdministration for FixturePreferences {
             .stored
             .lock()
             .map_err(|_| UiPreferenceAdministrationError::Unavailable)?;
+        let revision = match stored.revision {
+            Some(current) if update.expected_revision != Some(current) => {
+                return Err(UiPreferenceAdministrationError::StaleSnapshot(
+                    stored.revision_snapshot().map_err(|_| {
+                        UiPreferenceAdministrationError::Corrupt {
+                            field: "preferences",
+                        }
+                    })?,
+                ));
+            }
+            Some(current) => current
+                .checked_add(1)
+                .ok_or(UiPreferenceAdministrationError::Corrupt { field: "revision" })?,
+            None if update.expected_revision.is_some() => {
+                return Err(UiPreferenceAdministrationError::NotVisible);
+            }
+            None => 1,
+        };
         stored.theme = update.theme.or(stored.theme);
         stored.locale = update.locale.or(stored.locale);
+        stored.revision = Some(revision);
+        stored.updated_at = Some(OffsetDateTime::UNIX_EPOCH);
         Ok(*stored)
     }
 }
