@@ -521,7 +521,7 @@ mod tests {
         let mut bad_run = valid.clone();
         bad_run.source_run_id = RunId::new("run\u{85}control");
         let mut large_message = valid.clone();
-        large_message.source_message_id = String::from("界".repeat(171));
+        large_message.source_message_id = "界".repeat(171);
         let mut bad_hash = valid;
         bad_hash.expected_sha256 = "A".repeat(64);
         for (value, field) in [
