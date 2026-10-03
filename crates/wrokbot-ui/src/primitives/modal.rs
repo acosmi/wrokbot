@@ -63,6 +63,7 @@ struct ModalContext {
     presentation: ModalPresentation,
     on_close: Option<UnsyncCallback<()>>,
     inline: Signal<bool>,
+    composing: StoredValue<bool>,
 }
 
 pub(crate) fn modal_root(
@@ -100,6 +101,7 @@ pub(crate) fn modal_root_with_inline(
         presentation,
         on_close,
         inline,
+        composing: StoredValue::new(false),
     };
     install_modal_lifecycle(context.clone());
     install_outside_focus_keys(context.clone());
@@ -166,6 +168,7 @@ pub(crate) fn modal_content(
     let inline = context.inline;
     let panel_ref = context.panel_ref;
     let presentation = context.presentation;
+    let composing = context.composing;
     let layer_close = context.clone();
     let key_context = context.clone();
     let description_visible = description.clone();
@@ -197,6 +200,8 @@ pub(crate) fn modal_content(
                     node_ref=panel_ref
                     data-presentation=presentation.kind()
                     data-side=presentation.side()
+                    on:compositionstart=move |_| composing.set_value(true)
+                    on:compositionend=move |_| composing.set_value(false)
                     on:keydown=move |event| {
                         if !inline.get() { handle_panel_key(event, key_context.clone()); }
                     }
@@ -288,6 +293,7 @@ fn install_modal_lifecycle(context: ModalContext) {
             return;
         }
         was_open.set_value(open);
+        effect_context.composing.set_value(false);
         if open {
             #[cfg(target_arch = "wasm32")]
             {
@@ -340,6 +346,7 @@ fn install_modal_lifecycle(context: ModalContext) {
 
 fn close(context: ModalContext) {
     if context.open.get_untracked() {
+        context.composing.set_value(false);
         context.open.set(false);
         if let Some(callback) = context.on_close {
             callback.run(());
@@ -360,6 +367,8 @@ fn install_outside_focus_keys(context: ModalContext) {
         let key_document = document.clone();
         let callback = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
             if event.default_prevented()
+                || event.is_composing()
+                || context.composing.try_get_value() == Some(true)
                 || !matches!(event.key().as_str(), "Escape" | "Tab")
                 || context.open.try_get_untracked() != Some(true)
                 || context.inline.try_get_untracked() != Some(false)
@@ -410,6 +419,9 @@ fn install_outside_focus_keys(context: ModalContext) {
 }
 
 fn handle_panel_key(event: KeyboardEvent, context: ModalContext) {
+    if event.default_prevented() || event.is_composing() || context.composing.get_value() {
+        return;
+    }
     match event.key().as_str() {
         "Escape" => {
             event.prevent_default();

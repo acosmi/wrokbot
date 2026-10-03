@@ -62,19 +62,37 @@ impl DraftSignals {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn request(self) -> SaveSandboxedComponentRequest {
-        SaveSandboxedComponentRequest {
+    fn request(self) -> Option<SaveSandboxedComponentRequest> {
+        if !is_sandboxed_component_name(&format!("custom_{}", self.slug.get_untracked()))
+            || self.title.get_untracked().is_empty()
+        {
+            return None;
+        }
+        Some(SaveSandboxedComponentRequest {
             slug: self.slug.get_untracked(),
             title: self.title.get_untracked(),
             description: self.description.get_untracked(),
             html: self.html.get_untracked(),
             css: self.css.get_untracked(),
             js_functions: self.js_functions.get_untracked(),
-            argument_schema: parse_object(&self.argument_schema.get_untracked())
-                .unwrap_or_default(),
-            sample_arguments: parse_object(&self.sample_arguments.get_untracked())
-                .unwrap_or_default(),
-        }
+            argument_schema: parse_object(&self.argument_schema.get_untracked())?,
+            sample_arguments: parse_object(&self.sample_arguments.get_untracked())?,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn snapshot(self) -> [String; 8] {
+        [
+            self.slug,
+            self.title,
+            self.description,
+            self.html,
+            self.css,
+            self.js_functions,
+            self.argument_schema,
+            self.sample_arguments,
+        ]
+        .map(|field| field.get_untracked())
     }
 
     fn load(self, component: &SandboxedComponentRecord) {
@@ -108,6 +126,15 @@ struct PreviewItem {
     arguments: Value,
 }
 
+#[derive(Clone, Copy)]
+struct MutationState {
+    pending: RwSignal<bool>,
+    error: RwSignal<bool>,
+    reload: RwSignal<u64>,
+    write_lock: Signal<bool>,
+    worker_owner: StoredValue<Option<Owner>>,
+}
+
 /// Fresh-admin draft/save/publish/delete journey with the same renderer used by conversations.
 #[component]
 pub fn SandboxPlaygroundPage() -> impl IntoView {
@@ -118,10 +145,27 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
     let load_error = RwSignal::new(None::<ApiError>);
     let action_error = RwSignal::new(false);
     let pending = RwSignal::new(false);
+    let write_lock = crate::configuration_writes::family_lock(
+        crate::configuration_writes::ConfigurationKind::Sandbox,
+    );
     let reload_generation = RwSignal::new(0_u64);
     let delete_open = RwSignal::new(false);
     let deleting = RwSignal::new(None::<String>);
-    install_loader(reload_generation, components, loading, load_error);
+    let worker_owner = StoredValue::new(Owner::current());
+    let state = MutationState {
+        pending,
+        error: action_error,
+        reload: reload_generation,
+        write_lock,
+        worker_owner,
+    };
+    install_loader(
+        reload_generation,
+        components,
+        loading,
+        load_error,
+        worker_owner,
+    );
 
     let schema_valid = Memo::new(move |_| parse_object(&draft.argument_schema.get()).is_some());
     let sample = Memo::new(move |_| parse_object(&draft.sample_arguments.get()));
@@ -129,6 +173,8 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
         is_sandboxed_component_name(&format!("custom_{}", draft.slug.get()))
             && !draft.title.get().is_empty()
     });
+    let draft_valid =
+        Memo::new(move |_| identity_valid.get() && schema_valid.get() && sample.get().is_some());
     let preview = Memo::new(move |_| {
         let arguments = Value::Object(sample.get()?.into_iter().collect());
         let html = draft.html.get();
@@ -148,80 +194,48 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
         })
     });
 
-    let save = move || {
-        if pending.get_untracked() || !identity_valid.get_untracked() {
-            return;
+    let submit = move |publish| {
+        if draft_valid.get_untracked() {
+            dispatch_draft(draft, state, publish);
         }
-        pending.set(true);
-        action_error.set(false);
-        #[cfg(target_arch = "wasm32")]
-        let request = draft.request();
-        #[cfg(target_arch = "wasm32")]
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            match save_sandboxed_component_draft(&request).await {
-                Ok(saved) => {
-                    draft.load(&saved.component);
-                    reload_generation
-                        .update(|generation| *generation = generation.saturating_add(1));
-                }
-                Err(_) => action_error.set(true),
-            }
-            pending.set(false);
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        pending.set(false);
-    };
-    let publish = move || {
-        if pending.get_untracked() || !identity_valid.get_untracked() {
-            return;
-        }
-        pending.set(true);
-        action_error.set(false);
-        #[cfg(target_arch = "wasm32")]
-        let request = draft.request();
-        #[cfg(target_arch = "wasm32")]
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            match publish_sandboxed_component(&request).await {
-                Ok(published) => {
-                    draft.load(&published.component);
-                    reload_generation
-                        .update(|generation| *generation = generation.saturating_add(1));
-                }
-                Err(_) => action_error.set(true),
-            }
-            pending.set(false);
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        pending.set(false);
     };
     let confirm_delete = move || {
         let Some(_name) = deleting.get_untracked() else {
             return;
         };
-        if pending.get_untracked() {
+        if pending.get_untracked() || write_lock.get_untracked() {
             return;
         }
         pending.set(true);
         action_error.set(false);
         #[cfg(target_arch = "wasm32")]
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            match delete_sandboxed_component(&_name).await {
-                Ok(()) => {
-                    delete_open.set(false);
-                    deleting.set(None);
-                    reload_generation
-                        .update(|generation| *generation = generation.saturating_add(1));
-                }
-                Err(_) => action_error.set(true),
-            }
-            pending.set(false);
-        });
+        if let Some(owner) = worker_owner.get_value() {
+            owner.with(move || {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    match delete_sandboxed_component(&_name).await {
+                        Ok(()) => {
+                            if deleting.try_get_untracked().flatten().as_deref() == Some(&_name) {
+                                delete_open.try_set(false);
+                                deleting.try_set(None);
+                            }
+                            reload_generation.try_update(|generation| {
+                                *generation = generation.saturating_add(1)
+                            });
+                        }
+                        Err(_) => {
+                            action_error.try_set(!write_lock.get_untracked());
+                        }
+                    }
+                    pending.try_set(false);
+                })
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         pending.set(false);
     };
 
     view! {
-        <PageShell width=PageWidth::Table>
+        <PageShell width=PageWidth::Content>
             <PageHeader
                 heading_id="sandbox-playground-title"
                 title=move || t_string!(i18n, admin.playground_title).to_owned()
@@ -231,16 +245,16 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                 <Button
                     variant=ButtonVariant::Chip
                     size=ButtonSize::Small
-                    disabled=Signal::derive(move || !identity_valid.get() || pending.get())
+                    disabled=Signal::derive(move || !draft_valid.get() || pending.get() || write_lock.get())
                     loading=pending
-                    on_activate=move || save()
+                    on_activate=move || submit(false)
                 >{move || t!(i18n, admin.playground_save)}</Button>
                 <Button
                     variant=ButtonVariant::Primary
                     size=ButtonSize::Small
-                    disabled=Signal::derive(move || !identity_valid.get() || pending.get())
+                    disabled=Signal::derive(move || !draft_valid.get() || pending.get() || write_lock.get())
                     loading=pending
-                    on_activate=move || publish()
+                    on_activate=move || submit(true)
                 >{move || t!(i18n, admin.playground_publish)}</Button>
             </div>
             <Show when=move || action_error.get()>
@@ -345,6 +359,7 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                                                 <Button
                                                     size=ButtonSize::Small
                                                     variant=ButtonVariant::Chip
+                                                    disabled=pending
                                                     on_activate=move || draft.load(&open_component)
                                                 >{t!(i18n, admin.playground_open)}</Button>
                                                 <Button
@@ -387,13 +402,61 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                     >{move || t!(i18n, common.cancel)}</Button>
                     <Button
                         variant=ButtonVariant::DangerText
-                        loading=pending
+                        loading=pending disabled=write_lock
                         on_activate=confirm_delete
                     >{move || t!(i18n, common.delete)}</Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
     }
+}
+
+fn dispatch_draft(draft: DraftSignals, state: MutationState, publish: bool) {
+    if state.pending.get_untracked() || state.write_lock.get_untracked() {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(request) = draft.request() else {
+            return;
+        };
+        let snapshot = draft.snapshot();
+        state.pending.set(true);
+        state.error.set(false);
+        if let Some(owner) = state.worker_owner.get_value() {
+            owner.with(move || {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let result = if publish {
+                        publish_sandboxed_component(&request).await
+                    } else {
+                        save_sandboxed_component_draft(&request).await
+                    };
+                    match result {
+                        Ok(saved) => {
+                            if draft.snapshot() == snapshot {
+                                draft.load(&saved.component);
+                            }
+                            state.reload.try_update(|generation| {
+                                *generation = generation.saturating_add(1)
+                            });
+                        }
+                        Err(_) => {
+                            state.error.try_set(!state.write_lock.get_untracked());
+                        }
+                    }
+                    state.pending.try_set(false);
+                });
+            });
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (
+        draft,
+        publish,
+        state.error,
+        state.reload,
+        state.worker_owner,
+    );
 }
 
 #[component]
@@ -450,28 +513,35 @@ fn install_loader(
     components: RwSignal<Vec<SandboxedComponentRecord>>,
     loading: RwSignal<bool>,
     error: RwSignal<Option<ApiError>>,
+    worker_owner: StoredValue<Option<Owner>>,
 ) {
     #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         let observed = generation.get();
         loading.set(true);
         error.set(None);
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            match load_sandboxed_components().await {
-                Ok(loaded) if generation.get_untracked() == observed => {
-                    components.set(loaded.components)
-                }
-                Err(failure) if generation.get_untracked() == observed => error.set(Some(failure)),
-                Ok(_) | Err(_) => {}
-            }
-            if generation.get_untracked() == observed {
-                loading.set(false);
-            }
-        });
+        if let Some(owner) = worker_owner.get_value() {
+            owner.with(move || {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    match load_sandboxed_components().await {
+                        Ok(loaded) if generation.try_get_untracked() == Some(observed) => {
+                            components.try_set(loaded.components);
+                        }
+                        Err(failure) if generation.try_get_untracked() == Some(observed) => {
+                            error.try_set(Some(failure));
+                        }
+                        Ok(_) | Err(_) => {}
+                    }
+                    if generation.try_get_untracked() == Some(observed) {
+                        loading.try_set(false);
+                    }
+                })
+            });
+        }
     });
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (generation, components);
+        let _ = (generation, components, worker_owner);
         loading.set(false);
         error.set(Some(ApiError::Unavailable));
     }

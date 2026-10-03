@@ -5,12 +5,12 @@ use leptos::prelude::*;
 /// Closed content measure from the GUI first source, never an arbitrary pixel width.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PageWidth {
-    /// Configuration pages, 960px maximum.
+    /// Library and configuration pages, 1040px maximum including their source padding.
     #[default]
     Content,
     /// Dense tables, 1200px maximum.
     Table,
-    /// Transcript-like reading columns, 880px maximum.
+    /// Transcript-like reading columns, 850px maximum.
     Chat,
 }
 
@@ -39,10 +39,10 @@ pub fn PageShell(
     }
 }
 
-/// Fixed-height page topbar for breadcrumbs, back navigation and the page-level action.
+/// In-content breadcrumb/action row below the single application toolbar.
 #[component]
 pub fn PageTopbar(children: Children) -> impl IntoView {
-    view! { <div class="ob-page-topbar">{children()}</div> }
+    view! { <div class="ob-page-actions">{children()}</div> }
 }
 
 /// Same-origin back navigation used inside a PageTopbar.
@@ -135,7 +135,7 @@ pub fn PageSection(
     }
 }
 
-/// Bordered row group; callers omit this component when the collection is empty.
+/// Thinly divided library rows; callers omit this component for empty collections.
 #[component]
 pub fn PageRows(children: Children) -> impl IntoView {
     view! { <div class="ob-page-rows">{children()}</div> }

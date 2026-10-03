@@ -202,6 +202,10 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
     install_connections_loader(reload_generation, page, loading, load_error);
 
     let server_id = Memo::new(move |_| params.read().get("server_id"));
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::ToolConnections,
+        move || server_id.get().unwrap_or_default(),
+    );
     let account = Memo::new(move |_| {
         let server_id = server_id.get()?;
         reviewed_account(page.get().as_ref()?, &server_id)
@@ -303,7 +307,7 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                                         variant=ButtonVariant::Primary
                                         size=ButtonSize::Medium
                                         disabled=Signal::derive(move || {
-                                            action_pending.get() || !oauth_available.get()
+                                            action_pending.get() || write_lock.get() || !oauth_available.get()
                                         })
                                         loading=action_pending
                                         on_activate=connect
@@ -329,7 +333,7 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                                         </Badge>
                                         <div class="ob-connected-account-menu">
                                             <Menu id="connected-account-actions" open=menu_open>
-                                                <MenuTrigger disabled=action_pending>
+                                                <MenuTrigger disabled=Signal::derive(move || action_pending.get() || write_lock.get())>
                                                     <IconView icon=Icon::Ellipsis size=IconSize::Inline />
                                                     <span class="ob-visually-hidden">
                                                         {move || t!(i18n, common.more_actions)}
@@ -338,7 +342,7 @@ pub fn ConnectedAccountDetailPage() -> impl IntoView {
                                                 <MenuContent>
                                                     <MenuItem
                                                         id="connected-account-disconnect"
-                                                        disabled=action_pending
+                                                        disabled=Signal::derive(move || action_pending.get() || write_lock.get())
                                                         on_select=disconnect
                                                     >
                                                         {move || t!(i18n, settings.disconnect)}

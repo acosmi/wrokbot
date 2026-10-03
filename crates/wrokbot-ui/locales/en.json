@@ -1,5 +1,8 @@
 {
   "common": {
+    "configuration_publication_unknown": "The draft save was confirmed, but publication has not been confirmed. This object remains blocked; do not submit the save again.",
+    "configuration_write_pending": "A change is awaiting its receipt. Leaving this page does not cancel it.",
+    "configuration_write_unknown": "A previous change has an unknown outcome. Writes to that object remain blocked; refreshing the list does not resolve it.",
     "secret_entry_help": "To send this secret again after saving, re-enter it. Closing this form clears it.",
     "app_name": "Wrok Bot",
     "save": "Save",
@@ -354,7 +357,7 @@
     "empty": "No skills yet. Add a set of instructions you use often.",
     "no_match": "No matching skills.",
     "load_error": "Skills could not be loaded. Your saved instructions have not been changed.",
-    "write_error": "The change could not be confirmed. Review the refreshed list before trying again.",
+    "write_error": "The change was rejected. Read current records and check your permissions before a new attempt.",
     "grant_count": "Granted to {{ count }} coworkers",
     "slug": "Command name",
     "slug_help": "2–40 lowercase letters, numbers or hyphens; unique across the deployment. The name cannot be changed after creation.",
@@ -991,7 +994,7 @@
     "title": "Plugins",
     "intro": "Configure deployment connections and choose which Agents may use their tools.",
     "saving": "Saving…",
-    "write_error": "The change could not be confirmed. The latest state has been requested; check it before trying again.",
+    "write_error": "The change was rejected. Read current records and check your permissions before a new attempt.",
     "load_error": "Plugins could not be loaded.",
     "custom_add": "Add custom server",
     "connected": "Configured",
@@ -1101,6 +1104,9 @@
     "cap_boundary": "The per-run cost cap below controls your budget. It is not usage, account balance, or a plan allowance."
   },
   "models": {
+    "local_title": "Local capability",
+    "local_description": "Local means the execution node, which can differ from the computer showing this page.",
+    "local_pending": "An authenticated HTTPS custom service can use the existing custom API contract. Unauthenticated loopback services and managed download, start, or stop controls are not available.",
     "selection_unavailable_label": "Model selection unavailable",
     "selection_agent_conflict": "The model selection does not match the current assistant. Select a supported built-in assistant and choose the model again, or clear the selection.",
     "selection_unavailable_locked": "This model selection is not currently available.",

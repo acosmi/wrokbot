@@ -80,8 +80,30 @@ pub fn AdminPeoplePage() -> impl IntoView {
         );
     });
 
+    let refresh = UnsyncCallback::new(move |_| {
+        request_people_page(
+            people,
+            current_actor,
+            next_cursor,
+            request_epoch,
+            page_owner,
+            loading,
+            load_error,
+            query.get_untracked(),
+            None,
+            true,
+            false,
+        );
+    });
     let mutate = UnsyncCallback::new(move |mutation: PersonMutation| {
-        dispatch_person_mutation(mutation, mutation_pending, mutation_error, page_owner);
+        dispatch_person_mutation(
+            mutation,
+            mutation_pending,
+            mutation_error,
+            page_owner,
+            request_epoch,
+            refresh,
+        );
     });
     let load_more = move |_| {
         let Some(cursor) = next_cursor.get_untracked() else {
@@ -195,11 +217,16 @@ fn PersonRow(
 ) -> impl IntoView {
     let i18n = use_i18n();
     let role_checked = RwSignal::new(person.with_untracked(|person| person.role == Role::Admin));
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::People,
+        move || person.with(|person| person.id.as_str().to_owned()),
+    );
     Effect::new(move |_| {
         role_checked.set(person.with(|person| person.role == Role::Admin));
     });
     let controls_disabled = Signal::derive(move || {
         mutation_pending.get()
+            || write_lock.get()
             || current_actor.get().is_none_or(|actor| {
                 person.with(|person| actor == person.id || person.configured_admin)
             })
@@ -305,23 +332,32 @@ fn schedule_people_search(
         return;
     }
     schedule_people_timeout(move || {
-        if search_generation.get_untracked() != generation || requested == query.get_untracked() {
+        if search_generation.try_get_untracked() != Some(generation)
+            || query
+                .try_get_untracked()
+                .is_none_or(|query| requested == query)
+        {
             return;
         }
-        query.set(requested.clone());
-        request_people_page(
-            people,
-            current_actor,
-            next_cursor,
-            request_epoch,
-            page_owner,
-            loading,
-            load_error,
-            requested,
-            None,
-            true,
-            false,
-        );
+        let Some(owner) = page_owner.try_get_value().flatten() else {
+            return;
+        };
+        owner.with(|| {
+            query.set(requested.clone());
+            request_people_page(
+                people,
+                current_actor,
+                next_cursor,
+                request_epoch,
+                page_owner,
+                loading,
+                load_error,
+                requested,
+                None,
+                true,
+                false,
+            );
+        });
     });
 }
 
@@ -435,18 +471,21 @@ fn dispatch_person_mutation(
     pending: RwSignal<bool>,
     error: RwSignal<bool>,
     worker_owner: StoredValue<Option<Owner>>,
+    request_epoch: RwSignal<u64>,
+    refresh: UnsyncCallback<()>,
 ) {
     if pending.get_untracked() {
         if let PersonMutation::Role {
             checked, desired, ..
         } = mutation
         {
-            checked.set(desired != Role::Admin);
+            checked.try_set(desired != Role::Admin);
         }
         return;
     }
     pending.set(true);
     error.set(false);
+    let epoch = request_epoch.get_untracked();
     #[cfg(target_arch = "wasm32")]
     {
         let start_worker = move || {
@@ -463,27 +502,37 @@ fn dispatch_person_mutation(
                         change_person_access(&id, revoked).await
                     }
                 };
+                let same_page = request_epoch.get_untracked() == epoch;
                 match outcome {
                     Ok(replacement) => match mutation {
                         PersonMutation::Role {
                             person, checked, ..
                         } => {
-                            checked.set(replacement.role == Role::Admin);
-                            person.set(replacement);
+                            if same_page {
+                                checked.try_set(replacement.role == Role::Admin);
+                                person.try_set(replacement);
+                            }
                         }
-                        PersonMutation::Access { person, .. } => person.set(replacement),
+                        PersonMutation::Access { person, .. } => {
+                            if same_page {
+                                person.try_set(replacement);
+                            }
+                        }
                     },
                     Err(_) => {
                         if let PersonMutation::Role {
                             checked, desired, ..
                         } = mutation
                         {
-                            checked.set(desired != Role::Admin);
+                            checked.try_set(desired != Role::Admin);
                         }
                         error.set(true);
                     }
                 }
                 pending.set(false);
+                if !same_page {
+                    refresh.run(());
+                }
             });
         };
         match worker_owner.get_value() {
@@ -493,6 +542,7 @@ fn dispatch_person_mutation(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (epoch, refresh);
         match mutation {
             PersonMutation::Role {
                 person,

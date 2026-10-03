@@ -6,7 +6,10 @@ mod state;
 use leptos::prelude::*;
 
 use crate::features::admin::plugins::PluginActions;
-use crate::features::layout::{PageEmpty, PageHeader, PageRows, PageSection, PageShell};
+use crate::features::layout::{
+    DetailPanelLayout, DetailPanelMain, PageEmpty, PageHeader, PageRows, PageSection, PageShell,
+    editor_location::EditorLocation,
+};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
 use crate::primitives::{Button, ButtonVariant, IconSize, IconView, Input};
@@ -32,6 +35,34 @@ fn SkillsPage(#[prop(optional)] deployment: bool) -> impl IntoView {
     let actions = expect_context::<PluginActions>();
     let search = RwSignal::new(String::new());
     let dialog = RwSignal::new(None::<SkillDialog>);
+    let editor = EditorLocation::new(&["skill-new", "skill-edit", "skill-grants", "skill-delete"]);
+    Effect::new(move |_| {
+        let selected = editor
+            .selection
+            .get()
+            .and_then(|selected| match selected.kind {
+                "skill-new" => Some(SkillDialog::Create),
+                "skill-edit" => selected
+                    .target
+                    .filter(|s| crate::api::skills::valid_slug(s))
+                    .map(SkillDialog::Edit),
+                "skill-grants" => selected
+                    .target
+                    .filter(|s| crate::api::skills::valid_slug(s))
+                    .map(SkillDialog::Grants),
+                "skill-delete" => selected
+                    .target
+                    .filter(|s| crate::api::skills::valid_slug(s))
+                    .map(SkillDialog::Delete),
+                _ => None,
+            });
+        dialog.set(selected);
+    });
+    let page_open = Signal::derive(move || {
+        dialog
+            .get()
+            .is_some_and(|dialog| !matches!(dialog, SkillDialog::Delete(_)))
+    });
     Effect::new(move |_| {
         actions.revision.track();
         state.reload(deployment);
@@ -55,11 +86,13 @@ fn SkillsPage(#[prop(optional)] deployment: bool) -> impl IntoView {
             .collect::<Vec<_>>()
     });
     view! {
+        <DetailPanelLayout open=page_open>
+        <DetailPanelMain>
         <PageShell>
             <div class="ob-agent-roster-toolbar">
                 <PageHeader heading_id="skills-title" title=move || if deployment { t_string!(i18n,skills.deployment_title).to_owned() } else { t_string!(i18n,skills.personal_title).to_owned() }
                     description=move || if deployment { t_string!(i18n,skills.deployment_intro).to_owned() } else { t_string!(i18n,skills.personal_intro).to_owned() } />
-                <Button id="skill-create" variant=ButtonVariant::Primary disabled=disabled on_activate=move |_| dialog.set(Some(SkillDialog::Create))>
+                <Button id="skill-create" variant=ButtonVariant::Primary disabled=disabled on_activate=move |_| editor.open("skill-new", None)>
                     <IconView icon=Icon::Plus size=IconSize::Inline />{move || t!(i18n,skills.create)}
                 </Button>
             </div>
@@ -79,9 +112,9 @@ fn SkillsPage(#[prop(optional)] deployment: bool) -> impl IntoView {
                                     <span class="text-fg-muted">{move || t_string!(i18n,skills.grant_count,count=skill.granted_to.len()).to_owned()}</span>
                                 </div>
                                 <div class="ob-plugin-controls">
-                                    <Button id=format!("skill-edit-{edit}") disabled=disabled on_activate=move |_|dialog.set(Some(SkillDialog::Edit(edit.clone())))>{move || t!(i18n,skills.edit)}</Button>
-                                    <Button id=format!("skill-grants-{grants}") disabled=disabled on_activate=move |_|dialog.set(Some(SkillDialog::Grants(grants.clone())))>{move || t!(i18n,skills.grants)}</Button>
-                                    <Button id=format!("skill-delete-{remove}") disabled=disabled variant=ButtonVariant::DangerText on_activate=move |_|dialog.set(Some(SkillDialog::Delete(remove.clone())))>{move || t!(i18n,skills.delete)}</Button>
+                                    <Button id=format!("skill-edit-{edit}") disabled=disabled on_activate=move |_|editor.open("skill-edit", Some(edit.clone()))>{move || t!(i18n,skills.edit)}</Button>
+                                    <Button id=format!("skill-grants-{grants}") disabled=disabled on_activate=move |_|editor.open("skill-grants", Some(grants.clone()))>{move || t!(i18n,skills.grants)}</Button>
+                                    <Button id=format!("skill-delete-{remove}") disabled=disabled variant=ButtonVariant::DangerText on_activate=move |_|editor.open("skill-delete", Some(remove.clone()))>{move || t!(i18n,skills.delete)}</Button>
                                 </div>
                             </div> }
                         } />
@@ -90,6 +123,8 @@ fn SkillsPage(#[prop(optional)] deployment: bool) -> impl IntoView {
             </PageSection>
             <p class="ob-page-empty">{move || t!(i18n,skills.runtime_pending)}</p>
         </PageShell>
-        <SkillDialogs dialog data=state.data deployment />
+        </DetailPanelMain>
+        <SkillDialogs dialog state deployment editor />
+        </DetailPanelLayout>
     }
 }

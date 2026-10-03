@@ -45,9 +45,12 @@ fn compact_visual_roles_keep_aa_on_their_declared_surfaces() {
             ("fg_breadcrumb", "bg"),
             ("fg_user_bubble", "bg_user_bubble"),
             ("fg_review_positive", "bg_review_positive"),
+            ("fg_library_title", "bg"),
+            ("fg_library_muted", "bg"),
         ] {
             assert_contrast(colors, foreground, background, 4.5, theme);
         }
+        assert_contrast(colors, "fg_library_icon", "bg_library_icon", 3.0, theme);
     }
 }
 

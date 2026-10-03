@@ -45,6 +45,7 @@ pub struct SkillPageState {
     pub loading: RwSignal<bool>,
     pub error: RwSignal<bool>,
     serial: RwSignal<u64>,
+    page_owner: StoredValue<Option<Owner>>,
 }
 impl SkillPageState {
     pub fn new() -> Self {
@@ -53,6 +54,7 @@ impl SkillPageState {
             loading: RwSignal::new(true),
             error: RwSignal::new(false),
             serial: RwSignal::new(0),
+            page_owner: StoredValue::new(Owner::current()),
         }
     }
     pub fn reload(self, deployment: bool) {
@@ -65,23 +67,27 @@ impl SkillPageState {
         self.error.set(false);
         // Keep previously validated data while refreshing a write; disable controls until it settles.
         #[cfg(target_arch = "wasm32")]
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            let result = load(deployment).await;
-            if self.serial.try_get_untracked() != Some(serial) {
-                return;
-            }
-            match result {
-                Ok(data) => self.data.set(Some(data)),
-                Err(_) => {
-                    self.data.set(None);
-                    self.error.set(true);
-                }
-            }
-            self.loading.set(false);
-        });
+        if let Some(owner) = self.page_owner.try_get_value().flatten() {
+            owner.with(|| {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let result = load(deployment).await;
+                    if self.serial.try_get_untracked() != Some(serial) {
+                        return;
+                    }
+                    match result {
+                        Ok(data) => self.data.set(Some(data)),
+                        Err(_) => {
+                            self.data.set(None);
+                            self.error.set(true);
+                        }
+                    }
+                    self.loading.set(false);
+                });
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = (serial, deployment);
+            let _ = (serial, deployment, self.page_owner);
             self.loading.set(false);
             self.error.set(true);
         }

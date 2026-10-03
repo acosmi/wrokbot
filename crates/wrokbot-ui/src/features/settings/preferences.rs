@@ -40,6 +40,10 @@ pub fn SettingsPage() -> impl IntoView {
     let loading = RwSignal::new(true);
     let load_error = RwSignal::new(false);
     let saving = RwSignal::new(false);
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Preferences,
+        move || "$budget".into(),
+    );
     let attempted = RwSignal::new(false);
     let saved_form = RwSignal::new(None::<BudgetFormSnapshot>);
     let save_error_form = RwSignal::new(None::<BudgetFormSnapshot>);
@@ -186,7 +190,7 @@ pub fn SettingsPage() -> impl IntoView {
                                     control_id="run-cost-cap-enabled"
                                     label=move || t_string!(i18n, settings.run_cost_budget_enable_label).to_owned()
                                     description=move || t_string!(i18n, settings.run_cost_budget_enable_help).to_owned()
-                                    disabled=saving
+                                    disabled=Signal::derive(move || saving.get() || write_lock.get())
                                 >
                                     <Switch checked=cap_enabled on_change=toggle_cap />
                                 </Field>
@@ -198,7 +202,7 @@ pub fn SettingsPage() -> impl IntoView {
                                             description=move || t_string!(i18n, settings.run_cost_budget_currency_help).to_owned()
                                             error=move || t_string!(i18n, settings.run_cost_budget_currency_error).to_owned()
                                             invalid=currency_invalid
-                                            disabled=saving
+                                            disabled=Signal::derive(move || saving.get() || write_lock.get())
                                         >
                                             <Input value=currency placeholder="USD" />
                                         </Field>
@@ -208,7 +212,7 @@ pub fn SettingsPage() -> impl IntoView {
                                             description=move || t_string!(i18n, settings.run_cost_budget_amount_help).to_owned()
                                             error=move || t_string!(i18n, settings.run_cost_budget_amount_error).to_owned()
                                             invalid=amount_invalid
-                                            disabled=saving
+                                            disabled=Signal::derive(move || saving.get() || write_lock.get())
                                         >
                                             <Input
                                                 value=amount
@@ -222,6 +226,7 @@ pub fn SettingsPage() -> impl IntoView {
                                         variant=ButtonVariant::Primary
                                         size=ButtonSize::Medium
                                         loading=saving
+                                        disabled=write_lock
                                         on_activate=save
                                     >
                                         {move || t!(i18n, common.save)}

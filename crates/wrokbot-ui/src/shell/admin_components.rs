@@ -73,6 +73,10 @@ struct MutationState {
     pending: RwSignal<Option<String>>,
     error: RwSignal<bool>,
     worker_owner: StoredValue<Option<Owner>>,
+    load_epoch: StoredValue<u64>,
+    description_open: RwSignal<bool>,
+    description_draft: RwSignal<String>,
+    editor_epoch: StoredValue<u64>,
 }
 
 /// Administrator list of every durable compiled/sandboxed governance row.
@@ -165,14 +169,19 @@ pub fn AdminComponentDetailPage() -> impl IntoView {
     let pending = RwSignal::new(None::<String>);
     let mutation_error = RwSignal::new(false);
     let worker_owner = StoredValue::new(Owner::current());
-    install_component_detail_loader(params, generation, data, loading, load_error, not_found);
+    let load_epoch = StoredValue::new(0_u64);
     let retry = move |_| generation.update(|value| *value = value.saturating_add(1));
     let state = MutationState {
         data,
         pending,
         error: mutation_error,
         worker_owner,
+        load_epoch,
+        description_open: RwSignal::new(false),
+        description_draft: RwSignal::new(String::new()),
+        editor_epoch: StoredValue::new(0_u64),
     };
+    install_component_detail_loader(params, generation, state, loading, load_error, not_found);
 
     view! {
         <PageShell width=PageWidth::Content>
@@ -217,6 +226,10 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
     let i18n = use_i18n();
     let component = detail.component;
     let name = StoredValue::new(component.name.clone());
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Components,
+        move || name.get_value(),
+    );
     let title = component.title.clone();
     let preview_name = component.name.clone();
     let called_as = component.name.clone();
@@ -230,10 +243,11 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
     let functions_empty = detail.functions.is_empty();
     let functions = StoredValue::new(detail.functions);
     let sandboxed = component.kind == CompiledComponentKind::Sandboxed;
-    let description_open = RwSignal::new(false);
-    let draft = RwSignal::new(component.draft_description.clone());
+    let description_open = state.description_open;
+    let draft = state.description_draft;
     let published = RwSignal::new(component.published);
-    let publication_pending = Signal::derive(move || state.pending.get().is_some());
+    let publication_pending =
+        Signal::derive(move || state.pending.get().is_some() || write_lock.get());
     let publication_change = UnsyncCallback::new(move |next: bool| {
         let prior = !next;
         dispatch_mutation(
@@ -244,14 +258,19 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
             "publication".to_owned(),
             state,
             Some((published, prior)),
-            None,
         );
     });
     let open_description = move |_| {
+        state
+            .editor_epoch
+            .update_value(|epoch| *epoch = epoch.saturating_add(1));
         draft.set(initial_draft.get_value());
         description_open.set(true);
     };
     let close_description = UnsyncCallback::new(move |_| {
+        state
+            .editor_epoch
+            .update_value(|epoch| *epoch = epoch.saturating_add(1));
         draft.set(initial_draft.get_value());
         description_open.set(false);
     });
@@ -264,7 +283,6 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
             "draft".to_owned(),
             state,
             None,
-            Some(description_open),
         );
     };
     let available = agents
@@ -340,7 +358,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                     <Button
                         variant=ButtonVariant::Ghost
                         size=ButtonSize::Small
-                        disabled=Signal::derive(move || sandboxed || state.pending.get().is_some())
+                        disabled=Signal::derive(move || sandboxed || state.pending.get().is_some() || write_lock.get())
                         on_activate=open_description
                     >{move || t!(i18n, common.edit)}</Button>
                 </div>
@@ -380,7 +398,6 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                                 operation_id.clone(),
                                 state,
                                 Some((checked, !next)),
-                                None,
                             );
                         });
                         view! {
@@ -389,7 +406,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                                 <Switch
                                     aria_label=aria_name
                                     checked
-                                    disabled=Signal::derive(move || state.pending.get().is_some())
+                                    disabled=Signal::derive(move || state.pending.get().is_some() || write_lock.get())
                                     on_change
                                 />
                             </div>
@@ -430,7 +447,6 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                                 operation_id.clone(),
                                 state,
                                 Some((checked, !next)),
-                                None,
                             );
                         });
                         view! {
@@ -439,7 +455,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                                 <Switch
                                     aria_label=aria_name
                                     checked
-                                    disabled=Signal::derive(move || sandboxed || state.pending.get().is_some())
+                                    disabled=Signal::derive(move || sandboxed || state.pending.get().is_some() || write_lock.get())
                                     on_change
                                 />
                             </div>
@@ -469,15 +485,15 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                         id="component-description-draft"
                         aria_label=move || t_string!(i18n, admin.component_description).to_owned()
                         value=draft
-                        disabled=Signal::derive(move || state.pending.get().is_some())
+                        disabled=Signal::derive(move || state.pending.get().is_none() && write_lock.get())
                     />
                 </DialogBody>
                 <DialogFooter>
                     <Button
                         variant=ButtonVariant::Ghost
                         size=ButtonSize::Small
-                        disabled=Signal::derive(move || state.pending.get().is_some())
                         on_activate=move |_| {
+                            state.editor_epoch.update_value(|epoch| *epoch = epoch.saturating_add(1));
                             draft.set(initial_draft.get_value());
                             description_open.set(false);
                         }
@@ -486,6 +502,7 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
                         variant=ButtonVariant::Primary
                         size=ButtonSize::Small
                         loading=Signal::derive(move || state.pending.get().as_deref() == Some("draft"))
+                        disabled=write_lock
                         on_activate=save_description
                     >{move || t!(i18n, common.save)}</Button>
                 </DialogFooter>
@@ -525,7 +542,7 @@ fn install_component_index_loader(
 fn install_component_detail_loader(
     params: Memo<leptos_router::params::ParamsMap>,
     generation: RwSignal<u64>,
-    data: RwSignal<Option<ComponentDetailData>>,
+    state: MutationState,
     loading: RwSignal<bool>,
     error: RwSignal<bool>,
     not_found: RwSignal<bool>,
@@ -534,49 +551,73 @@ fn install_component_detail_loader(
     Effect::new(move |_| {
         let expected = generation.get();
         let name = params.get().get("name");
+        state
+            .load_epoch
+            .update_value(|epoch| *epoch = epoch.saturating_add(1));
+        let epoch = state.load_epoch.get_value();
+        state.pending.set(None);
+        state.error.set(false);
+        state.description_open.set(false);
+        state.description_draft.set(String::new());
+        state
+            .editor_epoch
+            .update_value(|epoch| *epoch = epoch.saturating_add(1));
         loading.set(true);
         error.set(false);
         not_found.set(false);
-        data.set(None);
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            let outcome = async {
-                let name = name.ok_or(DetailLoadError::Failed)?;
-                let _ = announce_component_catalogue().await;
-                let records = load_components()
-                    .await
-                    .map_err(|_| DetailLoadError::Failed)?;
-                let component = records
-                    .components
-                    .into_iter()
-                    .find(|component| component.name == name)
-                    .ok_or(DetailLoadError::NotFound)?;
-                let agents = list_agents(false)
-                    .await
-                    .map_err(|_| DetailLoadError::Failed)?;
-                let functions = load_component_data_functions()
-                    .await
-                    .map_err(|_| DetailLoadError::Failed)?
-                    .functions;
-                Ok::<_, DetailLoadError>(ComponentDetailData {
-                    component,
-                    agents,
-                    functions,
-                })
-            }
-            .await;
-            if generation.get_untracked() != expected {
-                return;
-            }
-            match outcome {
-                Ok(loaded) => data.set(Some(loaded)),
-                Err(DetailLoadError::NotFound) => not_found.set(true),
-                Err(DetailLoadError::Failed) => error.set(true),
-            }
-            loading.set(false);
-        });
+        state.data.set(None);
+        let start_worker = move || {
+            leptos::task::spawn_local_scoped_with_cancellation(async move {
+                let outcome = async {
+                    let name = name.ok_or(DetailLoadError::Failed)?;
+                    let _ = announce_component_catalogue().await;
+                    let records = load_components()
+                        .await
+                        .map_err(|_| DetailLoadError::Failed)?;
+                    let component = records
+                        .components
+                        .into_iter()
+                        .find(|component| component.name == name)
+                        .ok_or(DetailLoadError::NotFound)?;
+                    let agents = list_agents(false)
+                        .await
+                        .map_err(|_| DetailLoadError::Failed)?;
+                    let functions = load_component_data_functions()
+                        .await
+                        .map_err(|_| DetailLoadError::Failed)?
+                        .functions;
+                    Ok::<_, DetailLoadError>(ComponentDetailData {
+                        component,
+                        agents,
+                        functions,
+                    })
+                }
+                .await;
+                if generation.try_get_untracked() != Some(expected)
+                    || state.load_epoch.try_get_value() != Some(epoch)
+                {
+                    return;
+                }
+                match outcome {
+                    Ok(loaded) => {
+                        state.data.try_set(Some(loaded));
+                    }
+                    Err(DetailLoadError::NotFound) => {
+                        not_found.try_set(true);
+                    }
+                    Err(DetailLoadError::Failed) => {
+                        error.try_set(true);
+                    }
+                }
+                loading.try_set(false);
+            })
+        };
+        if let Some(owner) = state.worker_owner.get_value() {
+            owner.with(start_worker);
+        }
     });
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = (params, generation, data, loading, error, not_found);
+    let _ = (params, generation, state, loading, error, not_found);
 }
 
 fn dispatch_mutation(
@@ -584,7 +625,6 @@ fn dispatch_mutation(
     operation_id: String,
     state: MutationState,
     rollback: Option<(RwSignal<bool>, bool)>,
-    close_on_success: Option<RwSignal<bool>>,
 ) {
     if state.pending.get_untracked().is_some() {
         if let Some((signal, value)) = rollback {
@@ -596,28 +636,62 @@ fn dispatch_mutation(
     state.error.set(false);
     #[cfg(target_arch = "wasm32")]
     {
+        let name = match &mutation {
+            UiMutation::Agent { name, .. }
+            | UiMutation::Function { name, .. }
+            | UiMutation::Publication { name, .. }
+            | UiMutation::Draft { name, .. } => name.clone(),
+        };
+        let description = match &mutation {
+            UiMutation::Draft { description, .. } => Some(description.clone()),
+            _ => None,
+        };
+        let epoch = state.load_epoch.get_value();
+        let editor_epoch = state.editor_epoch.get_value();
+        let writes = expect_context::<crate::configuration_writes::ConfigurationWrites>();
+        if writes.locked(
+            crate::configuration_writes::ConfigurationKind::Components,
+            &name,
+        ) {
+            if let Some((signal, value)) = rollback {
+                signal.try_set(value);
+            }
+            state.pending.set(None);
+            return;
+        }
         let start_worker = move || {
             leptos::task::spawn_local_scoped_with_cancellation(async move {
                 let outcome = execute_mutation(mutation).await;
+                if state.load_epoch.try_get_value() != Some(epoch) {
+                    return;
+                }
                 match outcome {
                     Ok(component) => {
-                        state.data.update(|data| {
-                            if let Some(data) = data {
+                        state.data.try_update(|data| {
+                            if let Some(data) = data
+                                && data.component.name == name
+                            {
                                 data.component = component;
                             }
                         });
-                        if let Some(open) = close_on_success {
-                            open.set(false);
+                        if description.is_some()
+                            && state.editor_epoch.try_get_value() == Some(editor_epoch)
+                            && state.description_draft.try_get_untracked() == description
+                        {
+                            state.description_open.try_set(false);
                         }
                     }
                     Err(()) => {
                         if let Some((signal, value)) = rollback {
-                            signal.set(value);
+                            signal.try_set(value);
                         }
-                        state.error.set(true);
+                        state.error.try_set(!writes.locked(
+                            crate::configuration_writes::ConfigurationKind::Components,
+                            &name,
+                        ));
                     }
                 }
-                state.pending.set(None);
+                state.pending.try_set(None);
             });
         };
         match state.worker_owner.get_value() {
@@ -627,7 +701,12 @@ fn dispatch_mutation(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (mutation, close_on_success, state.worker_owner);
+        let _ = (
+            mutation,
+            state.worker_owner,
+            state.load_epoch,
+            state.editor_epoch,
+        );
         if let Some((signal, value)) = rollback {
             signal.set(value);
         }
