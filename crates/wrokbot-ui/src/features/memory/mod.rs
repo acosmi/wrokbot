@@ -32,7 +32,7 @@ use crate::features::layout::{PageEmpty, PageHeader, PageRows, PageSection, Page
 use crate::i18n::{t, t_string, use_i18n};
 use crate::primitives::{
     Badge, BadgeTone, Button, ButtonSize, ButtonVariant, Dialog, DialogBody, DialogClose,
-    DialogContent, DialogFooter, Field, Switch, Textarea,
+    DialogContent, DialogFooter, Field, Input, InputType, Switch, Textarea,
 };
 
 /// Native memory list and control destination required by v3 §3.1 item 7.
@@ -302,6 +302,12 @@ pub fn MemoryPage() -> impl IntoView {
                     title=move || t_string!(i18n, memory.title).to_owned()
                     description=move || t_string!(i18n, memory.description).to_owned()
                 />
+                <MemorySearch
+                    reload_generation
+                    pending_ids
+                    on_correct=open_correction
+                    on_mutate=mutate
+                />
                 <Show when=move || loading.get()>
                     <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
                 </Show>
@@ -417,6 +423,120 @@ pub fn MemoryPage() -> impl IntoView {
     }
 }
 
+/// This destination has no authoritative Bot/Thread context. Recall uses only the current
+/// actor's User scope; the complete owner list and its management actions remain separate.
+#[component]
+fn MemorySearch(
+    reload_generation: RwSignal<u64>,
+    pending_ids: RwSignal<BTreeSet<String>>,
+    on_correct: UnsyncCallback<MemoryRecord>,
+    on_mutate: UnsyncCallback<(String, MemoryMutation)>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    let query = RwSignal::new(String::new());
+    let generation = RwSignal::new(0_u64);
+    let pending = RwSignal::new(false);
+    let failed = RwSignal::new(false);
+    let invalid = RwSignal::new(false);
+    let results = RwSignal::new(None::<Vec<MemoryRecord>>);
+    let read_owner = StoredValue::new(Owner::current());
+
+    // Typing, a known mutation or explicit list reload invalidates the old read projection.
+    // It never reissues recall and never clears the existing configuration write barrier.
+    Effect::new(move |_| {
+        let _ = query.get();
+        let _ = reload_generation.get();
+        generation.update(|value| *value = value.saturating_add(1));
+        pending.set(false);
+        failed.set(false);
+        invalid.set(false);
+        results.set(None);
+    });
+    let search = UnsyncCallback::new(move |()| {
+        if pending.get_untracked() {
+            return;
+        }
+        let submitted = query.get_untracked();
+        if submitted.trim().is_empty() || submitted.len() > 4096 || submitted.contains('\0') {
+            invalid.set(true);
+            return;
+        }
+        generation.update(|value| *value = value.saturating_add(1));
+        let expected_generation = generation.get_untracked();
+        pending.set(true);
+        failed.set(false);
+        invalid.set(false);
+        results.set(None);
+        #[cfg(target_arch = "wasm32")]
+        if let Some(owner) = read_owner.get_value() {
+            owner.with(|| {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let outcome = crate::api::recall_user_memories(&submitted).await;
+                    if generation.try_get_untracked() != Some(expected_generation) {
+                        return;
+                    }
+                    match outcome {
+                        Ok(recalled) => results.set(Some(recalled.memories)),
+                        Err(_) => failed.set(true),
+                    }
+                    pending.set(false);
+                })
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (submitted, expected_generation, read_owner);
+            failed.set(true);
+            pending.set(false);
+        }
+    });
+
+    view! {
+        <PageSection
+            heading_id="memory-search-title"
+            title=move || t_string!(i18n, memory.search_placeholder).to_owned()
+        >
+            <Field
+                control_id="memory-search-query"
+                label=move || t_string!(i18n, memory.search_placeholder).to_owned()
+                description=move || t_string!(i18n, memory.search_scope_help).to_owned()
+                invalid=Signal::derive(move || invalid.get())
+                error=move || t_string!(i18n, memory.search_invalid).to_owned()
+            >
+                <Input value=query input_type=InputType::Search on_submit=search />
+            </Field>
+            <div class="ob-memory-actions">
+                <Button id="memory-search-submit" size=ButtonSize::Small loading=pending
+                    on_activate=move |_| search.run(())>
+                    {move || if failed.get() { t_string!(i18n, common.retry).to_owned() } else { t_string!(i18n, memory.search_placeholder).to_owned() }}
+                </Button>
+                <Button id="memory-search-clear" size=ButtonSize::Small variant=ButtonVariant::Ghost
+                    on_activate=move |_| query.set(String::new())>
+                    {move || t!(i18n, common.clear)}
+                </Button>
+            </div>
+            <Show when=move || failed.get()>
+                <p class="ob-alert" role="alert">{move || t!(i18n, memory.load_error)}</p>
+            </Show>
+            <Show when=move || results.get().is_some_and(|records| records.is_empty())>
+                <PageEmpty>{move || t!(i18n, common.no_results)}</PageEmpty>
+            </Show>
+            <div id="memory-search-results" aria-live="polite" aria-busy=move || pending.get()>
+                <PageRows>
+                    <For each=move || results.get().unwrap_or_default()
+                        key=|record| record.memory_id.clone()
+                        children=move |record| view! {
+                            <MemoryRow record read_only=true
+                                writes_enabled=Signal::derive(|| false)
+                                pending_ids on_correct on_mutate />
+                        }
+                    />
+                </PageRows>
+            </div>
+        </PageSection>
+    }
+}
+
 #[component]
 fn MemoryRow(
     record: MemoryRecord,
@@ -424,6 +544,7 @@ fn MemoryRow(
     pending_ids: RwSignal<BTreeSet<String>>,
     on_correct: UnsyncCallback<MemoryRecord>,
     on_mutate: UnsyncCallback<(String, MemoryMutation)>,
+    #[prop(optional)] read_only: bool,
 ) -> impl IntoView {
     let i18n = use_i18n();
     let memory_id = record.memory_id.clone();
@@ -460,10 +581,15 @@ fn MemoryRow(
     let kind = record.memory_kind;
     let sensitivity = record.sensitivity;
     let origin = record.origin;
-    let dom_id = memory_dom_id(&memory_id);
+    let dom_id = if read_only {
+        format!("recall-{}", memory_dom_id(&memory_id))
+    } else {
+        memory_dom_id(&memory_id)
+    };
     let correct_id = correct_trigger_id(&memory_id);
     view! {
-        <article id=dom_id class="ob-memory-row" data-memory-status=status_name(status) tabindex="-1">
+        <article id=dom_id class="ob-memory-row" data-memory-status=status_name(status)
+            data-memory-readonly=read_only.then_some("true") tabindex="-1">
             <div class="ob-memory-row-header">
                 <Badge tone=status_tone(status)>{move || status_label(i18n, status)}</Badge>
                 <span>{move || kind_label(i18n, kind)}</span>
@@ -495,7 +621,7 @@ fn MemoryRow(
                 </ul>
             </Show>
             <div class="ob-memory-actions">
-                <Show when=move || show_correct>
+                <Show when=move || !read_only && show_correct>
                     <Button
                         id=correct_id.clone()
                         variant=ButtonVariant::Ghost
@@ -505,7 +631,7 @@ fn MemoryRow(
                         on_activate=move |_| on_correct.run(correct_record.get_value())
                     >{move || t!(i18n, memory.correct_entry)}</Button>
                 </Show>
-                <Show when=move || show_forbid>
+                <Show when=move || !read_only && show_forbid>
                     <Button
                         variant=ButtonVariant::Ghost
                         size=ButtonSize::Small
@@ -514,7 +640,7 @@ fn MemoryRow(
                         on_activate=move |_| on_mutate.run((forbid_id.get_value(), MemoryMutation::Forbid))
                     >{move || t!(i18n, memory.forbid_entry)}</Button>
                 </Show>
-                <Show when=move || show_delete>
+                <Show when=move || !read_only && show_delete>
                     <Button
                         variant=ButtonVariant::DangerText
                         size=ButtonSize::Small

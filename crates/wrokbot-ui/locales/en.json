@@ -814,6 +814,8 @@
     "empty_title": "No memory yet",
     "empty_body": "What a coworker learns shows up here.",
     "search_placeholder": "Search memory",
+    "search_scope_help": "Search entries available across your conversations. Coworker- or thread-specific entries remain in the list below.",
+    "search_invalid": "Enter a query within 4 KiB, without null characters.",
     "created_at": "Created {{ when }}",
     "source": "Source",
     "source_detail": "Source thread {{ thread }}, message {{ message }}",

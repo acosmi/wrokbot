@@ -601,6 +601,18 @@ fn validate_sandboxed_draft_receipt(
     request: &SaveSandboxedComponentRequest,
     saved: &SandboxedComponentRecord,
 ) -> Result<(), ApiError> {
+    validate_sandboxed_draft_fields(request, saved)?;
+    if request.expected_revision.unwrap_or(0).checked_add(1) != Some(saved.editing_revision) {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(())
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn validate_sandboxed_draft_fields(
+    request: &SaveSandboxedComponentRequest,
+    saved: &SandboxedComponentRecord,
+) -> Result<(), ApiError> {
     if saved.name != format!("custom_{}", request.slug)
         || saved.title != request.title
         || saved.draft_description != request.description
@@ -621,8 +633,9 @@ fn validate_sandboxed_publication_receipt(
     saved: &SandboxedComponentRecord,
     published: &SandboxedComponentRecord,
 ) -> Result<(), ApiError> {
-    validate_sandboxed_draft_receipt(request, published)?;
+    validate_sandboxed_draft_fields(request, published)?;
     if !published.published
+        || saved.editing_revision.checked_add(1) != Some(published.editing_revision)
         || saved.revision.checked_add(1) != Some(published.revision)
         || published.published_html.as_ref() != Some(&request.html)
         || published.published_css.as_ref() != Some(&request.css)
@@ -1912,6 +1925,54 @@ pub async fn list_memories(cursor: Option<&str>) -> Result<MemoryPage, ApiError>
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = cursor;
+        Err(ApiError::Unavailable)
+    }
+}
+
+/// Recall only the current actor's User-scope entries through the existing read-only endpoint.
+pub async fn recall_user_memories(
+    query: &str,
+) -> Result<openbot_contracts::memory::MemoryRecall, ApiError> {
+    if query.trim().is_empty() || query.len() > 4096 || query.as_bytes().contains(&0) {
+        return Err(ApiError::NotSubmitted);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::api::request::Request;
+        use openbot_contracts::memory::{MemoryRecall, MemoryScope, MemoryStatus, RecallMemories};
+        let input = RecallMemories {
+            query: query.to_owned(),
+            tags: Vec::new(),
+            bot_id: None,
+            thread_id: None,
+            limit: Some(50),
+        };
+        let response = Request::send(
+            Request::post("/api/memories/recall")
+                .json(&input)
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
+        if response.status() != 200 {
+            return Err(status_error(response.status()));
+        }
+        let recall = Request::decode::<MemoryRecall>(&response).await?;
+        if recall.memories.iter().any(|record| {
+            record.status != MemoryStatus::Active || record.scope != MemoryScope::User
+        }) {
+            return Err(ApiError::InvalidResponse);
+        }
+        let page = MemoryPage {
+            memories: recall.memories,
+            next_cursor: None,
+        };
+        validate_memory_page(&page)?;
+        Ok(MemoryRecall {
+            memories: page.memories,
+        })
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
         Err(ApiError::Unavailable)
     }
 }
@@ -4229,6 +4290,7 @@ mod tests {
             ApiError::InvalidResponse
         );
         let request = SaveSandboxedComponentRequest {
+            expected_revision: None,
             slug: "delivery_eta".to_owned(),
             title: record.title.clone(),
             description: record.draft_description.clone(),
@@ -4251,12 +4313,20 @@ mod tests {
         );
         let mut saved = record.clone();
         saved.revision = 0;
-        assert!(validate_sandboxed_publication_receipt(&request, &saved, &record).is_ok());
+        let mut published = record.clone();
+        published.editing_revision = 2;
+        assert!(validate_sandboxed_publication_receipt(&request, &saved, &published).is_ok());
+        let mut wrong_editing_revision = record.clone();
+        wrong_editing_revision.editing_revision = 3;
+        assert_eq!(
+            validate_sandboxed_draft_receipt(&request, &wrong_editing_revision),
+            Err(ApiError::InvalidResponse)
+        );
         assert_eq!(
             validate_sandboxed_publication_receipt(&request, &record, &record),
             Err(ApiError::InvalidResponse)
         );
-        let mut wrong_snapshot = record.clone();
+        let mut wrong_snapshot = published.clone();
         wrong_snapshot.published_html = Some("<p>another</p>".into());
         assert_eq!(
             validate_sandboxed_publication_receipt(&request, &saved, &wrong_snapshot),

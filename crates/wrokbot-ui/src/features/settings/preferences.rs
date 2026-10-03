@@ -83,6 +83,7 @@ pub fn SettingsPage() -> impl IntoView {
         saving.set(true);
         #[cfg(target_arch = "wasm32")]
         {
+            let writes = expect_context::<crate::configuration_writes::ConfigurationWrites>();
             let start_worker = || {
                 leptos::task::spawn_local_scoped_with_cancellation(async move {
                     match replace_run_cost_budget(preference).await {
@@ -105,7 +106,14 @@ pub fn SettingsPage() -> impl IntoView {
                                 save_error_form.set(Some(snapshot));
                             }
                         }
-                        Err(_) => save_error_form.set(Some(snapshot)),
+                        Err(_) => {
+                            if !writes.locked(
+                                crate::configuration_writes::ConfigurationKind::Preferences,
+                                "$budget",
+                            ) {
+                                save_error_form.set(Some(snapshot));
+                            }
+                        }
                     }
                     saving.set(false);
                 });

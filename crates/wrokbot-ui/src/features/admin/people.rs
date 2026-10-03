@@ -92,7 +92,7 @@ pub fn AdminPeoplePage() -> impl IntoView {
             query.get_untracked(),
             None,
             true,
-            false,
+            current_actor.get_untracked().is_none(),
         );
     });
     let mutate = UnsyncCallback::new(move |mutation: PersonMutation| {
@@ -150,9 +150,16 @@ pub fn AdminPeoplePage() -> impl IntoView {
                     />
                 </div>
                 <Show when=move || load_error.get()>
-                    <p class="ob-alert" role="alert">
-                        {move || t!(i18n, admin.people_load_error)}
-                    </p>
+                    <div class="ob-alert" role="alert">
+                        <span>{move || t!(i18n, admin.people_load_error)}</span>
+                        <Button
+                            variant=ButtonVariant::Ghost
+                            size=ButtonSize::Small
+                            on_activate=move |_| refresh.run(())
+                        >
+                            {move || t!(i18n, common.retry)}
+                        </Button>
+                    </div>
                 </Show>
                 <Show when=move || loading.get() && people.with(Vec::is_empty)>
                     <div class="ob-loading" role="status">

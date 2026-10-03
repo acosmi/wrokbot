@@ -105,6 +105,25 @@ impl DraftSignals {
     fn load(self, component: &SandboxedComponentRecord) {
         self.known_revision
             .set(Some((component.name.clone(), component.editing_revision)));
+        self.load_fields(component);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn confirm_revision(self, component: &SandboxedComponentRecord) {
+        if self.slug.try_get_untracked().as_deref() != component.name.strip_prefix("custom_") {
+            return;
+        }
+        self.known_revision.try_update(|known| {
+            if known.as_ref().is_some_and(|(name, revision)| {
+                name == &component.name && *revision > component.editing_revision
+            }) {
+                return;
+            }
+            *known = Some((component.name.clone(), component.editing_revision));
+        });
+    }
+
+    fn load_fields(self, component: &SandboxedComponentRecord) {
         self.slug.set(
             component
                 .name
@@ -452,8 +471,9 @@ fn dispatch_draft(draft: DraftSignals, state: MutationState, publish: bool) {
                     };
                     match result {
                         Ok(saved) => {
+                            draft.confirm_revision(&saved.component);
                             if draft.snapshot() == snapshot {
-                                draft.load(&saved.component);
+                                draft.load_fields(&saved.component);
                             }
                             state.reload.try_update(|generation| {
                                 *generation = generation.saturating_add(1)

@@ -814,6 +814,8 @@
     "empty_title": "还没有记忆",
     "empty_body": "同事学到的东西会出现在这里。",
     "search_placeholder": "搜索记忆",
+    "search_scope_help": "查询可在你的会话之间使用的记忆；限定助手或会话的记忆仍保留在下方列表。",
+    "search_invalid": "请输入 4 KiB 以内且不含空字符的查询。",
     "created_at": "{{ when }} 创建",
     "source": "来源",
     "source_detail": "来源会话 {{ thread }}，消息 {{ message }}",

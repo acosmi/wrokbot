@@ -597,3 +597,21 @@ native0038追加nullable编辑列和最小retired名称表，保留旧SQL/schema
 精确源码及11份新证据经独立复核GO，摘要2859758e0b5d159f76df1f0d762c3b9f074b03cbdf603bf4f61fe57cb3b198b7；生成证据独立补充摘要fc6c46ac6137352f2f40fe30653abfde07841f8edc8585adf51baf8a52a4ef88。Axum管理员/Origin检查在body前；Desktop在body前只校验窗口authority/freshness，角色在Application、DB当前权限在对象锁/冲突快照前。现有最小UI传递已加载revision，删除只在确认时取列表版本，不认证打开弹窗冻结、保存三份状态/代次/800ms/10s或整个UI5-P6/R415。其余CAS对象与074–077/能力/精确目标反例继续开放；新能力不启动，完整M0 A0–A7仍0/8。旧PR与历史验收身份保留。
 
 本段仅记录源码GO与真实验证；最终台账增量仍需独立GO，PR #106此时未合并，合并须绑定最终准确head、正常admin执行并核实际GitHub回执后才进入下一任务。用户要求及时清理编译垃圾：仅删除可再生成过期缓存，五次累计2329170160逻辑字节，源码/QA/历史验收/数据库及必要产物保持。
+
+
+## UI5-P4 delivered CAS integration and parallel directed observations
+
+2026-10-03 UTC: normal local WIP e2424dd and merge 6e3ed2f preserved P4 UI plus actual delivered backend PR106/c3d25. Three real conflicts retained both ledger histories and existing Unknown/partial-publish behavior with expectedRevision. Private synthetic host0732f1d differs only by two nullable Memory seed None fields; successful build02, exact normalized bytes and 889 other non-UI inputs verified. The original missing-field failure is retained. Production backend, mobile and in-flight005 were not modified or consumed.
+
+Draft36 production Web build passed on unchanged1155 inputs. Web21 observed206 pass/1 fail, no JS/panic/external requests and actual host exit. Real synthetic component lifecycle, JSON rejection, late drafts, partial publish, two explicit CAS saves after continued input, wrong positive revision Unknown, plugin/People/paging/budget and original send regressions passed. OAuth alone failed because QA waited for a transient button to be detached after refresh; raw logs show enabled restoration. QA now binds confirmed response, catalogue read and enabled state, but correction remains unrun. Independent source audit5c590771a6e48cbd05da079e8b7228bceee8142a8b403696e507e02dca652655 closed previous source CAS blockers, without final P4 GO.
+
+WASM36 gzip3698009 exceeds frozen3670016 by27993: NO-GO. Shared original scoped-task wrapper trial37 built but increased gzip to3698480; exact source and failure retained before revert. Fixed-tool convergence is diagnostic only. Memory Chinese query has a delivered read contract; its User-scope consumer is being implemented without guessing Bot/Thread routing. Finalnine/candidate/independentGO/P4PR remain open. Oracle missing, native/production and P5-P9 debts persist; goal active.
+
+
+## UI5-P4 Memory read consumer and frozen size gate repair
+
+2026-10-03 UTC: draft38 preserves the original memory list, paging and management, and adds explicit read-only User-scope recall using the delivered contract. Bot/Thread context is not inferred. Read generations, the stable owner and the existing write Unknown barrier remain separate. Fifteen bounded query cases and two final account/SAML cases are authored but not yet executed.
+
+All nine directed checks pass on the same1155 unchanged inputs, with252 UI tests. The existing fixed compiler pipeline now uses size optimization only for openbot-ui and convergence in the existing Binaryen132 pass; backend package profiles, dependency versions and every budget remain fixed. Actual WASM gzip3119785/3670016, CSS130967/131072 with the original warning, fonts740216/819200, external1/inline0. Native fixture51877d1 synchronizes the root manifest and build04 succeeds on unchanged inputs; the original missing-testkit invocation failure03 is retained. No Cargo exception was added to input equivalence.
+
+Exact candidate checks, expanded browser regression, the reviewed action matrix, independent source/ledger review and P4 PR remain pending. Production/native/original oracle and P5-P9 acceptance debt are open; this is not full acceptance.
