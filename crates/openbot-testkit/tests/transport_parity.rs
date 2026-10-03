@@ -472,6 +472,7 @@ fn http_route_of(command: &AppCommand) -> Option<String> {
         // （`GET/POST /api/me/model-connections`、`GET/PUT/DELETE
         // /api/me/model-connections/{connection_id}`）覆盖。
         // Artifact has dedicated transport_artifact_parity.rs framing evidence.
+        // Runtime capabilities have separate current-host fact transport tests.
         // InvokeTool 尚无公开 HTTP 路由。仍逐变体列出且无 wildcard：新增命令必须在这里明确
         // 选择“channel 矩阵有 route”或“由哪一份专项证据承担”。
         AppCommand::GetCurrentUser
@@ -524,6 +525,7 @@ fn http_route_of(command: &AppCommand) -> Option<String> {
         | AppCommand::GetRunEffectReceipts { .. }
         | AppCommand::SaveRunMessageTextArtifact(_)
         | AppCommand::GetArtifactMetadata(_)
+        | AppCommand::GetRuntimeCapabilities
         | AppCommand::RememberMemory(_)
         | AppCommand::GetMemoryControl
         | AppCommand::UpdateMemoryControl(_)

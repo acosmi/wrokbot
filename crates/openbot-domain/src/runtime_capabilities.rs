@@ -35,12 +35,12 @@ use openbot_contracts::ids::ActorId;
 
 use crate::identity::generation::{GenerationMismatch, check as check_generation};
 
-/// 投影 schema。对应未来 reply 的 `schemaVersion:1`，不是对外 wire 冻结。
+/// 投影 schema；R426 对应公开 reply 的 `schemaVersion:1`。
 pub const SCHEMA_VERSION: u8 = 1;
 
 /// 投影 `revision` 最大字节数。
 ///
-/// 规范未固定公开协议长度。64 字节用于限制投影大小。字符/长度校验不能识别秘密；生产者必须仅传非秘密世代标记。
+/// R426 公开协议最多64 ASCII字节。字符/长度校验不能识别秘密；生产者必须仅传本实际owner的非秘密世代标记。
 pub const MAX_REVISION_BYTES: usize = 64;
 
 /// 投影 `revision` 最小字节数。空串不能当 opaque 世代。
@@ -444,7 +444,7 @@ pub enum PolicyFact {
     Unknown,
     /// 尚未保存合法 policy。
     Unconfigured,
-    /// 已保存但允许集为空。
+    /// 已保存但两个规则集合都为空；显式合法deny-all仍Configured。
     Empty,
     /// 已保存但内容非法。
     Invalid,
@@ -632,6 +632,8 @@ pub struct RuntimeCapabilityFacts {
     pub backup_config: ConfigFact,
     /// 动态 SSO 配置。
     pub sso_config: ConfigFact,
+    /// 当前 SSO 协议来源；仅配置明确存在时消费。
+    pub sso_provider: ProviderFact,
     /// 设备配对配置。
     pub pairing_config: ConfigFact,
     /// 模型 Provider。
@@ -1267,7 +1269,12 @@ fn add_applicable_blockers(
             push_local_confirmation(blockers, facts.local_confirmation);
         }
         CapabilityId::BackupRestore => push_config(blockers, facts.backup_config),
-        CapabilityId::DynamicSso => push_config(blockers, facts.sso_config),
+        CapabilityId::DynamicSso => {
+            push_config(blockers, facts.sso_config);
+            if facts.sso_config == ConfigFact::Present {
+                push_provider(blockers, facts.sso_provider);
+            }
+        }
         CapabilityId::DevicePairing => push_config(blockers, facts.pairing_config),
     }
 }

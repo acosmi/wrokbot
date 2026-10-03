@@ -381,6 +381,7 @@ impl Fixture {
             ui_preferences: Arc::new(openbot_application::NoUiPreferenceAdministration),
             screen_sessions: Arc::new(openbot_application::NoScreenSessionAdministration),
             artifacts: Some(port.clone()),
+            runtime_capabilities: None,
             remote_agent_probe: Arc::new(UnusedRemote),
             managed_slot_available: false,
             channel_routing_provider: ChannelRoutingProviderInput {

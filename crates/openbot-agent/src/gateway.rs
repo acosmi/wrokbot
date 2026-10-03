@@ -410,6 +410,7 @@ impl AgentToolGateway {
                 | AppReply::UiPreferences(_)
                 | AppReply::ArtifactRegistrationReceipt(_)
                 | AppReply::ArtifactMetadata(_)
+                | AppReply::RuntimeCapabilities(_)
                 | AppReply::RunCostBudget(_)
                 | AppReply::ScreenSession(_),
             ) => Err(AppError::DependencyUnavailable {

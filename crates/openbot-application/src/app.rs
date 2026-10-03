@@ -125,6 +125,8 @@ pub struct OpenBotApplication<
     remote_interrupts: std::sync::Arc<dyn RemoteInterruptCoordinator>,
     screen_sessions: std::sync::Arc<dyn ScreenSessionAdministration>,
     artifacts: std::sync::Arc<dyn ArtifactAdministration>,
+    runtime_capabilities:
+        Option<std::sync::Arc<dyn crate::runtime_capabilities::RuntimeCapabilitiesCollector>>,
     heartbeat_period: Duration,
 }
 
@@ -170,6 +172,7 @@ impl<R>
             remote_interrupts: std::sync::Arc::new(NoRemoteInterruptCoordinator),
             screen_sessions: std::sync::Arc::new(NoScreenSessionAdministration),
             artifacts: std::sync::Arc::new(NoArtifactAdministration),
+            runtime_capabilities: None,
             heartbeat_period: DEFAULT_HEARTBEAT_PERIOD,
         }
     }
@@ -204,6 +207,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -236,6 +240,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -268,6 +273,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -304,6 +310,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -336,6 +343,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -368,6 +376,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -403,6 +412,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
     }
@@ -551,6 +561,16 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
         self
     }
 
+    /// Attach the real current host's non-Serde capability collector.
+    #[must_use]
+    pub fn with_runtime_capabilities(
+        mut self,
+        collector: std::sync::Arc<dyn crate::runtime_capabilities::RuntimeCapabilitiesCollector>,
+    ) -> Self {
+        self.runtime_capabilities = Some(collector);
+        self
+    }
+
     /// 覆盖心跳间隔。
     ///
     /// 存在的理由只有一个：让测试不必与 30 秒的默认节拍赛跑。生产侧应当用默认值 ——
@@ -583,6 +603,13 @@ where
         command: AppCommand,
     ) -> Result<AppReply, AppError> {
         match command {
+            AppCommand::GetRuntimeCapabilities => Ok(AppReply::RuntimeCapabilities(
+                crate::runtime_capabilities::get_runtime_capabilities(
+                    self.runtime_capabilities.as_deref(),
+                    auth,
+                )
+                .await?,
+            )),
             AppCommand::SaveRunMessageTextArtifact(input) => {
                 Ok(AppReply::ArtifactRegistrationReceipt(
                     save_run_message_text_artifact(self.artifacts.as_ref(), auth, input).await?,
