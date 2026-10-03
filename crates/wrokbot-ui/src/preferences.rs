@@ -230,39 +230,52 @@ pub fn PreferenceSaveStatus() -> impl IntoView {
 }
 
 fn load_stored_preferences(context: UiPreferenceContext, i18n: I18nContext<Locale>) {
-    if context.reading.get_untracked() {
+    if context.reading.try_get_untracked() != Some(false) {
         return;
     }
-    context.reading.set(true);
-    let starting_revision = context.interaction_revision.get_untracked();
+    let Some(starting_revision) = context.interaction_revision.try_get_untracked() else {
+        return;
+    };
+    context.reading.try_set(true);
     #[cfg(target_arch = "wasm32")]
-    leptos::task::spawn_local_scoped_with_cancellation(async move {
-        let result = load_ui_preferences().await;
-        let Some(mut writes) = context.writes.try_get_untracked() else {
+    {
+        // Retry is rendered inside a transient error branch. Bind the read to its authenticated owner.
+        let Some(Some(owner)) = context.worker_owner.try_get_value() else {
+            context.reading.try_set(false);
+            context.writes.try_update(PreferenceWrites::pause);
             return;
         };
-        context.reading.try_set(false);
-        let Ok(stored) = result else {
-            writes.pause();
-            context.writes.try_set(writes);
-            return;
-        };
-        writes.known = Some(stored);
-        let apply_stored = context.interaction_revision.get_untracked() == starting_revision
-            && writes.draft.is_empty()
-            && !writes.paused;
-        context.writes.try_set(writes);
-        if apply_stored {
-            if let Some(theme) = stored.theme {
-                apply_theme(theme);
-                context.theme.set(theme);
-            }
-            if let Some(locale) = stored.locale {
-                i18n.set_locale(contract_locale(locale));
-            }
-        }
-        context.start_worker();
-    });
+        owner.with(|| {
+            leptos::task::spawn_local_scoped_with_cancellation(async move {
+                let result = load_ui_preferences().await;
+                let Some(mut writes) = context.writes.try_get_untracked() else {
+                    return;
+                };
+                context.reading.try_set(false);
+                let Ok(stored) = result else {
+                    writes.pause();
+                    context.writes.try_set(writes);
+                    return;
+                };
+                writes.known = Some(stored);
+                let apply_stored = context.interaction_revision.try_get_untracked()
+                    == Some(starting_revision)
+                    && writes.draft.is_empty()
+                    && !writes.paused;
+                context.writes.try_set(writes);
+                if apply_stored {
+                    if let Some(theme) = stored.theme {
+                        apply_theme(theme);
+                        context.theme.try_set(theme);
+                    }
+                    if let Some(locale) = stored.locale {
+                        i18n.set_locale(contract_locale(locale));
+                    }
+                }
+                context.start_worker();
+            })
+        });
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         context.reading.set(false);

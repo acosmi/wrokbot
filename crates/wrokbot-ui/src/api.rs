@@ -4034,7 +4034,7 @@ fn encode_url_component(value: &str) -> String {
     encoded
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn status_error(status: u16) -> ApiError {
     match status {
         202 => ApiError::ReconciliationRequired,
