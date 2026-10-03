@@ -395,6 +395,17 @@ impl SkillEditor {
                     self.read_failed.try_set(true);
                     return;
                 };
+                // Grant membership is independent; editing metadata at the same revision is not.
+                if remote.revision == known.revision
+                    && remote.revision_snapshot().ok() != known.revision_snapshot().ok()
+                {
+                    core.restore_pause(Phase::Error, core.historical_uncertainty());
+                    self.actions
+                        .hold_skill(&api::SkillBinding::of(&known), Phase::Error);
+                    self.core.try_set(core);
+                    self.read_failed.try_set(true);
+                    return;
+                }
                 if let Some(hint) = self.remote_hint.try_get_untracked().flatten()
                     && (remote.revision < hint.current_revision()
                         || (remote.revision == hint.current_revision()

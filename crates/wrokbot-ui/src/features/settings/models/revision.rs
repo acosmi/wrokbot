@@ -206,6 +206,17 @@ impl ModelDriver {
         let Some(mut core) = self.core.try_get_untracked() else {
             return;
         };
+        let Some(known) = self.known.try_get_untracked() else {
+            return;
+        };
+        if core.current_attempt().is_some()
+            || self
+                .actions
+                .metadata_hold(&known.id)
+                .is_some_and(|hold| hold.pending)
+        {
+            return;
+        }
         let Ok(read_token) = core.begin_read() else {
             self.core.try_set(core);
             return;
@@ -214,9 +225,6 @@ impl ModelDriver {
         let compared = self.latest.try_get_untracked().flatten();
         let confirmed_draft = self.snapshot();
         self.core.try_set(core);
-        let Some(known) = self.known.try_get_untracked() else {
-            return;
-        };
         let Some(Some(owner)) = self.owner.try_get_value() else {
             return;
         };
@@ -361,7 +369,13 @@ pub(super) fn ModelRevisionEditor(
     let edit = UnsyncCallback::new(move |_| driver.edited());
     let composition = UnsyncCallback::new(move |active| driver.composing(active));
     let phase = Signal::derive(move || driver.core.get().phase());
-    let busy = Signal::derive(move || driver.reading.get());
+    let busy = Signal::derive(move || {
+        driver.reading.get()
+            || driver.core.get().current_attempt().is_some()
+            || actions
+                .metadata_hold(&driver.known.get().id)
+                .is_some_and(|hold| hold.pending)
+    });
     let invalid = Signal::derive(move || {
         driver.name.track();
         driver.model.track();
@@ -390,7 +404,7 @@ pub(super) fn ModelRevisionEditor(
         }
     });
     on_cleanup(move || {
-        driver.core.try_update(|core| {
+        driver.core.try_update_untracked(|core| {
             let _ = core.invalidate();
         });
         driver.retained.try_set_value(None);

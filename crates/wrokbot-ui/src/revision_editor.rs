@@ -399,6 +399,13 @@ impl EditorCore {
             self.historical_uncertainty = false;
             self.uncertain = None;
             self.failed = None;
+            if !local_semantically_matches_ack && self.deadline.is_none() {
+                let Some(deadline) = token.start_ms.checked_add(DEBOUNCE_MS) else {
+                    self.exhaust();
+                    return Apply::Invalid;
+                };
+                self.deadline = Some(deadline);
+            }
         }
         if remote_conflict {
             self.restore_pause(Phase::Conflict, self.historical_uncertainty);
@@ -824,6 +831,51 @@ mod tests {
         assert_eq!(reapplied.expected_revision(), Some(5));
         assert_eq!(core.finish_ack(reapplied, 6, true), Apply::Applied);
         assert!(!core.auto_paused());
+    }
+
+    #[test]
+    fn exact_original_retry_ack_restores_only_the_pending_draft_deadline() {
+        for continued_during_retry in [false, true] {
+            let mut core = existing();
+            let original = core.edit(0).unwrap();
+            let sent = core.begin_auto(original, 800, true).unwrap();
+            core.edit(900).unwrap();
+            core.mark_timeout(sent, 10_800);
+            core.finish_failure(sent, FailureClass::Unknown);
+            assert_eq!(core.next_auto_deadline(), None);
+            let read = core.begin_read().unwrap();
+            let current = core.accept_recovery_read(read, 4).unwrap();
+            let retry = core
+                .begin_retry_original(current, sent, 12_000, true)
+                .unwrap();
+            assert_eq!(retry.expected_revision(), Some(4));
+            assert_eq!(retry.edit_serial(), sent.edit_serial());
+            if continued_during_retry {
+                core.edit(12_200).unwrap();
+            }
+            let deadline = if continued_during_retry {
+                13_000
+            } else {
+                12_800
+            };
+            assert_eq!(core.finish_ack(retry, 5, false), Apply::Applied);
+            assert_eq!(core.phase(), Phase::Dirty);
+            assert_eq!(core.next_auto_deadline(), Some(deadline));
+            let draft = core.debounce_token();
+            assert_eq!(
+                core.begin_auto(draft, deadline - 1, true),
+                Err(Blocked::NotDue)
+            );
+            let next = core.begin_auto(draft, deadline, true).unwrap();
+            assert_eq!(next.expected_revision(), Some(5));
+            assert!(next.edit_serial() > retry.edit_serial());
+            assert_eq!(
+                core.begin_auto(draft, deadline, true),
+                Err(Blocked::InFlight)
+            );
+            assert_eq!(core.finish_ack(next, 6, true), Apply::Applied);
+            assert_eq!(core.phase(), Phase::Saved);
+        }
     }
 
     #[test]
