@@ -519,6 +519,6 @@ Web使用现有隔离合成HTTP/ApplicationService宿主，模型目录与保存
 
 2026-10-03 UTC：返修源码c912ebecd5f38e67e192501dcbfa997e0cc85575/tree0a906e528ef86a31b00dfa68327ed857424f15bd经八项精确定向检查、246项UI单测与77项合成Web回归通过。独立reviewer重新核源码/原始日志/1145输入、121原始Web文件及24产物、宿主来源，并检查修复后701px与其它边界截图，给出限定实现和P4入场GO（摘要4a17819e0ef022b13846e2a9e11a297a30357a0bb5492a243ed068041a7c9fd9）；原133508的Sheet遮挡NO-GO、全部原证据及24产物完整字节保留，不撤回旧结论。
 
-十二组面板观察覆盖七个展开与五个折叠侧栏场景；两tab/标题的Range与命中、遮罩覆盖、实际关闭点击、焦点返回和草稿保持通过。QA中一个Range定位重复命中Computer，未将其声称为Close文字测量；关闭按钮另有每组实际点击/焦点证据。既有发送/FIFO/Unknown的38项回归在P3 bundle上通过。全部仍是隔离合成ApplicationService/具名DTO transport fixture，不能替代生产PG、模型、Tauri、实机L3/L4或独立oracle。
+十二组面板观察覆盖七个展开与五个折叠侧栏场景；两tab/标题的Range与命中、遮罩覆盖、实际关闭操作、焦点返回和草稿保持通过。QA中一个Range定位重复命中Computer，未将其声称为Close文字测量；每组另有点击关闭或Escape关闭及焦点返回证据。既有发送/FIFO/Unknown的38项回归在P3 bundle上通过。全部仍是隔离合成ApplicationService/具名DTO transport fixture，不能替代生产PG、模型、Tauri、实机L3/L4或独立oracle。
 
 最终CSS131030/131072仍预警，WASM gzip3640187/3670016、字体740216/819200、external1/inline0，守卫与限额未改；P4先删除退休页面规则。自有native缓存第三次清理2247979474字节，工具/host SHA未变、空闲15892480000字节；QA/必要产物/其它窗口保留。PR #105当前source head为c912，追加本段只改执行台账，发布前核编译输入除该文件外逐项等价并复核差量，再按既有授权正常合并。oracle missing、最终像素、native56/真实200%/读屏、生产Computer/Artifact及通用回读等依赖继续open，当前不关闭P3规定全量验收或持续总目标。
