@@ -1,0 +1,1602 @@
+{
+  "artifact_records": {
+    "columns": [
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "deployment_id",
+        "notNull": true,
+        "ordinal": 1,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "tenant_id",
+        "notNull": true,
+        "ordinal": 2,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "dataset_id",
+        "notNull": true,
+        "ordinal": 3,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "artifact_id",
+        "notNull": true,
+        "ordinal": 4,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "operation_id",
+        "notNull": true,
+        "ordinal": 5,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "request_id",
+        "notNull": true,
+        "ordinal": 6,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "owner_actor_id",
+        "notNull": true,
+        "ordinal": 7,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_thread_id",
+        "notNull": true,
+        "ordinal": 8,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_run_id",
+        "notNull": true,
+        "ordinal": 9,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_message_id",
+        "notNull": true,
+        "ordinal": 10,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_call_seq",
+        "notNull": false,
+        "ordinal": 11,
+        "type": "bigint"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_attempt_seq",
+        "notNull": false,
+        "ordinal": 12,
+        "type": "bigint"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "status",
+        "notNull": true,
+        "ordinal": 13,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "workspace_kind",
+        "notNull": false,
+        "ordinal": 14,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "workspace_id",
+        "notNull": false,
+        "ordinal": 15,
+        "type": "text"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "media_type",
+        "notNull": false,
+        "ordinal": 16,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "byte_length",
+        "notNull": false,
+        "ordinal": 17,
+        "type": "bigint"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "sha256",
+        "notNull": false,
+        "ordinal": 18,
+        "type": "text"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "retention_class",
+        "notNull": false,
+        "ordinal": 19,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "saved_by",
+        "notNull": false,
+        "ordinal": 20,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "saved_at",
+        "notNull": false,
+        "ordinal": 21,
+        "type": "timestamp with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((artifact_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND (operation_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND (request_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)))",
+        "kind": "c",
+        "name": "artifact_records_id_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND (deployment_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND (tenant_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND (dataset_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(owner_actor_id) >= 1) AND (octet_length(owner_actor_id) <= 512)) AND (owner_actor_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_thread_id) >= 1) AND (octet_length(source_thread_id) <= 512)) AND (source_thread_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_run_id) >= 1) AND (octet_length(source_run_id) <= 512)) AND (source_run_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_message_id) >= 1) AND (octet_length(source_message_id) <= 512)) AND (source_message_id !~ '[\u0001-\u001f-]'::text)))",
+        "kind": "c",
+        "name": "artifact_records_identity_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (deployment_id, tenant_id, dataset_id, operation_id)",
+        "kind": "u",
+        "name": "artifact_records_operation",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "FOREIGN KEY (deployment_id, tenant_id, dataset_id, operation_id) REFERENCES openbot_internal.artifact_save_operations(deployment_id, tenant_id, dataset_id, operation_id)",
+        "kind": "f",
+        "name": "artifact_records_operation_fkey",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((status = ANY (ARRAY['deleted'::text, 'expired'::text])) AND (workspace_kind IS NULL) AND (workspace_id IS NULL) AND (media_type IS NULL) AND (byte_length IS NULL) AND (sha256 IS NULL) AND (retention_class IS NULL) AND (saved_by IS NULL) AND (saved_at IS NULL)) OR ((status = ANY (ARRAY['available'::text, 'failed_partial'::text])) AND (workspace_kind IS NOT NULL) AND (workspace_kind = ANY (ARRAY['channel'::text, 'thread'::text])) AND (workspace_id IS NOT NULL) AND ((octet_length(workspace_id) >= 1) AND (octet_length(workspace_id) <= 512)) AND (workspace_id !~ '[\u0001-\u001f-]'::text) AND (media_type IS NOT NULL) AND (media_type = 'text/plain; charset=utf-8'::text) AND (byte_length IS NOT NULL) AND ((byte_length >= 0) AND (byte_length <= 67108864)) AND (sha256 IS NOT NULL) AND (sha256 ~ '^[0-9a-f]{64}$'::text) AND (retention_class IS NOT NULL) AND (retention_class = 'explicit_saved'::text) AND (saved_by IS NOT NULL) AND (saved_by = owner_actor_id) AND (saved_at IS NOT NULL))))",
+        "kind": "c",
+        "name": "artifact_records_payload",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (deployment_id, tenant_id, dataset_id, artifact_id)",
+        "kind": "p",
+        "name": "artifact_records_pkey",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (deployment_id, tenant_id, dataset_id, operation_id, artifact_id)",
+        "kind": "u",
+        "name": "artifact_records_receipt_pair",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((source_call_seq IS NULL) AND (source_attempt_seq IS NULL)) OR ((source_call_seq IS NOT NULL) AND (source_attempt_seq IS NOT NULL) AND (source_call_seq >= 0) AND (source_attempt_seq >= 0))))",
+        "kind": "c",
+        "name": "artifact_records_sequences",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((status = ANY (ARRAY['available'::text, 'failed_partial'::text, 'deleted'::text, 'expired'::text])))",
+        "kind": "c",
+        "name": "artifact_records_status",
+        "validated": true
+      }
+    ],
+    "guard": {
+      "arguments": "",
+      "configuration": null,
+      "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_append_only_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'append-only relation refuses mutation';\nEND;\n$function$\n",
+      "language": "plpgsql",
+      "name": "prevent_append_only_mutation",
+      "returnType": "trigger",
+      "schema": "openbot_internal",
+      "securityDefiner": false
+    },
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_records_operation ON openbot_internal.artifact_records USING btree (deployment_id, tenant_id, dataset_id, operation_id)",
+        "expressions": null,
+        "keys": "1 2 3 5",
+        "name": "artifact_records_operation",
+        "predicate": null,
+        "primary": false,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_records_pkey ON openbot_internal.artifact_records USING btree (deployment_id, tenant_id, dataset_id, artifact_id)",
+        "expressions": null,
+        "keys": "1 2 3 4",
+        "name": "artifact_records_pkey",
+        "predicate": null,
+        "primary": true,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_records_receipt_pair ON openbot_internal.artifact_records USING btree (deployment_id, tenant_id, dataset_id, operation_id, artifact_id)",
+        "expressions": null,
+        "keys": "1 2 3 5 4",
+        "name": "artifact_records_receipt_pair",
+        "predicate": null,
+        "primary": false,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX artifact_records_source_idx ON openbot_internal.artifact_records USING btree (deployment_id, tenant_id, dataset_id, source_run_id, artifact_id)",
+        "expressions": null,
+        "keys": "1 2 3 9 4",
+        "name": "artifact_records_source_idx",
+        "predicate": null,
+        "primary": false,
+        "ready": true,
+        "unique": false,
+        "valid": true
+      }
+    ],
+    "relation": {
+      "accessMethod": "heap",
+      "forceRowSecurity": false,
+      "kind": "r",
+      "partition": false,
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    "rules": [],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER artifact_records_identity_guard BEFORE DELETE OR UPDATE ON openbot_internal.artifact_records FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_artifact_record_misuse()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_artifact_record_misuse",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_records_identity_guard",
+        "type": 27
+      },
+      {
+        "definition": "CREATE TRIGGER artifact_records_no_truncate BEFORE TRUNCATE ON openbot_internal.artifact_records FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_records_no_truncate",
+        "type": 34
+      }
+    ]
+  },
+  "artifact_run_quotas": {
+    "columns": [
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "deployment_id",
+        "notNull": true,
+        "ordinal": 1,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "tenant_id",
+        "notNull": true,
+        "ordinal": 2,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "dataset_id",
+        "notNull": true,
+        "ordinal": 3,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_run_id",
+        "notNull": true,
+        "ordinal": 4,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": "0",
+        "generated": "",
+        "identity": "",
+        "name": "identity_count",
+        "notNull": true,
+        "ordinal": 5,
+        "type": "bigint"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((identity_count >= 0) AND (identity_count <= 32)))",
+        "kind": "c",
+        "name": "artifact_run_quotas_count",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND (deployment_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND (tenant_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND (dataset_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_run_id) >= 1) AND (octet_length(source_run_id) <= 512)) AND (source_run_id !~ '[\u0001-\u001f-]'::text)))",
+        "kind": "c",
+        "name": "artifact_run_quotas_identity_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (deployment_id, tenant_id, dataset_id, source_run_id)",
+        "kind": "p",
+        "name": "artifact_run_quotas_pkey",
+        "validated": true
+      }
+    ],
+    "guard": {
+      "arguments": "",
+      "configuration": null,
+      "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_append_only_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'append-only relation refuses mutation';\nEND;\n$function$\n",
+      "language": "plpgsql",
+      "name": "prevent_append_only_mutation",
+      "returnType": "trigger",
+      "schema": "openbot_internal",
+      "securityDefiner": false
+    },
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_run_quotas_pkey ON openbot_internal.artifact_run_quotas USING btree (deployment_id, tenant_id, dataset_id, source_run_id)",
+        "expressions": null,
+        "keys": "1 2 3 4",
+        "name": "artifact_run_quotas_pkey",
+        "predicate": null,
+        "primary": true,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "relation": {
+      "accessMethod": "heap",
+      "forceRowSecurity": false,
+      "kind": "r",
+      "partition": false,
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    "rules": [],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER artifact_run_quotas_no_delete BEFORE DELETE ON openbot_internal.artifact_run_quotas FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_run_quotas_no_delete",
+        "type": 11
+      },
+      {
+        "definition": "CREATE TRIGGER artifact_run_quotas_no_truncate BEFORE TRUNCATE ON openbot_internal.artifact_run_quotas FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_run_quotas_no_truncate",
+        "type": 34
+      }
+    ]
+  },
+  "artifact_save_operations": {
+    "columns": [
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "deployment_id",
+        "notNull": true,
+        "ordinal": 1,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "tenant_id",
+        "notNull": true,
+        "ordinal": 2,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "dataset_id",
+        "notNull": true,
+        "ordinal": 3,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "request_id",
+        "notNull": true,
+        "ordinal": 4,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "operation_id",
+        "notNull": true,
+        "ordinal": 5,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "artifact_id",
+        "notNull": true,
+        "ordinal": 6,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "owner_actor_id",
+        "notNull": true,
+        "ordinal": 7,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_thread_id",
+        "notNull": true,
+        "ordinal": 8,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_run_id",
+        "notNull": true,
+        "ordinal": 9,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_message_id",
+        "notNull": true,
+        "ordinal": 10,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_call_seq",
+        "notNull": false,
+        "ordinal": 11,
+        "type": "bigint"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_attempt_seq",
+        "notNull": false,
+        "ordinal": 12,
+        "type": "bigint"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "state",
+        "notNull": true,
+        "ordinal": 13,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "store_id",
+        "notNull": false,
+        "ordinal": 14,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "workspace_kind",
+        "notNull": false,
+        "ordinal": 15,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "workspace_id",
+        "notNull": false,
+        "ordinal": 16,
+        "type": "text"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "expected_sha256",
+        "notNull": false,
+        "ordinal": 17,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "expected_bytes",
+        "notNull": false,
+        "ordinal": 18,
+        "type": "bigint"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "charged_bytes",
+        "notNull": false,
+        "ordinal": 19,
+        "type": "bigint"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "actual_absent",
+        "notNull": false,
+        "ordinal": 20,
+        "type": "boolean"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "actual_byte_length",
+        "notNull": false,
+        "ordinal": 21,
+        "type": "bigint"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "actual_sha256",
+        "notNull": false,
+        "ordinal": 22,
+        "type": "text"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "actual_location",
+        "notNull": false,
+        "ordinal": 23,
+        "type": "text"
+      },
+      {
+        "collation": "default",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "observation_phase",
+        "notNull": false,
+        "ordinal": 24,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "created_at",
+        "notNull": false,
+        "ordinal": 25,
+        "type": "timestamp with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (deployment_id, tenant_id, dataset_id, artifact_id)",
+        "kind": "u",
+        "name": "artifact_save_operations_artifact",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((request_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND (operation_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND (artifact_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)))",
+        "kind": "c",
+        "name": "artifact_save_operations_id_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND (deployment_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND (tenant_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND (dataset_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(owner_actor_id) >= 1) AND (octet_length(owner_actor_id) <= 512)) AND (owner_actor_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_thread_id) >= 1) AND (octet_length(source_thread_id) <= 512)) AND (source_thread_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_run_id) >= 1) AND (octet_length(source_run_id) <= 512)) AND (source_run_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_message_id) >= 1) AND (octet_length(source_message_id) <= 512)) AND (source_message_id !~ '[\u0001-\u001f-]'::text)))",
+        "kind": "c",
+        "name": "artifact_save_operations_identity_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (deployment_id, tenant_id, dataset_id, request_id)",
+        "kind": "u",
+        "name": "artifact_save_operations_locator",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((actual_absent IS NULL) AND (actual_byte_length IS NULL) AND (actual_sha256 IS NULL) AND (actual_location IS NULL)) OR ((actual_absent IS TRUE) AND (actual_byte_length IS NULL) AND (actual_sha256 IS NULL) AND (actual_location IS NULL)) OR ((actual_absent IS FALSE) AND (actual_byte_length IS NOT NULL) AND ((actual_byte_length >= 0) AND (actual_byte_length <= 67108864)) AND (actual_sha256 IS NOT NULL) AND (actual_sha256 ~ '^[0-9a-f]{64}$'::text) AND (actual_location IS NOT NULL) AND (actual_location = ANY (ARRAY['staging'::text, 'object'::text])))))",
+        "kind": "c",
+        "name": "artifact_save_operations_observation",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((state = ANY (ARRAY['deleted'::text, 'expired'::text])) AND (store_id IS NULL) AND (workspace_kind IS NULL) AND (workspace_id IS NULL) AND (expected_sha256 IS NULL) AND (expected_bytes IS NULL) AND (charged_bytes IS NULL) AND (created_at IS NULL) AND (actual_absent IS NULL) AND (actual_byte_length IS NULL) AND (actual_sha256 IS NULL) AND (actual_location IS NULL) AND (observation_phase IS NULL)) OR ((state <> ALL (ARRAY['deleted'::text, 'expired'::text])) AND (store_id IS NOT NULL) AND (store_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND (workspace_kind IS NOT NULL) AND (workspace_kind = ANY (ARRAY['channel'::text, 'thread'::text])) AND (workspace_id IS NOT NULL) AND ((octet_length(workspace_id) >= 1) AND (octet_length(workspace_id) <= 512)) AND (workspace_id !~ '[\u0001-\u001f-]'::text) AND (expected_sha256 IS NOT NULL) AND (expected_sha256 ~ '^[0-9a-f]{64}$'::text) AND (expected_bytes IS NOT NULL) AND ((expected_bytes >= 1) AND (expected_bytes <= 67108864)) AND (charged_bytes IS NOT NULL) AND ((charged_bytes >= 0) AND (charged_bytes <= 67108864)) AND (created_at IS NOT NULL))))",
+        "kind": "c",
+        "name": "artifact_save_operations_payload",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((observation_phase IS NULL) OR (observation_phase = ANY (ARRAY['before_write'::text, 'staging'::text, 'installing'::text, 'installed'::text]))))",
+        "kind": "c",
+        "name": "artifact_save_operations_phase",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (deployment_id, tenant_id, dataset_id, operation_id)",
+        "kind": "p",
+        "name": "artifact_save_operations_pkey",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((source_call_seq IS NULL) AND (source_attempt_seq IS NULL)) OR ((source_call_seq IS NOT NULL) AND (source_attempt_seq IS NOT NULL) AND (source_call_seq >= 0) AND (source_attempt_seq >= 0))))",
+        "kind": "c",
+        "name": "artifact_save_operations_sequences",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['admitted'::text, 'io_started'::text, 'available'::text, 'failed_partial'::text, 'unresolved'::text, 'deleted'::text, 'expired'::text])))",
+        "kind": "c",
+        "name": "artifact_save_operations_state",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "FOREIGN KEY (deployment_id, tenant_id, dataset_id, store_id) REFERENCES openbot_internal.artifact_store_bindings(deployment_id, tenant_id, dataset_id, store_id)",
+        "kind": "f",
+        "name": "artifact_save_operations_store_fkey",
+        "validated": true
+      }
+    ],
+    "guard": {
+      "arguments": "",
+      "configuration": null,
+      "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_append_only_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'append-only relation refuses mutation';\nEND;\n$function$\n",
+      "language": "plpgsql",
+      "name": "prevent_append_only_mutation",
+      "returnType": "trigger",
+      "schema": "openbot_internal",
+      "securityDefiner": false
+    },
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_save_operations_artifact ON openbot_internal.artifact_save_operations USING btree (deployment_id, tenant_id, dataset_id, artifact_id)",
+        "expressions": null,
+        "keys": "1 2 3 6",
+        "name": "artifact_save_operations_artifact",
+        "predicate": null,
+        "primary": false,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_save_operations_locator ON openbot_internal.artifact_save_operations USING btree (deployment_id, tenant_id, dataset_id, request_id)",
+        "expressions": null,
+        "keys": "1 2 3 4",
+        "name": "artifact_save_operations_locator",
+        "predicate": null,
+        "primary": false,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_save_operations_pkey ON openbot_internal.artifact_save_operations USING btree (deployment_id, tenant_id, dataset_id, operation_id)",
+        "expressions": null,
+        "keys": "1 2 3 5",
+        "name": "artifact_save_operations_pkey",
+        "predicate": null,
+        "primary": true,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "relation": {
+      "accessMethod": "heap",
+      "forceRowSecurity": false,
+      "kind": "r",
+      "partition": false,
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    "rules": [],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER artifact_save_operations_identity_guard BEFORE DELETE OR UPDATE ON openbot_internal.artifact_save_operations FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_artifact_operation_misuse()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_artifact_operation_misuse",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_save_operations_identity_guard",
+        "type": 27
+      },
+      {
+        "definition": "CREATE TRIGGER artifact_save_operations_no_truncate BEFORE TRUNCATE ON openbot_internal.artifact_save_operations FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_save_operations_no_truncate",
+        "type": 34
+      }
+    ]
+  },
+  "artifact_saved_receipts": {
+    "columns": [
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "deployment_id",
+        "notNull": true,
+        "ordinal": 1,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "tenant_id",
+        "notNull": true,
+        "ordinal": 2,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "dataset_id",
+        "notNull": true,
+        "ordinal": 3,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "operation_id",
+        "notNull": true,
+        "ordinal": 4,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "artifact_id",
+        "notNull": true,
+        "ordinal": 5,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "request_id",
+        "notNull": true,
+        "ordinal": 6,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "owner_actor_id",
+        "notNull": true,
+        "ordinal": 7,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_thread_id",
+        "notNull": true,
+        "ordinal": 8,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_run_id",
+        "notNull": true,
+        "ordinal": 9,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_message_id",
+        "notNull": true,
+        "ordinal": 10,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_call_seq",
+        "notNull": false,
+        "ordinal": 11,
+        "type": "bigint"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "source_attempt_seq",
+        "notNull": false,
+        "ordinal": 12,
+        "type": "bigint"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (deployment_id, tenant_id, dataset_id, artifact_id)",
+        "kind": "u",
+        "name": "artifact_saved_receipts_artifact",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "FOREIGN KEY (deployment_id, tenant_id, dataset_id, operation_id, artifact_id) REFERENCES openbot_internal.artifact_records(deployment_id, tenant_id, dataset_id, operation_id, artifact_id)",
+        "kind": "f",
+        "name": "artifact_saved_receipts_artifact_fkey",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((operation_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND (artifact_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND (request_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)))",
+        "kind": "c",
+        "name": "artifact_saved_receipts_id_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND (deployment_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND (tenant_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND (dataset_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(owner_actor_id) >= 1) AND (octet_length(owner_actor_id) <= 512)) AND (owner_actor_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_thread_id) >= 1) AND (octet_length(source_thread_id) <= 512)) AND (source_thread_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_run_id) >= 1) AND (octet_length(source_run_id) <= 512)) AND (source_run_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(source_message_id) >= 1) AND (octet_length(source_message_id) <= 512)) AND (source_message_id !~ '[\u0001-\u001f-]'::text)))",
+        "kind": "c",
+        "name": "artifact_saved_receipts_identity_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "FOREIGN KEY (deployment_id, tenant_id, dataset_id, operation_id) REFERENCES openbot_internal.artifact_save_operations(deployment_id, tenant_id, dataset_id, operation_id)",
+        "kind": "f",
+        "name": "artifact_saved_receipts_operation_fkey",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (deployment_id, tenant_id, dataset_id, operation_id)",
+        "kind": "p",
+        "name": "artifact_saved_receipts_pkey",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((source_call_seq IS NULL) AND (source_attempt_seq IS NULL)) OR ((source_call_seq IS NOT NULL) AND (source_attempt_seq IS NOT NULL) AND (source_call_seq >= 0) AND (source_attempt_seq >= 0))))",
+        "kind": "c",
+        "name": "artifact_saved_receipts_sequences",
+        "validated": true
+      }
+    ],
+    "guard": {
+      "arguments": "",
+      "configuration": null,
+      "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_append_only_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'append-only relation refuses mutation';\nEND;\n$function$\n",
+      "language": "plpgsql",
+      "name": "prevent_append_only_mutation",
+      "returnType": "trigger",
+      "schema": "openbot_internal",
+      "securityDefiner": false
+    },
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_saved_receipts_artifact ON openbot_internal.artifact_saved_receipts USING btree (deployment_id, tenant_id, dataset_id, artifact_id)",
+        "expressions": null,
+        "keys": "1 2 3 5",
+        "name": "artifact_saved_receipts_artifact",
+        "predicate": null,
+        "primary": false,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_saved_receipts_pkey ON openbot_internal.artifact_saved_receipts USING btree (deployment_id, tenant_id, dataset_id, operation_id)",
+        "expressions": null,
+        "keys": "1 2 3 4",
+        "name": "artifact_saved_receipts_pkey",
+        "predicate": null,
+        "primary": true,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "relation": {
+      "accessMethod": "heap",
+      "forceRowSecurity": false,
+      "kind": "r",
+      "partition": false,
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    "rules": [],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER artifact_saved_receipts_append_only BEFORE DELETE OR UPDATE ON openbot_internal.artifact_saved_receipts FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_saved_receipts_append_only",
+        "type": 27
+      },
+      {
+        "definition": "CREATE TRIGGER artifact_saved_receipts_no_truncate BEFORE TRUNCATE ON openbot_internal.artifact_saved_receipts FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_saved_receipts_no_truncate",
+        "type": 34
+      }
+    ]
+  },
+  "artifact_store_bindings": {
+    "columns": [
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "deployment_id",
+        "notNull": true,
+        "ordinal": 1,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "tenant_id",
+        "notNull": true,
+        "ordinal": 2,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "dataset_id",
+        "notNull": true,
+        "ordinal": 3,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "store_id",
+        "notNull": true,
+        "ordinal": 4,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "root_device",
+        "notNull": true,
+        "ordinal": 5,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "root_inode",
+        "notNull": true,
+        "ordinal": 6,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "root_uid",
+        "notNull": true,
+        "ordinal": 7,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": "now()",
+        "generated": "",
+        "identity": "",
+        "name": "created_at",
+        "notNull": true,
+        "ordinal": 8,
+        "type": "timestamp with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (deployment_id, tenant_id, dataset_id, store_id)",
+        "kind": "u",
+        "name": "artifact_store_bindings_exact_key",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((store_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text))",
+        "kind": "c",
+        "name": "artifact_store_bindings_id_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND (deployment_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND (tenant_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND (dataset_id !~ '[\u0001-\u001f-]'::text)))",
+        "kind": "c",
+        "name": "artifact_store_bindings_identity_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((root_device ~ '^(0|[1-9][0-9]{0,19})$'::text) AND ((root_device)::numeric <= '18446744073709551615'::numeric) AND (root_inode ~ '^(0|[1-9][0-9]{0,19})$'::text) AND ((root_inode)::numeric <= '18446744073709551615'::numeric) AND (root_uid ~ '^(0|[1-9][0-9]{0,19})$'::text) AND ((root_uid)::numeric <= '18446744073709551615'::numeric)))",
+        "kind": "c",
+        "name": "artifact_store_bindings_physical_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (deployment_id, tenant_id, dataset_id)",
+        "kind": "p",
+        "name": "artifact_store_bindings_pkey",
+        "validated": true
+      }
+    ],
+    "guard": {
+      "arguments": "",
+      "configuration": null,
+      "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_append_only_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'append-only relation refuses mutation';\nEND;\n$function$\n",
+      "language": "plpgsql",
+      "name": "prevent_append_only_mutation",
+      "returnType": "trigger",
+      "schema": "openbot_internal",
+      "securityDefiner": false
+    },
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_store_bindings_exact_key ON openbot_internal.artifact_store_bindings USING btree (deployment_id, tenant_id, dataset_id, store_id)",
+        "expressions": null,
+        "keys": "1 2 3 4",
+        "name": "artifact_store_bindings_exact_key",
+        "predicate": null,
+        "primary": false,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_store_bindings_pkey ON openbot_internal.artifact_store_bindings USING btree (deployment_id, tenant_id, dataset_id)",
+        "expressions": null,
+        "keys": "1 2 3",
+        "name": "artifact_store_bindings_pkey",
+        "predicate": null,
+        "primary": true,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "relation": {
+      "accessMethod": "heap",
+      "forceRowSecurity": false,
+      "kind": "r",
+      "partition": false,
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    "rules": [],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER artifact_store_bindings_append_only BEFORE DELETE OR UPDATE ON openbot_internal.artifact_store_bindings FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_store_bindings_append_only",
+        "type": 27
+      },
+      {
+        "definition": "CREATE TRIGGER artifact_store_bindings_no_truncate BEFORE TRUNCATE ON openbot_internal.artifact_store_bindings FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_store_bindings_no_truncate",
+        "type": 34
+      }
+    ]
+  },
+  "artifact_workspace_quotas": {
+    "columns": [
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "deployment_id",
+        "notNull": true,
+        "ordinal": 1,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "tenant_id",
+        "notNull": true,
+        "ordinal": 2,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "dataset_id",
+        "notNull": true,
+        "ordinal": 3,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "workspace_kind",
+        "notNull": true,
+        "ordinal": 4,
+        "type": "text"
+      },
+      {
+        "collation": "C",
+        "collationSchema": "pg_catalog",
+        "default": null,
+        "generated": "",
+        "identity": "",
+        "name": "workspace_id",
+        "notNull": true,
+        "ordinal": 5,
+        "type": "text"
+      },
+      {
+        "collation": null,
+        "collationSchema": null,
+        "default": "0",
+        "generated": "",
+        "identity": "",
+        "name": "charged_bytes",
+        "notNull": true,
+        "ordinal": 6,
+        "type": "bigint"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((charged_bytes >= 0) AND (charged_bytes <= '17179869184'::bigint)))",
+        "kind": "c",
+        "name": "artifact_workspace_quotas_bytes",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND (deployment_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND (tenant_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND (dataset_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(workspace_id) >= 1) AND (octet_length(workspace_id) <= 512)) AND (workspace_id !~ '[\u0001-\u001f-]'::text)))",
+        "kind": "c",
+        "name": "artifact_workspace_quotas_identity_shape",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((workspace_kind = ANY (ARRAY['channel'::text, 'thread'::text])))",
+        "kind": "c",
+        "name": "artifact_workspace_quotas_kind",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (deployment_id, tenant_id, dataset_id, workspace_kind, workspace_id)",
+        "kind": "p",
+        "name": "artifact_workspace_quotas_pkey",
+        "validated": true
+      }
+    ],
+    "guard": {
+      "arguments": "",
+      "configuration": null,
+      "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_append_only_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'append-only relation refuses mutation';\nEND;\n$function$\n",
+      "language": "plpgsql",
+      "name": "prevent_append_only_mutation",
+      "returnType": "trigger",
+      "schema": "openbot_internal",
+      "securityDefiner": false
+    },
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX artifact_workspace_quotas_pkey ON openbot_internal.artifact_workspace_quotas USING btree (deployment_id, tenant_id, dataset_id, workspace_kind, workspace_id)",
+        "expressions": null,
+        "keys": "1 2 3 4 5",
+        "name": "artifact_workspace_quotas_pkey",
+        "predicate": null,
+        "primary": true,
+        "ready": true,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "relation": {
+      "accessMethod": "heap",
+      "forceRowSecurity": false,
+      "kind": "r",
+      "partition": false,
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    "rules": [],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER artifact_workspace_quotas_no_delete BEFORE DELETE ON openbot_internal.artifact_workspace_quotas FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_workspace_quotas_no_delete",
+        "type": 11
+      },
+      {
+        "definition": "CREATE TRIGGER artifact_workspace_quotas_no_truncate BEFORE TRUNCATE ON openbot_internal.artifact_workspace_quotas FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_append_only_mutation()",
+        "enabled": "O",
+        "functionArguments": "",
+        "functionName": "prevent_append_only_mutation",
+        "functionSchema": "openbot_internal",
+        "name": "artifact_workspace_quotas_no_truncate",
+        "type": 34
+      }
+    ]
+  },
+  "registration_guards": [
+    {
+      "arguments": "",
+      "configuration": null,
+      "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_artifact_operation_misuse()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n    IF TG_OP = 'DELETE' THEN\n        RAISE EXCEPTION 'artifact operation identity cannot be deleted' USING ERRCODE='55000';\n    END IF;\n    IF ROW(NEW.deployment_id,NEW.tenant_id,NEW.dataset_id,NEW.request_id,NEW.operation_id,NEW.artifact_id,\n           NEW.owner_actor_id,NEW.source_thread_id,NEW.source_run_id,NEW.source_message_id,NEW.source_call_seq,NEW.source_attempt_seq)\n       IS DISTINCT FROM\n       ROW(OLD.deployment_id,OLD.tenant_id,OLD.dataset_id,OLD.request_id,OLD.operation_id,OLD.artifact_id,\n           OLD.owner_actor_id,OLD.source_thread_id,OLD.source_run_id,OLD.source_message_id,OLD.source_call_seq,OLD.source_attempt_seq) THEN\n        RAISE EXCEPTION 'artifact operation identity cannot be rebound' USING ERRCODE='55000';\n    END IF;\n    IF OLD.state IN ('deleted','expired') AND NEW IS DISTINCT FROM OLD THEN\n        RAISE EXCEPTION 'artifact operation tombstone is final' USING ERRCODE='55000';\n    END IF;\n    IF NEW.state <> OLD.state AND NOT (\n        (OLD.state='admitted' AND NEW.state IN ('io_started','unresolved'))\n        OR (OLD.state='io_started' AND NEW.state IN ('available','failed_partial','unresolved'))\n        OR (OLD.state='unresolved' AND NEW.state IN ('failed_partial','deleted','expired'))\n        OR (OLD.state IN ('available','failed_partial') AND NEW.state IN ('deleted','expired'))\n    ) THEN\n        RAISE EXCEPTION 'artifact operation cannot reopen IO' USING ERRCODE='55000';\n    END IF;\n    IF NEW.state NOT IN ('deleted','expired') AND\n       ROW(NEW.store_id,NEW.workspace_kind,NEW.workspace_id,NEW.expected_sha256,NEW.expected_bytes,NEW.created_at)\n       IS DISTINCT FROM\n       ROW(OLD.store_id,OLD.workspace_kind,OLD.workspace_id,OLD.expected_sha256,OLD.expected_bytes,OLD.created_at) THEN\n        RAISE EXCEPTION 'artifact operation intent cannot change' USING ERRCODE='55000';\n    END IF;\n    IF OLD.state IN ('available','failed_partial') AND NEW.state=OLD.state AND NEW IS DISTINCT FROM OLD THEN\n        RAISE EXCEPTION 'artifact settled operation cannot change' USING ERRCODE='55000';\n    END IF;\n    RETURN NEW;\nEND;\n$function$\n",
+      "name": "prevent_artifact_operation_misuse",
+      "securityDefiner": false
+    },
+    {
+      "arguments": "",
+      "configuration": null,
+      "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_artifact_record_misuse()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n    IF TG_OP = 'DELETE' THEN\n        RAISE EXCEPTION 'artifact identity cannot be deleted' USING ERRCODE='55000';\n    END IF;\n    IF ROW(NEW.deployment_id,NEW.tenant_id,NEW.dataset_id,NEW.artifact_id,NEW.operation_id,NEW.request_id,\n           NEW.owner_actor_id,NEW.source_thread_id,NEW.source_run_id,NEW.source_message_id,NEW.source_call_seq,NEW.source_attempt_seq)\n       IS DISTINCT FROM\n       ROW(OLD.deployment_id,OLD.tenant_id,OLD.dataset_id,OLD.artifact_id,OLD.operation_id,OLD.request_id,\n           OLD.owner_actor_id,OLD.source_thread_id,OLD.source_run_id,OLD.source_message_id,OLD.source_call_seq,OLD.source_attempt_seq) THEN\n        RAISE EXCEPTION 'artifact identity cannot be rebound' USING ERRCODE='55000';\n    END IF;\n    IF NEW.status=OLD.status AND NEW IS DISTINCT FROM OLD THEN\n        RAISE EXCEPTION 'artifact record cannot be overwritten' USING ERRCODE='55000';\n    END IF;\n    IF NEW.status<>OLD.status AND NOT\n       (OLD.status IN ('available','failed_partial') AND NEW.status IN ('deleted','expired')) THEN\n        RAISE EXCEPTION 'artifact record tombstone cannot reopen' USING ERRCODE='55000';\n    END IF;\n    RETURN NEW;\nEND;\n$function$\n",
+      "name": "prevent_artifact_record_misuse",
+      "securityDefiner": false
+    }
+  ]
+}

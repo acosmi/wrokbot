@@ -179,6 +179,7 @@ async fn assemble(
             .map_err(|e| e.to_string())?,
         ),
         screen_sessions: Arc::new(openbot_application::NoScreenSessionAdministration),
+        artifacts: None,
         remote_agent_probe: Arc::new(UnusedRemote),
         managed_slot_available: false,
         channel_routing_provider: ChannelRoutingProviderInput {

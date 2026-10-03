@@ -1,5 +1,6 @@
 //! Tauri 2.11.5 custom-protocol adapter for the shared Leptos bundle.
 
+mod artifacts;
 mod assets;
 #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
 mod local_confirmation;
@@ -728,6 +729,9 @@ impl DesktopTauriProtocol {
         }
         if path == "/api/memories" || path.starts_with("/api/memories/") {
             return self.memories(label, request, authority).await;
+        }
+        if path == "/api/artifacts" || path.starts_with("/api/artifacts/") {
+            return self.artifacts(label, request, authority).await;
         }
         if path == "/api/plugins" {
             return self.plugins(request, authority).await;
@@ -2906,6 +2910,14 @@ fn error_response(error: AppError) -> Response<Vec<u8>> {
         AppError::StaleGeneration {
             subject: openbot_contracts::error::StaleGenerationSubject::Configuration { snapshot },
         } => serde_json::to_vec(snapshot),
+        AppError::ArtifactGone { status } => {
+            serde_json::to_vec(&json!({"code":error.code().as_str(),"status":status}))
+        }
+        AppError::PolicyRefused { rule, .. }
+            if matches!(rule.as_str(), "artifact_disk_space" | "artifact_quota") =>
+        {
+            serde_json::to_vec(&json!({"code":error.code().as_str(),"rule":rule}))
+        }
         _ => serde_json::to_vec(&json!({"code": error.code().as_str()})),
     }
     .unwrap_or_else(|_| b"{\"code\":\"dependency_unavailable\"}".to_vec());

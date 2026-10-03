@@ -111,6 +111,10 @@ pub const MAX_MEMORY_PAGE: u32 = 100;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppCommand {
+    /// Explicit save of the current actor's real PG user message.
+    SaveRunMessageTextArtifact(crate::artifacts::SaveRunMessageTextArtifact),
+    /// Current-source-authorized metadata selector, never byte access.
+    GetArtifactMetadata(crate::artifacts::GetArtifactMetadata),
     /// 最小只读用例：探活。不读任何租户数据，也不产生 audit 事件。
     Health,
 
@@ -607,6 +611,10 @@ pub enum AppCommand {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AppReply {
+    /// Content-free positive local registration fact.
+    ArtifactRegistrationReceipt(crate::artifacts::ArtifactRegistrationReceipt),
+    /// Current-authorized artifact metadata with distinct live/tombstone shapes.
+    ArtifactMetadata(crate::artifacts::ArtifactMetadata),
     /// [`AppCommand::Health`] 的应答。
     Health(HealthReport),
     /// [`AppCommand::ListVisibleChannels`] 的应答。
