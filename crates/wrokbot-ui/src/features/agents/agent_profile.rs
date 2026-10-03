@@ -33,6 +33,10 @@ pub fn AgentProfilePanel(
     let editing = RwSignal::new(false);
     let confirming_delete = RwSignal::new(false);
     let action_pending = RwSignal::new(false);
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        move || agent_id.get().unwrap_or_default(),
+    );
     let action_error = RwSignal::new(false);
     let generation = RwSignal::new(0_u64);
 
@@ -183,7 +187,7 @@ pub fn AgentProfilePanel(
                         <Button
                             variant=ButtonVariant::Chip
                             size=ButtonSize::Small
-                            disabled=action_pending
+                            disabled=Signal::derive(move || action_pending.get() || write_lock.get())
                             on_activate=move |_| {
                                 action_pending.set(true);
                                 action_error.set(false);
@@ -213,7 +217,7 @@ pub fn AgentProfilePanel(
                         <Button
                             variant=ButtonVariant::Chip
                             size=ButtonSize::Small
-                            disabled=action_pending
+                            disabled=Signal::derive(move || action_pending.get() || write_lock.get())
                             on_activate=move |_| {
                                 action_pending.set(true);
                                 action_error.set(false);
@@ -250,7 +254,7 @@ pub fn AgentProfilePanel(
                             <Button
                                 variant=ButtonVariant::Chip
                                 size=ButtonSize::Small
-                                disabled=action_pending
+                                disabled=Signal::derive(move || action_pending.get() || write_lock.get())
                                 on_activate=move |_| editing.set(true)
                             >{move || t!(i18n, common.edit)}</Button>
                             <Show
@@ -259,7 +263,7 @@ pub fn AgentProfilePanel(
                                     <Button
                                         variant=ButtonVariant::DangerText
                                         size=ButtonSize::Small
-                                        disabled=action_pending
+                                        disabled=Signal::derive(move || action_pending.get() || write_lock.get())
                                         on_activate=move |_| confirming_delete.set(true)
                                     >{move || t!(i18n, common.delete)}</Button>
                                 }
@@ -271,13 +275,13 @@ pub fn AgentProfilePanel(
                                     <Button
                                         variant=ButtonVariant::Ghost
                                         size=ButtonSize::Small
-                                        disabled=action_pending
+                                        disabled=Signal::derive(move || action_pending.get() || write_lock.get())
                                         on_activate=move |_| confirming_delete.set(false)
                                     >{move || t!(i18n, common.cancel)}</Button>
                                     <Button
                                         variant=ButtonVariant::DangerText
                                         size=ButtonSize::Small
-                                        disabled=action_pending
+                                        disabled=Signal::derive(move || action_pending.get() || write_lock.get())
                                         on_activate=move |_| {
                                             action_pending.set(true);
                                             action_error.set(false);

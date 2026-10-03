@@ -32,7 +32,7 @@ use crate::features::layout::{PageEmpty, PageHeader, PageRows, PageSection, Page
 use crate::i18n::{t, t_string, use_i18n};
 use crate::primitives::{
     Badge, BadgeTone, Button, ButtonSize, ButtonVariant, Dialog, DialogBody, DialogClose,
-    DialogContent, DialogFooter, Field, Switch, Textarea,
+    DialogContent, DialogFooter, Field, Input, InputType, Switch, Textarea,
 };
 
 /// Native memory list and control destination required by v3 §3.1 item 7.
@@ -45,10 +45,15 @@ pub fn MemoryPage() -> impl IntoView {
     let loading = RwSignal::new(true);
     let load_error = RwSignal::new(MemoryReadIssue::None);
     let control_pending = RwSignal::new(false);
+    let control_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Memory,
+        move || "$control".into(),
+    );
     let control_error = RwSignal::new(false);
     let action_error = RwSignal::new(false);
     let pending_ids = RwSignal::new(BTreeSet::<String>::new());
     let loading_more = RwSignal::new(false);
+    let page_owner = StoredValue::new(Owner::current());
     let reload_generation = RwSignal::new(0_u64);
     let reload_focus = RwSignal::new(None::<String>);
     let correct_open = RwSignal::new(false);
@@ -56,13 +61,14 @@ pub fn MemoryPage() -> impl IntoView {
     let correction = RwSignal::new(String::new());
     let correction_invalid = RwSignal::new(false);
     let correction_return_focus = RwSignal::new(None::<String>);
+    let correction_generation = RwSignal::new(0_u64);
 
     install_memory_loader(
         reload_generation,
         memories,
         next_cursor,
         writes_enabled,
-        loading,
+        (loading, loading_more),
         load_error,
         reload_focus,
     );
@@ -112,29 +118,39 @@ pub fn MemoryPage() -> impl IntoView {
         }
         loading_more.set(true);
         action_error.set(false);
+        let generation = reload_generation.get_untracked();
         #[cfg(target_arch = "wasm32")]
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            match list_memories(Some(&cursor)).await {
-                Ok(page) => match append_page(&memories.get_untracked(), page) {
-                    Ok((rows, cursor)) => {
-                        memories.set(rows);
-                        next_cursor.set(cursor);
+        if let Some(owner) = page_owner.get_value() {
+            owner.with(|| {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let result = list_memories(Some(&cursor)).await;
+                    if reload_generation.try_get_untracked() != Some(generation) {
+                        return;
                     }
-                    Err(()) => reload_generation
-                        .update(|generation| *generation = generation.saturating_add(1)),
-                },
-                Err(_) => action_error.set(true),
-            }
-            loading_more.set(false);
-        });
+                    match result {
+                        Ok(page) => match append_page(&memories.get_untracked(), page) {
+                            Ok((rows, cursor)) => {
+                                memories.set(rows);
+                                next_cursor.set(cursor);
+                            }
+                            Err(()) => reload_generation
+                                .update(|generation| *generation = generation.saturating_add(1)),
+                        },
+                        Err(_) => action_error.set(true),
+                    }
+                    loading_more.set(false);
+                })
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = cursor;
+            let _ = (cursor, generation, page_owner);
             loading_more.set(false);
             action_error.set(true);
         }
     };
     let open_correction = UnsyncCallback::new(move |record: MemoryRecord| {
+        correction_generation.update(|generation| *generation = generation.saturating_add(1));
         correction_return_focus.set(Some(correct_trigger_id(&record.memory_id)));
         correction.set(record.content.clone().unwrap_or_default());
         correction_invalid.set(false);
@@ -142,6 +158,7 @@ pub fn MemoryPage() -> impl IntoView {
         correct_open.set(true);
     });
     let close_correction = UnsyncCallback::new(move |_| {
+        correction_generation.update(|generation| *generation = generation.saturating_add(1));
         dismiss_correction(
             correct_open,
             correcting,
@@ -161,6 +178,7 @@ pub fn MemoryPage() -> impl IntoView {
             return;
         };
         let memory_id = record.memory_id.clone();
+        let editor_generation = correction_generation.get_untracked();
         if pending_ids.get_untracked().contains(&memory_id) {
             return;
         }
@@ -183,17 +201,25 @@ pub fn MemoryPage() -> impl IntoView {
             pending_ids.update(|ids| {
                 ids.remove(&memory_id);
             });
+            let same_editor = correction_generation.get_untracked() == editor_generation
+                && correcting.with_untracked(|selected| {
+                    selected
+                        .as_ref()
+                        .is_some_and(|record| record.memory_id == memory_id)
+                });
             match result {
                 Ok(replacement) => {
-                    dismiss_correction(
-                        correct_open,
-                        correcting,
-                        correction,
-                        correction_invalid,
-                        correction_return_focus,
-                        false,
-                    );
-                    reload_focus.set(Some(memory_dom_id(&replacement.memory_id)));
+                    if same_editor {
+                        dismiss_correction(
+                            correct_open,
+                            correcting,
+                            correction,
+                            correction_invalid,
+                            correction_return_focus,
+                            false,
+                        );
+                        reload_focus.set(Some(memory_dom_id(&replacement.memory_id)));
+                    }
                     reload_generation
                         .update(|generation| *generation = generation.saturating_add(1));
                 }
@@ -203,14 +229,16 @@ pub fn MemoryPage() -> impl IntoView {
                     | crate::api::ApiError::InvalidResponse
                     | crate::api::ApiError::Server,
                 ) => {
-                    dismiss_correction(
-                        correct_open,
-                        correcting,
-                        correction,
-                        correction_invalid,
-                        correction_return_focus,
-                        false,
-                    );
+                    if same_editor {
+                        dismiss_correction(
+                            correct_open,
+                            correcting,
+                            correction,
+                            correction_invalid,
+                            correction_return_focus,
+                            false,
+                        );
+                    }
                     load_error.set(MemoryReadIssue::ReconciliationRequired);
                 }
                 Err(_) => action_error.set(true),
@@ -218,6 +246,7 @@ pub fn MemoryPage() -> impl IntoView {
         });
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let _ = editor_generation;
             pending_ids.update(|ids| {
                 ids.remove(&memory_id);
             });
@@ -273,6 +302,12 @@ pub fn MemoryPage() -> impl IntoView {
                     title=move || t_string!(i18n, memory.title).to_owned()
                     description=move || t_string!(i18n, memory.description).to_owned()
                 />
+                <MemorySearch
+                    reload_generation
+                    pending_ids
+                    on_correct=open_correction
+                    on_mutate=mutate
+                />
                 <Show when=move || loading.get()>
                     <div class="ob-loading" role="status">{move || t!(i18n, common.loading)}</div>
                 </Show>
@@ -294,7 +329,7 @@ pub fn MemoryPage() -> impl IntoView {
                                 control_id="memory-writes-enabled"
                                 label=move || t_string!(i18n, memory.control_label).to_owned()
                                 description=move || t_string!(i18n, memory.control_description).to_owned()
-                                disabled=Signal::derive(move || control_pending.get())
+                                disabled=Signal::derive(move || control_pending.get() || control_lock.get())
                             >
                                 <Switch
                                     checked=writes_enabled
@@ -370,6 +405,7 @@ pub fn MemoryPage() -> impl IntoView {
                     </DialogClose>
                     <Button
                         id="memory-correction-save"
+                        disabled=crate::configuration_writes::resource_lock(crate::configuration_writes::ConfigurationKind::Memory, move || correcting.get().map(|record| record.memory_id).unwrap_or_default())
                         variant=ButtonVariant::Primary
                         size=ButtonSize::Medium
                         loading=Signal::derive(move || {
@@ -387,6 +423,120 @@ pub fn MemoryPage() -> impl IntoView {
     }
 }
 
+/// This destination has no authoritative Bot/Thread context. Recall uses only the current
+/// actor's User scope; the complete owner list and its management actions remain separate.
+#[component]
+fn MemorySearch(
+    reload_generation: RwSignal<u64>,
+    pending_ids: RwSignal<BTreeSet<String>>,
+    on_correct: UnsyncCallback<MemoryRecord>,
+    on_mutate: UnsyncCallback<(String, MemoryMutation)>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    let query = RwSignal::new(String::new());
+    let generation = RwSignal::new(0_u64);
+    let pending = RwSignal::new(false);
+    let failed = RwSignal::new(false);
+    let invalid = RwSignal::new(false);
+    let results = RwSignal::new(None::<Vec<MemoryRecord>>);
+    let read_owner = StoredValue::new(Owner::current());
+
+    // Typing, a known mutation or explicit list reload invalidates the old read projection.
+    // It never reissues recall and never clears the existing configuration write barrier.
+    Effect::new(move |_| {
+        let _ = query.get();
+        let _ = reload_generation.get();
+        generation.update(|value| *value = value.saturating_add(1));
+        pending.set(false);
+        failed.set(false);
+        invalid.set(false);
+        results.set(None);
+    });
+    let search = UnsyncCallback::new(move |()| {
+        if pending.get_untracked() {
+            return;
+        }
+        let submitted = query.get_untracked();
+        if submitted.trim().is_empty() || submitted.len() > 4096 || submitted.contains('\0') {
+            invalid.set(true);
+            return;
+        }
+        generation.update(|value| *value = value.saturating_add(1));
+        let expected_generation = generation.get_untracked();
+        pending.set(true);
+        failed.set(false);
+        invalid.set(false);
+        results.set(None);
+        #[cfg(target_arch = "wasm32")]
+        if let Some(owner) = read_owner.get_value() {
+            owner.with(|| {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let outcome = crate::api::recall_user_memories(&submitted).await;
+                    if generation.try_get_untracked() != Some(expected_generation) {
+                        return;
+                    }
+                    match outcome {
+                        Ok(recalled) => results.set(Some(recalled.memories)),
+                        Err(_) => failed.set(true),
+                    }
+                    pending.set(false);
+                })
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (submitted, expected_generation, read_owner);
+            failed.set(true);
+            pending.set(false);
+        }
+    });
+
+    view! {
+        <PageSection
+            heading_id="memory-search-title"
+            title=move || t_string!(i18n, memory.search_placeholder).to_owned()
+        >
+            <Field
+                control_id="memory-search-query"
+                label=move || t_string!(i18n, memory.search_placeholder).to_owned()
+                description=move || t_string!(i18n, memory.search_scope_help).to_owned()
+                invalid=Signal::derive(move || invalid.get())
+                error=move || t_string!(i18n, memory.search_invalid).to_owned()
+            >
+                <Input value=query input_type=InputType::Search on_submit=search />
+            </Field>
+            <div class="ob-memory-actions">
+                <Button id="memory-search-submit" size=ButtonSize::Small loading=pending
+                    on_activate=move |_| search.run(())>
+                    {move || if failed.get() { t_string!(i18n, common.retry).to_owned() } else { t_string!(i18n, memory.search_placeholder).to_owned() }}
+                </Button>
+                <Button id="memory-search-clear" size=ButtonSize::Small variant=ButtonVariant::Ghost
+                    on_activate=move |_| query.set(String::new())>
+                    {move || t!(i18n, common.clear)}
+                </Button>
+            </div>
+            <Show when=move || failed.get()>
+                <p class="ob-alert" role="alert">{move || t!(i18n, memory.load_error)}</p>
+            </Show>
+            <Show when=move || results.get().is_some_and(|records| records.is_empty())>
+                <PageEmpty>{move || t!(i18n, common.no_results)}</PageEmpty>
+            </Show>
+            <div id="memory-search-results" aria-live="polite" aria-busy=move || if pending.get() { "true" } else { "false" }>
+                <PageRows>
+                    <For each=move || results.get().unwrap_or_default()
+                        key=|record| record.memory_id.clone()
+                        children=move |record| view! {
+                            <MemoryRow record read_only=true
+                                writes_enabled=Signal::derive(|| false)
+                                pending_ids on_correct on_mutate />
+                        }
+                    />
+                </PageRows>
+            </div>
+        </PageSection>
+    }
+}
+
 #[component]
 fn MemoryRow(
     record: MemoryRecord,
@@ -394,6 +544,7 @@ fn MemoryRow(
     pending_ids: RwSignal<BTreeSet<String>>,
     on_correct: UnsyncCallback<MemoryRecord>,
     on_mutate: UnsyncCallback<(String, MemoryMutation)>,
+    #[prop(optional)] read_only: bool,
 ) -> impl IntoView {
     let i18n = use_i18n();
     let memory_id = record.memory_id.clone();
@@ -401,7 +552,12 @@ fn MemoryRow(
     let forbid_id = StoredValue::new(memory_id.clone());
     let delete_id = StoredValue::new(memory_id.clone());
     let busy_id = memory_id.clone();
-    let busy = Signal::derive(move || pending_ids.get().contains(&busy_id));
+    let lock_id = StoredValue::new(memory_id.clone());
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Memory,
+        move || lock_id.get_value(),
+    );
+    let busy = Signal::derive(move || pending_ids.get().contains(&busy_id) || write_lock.get());
     let excerpt = record
         .content
         .as_deref()
@@ -425,10 +581,15 @@ fn MemoryRow(
     let kind = record.memory_kind;
     let sensitivity = record.sensitivity;
     let origin = record.origin;
-    let dom_id = memory_dom_id(&memory_id);
+    let dom_id = if read_only {
+        format!("recall-{}", memory_dom_id(&memory_id))
+    } else {
+        memory_dom_id(&memory_id)
+    };
     let correct_id = correct_trigger_id(&memory_id);
     view! {
-        <article id=dom_id class="ob-memory-row" data-memory-status=status_name(status) tabindex="-1">
+        <article id=dom_id class="ob-memory-row" data-memory-status=status_name(status)
+            data-memory-readonly=read_only.then_some("true") tabindex="-1">
             <div class="ob-memory-row-header">
                 <Badge tone=status_tone(status)>{move || status_label(i18n, status)}</Badge>
                 <span>{move || kind_label(i18n, kind)}</span>
@@ -460,7 +621,7 @@ fn MemoryRow(
                 </ul>
             </Show>
             <div class="ob-memory-actions">
-                <Show when=move || show_correct>
+                <Show when=move || !read_only && show_correct>
                     <Button
                         id=correct_id.clone()
                         variant=ButtonVariant::Ghost
@@ -470,7 +631,7 @@ fn MemoryRow(
                         on_activate=move |_| on_correct.run(correct_record.get_value())
                     >{move || t!(i18n, memory.correct_entry)}</Button>
                 </Show>
-                <Show when=move || show_forbid>
+                <Show when=move || !read_only && show_forbid>
                     <Button
                         variant=ButtonVariant::Ghost
                         size=ButtonSize::Small
@@ -479,7 +640,7 @@ fn MemoryRow(
                         on_activate=move |_| on_mutate.run((forbid_id.get_value(), MemoryMutation::Forbid))
                     >{move || t!(i18n, memory.forbid_entry)}</Button>
                 </Show>
-                <Show when=move || show_delete>
+                <Show when=move || !read_only && show_delete>
                     <Button
                         variant=ButtonVariant::DangerText
                         size=ButtonSize::Small
@@ -498,13 +659,15 @@ fn install_memory_loader(
     memories: RwSignal<Vec<MemoryRecord>>,
     next_cursor: RwSignal<Option<String>>,
     writes_enabled: RwSignal<bool>,
-    loading: RwSignal<bool>,
+    loading: (RwSignal<bool>, RwSignal<bool>),
     load_error: RwSignal<MemoryReadIssue>,
     reload_focus: RwSignal<Option<String>>,
 ) {
+    let (loading, loading_more) = loading;
     #[cfg(target_arch = "wasm32")]
     Effect::new(move |_| {
         let generation = reload_generation.get();
+        loading_more.set(false);
         loading.set(true);
         load_error.set(MemoryReadIssue::None);
         leptos::task::spawn_local_scoped_with_cancellation(async move {
@@ -540,6 +703,7 @@ fn install_memory_loader(
             next_cursor,
             writes_enabled,
             reload_focus,
+            loading_more,
         );
     }
 }

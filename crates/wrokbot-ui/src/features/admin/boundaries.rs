@@ -82,6 +82,10 @@ pub fn AdminBoundariesPage() -> impl IntoView {
     let loading = RwSignal::new(false);
     let load_error = RwSignal::new(false);
     let save_pending = RwSignal::new(false);
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Boundaries,
+        move || "$policy".into(),
+    );
     let save_error = RwSignal::new(false);
     let saved = RwSignal::new(false);
     let draft = RwSignal::new(String::new());
@@ -196,7 +200,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                                     policy.mode == ActionPolicyMode::Enforce
                                 })
                             })
-                            disabled=save_pending
+                            disabled=Signal::derive(move || save_pending.get() || write_lock.get())
                             on_activate=enforce
                         >
                             {move || t!(i18n, boundaries.mode_enforce)}
@@ -209,7 +213,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                                     policy.mode == ActionPolicyMode::DryRun
                                 })
                             })
-                            disabled=save_pending
+                            disabled=Signal::derive(move || save_pending.get() || write_lock.get())
                             on_activate=dry_run
                         >
                             {move || t!(i18n, boundaries.mode_dry_run)}
@@ -270,7 +274,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                                                 ).to_owned()
                                                 variant=ButtonVariant::Ghost
                                                 size=ButtonSize::Small
-                                                disabled=save_pending
+                                                disabled=Signal::derive(move || save_pending.get() || write_lock.get())
                                                 on_activate=remove
                                             >
                                                 {move || t!(i18n, boundaries.remove_rule)}
@@ -289,13 +293,13 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                             aria_label=move || t_string!(i18n, boundaries.rule_label).to_owned()
                             placeholder=move || t_string!(i18n, boundaries.rule_placeholder).to_owned()
                             invalid=Signal::derive(move || draft_error.get().is_some())
-                            disabled=save_pending
+                            disabled=Signal::derive(move || save_pending.get() || write_lock.get())
                         />
                         <Button
                             variant=ButtonVariant::Primary
                             size=ButtonSize::Small
                             disabled=Signal::derive(move || {
-                                save_pending.get() || trim_ecmascript(&draft.get()).is_empty()
+                                save_pending.get() || write_lock.get() || trim_ecmascript(&draft.get()).is_empty()
                             })
                             on_activate=move |_| add_rule.run(())
                         >
@@ -332,7 +336,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                                             variant=ButtonVariant::Chip
                                             size=ButtonSize::Small
                                             disabled=Signal::derive(move || {
-                                                save_pending.get()
+                                                save_pending.get() || write_lock.get()
                                                     || policy.get().is_none_or(|policy| {
                                                         policy.deny.iter().any(|rule| rule == preset.rule)
                                                     })
@@ -373,7 +377,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                                 <Button
                                     variant=ButtonVariant::Chip
                                     size=ButtonSize::Small
-                                    disabled=save_pending
+                                    disabled=Signal::derive(move || save_pending.get() || write_lock.get())
                                     on_activate=allow_unmatched
                                 >
                                     {move || t!(i18n, boundaries.allow_unmatched)}
@@ -383,7 +387,7 @@ pub fn AdminBoundariesPage() -> impl IntoView {
                                 <Button
                                     variant=ButtonVariant::DangerText
                                     size=ButtonSize::Small
-                                    disabled=save_pending
+                                    disabled=Signal::derive(move || save_pending.get() || write_lock.get())
                                     on_activate=deny_unmatched
                                 >
                                     {move || t!(i18n, boundaries.deny_unmatched)}
@@ -409,6 +413,10 @@ fn FirstSetup(
     choose_allow_unmatched: UnsyncCallback<()>,
 ) -> impl IntoView {
     let i18n = use_i18n();
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Boundaries,
+        move || "$policy".into(),
+    );
     view! {
         <PageSection
             heading_id="boundary-first-setup-title"
@@ -422,7 +430,7 @@ fn FirstSetup(
                     <Button
                         variant=ButtonVariant::Primary
                         size=ButtonSize::Medium
-                        disabled=save_pending
+                        disabled=Signal::derive(move || save_pending.get() || write_lock.get())
                         on_activate=choose_default_deny
                     >
                         {move || t!(i18n, boundaries.choose_strict)}
@@ -434,7 +442,7 @@ fn FirstSetup(
                     <Button
                         variant=ButtonVariant::Chip
                         size=ButtonSize::Medium
-                        disabled=save_pending
+                        disabled=Signal::derive(move || save_pending.get() || write_lock.get())
                         on_activate=choose_allow_unmatched
                     >
                         {move || t!(i18n, boundaries.choose_compatible)}
@@ -499,6 +507,7 @@ fn dispatch_policy_save(
     saved.set(false);
     #[cfg(target_arch = "wasm32")]
     {
+        let writes = expect_context::<crate::configuration_writes::ConfigurationWrites>();
         let start_worker = move || {
             leptos::task::spawn_local_scoped_with_cancellation(async move {
                 match save_action_policy(&intent.document).await {
@@ -510,7 +519,10 @@ fn dispatch_policy_save(
                         draft_error.set(None);
                         saved.set(true);
                     }
-                    Err(_) => error.set(true),
+                    Err(_) => error.set(!writes.locked(
+                        crate::configuration_writes::ConfigurationKind::Boundaries,
+                        "$policy",
+                    )),
                 }
                 pending.set(false);
             });

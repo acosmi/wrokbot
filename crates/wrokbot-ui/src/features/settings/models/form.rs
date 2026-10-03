@@ -7,9 +7,9 @@ use crate::{
     },
     i18n::{t, t_string, use_i18n},
     primitives::{
-        Button, ButtonVariant, Dialog, DialogBody, DialogContent, DialogFooter, Field, Input,
-        InputType, Label, SecretInput, SecretInputController, SecretInputPolicy, Select,
-        SelectContent, SelectItem, SelectTrigger, Switch,
+        Button, ButtonVariant, Dialog, DialogContent, Field, Input, InputType, Label, SecretInput,
+        SecretInputController, SecretInputPolicy, Select, SelectContent, SelectItem, SelectTrigger,
+        Switch,
     },
 };
 use leptos::prelude::*;
@@ -23,11 +23,24 @@ pub(super) enum EditTarget {
 }
 
 #[component]
-pub(super) fn ModelDialog(target: EditTarget, close: UnsyncCallback<()>) -> impl IntoView {
+pub(super) fn ModelDeleteDialog(target: EditTarget, close: UnsyncCallback<()>) -> impl IntoView {
     let i18n = use_i18n();
     let open = RwSignal::new(true);
+    view! {
+        <Dialog id="model-delete-dialog" open on_close=close>
+            <DialogContent title=move ||t_string!(i18n, models.remove).to_owned()>
+                <ModelEditor target close/>
+            </DialogContent>
+        </Dialog>
+    }
+}
+
+#[component]
+pub(super) fn ModelEditor(target: EditTarget, close: UnsyncCallback<()>) -> impl IntoView {
+    let i18n = use_i18n();
+    // The authenticated action can finish later, but a disposed editor cannot close its successor.
+    let close = UnsyncCallback::new(move |_| close.run(()));
     let deleting = matches!(target, EditTarget::Delete(_));
-    let creating = matches!(target, EditTarget::Create);
     let current = LocalResource::new(move || {
         let target = target.clone();
         async move {
@@ -38,16 +51,12 @@ pub(super) fn ModelDialog(target: EditTarget, close: UnsyncCallback<()>) -> impl
         }
     });
     view! {
-        <Dialog id="model-dialog" open on_close=close>
-            <DialogContent title=move || if deleting {t_string!(i18n, models.remove).to_owned()} else if creating {t_string!(i18n, models.custom_add).to_owned()} else {t_string!(i18n, models.edit).to_owned()}>
-                <Suspense fallback=move || view! {<DialogBody><p role="status">{move ||t!(i18n, common.loading)}</p></DialogBody>}>
+                <Suspense fallback=move || view! {<div class="ob-library-form"><p role="status">{move ||t!(i18n, common.loading)}</p></div>}>
                     {move || current.get().map(|result| match result {
                         Ok(base) => view! { <ModelForm base deleting close/> }.into_any(),
-                        Err(_) => view! { <DialogBody><p class="ob-alert" role="alert">{move ||t!(i18n, models.load_failed)}</p><Button on_activate=move |_| current.refetch()>{move ||t!(i18n, models.refresh)}</Button><Button on_activate=move |_|close.run(())>{move ||t!(i18n, common.close)}</Button></DialogBody> }.into_any()
+                        Err(_) => view! { <div class="ob-library-form"><p class="ob-alert" role="alert">{move ||t!(i18n, models.load_failed)}</p><Button on_activate=move |_| current.refetch()>{move ||t!(i18n, models.refresh)}</Button><Button on_activate=move |_|close.run(())>{move ||t!(i18n, common.close)}</Button></div> }.into_any()
                     })}
                 </Suspense>
-            </DialogContent>
-        </Dialog>
     }
 }
 
@@ -98,6 +107,7 @@ fn ModelForm(
         if blocked.get_untracked() {
             return;
         }
+        let secret = key.take();
         let original = original.get_value();
         let input = if deleting {
             let Some(row) = original else {
@@ -126,7 +136,6 @@ fn ModelForm(
                 invalid.set(true);
                 return;
             }
-            let secret = key.take();
             let api_key = if secret.is_empty() && !key_required.get_untracked() {
                 None
             } else {
@@ -174,7 +183,7 @@ fn ModelForm(
         });
     };
     view! {
-        <DialogBody>
+        <div class="ob-library-form" class:ob-modal-body=deleting>
             <Show when=move || invalid.get() || matches!(actions.status.get(), Status::Failed(WriteError::InvalidInput))><p class="ob-alert" role="alert">{move ||t!(i18n, models.invalid)}</p></Show>
             <Show when=move || matches!(actions.status.get(), Status::Failed(WriteError::Rejected(ApiError::Conflict|ApiError::NotFound)))><p class="ob-alert" role="alert">{move ||t!(i18n, models.conflict)}</p></Show>
             <Show when=move || matches!(actions.status.get(), Status::Failed(WriteError::Rejected(ApiError::Unauthorized|ApiError::Forbidden)))><p class="ob-alert" role="alert">{move ||t!(i18n, models.authentication)}</p></Show>
@@ -198,10 +207,10 @@ fn ModelForm(
             }>
                 <p>{move || name.get()}</p><p class="ob-page-intro">{move ||t!(i18n, models.remove_help)}</p>
             </Show>
-        </DialogBody>
-        <DialogFooter>
+        </div>
+        <div class="ob-library-form-actions" class:ob-modal-footer=deleting>
             <Button on_activate=move |_| {key.clear();close.run(());} >{move ||t!(i18n, common.close)}</Button>
             <Button id="model-confirm" variant=if deleting {ButtonVariant::DangerText} else {ButtonVariant::Primary} disabled=blocked loading=Signal::derive(move ||actions.status.get()==Status::Pending) on_activate=save>{move ||if deleting {t_string!(i18n, models.remove).to_owned()} else {t_string!(i18n, common.save).to_owned()}}</Button>
-        </DialogFooter>
+        </div>
     }
 }

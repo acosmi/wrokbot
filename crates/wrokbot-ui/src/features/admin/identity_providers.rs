@@ -11,13 +11,15 @@ use openbot_contracts::identity_provider::{
 use crate::api::{canonical_identity_provider_domains, valid_identity_provider_id};
 #[cfg(target_arch = "wasm32")]
 use crate::api::{load_identity_providers, register_identity_provider, remove_identity_provider};
-use crate::features::layout::{PageEmpty, PageHeader, PageRows, PageSection, PageShell, PageWidth};
+use crate::features::layout::{
+    DetailPanel, DetailPanelLayout, DetailPanelMain, PageEmpty, PageHeader, PageRows, PageSection,
+    PageShell, PageWidth, editor_location::EditorLocation,
+};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
 use crate::primitives::{
-    Button, ButtonSize, ButtonVariant, Dialog, DialogBody, DialogContent, DialogFooter, Field,
-    IconSize, IconView, Input, InputType, SecretInput, SecretInputController, SecretInputPolicy,
-    SecretInputStatus, Textarea,
+    Button, ButtonSize, ButtonVariant, Field, IconSize, IconView, Input, InputType, SecretInput,
+    SecretInputController, SecretInputPolicy, SecretInputStatus, Textarea,
 };
 
 #[derive(Clone, Copy)]
@@ -96,21 +98,35 @@ impl DraftSignals {
     }
 }
 
-/// Dynamic provider list plus SAML/OIDC registration dialog.
+/// Dynamic provider list plus a route-owned SAML/OIDC registration page.
 #[component]
 pub fn AdminIdentityProvidersPage() -> impl IntoView {
     let i18n = use_i18n();
     let providers = RwSignal::new(Vec::<RegisteredIdentityProvider>::new());
     let loading = RwSignal::new(false);
     let load_error = RwSignal::new(false);
-    let dialog_open = RwSignal::new(false);
+    let editor = EditorLocation::new(&["sso-register"]);
+    let dialog_open = Signal::derive(move || editor.selection.get().is_some());
     let draft = DraftSignals::new();
     let submit_attempted = RwSignal::new(false);
     let registration_pending = RwSignal::new(false);
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::IdentityProviders,
+        move || draft.provider_id.get().trim().to_owned(),
+    );
     let registration_error = RwSignal::new(false);
     let removing = RwSignal::new(None::<String>);
     let removal_error = RwSignal::new(false);
     let page_owner = StoredValue::new(Owner::current());
+    let form_generation = RwSignal::new(0_u64);
+    Effect::new(move |_| {
+        editor.selection.track();
+        form_generation.update(|generation| *generation = generation.wrapping_add(1));
+        draft.clear();
+        submit_attempted.set(false);
+        registration_error.set(false);
+    });
+    on_cleanup(move || draft.client_secret.clear());
 
     request_providers(providers, loading, load_error, page_owner);
 
@@ -118,25 +134,26 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
         draft.clear();
         submit_attempted.set(false);
         registration_error.set(false);
-        dialog_open.set(true);
+        editor.open("sso-register", None);
     };
     let close_dialog = UnsyncCallback::new(move |_| {
         if !registration_pending.get_untracked() {
             draft.clear();
             submit_attempted.set(false);
             registration_error.set(false);
-            dialog_open.set(false);
+            editor.close();
         }
     });
     let retry = move |_| request_providers(providers, loading, load_error, page_owner);
     let register = move |_| {
-        if registration_pending.get_untracked() {
+        if registration_pending.get_untracked() || write_lock.get_untracked() {
             return;
         }
         submit_attempted.set(true);
         registration_error.set(false);
         draft.client_secret.validate();
         if !draft_valid(draft) {
+            draft.client_secret.clear();
             return;
         }
         let Ok(request) = build_registration_request(draft.snapshot()) else {
@@ -145,16 +162,21 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
         dispatch_registration(
             request,
             providers,
-            dialog_open,
+            editor,
             draft,
             submit_attempted,
             registration_pending,
             registration_error,
             page_owner,
+            form_generation,
+            loading,
+            load_error,
         );
     };
 
     view! {
+        <DetailPanelLayout open=dialog_open>
+        <DetailPanelMain>
         <PageShell width=PageWidth::Content>
             <PageHeader
                 heading_id="admin-identity-providers-title"
@@ -214,6 +236,10 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                 let remove_id = provider_id.clone();
                                 let pending_id = provider_id.clone();
                                 let label_id = provider_id.clone();
+                                let lock_id = provider_id.clone();
+                                let removal_lock = crate::configuration_writes::resource_lock(
+                                    crate::configuration_writes::ConfigurationKind::IdentityProviders,
+                                    move || lock_id.clone());
                                 let description = provider_description(&provider);
                                 let remove = move |_| {
                                     dispatch_removal(
@@ -222,6 +248,8 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                         removing,
                                         removal_error,
                                         page_owner,
+                                        loading,
+                                        load_error,
                                     );
                                 };
                                 view! {
@@ -244,7 +272,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                             loading=Signal::derive(move || {
                                                 removing.get().as_deref() == Some(pending_id.as_str())
                                             })
-                                            disabled=Signal::derive(move || removing.get().is_some())
+                                            disabled=Signal::derive(move || removing.get().is_some() || removal_lock.get())
                                             on_activate=remove
                                         >
                                             <IconView icon=Icon::Trash2 size=IconSize::Inline />
@@ -258,13 +286,13 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                 </Show>
             </PageSection>
         </PageShell>
-
-        <Dialog id="identity-provider-dialog" open=dialog_open on_close=close_dialog>
-            <DialogContent
+        </DetailPanelMain>
+        <DetailPanel id="identity-provider-dialog" open=dialog_open on_close=close_dialog
+                return_focus_id="identity-provider-add"
                 title=move || t_string!(i18n, admin.identity_providers_dialog_title).to_owned()
-                description=move || t_string!(i18n, admin.identity_providers_dialog_intro).to_owned()
             >
-                <DialogBody>
+                <p class="ob-page-intro">{move || t!(i18n, admin.identity_providers_dialog_intro)}</p>
+                <div class="ob-library-form">
                     <div class="ob-identity-provider-protocols" role="group" aria-label=move || {
                         t_string!(i18n, admin.identity_providers_protocol).to_owned()
                     }>
@@ -272,7 +300,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                             id="identity-provider-protocol-saml"
                             size=ButtonSize::Small
                             selected=Signal::derive(move || draft.protocol.get() == SsoProtocol::Saml)
-                            disabled=registration_pending
+                            disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                             on_activate=move |_| {
                                 draft.client_secret.clear();
                                 draft.protocol.set(SsoProtocol::Saml);
@@ -284,7 +312,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                             id="identity-provider-protocol-oidc"
                             size=ButtonSize::Small
                             selected=Signal::derive(move || draft.protocol.get() == SsoProtocol::Oidc)
-                            disabled=registration_pending
+                            disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                             on_activate=move |_| {
                                 draft.client_secret.clear();
                                 draft.protocol.set(SsoProtocol::Oidc);
@@ -304,7 +332,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                 submit_attempted.get()
                                     && !field_valid(DraftField::ProviderId, draft)
                             })
-                            disabled=registration_pending
+                            disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                         >
                             <Input
                                 value=draft.provider_id
@@ -319,7 +347,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                             invalid=Signal::derive(move || {
                                 submit_attempted.get() && !field_valid(DraftField::Domain, draft)
                             })
-                            disabled=registration_pending
+                            disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                         >
                             <Input value=draft.domain placeholder="acme.com" />
                         </Field>
@@ -330,7 +358,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                             invalid=Signal::derive(move || {
                                 submit_attempted.get() && !field_valid(DraftField::Issuer, draft)
                             })
-                            disabled=registration_pending
+                            disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                         >
                             <Input
                                 value=draft.issuer
@@ -348,7 +376,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                     submit_attempted.get()
                                         && !field_valid(DraftField::EntryPoint, draft)
                                 })
-                                disabled=registration_pending
+                                disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                             >
                                 <Input
                                     value=draft.entry_point
@@ -365,7 +393,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                     submit_attempted.get()
                                         && !field_valid(DraftField::Metadata, draft)
                                 })
-                                disabled=registration_pending
+                                disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                             >
                                 <Textarea
                                     value=draft.metadata
@@ -383,7 +411,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                     submit_attempted.get()
                                         && !field_valid(DraftField::ClientId, draft)
                                 })
-                                disabled=registration_pending
+                                disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                             >
                                 <Input value=draft.client_id />
                             </Field>
@@ -396,7 +424,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                                     submit_attempted.get()
                                         && !field_valid(DraftField::ClientSecret, draft)
                                 })
-                                disabled=registration_pending
+                                disabled=Signal::derive(move || registration_pending.get() || write_lock.get())
                             >
                                 <SecretInput controller=draft.client_secret />
                             </Field>
@@ -415,8 +443,8 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                             {move || t!(i18n, admin.identity_providers_register_error)}
                         </p>
                     </Show>
-                </DialogBody>
-                <DialogFooter>
+                </div>
+                <div class="ob-library-form-actions">
                     <Button
                         variant=ButtonVariant::Ghost
                         disabled=registration_pending
@@ -428,6 +456,7 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                         id="identity-provider-submit"
                         variant=ButtonVariant::Primary
                         loading=registration_pending
+                        disabled=write_lock
                         on_activate=register
                     >
                         {move || if registration_pending.get() {
@@ -436,9 +465,9 @@ pub fn AdminIdentityProvidersPage() -> impl IntoView {
                             t_string!(i18n, admin.identity_providers_submit).to_owned()
                         }}
                     </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
+                </div>
+        </DetailPanel>
+        </DetailPanelLayout>
     }
 }
 
@@ -481,34 +510,47 @@ fn request_providers(
 fn dispatch_registration(
     request: RegisterIdentityProviderRequest,
     providers: RwSignal<Vec<RegisteredIdentityProvider>>,
-    dialog_open: RwSignal<bool>,
+    editor: EditorLocation,
     draft: DraftSignals,
     submit_attempted: RwSignal<bool>,
     pending: RwSignal<bool>,
     error: RwSignal<bool>,
     page_owner: StoredValue<Option<Owner>>,
+    form_generation: RwSignal<u64>,
+    list_loading: RwSignal<bool>,
+    list_error: RwSignal<bool>,
 ) {
     if pending.get_untracked() {
         return;
     }
     pending.set(true);
     error.set(false);
+    // The DOM-owned secret has been consumed; its empty field is not a failed preflight.
+    submit_attempted.set(false);
+    let generation = form_generation.get_untracked();
     #[cfg(target_arch = "wasm32")]
     {
+        let writes = expect_context::<crate::configuration_writes::ConfigurationWrites>();
+        let provider_id = request.provider_id().to_owned();
         let start_worker = move || {
             leptos::task::spawn_local_scoped_with_cancellation(async move {
-                let outcome = match register_identity_provider(request).await {
-                    Ok(_) => load_identity_providers().await,
-                    Err(error) => Err(error),
-                };
+                let outcome = register_identity_provider(request).await;
                 match outcome {
-                    Ok(loaded) => {
-                        providers.set(loaded);
-                        draft.clear();
-                        submit_attempted.set(false);
-                        dialog_open.set(false);
+                    Ok(_) => {
+                        if form_generation.get_untracked() == generation {
+                            draft.clear();
+                            submit_attempted.set(false);
+                            editor.close();
+                        }
+                        request_providers(providers, list_loading, list_error, page_owner);
                     }
-                    Err(_) => error.set(true),
+                    Err(_) if form_generation.get_untracked() == generation => {
+                        error.set(!writes.locked(
+                            crate::configuration_writes::ConfigurationKind::IdentityProviders,
+                            &provider_id,
+                        ))
+                    }
+                    Err(_) => {}
                 }
                 pending.set(false);
             });
@@ -523,10 +565,14 @@ fn dispatch_registration(
         let _ = (
             request,
             providers,
-            dialog_open,
+            editor,
             draft,
             submit_attempted,
             page_owner,
+            form_generation,
+            generation,
+            list_loading,
+            list_error,
         );
         pending.set(false);
         error.set(true);
@@ -539,6 +585,8 @@ fn dispatch_removal(
     removing: RwSignal<Option<String>>,
     error: RwSignal<bool>,
     page_owner: StoredValue<Option<Owner>>,
+    list_loading: RwSignal<bool>,
+    list_error: RwSignal<bool>,
 ) {
     if removing.get_untracked().is_some() {
         return;
@@ -547,15 +595,26 @@ fn dispatch_removal(
     error.set(false);
     #[cfg(target_arch = "wasm32")]
     {
+        let writes = expect_context::<crate::configuration_writes::ConfigurationWrites>();
         let start_worker = move || {
             leptos::task::spawn_local_scoped_with_cancellation(async move {
-                let outcome = match remove_identity_provider(&provider_id).await {
-                    Ok(()) => load_identity_providers().await,
-                    Err(error) => Err(error),
-                };
-                match outcome {
-                    Ok(loaded) => providers.set(loaded),
-                    Err(_) => error.set(true),
+                match remove_identity_provider(&provider_id).await {
+                    Ok(()) => {
+                        providers.update(|providers| {
+                            providers.retain(|provider| provider.provider_id != provider_id);
+                        });
+                        list_loading.set(true);
+                        list_error.set(false);
+                        match load_identity_providers().await {
+                            Ok(loaded) => providers.set(loaded),
+                            Err(_) => list_error.set(true),
+                        }
+                        list_loading.set(false);
+                    }
+                    Err(_) => error.set(!writes.locked(
+                        crate::configuration_writes::ConfigurationKind::IdentityProviders,
+                        &provider_id,
+                    )),
                 }
                 removing.set(None);
             });
@@ -567,7 +626,7 @@ fn dispatch_removal(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (provider_id, providers, page_owner);
+        let _ = (provider_id, providers, page_owner, list_loading, list_error);
         removing.set(None);
         error.set(true);
     }

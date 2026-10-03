@@ -4,10 +4,13 @@ use openbot_contracts::mcp::{
 };
 
 use crate::api::plugins as api;
+use crate::features::layout::{
+    editor_location::EditorLocation, library_editor::LibraryEditorFrame,
+};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::primitives::{
-    Button, ButtonVariant, Dialog, DialogBody, DialogContent, DialogFooter, Field, Input,
-    InputType, SecretInput, SecretInputController, SecretInputPolicy, SecretInputStatus, Textarea,
+    Button, ButtonVariant, Field, Input, InputType, SecretInput, SecretInputController,
+    SecretInputPolicy, Textarea,
 };
 use crate::primitives::{Select, SelectContent, SelectItem, SelectTrigger};
 
@@ -21,7 +24,10 @@ pub enum PluginDialog {
 }
 
 #[component]
-pub fn PluginDialogs(dialog: RwSignal<Option<PluginDialog>>) -> impl IntoView {
+pub fn PluginDialogs(
+    dialog: RwSignal<Option<PluginDialog>>,
+    editor: EditorLocation,
+) -> impl IntoView {
     let i18n = use_i18n();
     let actions = expect_context::<PluginActions>();
     let open = RwSignal::new(false);
@@ -38,8 +44,21 @@ pub fn PluginDialogs(dialog: RwSignal<Option<PluginDialog>>) -> impl IntoView {
     let attempted = RwSignal::new(false);
     let auth_method = RwSignal::new(Some("basic".to_owned()));
     let method_open = RwSignal::new(false);
+    let generation = RwSignal::new(0_u64);
+    let return_focus = RwSignal::new("plugin-add".to_owned());
     Effect::new(move |_| {
         let selected = dialog.get();
+        generation.update(|value| *value = value.wrapping_add(1));
+        if let Some(selected) = &selected {
+            return_focus.set(
+                match selected {
+                    PluginDialog::Custom => "plugin-add",
+                    PluginDialog::OAuth(_) => "plugin-oauth-client",
+                    PluginDialog::Remove(_) => "plugin-remove",
+                }
+                .to_owned(),
+            );
+        }
         open.set(selected.is_some());
         invalid.set(false);
         attempted.set(false);
@@ -65,24 +84,20 @@ pub fn PluginDialogs(dialog: RwSignal<Option<PluginDialog>>) -> impl IntoView {
         }
     });
     let close = UnsyncCallback::new(move |_| {
-        let target = match dialog.get_untracked() {
-            Some(PluginDialog::Custom) => "plugin-add",
-            Some(PluginDialog::OAuth(_)) => "plugin-oauth-client",
-            Some(PluginDialog::Remove(_)) => "plugin-remove",
-            None => return,
-        };
-        dialog.set(None);
-        actions.return_to(target);
+        client_secret.clear();
+        editor.close();
     });
     let save = move |_| {
         if actions.busy.get_untracked() {
             return;
         }
         invalid.set(false);
+        let secret = client_secret.take();
         let selected = dialog.get_untracked();
+        let started = generation.get_untracked();
         let finish = move |ok| {
-            if ok {
-                dialog.try_set(None);
+            if ok && generation.try_get_untracked() == Some(started) {
+                editor.close();
             }
         };
         match selected {
@@ -112,13 +127,9 @@ pub fn PluginDialogs(dialog: RwSignal<Option<PluginDialog>>) -> impl IntoView {
                     invalid.set(true);
                     return;
                 }
-                if client_secret.validate() != SecretInputStatus::Valid {
-                    invalid.set(true);
-                    return;
-                }
                 let registration = McpOAuthClientRegistration::with_zeroizing_secret(
                     client_id.get_untracked(),
-                    client_secret.take(),
+                    secret,
                     issuer.get_untracked(),
                     if auth_method.get_untracked().as_deref() == Some("post") {
                         McpOAuthClientAuthMethod::ClientSecretPost
@@ -151,15 +162,18 @@ pub fn PluginDialogs(dialog: RwSignal<Option<PluginDialog>>) -> impl IntoView {
         }
     };
     view! {
-        <Dialog id="plugin-dialog" open on_close=close>
-            <DialogContent title=move || match dialog.get() {
+        <LibraryEditorFrame id="plugin-dialog" open=Signal::derive(move || open.get())
+            confirm=Signal::derive(move || matches!(dialog.get(),Some(PluginDialog::Remove(_))))
+            return_focus_id=move || return_focus.get() on_close=close
+            title=move || match dialog.get() {
                 Some(PluginDialog::Custom) => t_string!(i18n, plugins.custom_add).to_owned(),
                 Some(PluginDialog::OAuth(_)) => t_string!(i18n, plugins.oauth_client).to_owned(),
                 _ => t_string!(i18n, plugins.remove).to_owned(),
             }>
-                <DialogBody>
+                <div class="ob-library-form">
                     <Show when=move || invalid.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.invalid)}</p></Show>
-                    <Show when=move || attempted.get() && actions.failed.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.write_error)}</p></Show>
+                    <Show when=move || attempted.get() && actions.failed.get() && !actions.unknown.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.write_error)}</p></Show>
+                    {move || dialog.get().and_then(|selected| match selected {PluginDialog::OAuth(id)|PluginDialog::Remove(id)=>Some(view!{<p class="ob-page-intro"><code>{id}</code></p>}),PluginDialog::Custom=>None})}
                     <Show when=move || matches!(dialog.get(), Some(PluginDialog::Custom))>
                         <Field control_id="plugin-id" label=move || t_string!(i18n, plugins.id).to_owned() disabled=actions.busy><Input value=id /></Field>
                         <Field control_id="plugin-title" label=move || t_string!(i18n, plugins.name).to_owned() disabled=actions.busy><Input value=title /></Field>
@@ -184,13 +198,12 @@ pub fn PluginDialogs(dialog: RwSignal<Option<PluginDialog>>) -> impl IntoView {
                     <Show when=move || matches!(dialog.get(), Some(PluginDialog::Remove(_)))>
                         <p>{move || t!(i18n, plugins.remove_warning)}</p>
                     </Show>
-                </DialogBody>
-                <DialogFooter>
+                </div>
+                <div class="ob-library-form-actions">
                     <Button disabled=actions.busy on_activate=move |_| close.run(())>{move || t!(i18n, common.cancel)}</Button>
                     <Button id="plugin-confirm" variant=ButtonVariant::Primary disabled=actions.busy on_activate=save>{move || t!(i18n, plugins.confirm)}</Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
+                </div>
+        </LibraryEditorFrame>
     }
 }
 

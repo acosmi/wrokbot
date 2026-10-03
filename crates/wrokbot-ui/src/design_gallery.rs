@@ -856,7 +856,7 @@ pub fn DesignGallery() -> impl IntoView {
                 <section class="ob-design-section" aria-labelledby="design-layout-title">
                     <h2 id="design-layout-title">{move || t!(i18n, design_gallery.layout)}</h2>
                     <div class="ob-design-layout-preview" id="design-layout-example">
-                        <DetailPanelLayout>
+                        <DetailPanelLayout open=detail_open>
                             <DetailPanelMain>
                                 <PageShell width=PageWidth::Content>
                                     <PageTopbar>

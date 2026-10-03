@@ -66,6 +66,15 @@ pub fn AgentEditor(
     let visibility_open = RwSignal::new(false);
     let attempted = RwSignal::new(false);
     let pending = RwSignal::new(false);
+    let write_lock = crate::configuration_writes::resource_lock(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        move || {
+            agent_id
+                .get_value()
+                .map(|id| id.as_str().to_owned())
+                .unwrap_or_else(|| "$create".into())
+        },
+    );
     let save_error = RwSignal::new(false);
     let connection_pending = RwSignal::new(false);
     let connection = RwSignal::new(None::<ConnectionState>);
@@ -84,7 +93,7 @@ pub fn AgentEditor(
     });
 
     let build = move || {
-        let secret = auth.copy_for_request();
+        let secret = auth.take();
         build_agent_request(
             &name.get_untracked(),
             &title.get_untracked(),
@@ -105,7 +114,6 @@ pub fn AgentEditor(
             return;
         };
         pending.set(true);
-        auth.clear();
         connection.set(None);
         connection_pending.set(false);
         let _ = advance_connection_generation(connection_generation);
@@ -129,6 +137,7 @@ pub fn AgentEditor(
     });
 
     let test = move |_| {
+        let auth_raw = auth.take();
         connection.set(None);
         let Some(generation) = advance_connection_generation(connection_generation) else {
             connection.set(Some(ConnectionState::Rejected(
@@ -144,7 +153,6 @@ pub fn AgentEditor(
             )));
             return;
         }
-        let auth_raw = auth.copy_for_request();
         let auth_value = openbot_contracts::text::trim_ecmascript(&auth_raw);
         let request = AgentConnectionTestRequest {
             endpoint: endpoint_value.to_owned(),
@@ -240,7 +248,7 @@ pub fn AgentEditor(
                     label=move || t_string!(i18n, agents.name_label).to_owned()
                     error=move || t_string!(i18n, agents.name_error).to_owned()
                     invalid=invalid_name
-                    disabled=pending
+                    disabled=Signal::derive(move || pending.get() || write_lock.get())
                 >
                     <Input
                         value=name
@@ -252,7 +260,7 @@ pub fn AgentEditor(
                     label=move || t_string!(i18n, agents.title_label).to_owned()
                     error=move || t_string!(i18n, agents.title_error).to_owned()
                     invalid=invalid_title
-                    disabled=pending
+                    disabled=Signal::derive(move || pending.get() || write_lock.get())
                 >
                     <Input
                         value=title
@@ -264,7 +272,7 @@ pub fn AgentEditor(
                     label=move || t_string!(i18n, agents.role_label).to_owned()
                     error=move || t_string!(i18n, agents.role_error).to_owned()
                     invalid=invalid_role
-                    disabled=pending
+                    disabled=Signal::derive(move || pending.get() || write_lock.get())
                 >
                     <Textarea
                         value=role
@@ -274,7 +282,7 @@ pub fn AgentEditor(
                 <Field
                     control_id="agent-visibility"
                     label=move || t_string!(i18n, agents.visibility_label).to_owned()
-                    disabled=pending
+                    disabled=Signal::derive(move || pending.get() || write_lock.get())
                 >
                     <Select
                         id="agent-visibility"
@@ -303,7 +311,7 @@ pub fn AgentEditor(
                     control_id="agent-endpoint"
                     label=move || t_string!(i18n, agents.endpoint_label).to_owned()
                     description=move || t_string!(i18n, agents.endpoint_help).to_owned()
-                    disabled=pending
+                    disabled=Signal::derive(move || pending.get() || write_lock.get())
                 >
                     <Input
                         value=endpoint
@@ -320,7 +328,7 @@ pub fn AgentEditor(
                         format!("{} {}", mode_help, t_string!(i18n, common.secret_entry_help))
                     }
                     invalid=Signal::derive(move || attempted.get() && auth.status().get() == SecretInputStatus::Invalid)
-                    disabled=pending
+                    disabled=Signal::derive(move || pending.get() || write_lock.get())
                 >
                     <SecretInput
                         controller=auth
@@ -362,7 +370,7 @@ pub fn AgentEditor(
             <div class="ob-agent-editor-actions">
                 <Button
                     variant=ButtonVariant::Primary
-                    disabled=pending
+                    disabled=Signal::derive(move || pending.get() || write_lock.get())
                     on_activate=move |_| save.run(())
                 >
                     {move || if pending.get() {
@@ -375,7 +383,7 @@ pub fn AgentEditor(
                 </Button>
                 <Button
                     variant=ButtonVariant::Ghost
-                    disabled=pending
+                    disabled=Signal::derive(move || pending.get() || write_lock.get())
                     on_activate=cancel
                 >{move || t!(i18n, common.cancel)}</Button>
             </div>

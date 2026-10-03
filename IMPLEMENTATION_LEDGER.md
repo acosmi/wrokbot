@@ -524,6 +524,68 @@ Web使用现有隔离合成HTTP/ApplicationService宿主，模型目录与保存
 最终CSS131030/131072仍预警，WASM gzip3640187/3670016、字体740216/819200、external1/inline0，守卫与限额未改；P4先删除退休页面规则。自有native缓存第三次清理2247979474字节，工具/host SHA未变、空闲15892480000字节；QA/必要产物/其它窗口保留。PR #105当前source head为c912，追加本段只改执行台账，发布前核编译输入除该文件外逐项等价并复核差量，再按既有授权正常合并。oracle missing、最终像素、native56/真实200%/读屏、生产Computer/Artifact及通用回读等依赖继续open，当前不关闭P3规定全量验收或持续总目标。
 
 
+## UI5-P3 实际合并与UI5-P4入场
+
+2026-10-03 UTC：PR #105已正常合入dd91601d095a0faccf8eba8fe91aaf45a1bd4fd8（GitHub merged=true，合并时间02:11:37Z；Git父ae60+26ece，tree990dc与精确出版候选一致）。源c912的八定向检查/246单测/77合成Web经独立有限实现GO，出版26ece的1144非ledger输入与24产物等价及实际台账差量再经独立GO（1781cde68f56d06a53893dfc317629eb561ccc5f72a6766dcfce74a9f02e2a0d）。不以此关闭原应用oracle、最终像素/native/生产PG模型/Computer成果和全量验收；旧源码与台账NO-GO均保留。
+
+P4从实际合并主线建立独立工作树，先重建共用页面骨架、设置/管理分区及退休旧页面样式，再逐28路由/动作/角色/错误/分页核销。保持DOM-owned SecretInput、认证owner、CAS/Unknown写锁、compiled/sandboxed隔离与原API；只消费已经合入的后端合同。另窗口V7-COMP-004仍在b4feea上编辑sandbox合同与两处UI消费者，属于在途，不从其脏工作树复制未交付能力；后续合入时在自有树正常整合。P4当前无产品改动、候选、PR或验收，CSS余量仅42字节，必须先删除旧视图规则。持续目标继续active，移动/依赖/守卫冻结。
+
+
+## UI5-P4 页面骨架草稿、独立反例修复与缓存清理
+
+2026-10-03 UTC：在dd916独立P4树替换共用library页面骨架、Settings/Admin分区及Agent详情呈现，退休旧侧详情动效与级联入场；已有typed配置写适配器增加有界认证owner的逐对象Pending/Unknown与部分发布事实，不虚构回读或CAS。早期只读独立审查NO-GO指出未发HTTP的本地失败误锁、Agent操作成功码/目标绑定和Memory修正意图绑定缺口，另提示焦点owner与部分发布句柄风险；该报告与失败历史保留。修正明确区分NotSubmitted、201/200及规范化非秘密请求字段，Memory绑定正文/排序去重tags/敏感级别/expiry及替代身份，已保存阶段用捕获句柄，详情焦点由稳定owner和代际守卫调度。
+
+同一修正草稿251项UI单测、WASM与严格Clippy定向检查exit0，逐项编译输入前后未变；直接1.98.0工具链执行，未声称不存在的rustup shim命令成功。此前三处WASM编译错误与一处native callback id作用域错误均保留原失败，不将formatter输入变化计作检查通过。本轮尚无精确P4候选、Web/CSS预算结果、独立返修GO或PR；复杂模型/SSO/权限表单与全28动作矩阵继续迁移，动态焦点尚待验证。
+
+检查和自有服务停止后清理本任务native deps/build/fingerprint共2248435277逻辑字节，固定工具及fixture host摘要不变，QA、必要产物与其它窗口保持；释放后空闲以本机收据为准。后端004已独立冻结bf74a6e并有draft PR #106，11定向检查通过但复核/合并仍在途；UI未复制未合合同。规范摘要维持v5.1=2469dbd…/v7R422=4e973a4…，oracle缺失、最终像素/native/生产旅程及全量验收持续开放。
+
+
+## UI5-P4 完整表单迁移草稿与第二轮负面回归
+
+2026-10-03 UTC：模型、SSO、技能创建/编辑/grant及插件OAuth/自定义复杂表单迁入既有路径内可定位的完整library页，短删除确认继续使用既有dialog；仅增加非秘密ui_editor/ui_target定位参数，保留agent/thread/重复查询值与原权限边界。稳定owner调度详情关闭的实际返回焦点，代际绑定防旧回执关闭新表单；SSO已确认写与后续GET错误分别呈现。助手本地无效提交和连接测试均清空DOM-owned秘密，测试仍与保存分开。
+
+第二轮隔离合成宿主实际P4产物为124项通过/2失败，全部28路径骨架、助手201要求/错目标200的逐对象Unknown跨路由锁、403无自动重试、密钥清理、三种管理探针拒绝及原发送/FIFO/Unknown/登出回归通过；701px旧768px规则提前应用窄屏间距为真实产品反例，技能短确认缺夹具数据为未运行部分，均保留失败。零JS错误/外部请求，宿主已退出；候选截图仅为观察，不作oracle。
+
+最新草稿production Web与CSS检查通过；WASM gzip3695493超过冻结3670016，预算仍失败，未放宽限额。中间3687920/3684161超限亦保留；新增类型擦除尝试未收敛，接续减少重复适配与退休视图代码。较早251单测/严格Clippy仅绑定其原输入，不外推完整新表单源码；当前无P4候选、最终独立GO、PR或合并。28页面观察不关闭194业务动作矩阵、原应用oracle、native/生产及全量验收欠项；后端004的未合合同未复制，移动/依赖/守卫冻结。完整负面Web产物与源码摘要在本机保留，持续目标active。
+
+
+## UI5-P4 第七轮负面回归与真实欠项
+
+2026-10-03 UTC：独立draft14 NO-GO指出技能冷URL缺预填、插件path/query错对象、技能非法定位触发DOM断言与Unknown误反馈，原报告/源码/失败保留。新草稿由真实同scope读取完成后仅首代预填，定位只接受原slug规则，插件query必须匹配path，完整表单外显示认证owner的Unknown与实际目标，未解除占用或自动重试。关闭短确认保留返回目标；完整页补丢焦点后的Escape及禁用触发器的标题焦点fallback。另独立draft20审查发现Audit重试owner会随错误分支销毁，已将读取绑定页面owner。
+
+最新draft23在同1148输入上137项隔离合成宿主Web通过，零JS/panic/外部请求，host已退出；覆盖700/701边界、技能冷读/非法/越scope、插件错目标、Unknown后BODY Escape/真实返回焦点/秘密清理/跨路由零重放、Audit初次失败与分页失败同opaque cursor显式重试、人员角色/访问及self与configured-admin floor，以及既有发送/FIFO/Unknown/注销回归。候选截图仅为观察，具名DTO transport结果不声称生产PG权限或外部OAuth效果。新增单元测试最初因浏览器专用编码器在native执行失败，修正纯URL构造后252通过；该lib和严格Clippy/WASM只绑定各自原输入，不外推draft23精确验收。第三至六轮所有真实失败与QA时机/标签/glob错误均保留。
+
+生产构建通过但draft23 WASM gzip3706725仍超冻结3670016；中间3671822/3682543/3701952失败亦保留，未放宽预算或升级依赖。移除重叠请求policy、共享既有typed响应等待，部分尝试因体积更大回退。独立复核新增凭据页共用PluginActions的Unknown遗漏：该页仍可能误显示Saving/Rejected，待同合同返修和实际负面回归。28路径骨架和137检查不关闭194业务动作矩阵、最终精确候选、独立GO或P4全验收；当前无P4候选/PR/合并，后端004仍未合入、不消费未交付CAS。
+
+按用户磁盘要求，本批两次清理自有停止后的native缓存2248599668与788540991逻辑字节，工具及合成host摘要不变，最新空闲7004160000字节。QA/原始日志/必要产物/其它窗口保持。draft22观察后的bundle字节归档尝试晚于下一构建，摘要断言拒绝，真实登记原bundle字节缺失；原report/PNG/metrics仍保留，不拿新bundle替代。现runner在观测前以内容摘要保存24产物并复核，重复字节共享存储。规范v5.1=2469dbd…/v7R422=4e973a4…未改；oracle/native/生产和P5–P9全量欠项继续开放，总目标active。
+
+
+## UI5-P4 精确草稿回归、预算去重与IME反例
+
+2026-10-03 UTC：draft28在同1148输入上九项定向检查及252项UI单测、144项隔离合成Web回归全部通过，零JS/panic/外部请求，宿主实际退出。新增凭据202/响应丢失均显示实际Unknown目标、清除秘密、跨路由保持锁且零重放；助手创建/编辑/复制/隐藏/恢复/软删、角色保护及callback签发/撤销/单次展示清理，凭据分页/首末及错误显式重试均实际观察。合成ApplicationService/严格DTO transport不冒称生产PG/fresh授权或原生验收；一次隐藏助手QA误将section标签要求到卡片内，原失败保留后按实际section核验通过。
+
+共享原请求策略、浏览器等待与typed解码，保持DTO/响应限额/秘密边界，draft28 WASM gzip3663649/3670016、CSS130967/131072、字体740216/819200、external1/inline0；较大中间尝试真实回退，不放宽预算或变依赖。独立draft20 NO-GO保留；draft28不可变复核又发现完整编辑页section Escape未判断composition，可能误关中文草稿。draft29统一composition守卫正在验证，构建/CSS通过但WASM3689356超限；首个模型IME QA因未安装合成模型库存fixture无创建按钮，未执行其IME断言，保持失败。不拿draft28通过外推新草稿或P4最终GO。
+
+服务与本批编译停止后清理自有native缓存2248601429逻辑字节，工具/host SHA不变、空闲6922240000字节；保留原证据、必要bundle、工具及其它窗口。194业务动作矩阵和P4精确候选/PR/合并仍open，移动/后端合同/守卫冻结；后端004 PR106实际仍draft未合，未复制其在途CAS。唯一规范摘要v5.1=2469dbd…/v7R422=4e973a4…保持，oracle/native/生产与P5–P9欠项继续真实登记，总目标active。
+
+
+## UI5-P4 IME与迟到响应返修、精确草稿回归和真实动作登记
+
+2026-10-03 UTC：draft32在同1148输入上九项定向检查、252项UI单测与163项隔离合成Web回归exit0，零JS/panic/外部请求、host实际退出。独立draft28反例已按实际owner修复：完整编辑页与普通dialog均保护IME，Memory迟到分页/旧修订不污染刷新页或新草稿，People离页debounce和搜索换代迟到角色回执受控，SSO确认删除与后续读取失败分别呈现。draft31行为返修被独立核验，但其native Clippy导入失败保留；32仅修WASM专用导入，九检查重跑通过。32有限独立delta/gates复核通过，不是最终P4源码、业务或合并GO。
+
+新增合成端口/严格DTO观察包括凭据新增/旋转/撤销及fresh401零重放，模型CRUD/启停/409后显式刷新新revision，预算精确微单位与无效零写，工具连接合成consent/断开，记忆关闭写入仍可禁止/删除，compiled组件目录与只读预览。目录导航实际有三次既有PUT构建清单登记，单独记录零decision写，不称零effects。私有194业务动作矩阵逐行绑定70行有限观察，包含只取消/Unknown及缺native的范围，不把70行或163总用例数计全量通过；其余成功动作、角色、错误、分页继续补验。原Web14/15/17/18失败、旧NO-GO和全部失败历史均保留。
+
+冻结预算WASM gzip3667971/3670016、CSS130967/131072（仍120KiB预警）、字体740216/819200、external1/inline0，守卫/依赖/移动未变。已在检查和服务停止后清理自有native deps/build/fingerprint共2248603902逻辑字节，固定工具与host SHA未变，收据空闲6799360000字节；源文件、QA、原观察产物及其它窗口保留。当前仍dirty草稿，无精确P4候选、PR、最终GO或合并；后端004 PR106新查仍draft未合，不消费其在途CAS。规范v5.1=2469dbd…/v7R422=4e973a4…未改，oracle缺失、最终像素/native/生产和P5–P9全部欠项保持，持续目标active。下一批继续技能两scope、策略与组件/插件逐动作实测。
+
+
+## UI5-P4 技能与管理动作实测、预算失败和并行返修
+
+2026-10-03 UTC：draft33在同1148输入上八项定向检查/252UI单测通过，但冻结WASM gzip3688134>3670016，budget exit1，保持NO-GO。隔离合成Web20实际171通过/4失败、零JS/panic/外部请求、host已停。技能个人/部署scope CRUD/grant/撤销/读错重试与无效/碰撞零写、策略enforce/dry-run/规则/基线/读重试、SAML/OIDC原200注册及秘密清理、策略和SSO注册/删除202不假报确定失败已观察。P0“添加会话允许项”经独立核实为误登记：三个固定基线都只有自定义allow只读展示；当前矩阵纠正，原矩阵/旧复核及194历史登记行保留，不为旧标签新增接口或洗绿验收。
+
+独立draft33报告摘要0d99189551d90997ed6d151cfccb4809385a1f740d4e7d85d56c0e6280c1d91b仍NO-GO。Web20组件描述已确认保存而QA错误等待旧textarea完全卸载，失败原件保留待改为隐藏与真实回执断言；compiled与sandbox202假报未提交、sandbox非法JSON仍可保存是真实未修反例。root正在收敛原dispatcher反馈与预算；用户具名要求增加代理后，两个受控子代理分别返修组件/沙箱及补插件完整动作和稳定读取owner，独立reviewer保留审查职责，编译/固定宿主仍串行。新修改没有被33旧通过外推，当前无最终候选/GO/P4 PR或合并。
+
+检查及宿主实际停止后，清理自有native缓存2248604108逻辑字节，工具/host SHA不变、收据空闲11591680000字节，源/QA/观察产物/其它窗口保持。后端PR106已fresh核实正常合并c3d25f8a24bcef88576ff496ccddaad400902014（06:11:19Z），自有UI树待正常整合已交付最小消费者并重建合成host；005插件技能CAS仍在途，不复制未合合同。唯一规范摘要未变；oracle缺失/最终像素/native/生产和P5–P9全部欠项继续open，总目标active。
+
 ## V7-COMP-004 已交付沙箱编辑 CAS 补全与独立源码复核
 
 2026-10-03 UTC：按现行v7/R422仅补既有沙箱save/publish/delete的并发编辑缺口，独立PR #106。原revision继续表示发布次数；新增editingRevision:i64/updatedAt，None保存只创建、Some仅更新已知版本，发布/删除要求准确expectedRevision，stale返回当前授权范围的三字段快照与no-store。每次写入显式ReadCommitted/5s锁超时，当前DB actor generation/admin/deny SHARE先于治理及来源UPDATE锁，无自动重试；来源、治理、审计同事务。永久retired名称防删除后重建ABA，孤立治理行fail-closed；新身份初始1，旧NULL读1、实际更新消费2。新增component_editing_revision审计事实，原component_revision与Agent publication/grant语义保持。
@@ -536,6 +598,23 @@ native0038追加nullable编辑列和最小retired名称表，保留旧SQL/schema
 
 本段仅记录源码GO与真实验证；最终台账增量仍需独立GO，PR #106此时未合并，合并须绑定最终准确head、正常admin执行并核实际GitHub回执后才进入下一任务。用户要求及时清理编译垃圾：仅删除可再生成过期缓存，五次累计2329170160逻辑字节，源码/QA/历史验收/数据库及必要产物保持。
 
+
+## UI5-P4 delivered CAS integration and parallel directed observations
+
+2026-10-03 UTC: normal local WIP e2424dd and merge 6e3ed2f preserved P4 UI plus actual delivered backend PR106/c3d25. Three real conflicts retained both ledger histories and existing Unknown/partial-publish behavior with expectedRevision. Private synthetic host0732f1d differs only by two nullable Memory seed None fields; successful build02, exact normalized bytes and 889 other non-UI inputs verified. The original missing-field failure is retained. Production backend, mobile and in-flight005 were not modified or consumed.
+
+Draft36 production Web build passed on unchanged1155 inputs. Web21 observed206 pass/1 fail, no JS/panic/external requests and actual host exit. Real synthetic component lifecycle, JSON rejection, late drafts, partial publish, two explicit CAS saves after continued input, wrong positive revision Unknown, plugin/People/paging/budget and original send regressions passed. OAuth alone failed because QA waited for a transient button to be detached after refresh; raw logs show enabled restoration. QA now binds confirmed response, catalogue read and enabled state, but correction remains unrun. Independent source audit5c590771a6e48cbd05da079e8b7228bceee8142a8b403696e507e02dca652655 closed previous source CAS blockers, without final P4 GO.
+
+WASM36 gzip3698009 exceeds frozen3670016 by27993: NO-GO. Shared original scoped-task wrapper trial37 built but increased gzip to3698480; exact source and failure retained before revert. Fixed-tool convergence is diagnostic only. Memory Chinese query has a delivered read contract; its User-scope consumer is being implemented without guessing Bot/Thread routing. Finalnine/candidate/independentGO/P4PR remain open. Oracle missing, native/production and P5-P9 debts persist; goal active.
+
+
+## UI5-P4 Memory read consumer and frozen size gate repair
+
+2026-10-03 UTC: draft38 preserves the original memory list, paging and management, and adds explicit read-only User-scope recall using the delivered contract. Bot/Thread context is not inferred. Read generations, the stable owner and the existing write Unknown barrier remain separate. Fifteen bounded query cases and two final account/SAML cases are authored but not yet executed.
+
+All nine directed checks pass on the same1155 unchanged inputs, with252 UI tests. The existing fixed compiler pipeline now uses size optimization only for openbot-ui and convergence in the existing Binaryen132 pass; backend package profiles, dependency versions and every budget remain fixed. Actual WASM gzip3119785/3670016, CSS130967/131072 with the original warning, fonts740216/819200, external1/inline0. Native fixture51877d1 synchronizes the root manifest and build04 succeeds on unchanged inputs; the original missing-testkit invocation failure03 is retained. No Cargo exception was added to input equivalence.
+
+Exact candidate checks, expanded browser regression, the reviewed action matrix, independent source/ledger review and P4 PR remain pending. Production/native/original oracle and P5-P9 acceptance debt are open; this is not full acceptance.
 
 ## V7-COMP-004 实际合并事实
 
@@ -556,6 +635,14 @@ HTTP两技能写入口在JSON前检查freshness/Origin，Desktop在body前检查
 本段记录时PR #107尚未合并；最终ledger-only差量需独立GO，再绑定准确head按持续授权正常admin合并并核fresh实际回执。未运行本机全量CI或手动Actions，未强推、修改保护或绕过hooks；规范与QA保持本机，不以局部补全关闭总目标。
 
 
+## UI5-P4 candidate1 exact checks and independent follow-up
+
+2026-10-03 UTC: clean source43c086acd5c1cfa989553b477e7597e1e432f96a/tree05345c4459ddc9b60e4c32a52ee6fef74eb8c0e8 passed nine directed checks on unchanged1164 inputs, including253 UI tests. Actual WASM gzip3126320/3670016 and CSS130967/131072 pass with the original CSS warning. Delivered backend PR107/7248463 was normally integrated, preserving the real skill edit-version contract. The rebuilt isolated host matches898 non-UI inputs and differs only by two nullable Memory seed fields. No production backend claim is made.
+
+The primary browser record has222 pass/four failures: two QA timing failures and their two summaries. Original failures remain. Explicit destination-heading waits and actual typed cancellation-response waits then pass separate1/78-case reruns on the identical candidate and24 artifacts, providing226 distinct finite observations in the combined index, with zero JS/panic/external requests and actual host exits. Fifteen User-scope recall cases and account/SAML cases now ran; reads preserve write Unknown locks.
+
+Independent source, route-image and historical-action review found three real remaining source issues: loss of the old approval error-notification dismissal, an oversized decorative admin Computer placeholder, and an unsized plugin account link. They are being repaired before a new exact candidate. Notification dismissal must retain the visible Unknown state, disabled decisions and operation observations, with zero mutation replay. Current43 evidence remains historical; no final P4 GO, PR or merge exists. Original oracle/native/production, unexecuted action branches and P5-P9 acceptance remain open.
+
 ## V7-IMPL-001 backend implementation track entry
 
 2026-10-03: User authorized a separate continuing track for included but undelivered v7 backend capabilities, parallel to V7-COMP and UI5. Entry verified v7/R422, actual remote main 7248463 and COMP006/UI5-P4 ownership. V7-IMPL-001 claims only the internal R414 artifact byte foundation; no production ready state, actor authorization or public read route is claimed. Native0040 belongs to COMP006; native0041 is reserved for the following artifact persistence task. Task IDs use V7-IMPL and do not consume COMP/UI task IDs. Current candidate, directed acceptance, independent source GO, PR and merge remain pending. One task per PR; normal hooks and merges, private specifications and QA stay local.
@@ -571,6 +658,19 @@ Actual platform evidence is aarch64 macOS only. Linux has source cfg but no comp
 
 No AppCommand, host download route or product ready state is delivered. PG metadata/source linkage,32-per-Run/16GiB-workspace quota serialization, immutable artifact effect receipts, current source-thread authorization,600s once-only actor/session/window handles and no-store streaming, retention/tombstones, consistent backup/restore and M1 artifactRefs remain pending. Native0040 stays with COMP006; reserved0041 must await its actual contiguous migration and a defined physical workspace/dataset binding. Existing memory-only receipts are not reused for artifact effects. Installed-orphan/uncertain-commit bytes are not claimed as registered results. This is a backend dependency, not fullR414/M0/M1 completion. Final ledger-only review, exact-head ready transition, latest-main check and actual normal merge remain pending at this record; subsequent checkpoint records the outcome. The continuing goal stays active beyond this PR.
 
+## UI5-P4 exact candidate3 and limited implementation GO
+
+2026-10-03 UTC: clean source b4ab6a3187f7d7b778942180bdc550ed29a661bc / tree f0260187bed067ff5b1cd62db33b2bd07b1991f6 passes nine fresh directed checks on the same1164 unchanged inputs, including255 UI library tests. The independent exact source/evidence review gives limited P4 implementation GO, report SHA aa28d7db9606be57f1ee0a04405aa6317022db48330b954f2eb0be7daf7ff833. The source snapshot SHA eece1c93eb6979445598f0c12a930eae0890f37ccaf86ef6ab22fd3b1a9853e9 binds266 copied source files and all1164 inputs. Earlier candidate1 failures and candidate2 native E0525 failure remain original evidence; their tests are not relabelled as candidate3.
+
+The three independent source findings are repaired: approval notification dismissal preserves the visible Unknown state, both decision locks and original observation with zero replay; admin Computer inventory uses the existing compact empty state; the personal plugin account link uses the existing sized secondary control. All28 registered paths retain their rebuilt views, authentication and operation boundaries. On this exact source and24 archived artifact bytes, the isolated synthetic browser records232 pass/zero fail/zero fatal, no JS/panic/external requests and actual host exit; report SHA 21daaf1dfacecd62ac126491ab9188b836ad232e9fd8042893be85faff544ef8. The host is not compiled at this source:898 other non-UI inputs match, with the sole fixture compatibility delta of two nullable Memory seed fields. Neither strict DTO transports nor the synthetic ApplicationService prove production PG/provider/native/current-account authorization.
+
+The194 original business rows are preserved and use294 evidence references plus194 per-row frame-reference fields to bind actual named observations to the exact source3 report. Of the294 references,289 are non-frame references and five are route-frame references; they reuse124 named checks, while the194 frame fields reuse28 route checks. Reference counts are not distinct test counts or completion rates. Their projection SHA 4ebbf80dc5bb0a50f0afe1537090dbe87d3e8f9c122462947114778b67579915 and evidence index SHA cc984192b8e4acdfe224e015117d47d8b7695805ab03ec156951d62b89ea733a are independently reviewed. None of the194 rows or37 acceptance IDs is marked fully accepted. Unexecuted branches, narrower transport scope and historical registration mistakes remain explicit. Existing send/FIFO/Unknown, SecretInput, grants, permissions and mobile freeze remain protected.
+
+Actual source3 budgets pass unchanged limits: WASM gzip3130513/3670016, CSS130967/131072 with the original120KiB warning, fonts740216/819200, external1/inline0. After compilation and the host stopped, only owned native deps/build/fingerprint caches were cleared:3409052412 logical bytes, receipt SHA 085eabc287aea69cf523e0315a3ab85c48f0e19b1705d1018a6bcb5fb424b11a, observed free-after13516800000 bytes. Tools, host, QA, sources, artifact bytes and other-window changes were retained; concurrent disk changes are not attributed to this cleanup.
+
+Fresh upstream PR108 actually merged at08:19:21Z to5c3cf809f07225927f9555242c8642c27a42f86c. Normal local integration preserves both ledger histories and its exact three internal Infra leaf changes; it adds no UI dependency, host route, public artifact DTO or production ready state. The255/232 and nine-gate evidence remains bound to b4ab6a3, not rerun or relabelled at the later publication head. Final publication input/ledger review and normal PR/merge are pending at this record. No backend in-flight work, dependency, hook, protection or frozen budget is changed.
+
+The original-app oracle is missing and final pixel acceptance is not passed. Native macOS titlebar/system/drag, real200%/OS reader, full original golden sets, production L3/L4 and all remaining P5-P9 requirements remain open. P5/P7/P8 missing delivered interfaces are registered dependencies; the next independently executable work is P6 consumer implementation for already delivered per-object model/sandbox/skill CAS/readback. Minimal version consumption does not complete R415 autosave. The continuing goal remains active beyond this PR.
 
 ## V7-COMP-005 actual delivery confirmation
 
@@ -589,6 +689,20 @@ Old bounded256-byte three-line Desktop file and Server cookie remain value-only 
 Exact source independent GO report SHA: c742d4dfa52f8959754d8dd6eb8815ea1479e97ac9b36762b1b2d5caa3b7275e. The original independent365 phase report had an actual UTF-8 encoding failure and is retained unreadable; its separately saved strict-JSON correction explicitly withheld finalGO pending integration. Final source review uses the exact integration evidence. Original test audit-column failures, dropped-observer compile failure, test-only unused import lint and direct fmt PATH invocation limitation are retained; correction uses new candidate labels, no warning bypass. Original integrated preference source is Initial15d66ee with historical R79/R100/R160/Batch16/37; standalone original preference PR number remains unverified and is not invented. Source commit/push original initial and terminal receipts are saved with normal hooks. Two recorded cleanups removed eight old regeneratable test executables202906416 logical bytes; source/QA/data preserved. Filesystem free-space changes include other tracks and are not credited as this cleanup. Original139 other user files remain byte-identical; authorized ledger additions and independent UI entry updates are not claimed whole-file-identical.
 
 This record precedes final ledger-only review/admin merge. Full UI5-P6/M0/G3 and other074–077/capability/exact-target checks remain open; approval three-state preferences, automation and other undelivered abilities are registered separately. One task/one PR, private specifications and QA stay local; no fullCI/manualActions/force/protection change/hook bypass.
+
+## UI5-P4 upstream preference-contract integration checkpoint
+
+2026-10-03 UTC: exact publication353ecd1/tree94992d1 obtained independent limited publication GO a66c9cce859614cb5a52b62b9ef59f9269e82c80ac261d14a9bdb04c48bf68b4. Normal push hooks accepted317 commits/2113 file versions; the first TLS disconnect exited1 and actual remote verification showed no branch. The normal retry succeeded, preserving the original failure. No P4 PR or merge had occurred when backend PR109 actually merged at08:58:03Z to7a9bcd46737182f5385868056e25580000a9d019.
+
+PR109 changes the actual preference DTO, authenticated client persistence and synthetic host. It is normally integrated with both ledger histories preserved. P4 keeps its shared bounded/no-store decoder and the new real revision validation; preference GET and PUT now accept only the actual200 response, so a202 with apparently matching revision metadata cannot become a committed acknowledgement. Independent read-only entry review identified this inherited status ambiguity. Existing backend109 bytes remain exact upstream; no in-flight backend files or source contract are rewritten.
+
+The prior9/255/232, source GO and publication GO retain their original identities and do not certify this new integration. New exact source checks, directed preference/retained browser regression and independent review are pending. Full P6 state-machine timing is still separate implementation work. Oracle/native/production/full acceptance debts and the continuing goal remain open; original guards, budgets, mobile freeze and private material boundaries stay intact.
+
+## UI5-P4 preference integration counterexamples and repair
+
+2026-10-03 UTC: candidate19c6dbf3a937cb9753278547cccdf56218344e10/tree9ff13a147f0bc11a03e9b04d27a6fc331be50267 passes fresh fmt but fails native library compilation with E0425: the new tested status gate called a WASM-only helper. The exact1173 unchanged-input failed receipt and296-file source snapshot are retained. No remaining seven gates ran. Independent limited preflight e6ea0305e5229ad5d4cc866fec3ce12ebe72d53bbe21e5b1db8eba4f59f057db also identifies an inherited lifecycle blocker: initial preference read failure followed by Retry can cancel the new read when the transient error branch unmounts.
+
+The repair aligns the pure status helper's native-test cfg and binds every preference read to the captured authenticated worker owner, rejecting disposed/no-owner callbacks and using fallible signals. The transient Retry button no longer owns the read future. New precise checks, initial503/held200 Retry and logout/late-read browser counterexamples are pending on the next candidate. These are client lifecycle repairs; all delivered109 non-UI inputs remain exact upstream, and full P6 timing/conflict-version behavior is still open. Direct fixed-cargo formatting initially lacked cargo-fmt on PATH; the configured wrapper performs formatting separately, without upgrading tools or recording that failed invocation as a pass.
 
 
 ## V7-IMPL-001 actual merge and002 claim
@@ -613,6 +727,14 @@ The final integrated source is c7243208bd5edf0dfeae027354fad7cdfed6d308/tree5ac9
 
 V7-IMPL-003 is separately registered for the trusted R414 dataset/source PG foundation in another isolated worktree, with native0041 reserved after actual0040. Its initial base is the unmerged002 dependency candidatec724;003 will merge only after actual PR110 and current primary physical contracts. No003 code/checks/GO, public producer or ready acceptance is claimed by this registration. The continuing goal remains active.
 
+## UI5-P4 preference integration verified and upstream110 entry
+
+2026-10-03 UTC: exact clean source28dfb12d35b36acef6a896159003bdb93939fb42/treeff08c9159fabb6b7e08ec15036eff9d3b0c1b596 passes all nine directed checks with the same1173 unchanged inputs, including259 UI library tests. Its new synthetic109 host build exits0 and the source delta is exactly two nullable Memory seed None fields; this is not production PG/native acceptance. Fresh full browser rerun records237 pass/zero fail/zero fatal, zero JS/panic/external requests and actual host exit, report SHA86bbee818e05ba48cd51f99f84a0ce3f95fdf305df8a794e138b34ce7ecaff1a. The first236-pass/one-fail run remains immutable: private QA incorrectly read the current-user response as a flat object. Closed user-envelope parsing was corrected while keeping the zero old-owner writes, actual logout/navigation/new mount and exact3-to4 CAS assertions. The repaired counterexample passes separately and in the fresh full run; it observes the same synthetic actor with injected auth transition, not real session revocation or a second account.
+
+The194 original business rows now bind299 evidence references, reusing129 named checks; five references are route frames and194 separate frame fields reuse28 route checks. Reference counts are not distinct tests or completion rates. None of the194 rows or37 acceptance IDs is fully accepted. Projection SHAa4c6ecb55a26e9d94b9f46ff8b0494564dab7078285a8da0697131bc4f0a5ae0 and evidence index SHAd3da058e29cb9855fbf03ed84cc8d8d0c6574d0848e8ad14e8f6bf72ca987725 preserve unexecuted branches, oracle/native/production and complete R415 debts. Native cache cleanup removes3411317862 logical owned bytes after all own compilers and the host stop; preserved host/tool hashes and free-after6881280000 are recorded separately, without attributing concurrent disk changes.
+
+Actual upstream PR110 merged to7a9269b1cb36cf092bdc44983434022cf988051a. Normal integration preserves both ledger histories and its exact five product paths: internal bounded artifact contracts/core and two unchanged storage constants. No existing UI/host DTO consumer or production artifact-ready capability is added. The new Contracts module is nevertheless in the UI compilation graph, so source28dfb checks are not relabelled as integration evidence: fresh precise compilation/build/budget checks and input/artifact review are required next. Source and publication independent GO, actual P4 PR/merge, full pixels, native/production/full-scope acceptance remain pending at this entry. The continuing goal stays active and P6 coding waits actual P4 merge.
+
 
 ## V7-COMP-006 actual normal admin merge
 
@@ -630,6 +752,16 @@ Exact source independent GO SHA6af7767cca7c760b9394a975b759f6df2067be84d3286d791
 
 This record precedes final ledger-only review and exact-head admin normal merge. FullR415 delivered-client state/generation/timing after UI5-P6 and remaining074-077/current-result/capability/exact-target evidence remain required goal debts. Full Unknown disposition/safecontinue, capability API, learning/skill loading and other undelivered abilities remain separately registered. No M0/G3 or whole-goal completion is claimed. One task/one PR; private specifications/QA stay local, no fullCI/manualActions/force/protection change/hook bypass.
 
+## UI5-P4 exact integrated source6 and publication facts
+
+2026-10-03 UTC: exact clean source244ae962781a86bd8ebfd878dd0ffc4028d3d3a2/treed346c95bd3851cefb7647d5c4e1be196e62091f5 passes nine NEW directed checks on the same1175 unchanged inputs, including259 UI library tests. Unlike the earlier source, the production WASM bytes changed after delivered110 integration, so a new synthetic host and full browser run were performed. Actual new24 archived artifact bytes and host047a14e5/compile50a2425 are separately bound; the only host source difference is the two previously reviewed nullable Memory seed None fields. Fresh full browser records237 pass/zero fail/zero fatal, no JS/panic/external requests and actual host exit, report SHA186fd7a06d5fcbdc8b1d4b3bafed52183599627bc4ab5fdd531771ebeaf353fe. Budget limits remain unchanged: WASM gzip3145611/3670016, CSS130967/131072 with original warning, fonts740216/819200, external1/inline0. Independent exact source GO89f3171b9b031b7483480e92ad2e633194df88cc4f1b2eaed5b8c420bb36afaf is limited to this implementation evidence.
+
+The new evidence index SHA3c1d115ab5f5242fde6a92fb6551204405787d3cd0684b3fac80fb19a14e9d46 and matrix projection SHA7e4e8ed658de33c424d7867cff79c8656dc520672c5ea411991c9df632f5998a retain194 historical rows/299 evidence references reusing129 named checks, plus194 frame fields reusing28 routes; none of194 rows or37 acceptance IDs is fully accepted. Earlier failures, candidate identities, repaired QA envelope and source5 GO are preserved. Original oracle is missing; final pixels, native macOS, real200%/OS reader, full golden requirements, production L3/L4 and remaining P5-P9/fullR415 debts stay open. After all own compilers/host stopped, native cleanup11 removed3411725935 logical owned cache bytes; host/xtask hashes remain identical. Concurrent disk changes are not credited to cleanup.
+
+Accuracy correction to the earlier shared-decoder wording: the actual shared adapter uses no-store, same-origin and redirect-error transport, typed decoding and caller-specific validation. It reads the complete response body before typed decoding and has no shared transport-level preallocation byte cap. The separately bounded reconciliation reader remains unchanged. The earlier phrase shared bounded/no-store decoder must not be interpreted as such a shared cap. This corrects an execution description and does not change product code or any guard.
+
+Actual main now contains separately delivered PR111 at4ce421a18c3c55cbf1000206f0886ae350b2961f. Normal publication integration preserves both ledger histories and its exact two private PG Memory authority leaves plus the new directed test file. UI, Contracts/Domain/Cargo/lock/toolchain and observed24 artifact bytes remain the verified source6 bytes; the source6 compilation/browser records keep their actual identity and are not claimed rerun at this later publication head. The precise incoming scope and synthetic fixture consumer boundary require separate independent publication review before normal P4 PR/merge. No production Memory acceptance is inferred from the synthetic browser. Full-scope completion remains false and P6 implementation follows actual P4 merge.
+
 
 ## V7-COMP-007 actual delivery checkpoint
 
@@ -643,3 +775,9 @@ This record precedes final ledger-only review and exact-head admin normal merge.
 - After response loss, an independent direct connection with the same runtime owner returns no dispatch claim before expiry and after RR recovery; both probes leave all15 observed durable tables unchanged. After bounded lease expiry, actual runtime recovery creates exactly one original reconciliation-required terminal, the next recovery returns none, the original run/prompt/outbox/foreground pair is retained, and five occupancy consumers, including074/075 reads remain consistent without writes, available actions or inferred NotCommitted from empty receipts.
 - Limits: accepting controlled consumer demonstrates relay ordering, not complete built-in Agent/provider execution. Dedicated worker-pool closure isolates the first ACK experiment; its single reservation count is not a general production no-reclaim promise. The two direct no-claim probes prove their finite observed states. Worker/probe pools explicitly configure and verify a repeatable-read default inherited by Runtime; observer/controller transactions explicitly use read committed. Deployed production default isolation was not observed or changed. The initial three-pass phase remains bound to its earlier test bytes; it is not relabelled as the strengthened final phase.
 - Independent source review digest: `63445815026eda171ba9b43f97b1e83b93bdda8bb22afcc0ab3a93c2a10b22e0`. PR #112 is the independent delivery PR; final ledger-only review and exact-head normal admin merge remain pending at this checkpoint. One task, one PR; original074–077 PRs and historical evidence are preserved. Full R415 client state/timing, UI5-P6 integration and remaining delivered recovery/capability/target counterexamples remain required goal debts; broader unimplemented capabilities remain separate. Whole-goal completion is not claimed.
+
+## UI5-P4 publication continuation at actual PR113
+
+2026-10-03 UTC: exact publication265fc93ddcb6534b66226b94f7fcd73ab9484c8e/tree8649854445f076a27f26cbcde985ffe2c5a61283 obtained independent GO4e5341452689b9f2091eda99d6fed8a62014f4ddfc63bb5e06abfc50bbec495b. Normal forward push exited0 with335 commits/2165 file versions accepted by the original hooks. The sole P4 PR113 was actually created, initially matching head265fc93. No merge is claimed by this record.
+
+During creation actual main advanced to separately delivered PR112/a8d9b4664cb94bbb9dd4e6d555818b70b5597b60. Its only nonledger change is the existing Infra run-dispatch regression test file; production code, UI compilation inputs, DTO/schema, selected synthetic consumers and24 observed artifact bytes remain unchanged. Normal integration preserves both ledger histories and the exact upstream test bytes. The source244 nine-check/259-test/237-browser evidence and publication265 GO keep their original identities; the later test/ledger integration needs only precise final input/delta/format review. This same PR will be normally merged after that review. Original failures and all native/production/oracle/full/P6 debts remain open, and the continuing goal proceeds to P6 after actual merge.

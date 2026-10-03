@@ -1,5 +1,8 @@
 {
   "common": {
+    "configuration_publication_unknown": "草稿保存已确认，但发布尚未确认。该对象继续禁止写入，请勿再次提交保存。",
+    "configuration_write_pending": "一项更改正在等待回执，离开此页不会取消已提交的操作。",
+    "configuration_write_unknown": "此前一项更改的结果未知。该对象继续禁止写入，刷新列表不能解除未知状态。",
     "secret_entry_help": "提交后若需再次发送此密钥，请重新输入；关闭表单会清除密钥。",
     "app_name": "Wrok Bot",
     "save": "保存",
@@ -354,7 +357,7 @@
     "empty": "还没有技能，可以添加一组经常使用的工作指令。",
     "no_match": "没有匹配的技能。",
     "load_error": "无法加载技能，已保存的指令未被更改。",
-    "write_error": "无法确认本次更改，请核对刷新后的列表再重试。",
+    "write_error": "本次更改被拒绝。请先读取当前记录并核对权限，再发起新的操作。",
     "grant_count": "已授权给 {{ count }} 位同事",
     "slug": "指令名称",
     "slug_help": "2–40 位小写字母、数字或连字符，在整个部署中唯一，创建后不可改名。",
@@ -811,6 +814,8 @@
     "empty_title": "还没有记忆",
     "empty_body": "同事学到的东西会出现在这里。",
     "search_placeholder": "搜索记忆",
+    "search_scope_help": "查询可在你的会话之间使用的记忆；限定助手或会话的记忆仍保留在下方列表。",
+    "search_invalid": "请输入 4 KiB 以内且不含空字符的查询。",
     "created_at": "{{ when }} 创建",
     "source": "来源",
     "source_detail": "来源会话 {{ thread }}，消息 {{ message }}",
@@ -991,7 +996,7 @@
     "title": "插件",
     "intro": "配置部署连接，并选择哪些 Agent 可以使用其工具。",
     "saving": "正在保存…",
-    "write_error": "未能确认这次更改。已请求刷新最新状态，请核对后再重试。",
+    "write_error": "本次更改被拒绝。请先读取当前记录并核对权限，再发起新的操作。",
     "load_error": "无法加载插件。",
     "custom_add": "添加自定义服务器",
     "connected": "已配置",
@@ -1101,6 +1106,9 @@
     "cap_boundary": "下方的单次任务成本上限是预算控制，不代表已用量、账户余额或套餐额度。"
   },
   "models": {
+    "local_title": "本地能力",
+    "local_description": "本地指执行节点，可能与打开此页的电脑不同。",
+    "local_pending": "经认证的 HTTPS 自定义服务可使用现有自定义 API 合同。无认证 loopback 服务以及托管下载、启动、停止控制尚不可用。",
     "selection_unavailable_label": "模型选择不可用",
     "selection_agent_conflict": "模型选择与当前助手不匹配。请确认支持模型选择的内置助手并重新选择模型，或清除模型选择。",
     "selection_unavailable_locked": "此模型选择当前不可用。",

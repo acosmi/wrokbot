@@ -184,7 +184,9 @@ pub(crate) async fn write(input: Write) -> Result<(), WriteError> {
         }
         .map_err(|_| WriteError::InvalidInput)?;
         drop(input);
-        let response = outgoing.send().await.map_err(|_| WriteError::Unknown)?;
+        let response = crate::api::request::Request::send(outgoing)
+            .await
+            .map_err(|_| WriteError::Unknown)?;
         if response.status() != status {
             return Err(write_failure(response.status()));
         }
@@ -231,8 +233,7 @@ fn write_failure(status: u16) -> WriteError {
 async fn read<T: serde::de::DeserializeOwned>(route: &str) -> Result<T, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let response = builder(route, "GET")
-            .send()
+        let response = crate::api::request::Request::send(builder(route, "GET"))
             .await
             .map_err(|_| ApiError::Network)?;
         if response.status() != 200 {
@@ -250,16 +251,12 @@ async fn read<T: serde::de::DeserializeOwned>(route: &str) -> Result<T, ApiError
 #[cfg(target_arch = "wasm32")]
 fn builder(route: &str, method: &str) -> gloo_net::http::RequestBuilder {
     use crate::api::request::Request;
-    use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
     match method {
         "POST" => Request::post(route),
         "PUT" => Request::put(route),
         "DELETE" => Request::delete(route),
         _ => Request::get(route),
     }
-    .cache(RequestCache::NoStore)
-    .credentials(RequestCredentials::SameOrigin)
-    .redirect(RequestRedirect::Error)
 }
 
 #[cfg(target_arch = "wasm32")]

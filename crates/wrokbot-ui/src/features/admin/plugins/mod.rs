@@ -12,7 +12,8 @@ use openbot_contracts::mcp::{
 
 use crate::api::plugins as api;
 use crate::features::layout::{
-    PageBackLink, PageEmpty, PageHeader, PageRows, PageSection, PageShell, PageTopbar,
+    DetailPanelLayout, DetailPanelMain, PageBackLink, PageEmpty, PageHeader, PageRows, PageSection,
+    PageShell, PageTopbar, editor_location::EditorLocation,
 };
 use crate::i18n::{t, t_string, use_i18n};
 use crate::icons::Icon;
@@ -29,16 +30,64 @@ pub fn AdminPluginsPage() -> impl IntoView {
     let state = PluginPageState::new();
     let actions = expect_context::<PluginActions>();
     let dialog = RwSignal::new(None::<PluginDialog>);
+    let editor = EditorLocation::new(&["plugin-new", "plugin-oauth", "plugin-delete"]);
     let scope = Memo::new(move |_| (params.read().get("key"), params.read().get("tool")));
+    Effect::new(move |_| {
+        let (path_target, tool) = scope.get();
+        let current = state.data.get();
+        let selected = editor
+            .selection
+            .get()
+            .and_then(|selected| match selected.kind {
+                "plugin-new" if path_target.is_none() && tool.is_none() => {
+                    Some(PluginDialog::Custom)
+                }
+                "plugin-oauth" | "plugin-delete" if tool.is_none() => {
+                    let target = selected.target?;
+                    if path_target.as_ref() != Some(&target) {
+                        return None;
+                    }
+                    let current = current.as_ref()?;
+                    if !current
+                        .page
+                        .servers
+                        .iter()
+                        .any(|server| server.id == target)
+                    {
+                        return None;
+                    }
+                    if selected.kind == "plugin-oauth" {
+                        current.page.redirect_uri.as_ref()?;
+                        Some(PluginDialog::OAuth(target))
+                    } else {
+                        Some(PluginDialog::Remove(target))
+                    }
+                }
+                _ => None,
+            });
+        if dialog.get_untracked() != selected {
+            dialog.set(selected);
+        }
+    });
+    let page_open = Signal::derive(move || {
+        dialog
+            .get()
+            .is_some_and(|dialog| !matches!(dialog, PluginDialog::Remove(_)))
+    });
     Effect::new(move |_| {
         let _ = (scope.get(), actions.revision.get());
         state.reload();
     });
-    Effect::new(move |_| {
-        let _ = scope.get();
-        dialog.set(None);
+    Effect::new(move |previous: Option<(Option<String>, Option<String>)>| {
+        let current = scope.get();
+        if previous.is_some() {
+            editor.close();
+        }
+        current
     });
     view! {
+        <DetailPanelLayout open=page_open>
+        <DetailPanelMain>
         <PageShell>
             {move || {
                 let (server, tool) = scope.get();
@@ -69,19 +118,21 @@ pub fn AdminPluginsPage() -> impl IntoView {
             {move || state.data.get().map(|data| {
                 let (server, tool) = scope.get();
                 match (server, tool) {
-                    (None, None) => view! { <PluginIndex data dialog /> }.into_any(),
-                    (Some(key), None) if api::plugin_href(&key).is_ok() => view! { <PluginDetail data server_id=key dialog /> }.into_any(),
+                    (None, None) => view! { <PluginIndex data editor /> }.into_any(),
+                    (Some(key), None) if api::plugin_href(&key).is_ok() => view! { <PluginDetail data server_id=key editor /> }.into_any(),
                     (Some(key), Some(tool)) if api::tool_href(&key, &tool).is_ok() => view! { <PluginTool data server_id=key tool_name=tool /> }.into_any(),
                     _ => view! { <PageEmpty>{move || t!(i18n, plugins.not_found)}</PageEmpty> }.into_any(),
                 }
             })}
         </PageShell>
-        <PluginDialogs dialog />
+        </DetailPanelMain>
+        <PluginDialogs dialog editor />
+        </DetailPanelLayout>
     }
 }
 
 #[component]
-fn PluginIndex(data: PluginData, dialog: RwSignal<Option<PluginDialog>>) -> impl IntoView {
+fn PluginIndex(data: PluginData, editor: EditorLocation) -> impl IntoView {
     let i18n = use_i18n();
     let actions = expect_context::<PluginActions>();
     let connected = data.page.servers;
@@ -93,7 +144,7 @@ fn PluginIndex(data: PluginData, dialog: RwSignal<Option<PluginDialog>>) -> impl
         .collect::<Vec<_>>();
     view! {
         <div class="ob-page-primary-action"><Button id="plugin-add" variant=ButtonVariant::Primary disabled=actions.busy
-            on_activate=move |_| dialog.set(Some(PluginDialog::Custom))>{move || t!(i18n, plugins.custom_add)}</Button></div>
+            on_activate=move |_| editor.open("plugin-new", None)>{move || t!(i18n, plugins.custom_add)}</Button></div>
         <PageSection heading_id="plugins-connected" title=move || t_string!(i18n, plugins.connected).to_owned()>
             {if connected.is_empty() { view! { <PageEmpty>{move || t!(i18n, plugins.empty)}</PageEmpty> }.into_any() }
             else { view! { <PageRows>{connected.into_iter().map(|server| {
@@ -126,11 +177,7 @@ fn PluginLink(
 }
 
 #[component]
-fn PluginDetail(
-    data: PluginData,
-    server_id: String,
-    dialog: RwSignal<Option<PluginDialog>>,
-) -> impl IntoView {
+fn PluginDetail(data: PluginData, server_id: String, editor: EditorLocation) -> impl IntoView {
     let i18n = use_i18n();
     let actions = expect_context::<PluginActions>();
     let server = data
@@ -189,7 +236,7 @@ fn PluginDetail(
             </Show>
             <Show when=move || enabled>
                 <Button id="plugin-remove" variant=ButtonVariant::DangerText disabled=actions.busy
-                    on_activate=move |_| dialog.set(Some(PluginDialog::Remove(key.get_value())))>{move || t!(i18n, plugins.remove)}</Button>
+                    on_activate=move |_| editor.open("plugin-delete", Some(key.get_value()))>{move || t!(i18n, plugins.remove)}</Button>
             </Show>
         </section>
         <Show when=move || enabled>
@@ -199,7 +246,7 @@ fn PluginDetail(
                     McpAdminAuthentication::DeploymentBearer => t_string!(i18n, plugins.auth_bearer).to_owned(),
                     McpAdminAuthentication::None => t_string!(i18n, plugins.auth_none).to_owned(),
                 }}</p>
-                <Button id="plugin-oauth-client" disabled=Signal::derive(move || actions.busy.get() || !callback_available) on_activate=move |_| dialog.set(Some(PluginDialog::OAuth(key.get_value())))>
+                <Button id="plugin-oauth-client" disabled=Signal::derive(move || actions.busy.get() || !callback_available) on_activate=move |_| editor.open("plugin-oauth", Some(key.get_value()))>
                     {move || t!(i18n, plugins.oauth_client)}
                 </Button>
                 <Show when=move || oauth && has_client>
@@ -209,7 +256,9 @@ fn PluginDetail(
                             on_activate=move |_| connect_own_account(key.get_value(), connecting, connect_error)>{move || t!(i18n, plugins.personal_connect)}</Button>
                     </Show>
                     <Show when=move || key.get_value() == "google-drive">
-                        <a class="ob-button" href=api::account_href(&key.get_value()).expect("validated server")>{move || t!(i18n, plugins.personal_manage)}</a>
+                        <div class="ob-plugin-controls">
+                            <a class="ob-button" data-size="md" data-variant="secondary" href=api::account_href(&key.get_value()).expect("validated server")>{move || t!(i18n, plugins.personal_manage)}</a>
+                        </div>
                     </Show>
                     <Show when=move || connect_error.get()><p class="ob-alert" role="alert">{move || t!(i18n, plugins.connect_error)}</p></Show>
                 </Show>

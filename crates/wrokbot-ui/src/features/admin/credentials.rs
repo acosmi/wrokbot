@@ -24,6 +24,8 @@ enum CredentialDialog {
 
 #[derive(Clone, Copy)]
 struct PageState {
+    #[cfg(target_arch = "wasm32")]
+    owner: StoredValue<Option<Owner>>,
     page: RwSignal<Option<CredentialPage>>,
     cursor: RwSignal<Option<String>>,
     history: RwSignal<Vec<Option<String>>>,
@@ -35,6 +37,8 @@ struct PageState {
 impl PageState {
     fn new() -> Self {
         Self {
+            #[cfg(target_arch = "wasm32")]
+            owner: StoredValue::new(Owner::current()),
             page: RwSignal::new(None),
             cursor: RwSignal::new(None),
             history: RwSignal::new(Vec::new()),
@@ -53,20 +57,24 @@ impl PageState {
         #[cfg(target_arch = "wasm32")]
         let actions = expect_context::<PluginActions>();
         #[cfg(target_arch = "wasm32")]
-        leptos::task::spawn_local_scoped_with_cancellation(async move {
-            let result = api::load(cursor.as_deref()).await;
-            if self.serial.try_get_untracked() != Some(serial) {
-                return;
-            }
-            match result {
-                Ok(page) => self.page.set(Some(page)),
-                Err(_) => self.failed.set(true),
-            }
-            self.loading.set(false);
-            if !actions.busy.get_untracked() {
-                actions.restore_focus();
-            }
-        });
+        if let Some(owner) = self.owner.try_get_value().flatten() {
+            owner.with(|| {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let result = api::load(cursor.as_deref()).await;
+                    if self.serial.try_get_untracked() != Some(serial) {
+                        return;
+                    }
+                    match result {
+                        Ok(page) => self.page.set(Some(page)),
+                        Err(_) => self.failed.set(true),
+                    }
+                    self.loading.set(false);
+                    if !actions.busy.get_untracked() {
+                        actions.restore_focus();
+                    }
+                })
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = (serial, cursor);
@@ -113,8 +121,8 @@ pub fn AdminCredentialsPage() -> impl IntoView {
             <PageHeader heading_id="credentials-title" title=move||t_string!(i18n,credentials.title).to_owned() description=move||t_string!(i18n,credentials.intro).to_owned()/>
             <div class="ob-page-primary-action"><Button id="credentials-add" variant=ButtonVariant::Primary disabled=actions.busy
                 on_activate=move|_|dialog.set(Some(CredentialDialog::Create(state.page.get_untracked().and_then(|p|p.model_reference))))>{move||t!(i18n,credentials.add)}</Button></div>
-            <Show when=move||actions.busy.get()><p role="status" class="ob-loading">{move||t!(i18n,plugins.saving)}</p></Show>
-            <Show when=move||actions.failed.get()&&actions.target.get().is_some_and(|id|id.starts_with("credential:"))><p class="ob-alert" role="alert">{move||t!(i18n,plugins.write_error)}</p></Show>
+            <Show when=move||actions.busy.get()&&!actions.unknown.get()><p role="status" class="ob-loading">{move||t!(i18n,plugins.saving)}</p></Show>
+            <Show when=move||actions.failed.get()&&!actions.unknown.get()&&actions.target.get().is_some_and(|id|id.starts_with("credential:"))><p class="ob-alert" role="alert">{move||t!(i18n,plugins.write_error)}</p></Show>
             {move||saved.get().map(|id|view!{<p class="ob-plugin-value" role="status"><span>{move||t!(i18n,credentials.saved)}</span><code>{id}</code></p>})}
             <Show when=move||state.loading.get()><p class="ob-loading" role="status">{move||t!(i18n,common.loading)}</p></Show>
             <Show when=move||state.failed.get()><div class="ob-alert" role="alert"><span>{move||t!(i18n,credentials.load_error)}</span><Button on_activate=move|_|state.load()>{move||t!(i18n,common.retry)}</Button></div></Show>
@@ -233,6 +241,8 @@ fn CredentialForm(
         if actions.busy.get_untracked() {
             return;
         }
+        let secret_status = secret.validate();
+        let secret_value = secret.take();
         invalid.set(false);
         attempted.set(true);
         authentication_needed.set(false);
@@ -265,7 +275,7 @@ fn CredentialForm(
                 return;
             }
         };
-        if secret.validate() != SecretInputStatus::Valid {
+        if secret_status != SecretInputStatus::Valid {
             invalid.set(true);
             return;
         }
@@ -287,7 +297,7 @@ fn CredentialForm(
             provider.get_untracked(),
             key.get_untracked(),
             metadata,
-            secret.take(),
+            secret_value,
         ) else {
             invalid.set(true);
             return;
@@ -310,8 +320,9 @@ fn CredentialForm(
         <Dialog id="credential-dialog" open on_close=close>
             <DialogContent title=move||match dialog.get(){Some(CredentialDialog::Rotate(_))=>t_string!(i18n,credentials.rotate).to_owned(),Some(CredentialDialog::Revoke(_))=>t_string!(i18n,credentials.revoke).to_owned(),_=>t_string!(i18n,credentials.add).to_owned()}>
                 <DialogBody>
+                    <crate::configuration_writes::ConfigurationWriteNotice />
                     <Show when=move||invalid.get()><p class="ob-alert" role="alert">{move||t!(i18n,credentials.invalid)}</p></Show>
-                    <Show when=move||attempted.get()&&actions.failed.get()><p class="ob-alert" role="alert">{move||t!(i18n,plugins.write_error)}</p></Show>
+                    <Show when=move||attempted.get()&&actions.failed.get()&&!actions.unknown.get()><p class="ob-alert" role="alert">{move||t!(i18n,plugins.write_error)}</p></Show>
                     <Show when=move||authentication_needed.get()><p class="ob-alert" role="alert">{move||t!(i18n,credentials.authentication_needed)}</p></Show>
                     <Show when=move||matches!(dialog.get(),Some(CredentialDialog::Revoke(_))) fallback=move||view!{
                         <Select id="credential-kind" open=kind_open value=kind disabled=Signal::derive(move||actions.busy.get()||matches!(dialog.get(),Some(CredentialDialog::Rotate(_))))>

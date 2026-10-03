@@ -150,6 +150,16 @@ bg_tool_preview = "#F6F7F8"
 review_border = "#DFE3DF"
 fg_review_header = "#46574B"
 bg_review_footer = "#F7F9F7"
+fg_library_title = "#30392F"
+fg_library_muted = "#646A67"
+fg_library_copy = "#6D7469"
+fg_library_icon = "#6F786A"
+bg_library_icon = "#F5F6F2"
+library_icon_border = "#EAEDE6"
+library_border = "#E4E8E1"
+library_border_hover = "#B4C2B0"
+shadow_library = "0 2px 3px #20351D03"
+shadow_library_hover = "0 5px 15px #26332208"
 
 [color.dark]
 bg = "#141415"
@@ -217,6 +227,16 @@ bg_tool_preview = "#1F1F22"
 review_border = "#2E2E33"
 fg_review_header = "#A6A6AF"
 bg_review_footer = "#1F1F22"
+fg_library_title = "#ECECEE"
+fg_library_muted = "#A6A6AF"
+fg_library_copy = "#A6A6AF"
+fg_library_icon = "#A6A6AF"
+bg_library_icon = "#27272B"
+library_icon_border = "#2E2E33"
+library_border = "#2E2E33"
+library_border_hover = "#66666F"
+shadow_library = "0 2px 3px #00000020"
+shadow_library_hover = "0 5px 15px #00000040"
 
 [typography]
 css_prefix = ""
@@ -359,8 +379,6 @@ topbar = 64
 native_toolbar = 56    # macOS unified title/toolbar; host-authored overlay mode only
 sidebar = 220
 sidebar_rail = 48
-detail_panel = 360
-subnav = 184             # admin / settings 二级侧栏
 content_max = 1040
 content_max_table = 1200 # 表格类页面
 content_max_chat = 850
@@ -384,6 +402,24 @@ agent_row_font = 12
 aux_time_font = 11
 ordinary_control_font = 12
 assistant_row_avatar = 30
+# Frozen library geometry from the independent editor.css source.
+library_title = 32
+library_title_narrow = 27
+library_pad_top = 62
+library_pad_inline = 50
+library_pad_bottom = 70
+library_pad_narrow = 35
+library_pad_inline_narrow = 23
+library_heading_gap = 35
+library_heading_gap_narrow = 25
+library_intro_max = 560
+library_card_radius = 12
+library_card_height = 226
+library_card_height_narrow = 188
+library_card_padding = 22
+library_card_gap = 20
+library_mark_width = 38
+library_mark_height = 42
 [breakpoint]
 md = "701px"
 lg = "1101px"
@@ -405,7 +441,7 @@ toast = 100
 
 # 菜单、模态和 Composer 分别使用明确的语义阴影。
 [shadow]
-tokens = ["shadow_popover", "shadow_dialog", "shadow_composer"]
+tokens = ["shadow_popover", "shadow_dialog", "shadow_composer", "shadow_library", "shadow_library_hover"]
 
 # ---------------------------------------------------------------------------
 # §4.5 动效
@@ -425,8 +461,6 @@ duration_overlay_enter = "180ms"    # popover / menu / sheet 进入
 duration_overlay_exit = "120ms"     # 同上退出
 duration_dialog_enter = "240ms"     # dialog 进入
 duration_dialog_exit = "160ms"      # 同上退出
-stagger_step = "30ms"               # 列表入场级联每项 +30ms
-stagger_max_items = 8               # 级联上限 8 项
 agent_presence_cycle = "1200ms"     # thinking/speaking 状态环周期（§6.7）
 agent_presence_error = "160ms"      # error 单次横向位移（§6.7）
 
@@ -434,8 +468,6 @@ agent_presence_error = "160ms"      # error 单次横向位移（§6.7）
 allowed_animations = [
   "color_transition",   # ① 底色 / 文字色过渡
   "overlay",            # ② popover / menu / sheet / dialog 出入
-  "list_stagger",       # ③ 列表入场级联（替代上游 layout/stagger.tsx）
-  "detail_panel_slide", # ④ detail panel 滑入（替代 layout/detail-panel.tsx 的 motion）
   "skeleton_breathe",   # ⑤ skeleton 呼吸
   "tool_line_shimmer",  # ⑥ 运行中工具行的文字扫光（上游 styles.css 已有，parity）
   "agent_presence_ring" # ⑦ agent 状态环（§6.7）

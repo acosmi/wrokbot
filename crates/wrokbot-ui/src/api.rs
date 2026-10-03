@@ -133,6 +133,8 @@ use openbot_contracts::ui::{SessionStatus, UiPreferences, UpdateUiPreferences};
 /// Stable, payload-free failure categories suitable for localized presentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ApiError {
+    /// Local validation or request construction failed before any HTTP dispatch.
+    NotSubmitted,
     /// The browser could not complete the request.
     Network,
     /// The current session is absent or expired.
@@ -154,6 +156,15 @@ pub enum ApiError {
     Unavailable,
 }
 
+// Only pure preflight call sites use this classification. HTTP receipts never do.
+fn not_submitted(error: ApiError) -> ApiError {
+    if error == ApiError::InvalidResponse {
+        ApiError::NotSubmitted
+    } else {
+        error
+    }
+}
+
 /// Roster page size; the application still owns the authoritative 1..=200 clamp.
 pub const CHANNEL_PAGE_SIZE: u32 = 50;
 /// Memory page size; the application owns the authoritative clamp.
@@ -171,22 +182,17 @@ pub async fn announce_component_catalogue() -> Result<ComponentCatalogueAdded, A
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::put("/api/components/catalogue")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&request)
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::put("/api/components/catalogue")
+                .json(&request)
+                .map_err(|_| ApiError::InvalidResponse)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let added = response
-            .json::<ComponentCatalogueAdded>()
+        let added = crate::api::request::Request::decode::<ComponentCatalogueAdded>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_catalogue_added(&request, &added)?;
@@ -204,20 +210,12 @@ pub async fn load_components() -> Result<ComponentRecords, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/components")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/components")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let records = response
-            .json::<ComponentRecords>()
+        let records = crate::api::request::Request::decode::<ComponentRecords>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_component_records(&records)?;
@@ -235,8 +233,21 @@ pub async fn set_component_agent_grant(
     agent_id: &str,
     granted: bool,
 ) -> Result<ComponentRecord, ApiError> {
-    validate_component_name(name)?;
-    validate_agent_id(agent_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Components,
+        name.to_owned(),
+        set_component_agent_grant_write(name, agent_id, granted),
+    )
+    .await
+}
+
+async fn set_component_agent_grant_write(
+    name: &str,
+    agent_id: &str,
+    granted: bool,
+) -> Result<ComponentRecord, ApiError> {
+    validate_component_name(name).map_err(not_submitted)?;
+    validate_agent_id(agent_id).map_err(not_submitted)?;
     let base = format!("/api/components/{}", encode_url_component(name));
     let path = if granted {
         format!("{base}/grants")
@@ -246,28 +257,23 @@ pub async fn set_component_agent_grant(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
         let response = if granted {
             Request::post(&path)
-                .cache(RequestCache::NoStore)
-                .credentials(RequestCredentials::SameOrigin)
-                .redirect(RequestRedirect::Error)
                 .json(&ComponentAgentGrantRequest {
                     agent_id: BotId::new(agent_id),
                 })
-                .map_err(|_| ApiError::InvalidResponse)?
+                .map_err(|_| ApiError::NotSubmitted)?
                 .send()
                 .await
         } else {
-            Request::delete(&path)
-                .cache(RequestCache::NoStore)
-                .credentials(RequestCredentials::SameOrigin)
-                .redirect(RequestRedirect::Error)
-                .send()
-                .await
+            Request::delete(&path).send().await
         }
         .map_err(|_| ApiError::Network)?;
-        component_governance_response(response, name).await
+        let component = component_governance_response(response, name).await?;
+        if component.withheld_from.iter().any(|id| id == agent_id) == granted {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(component)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -282,13 +288,26 @@ pub async fn set_component_function_grant(
     function: &str,
     granted: bool,
 ) -> Result<ComponentRecord, ApiError> {
-    validate_component_name(name)?;
-    validate_component_name(function)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Components,
+        name.to_owned(),
+        set_component_function_grant_write(name, function, granted),
+    )
+    .await
+}
+
+async fn set_component_function_grant_write(
+    name: &str,
+    function: &str,
+    granted: bool,
+) -> Result<ComponentRecord, ApiError> {
+    validate_component_name(name).map_err(not_submitted)?;
+    validate_component_name(function).map_err(not_submitted)?;
     if !component_data_function_manifest()
         .iter()
         .any(|entry| entry.name == function)
     {
-        return Err(ApiError::InvalidResponse);
+        return Err(ApiError::NotSubmitted);
     }
     let base = format!("/api/components/{}", encode_url_component(name));
     let path = if granted {
@@ -299,28 +318,23 @@ pub async fn set_component_function_grant(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
         let response = if granted {
             Request::post(&path)
-                .cache(RequestCache::NoStore)
-                .credentials(RequestCredentials::SameOrigin)
-                .redirect(RequestRedirect::Error)
                 .json(&ComponentFunctionGrantRequest {
                     function: function.to_owned(),
                 })
-                .map_err(|_| ApiError::InvalidResponse)?
+                .map_err(|_| ApiError::NotSubmitted)?
                 .send()
                 .await
         } else {
-            Request::delete(&path)
-                .cache(RequestCache::NoStore)
-                .credentials(RequestCredentials::SameOrigin)
-                .redirect(RequestRedirect::Error)
-                .send()
-                .await
+            Request::delete(&path).send().await
         }
         .map_err(|_| ApiError::Network)?;
-        component_governance_response(response, name).await
+        let component = component_governance_response(response, name).await?;
+        if component.functions.iter().any(|value| value == function) != granted {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(component)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -334,22 +348,34 @@ pub async fn set_component_publication(
     name: &str,
     published: bool,
 ) -> Result<ComponentRecord, ApiError> {
-    validate_component_name(name)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Components,
+        name.to_owned(),
+        set_component_publication_write(name, published),
+    )
+    .await
+}
+
+async fn set_component_publication_write(
+    name: &str,
+    published: bool,
+) -> Result<ComponentRecord, ApiError> {
+    validate_component_name(name).map_err(not_submitted)?;
     let path = format!("/api/components/{}/publication", encode_url_component(name));
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&ComponentPublicationRequest { published })
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
-        component_governance_response(response, name).await
+        let response = Request::send(
+            Request::post(&path)
+                .json(&ComponentPublicationRequest { published })
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
+        let component = component_governance_response(response, name).await?;
+        if component.published != published {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(component)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -363,31 +389,43 @@ pub async fn save_component_draft(
     name: &str,
     description: &str,
 ) -> Result<ComponentRecord, ApiError> {
-    validate_component_name(name)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Components,
+        name.to_owned(),
+        save_component_draft_write(name, description),
+    )
+    .await
+}
+
+async fn save_component_draft_write(
+    name: &str,
+    description: &str,
+) -> Result<ComponentRecord, ApiError> {
+    validate_component_name(name).map_err(not_submitted)?;
     let description = openbot_contracts::text::trim_ecmascript(description);
     if description.is_empty()
         || description.len() > MAX_COMPONENT_DESCRIPTION_BYTES
         || description.as_bytes().contains(&0)
     {
-        return Err(ApiError::InvalidResponse);
+        return Err(ApiError::NotSubmitted);
     }
     let path = format!("/api/components/{}/draft", encode_url_component(name));
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-        let response = Request::put(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&ComponentDraftRequest {
-                description: description.to_owned(),
-            })
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
-        component_governance_response(response, name).await
+        let response = Request::send(
+            Request::put(&path)
+                .json(&ComponentDraftRequest {
+                    description: description.to_owned(),
+                })
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
+        let component = component_governance_response(response, name).await?;
+        if component.draft_description != description {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(component)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -404,8 +442,7 @@ async fn component_governance_response(
     if response.status() != 200 {
         return Err(status_error(response.status()));
     }
-    let receipt = response
-        .json::<ComponentGovernanceReceipt>()
+    let receipt = crate::api::request::Request::decode::<ComponentGovernanceReceipt>(&response)
         .await
         .map_err(|_| ApiError::InvalidResponse)?;
     validate_component_record(&receipt.component)?;
@@ -420,20 +457,12 @@ pub async fn load_sandboxed_components() -> Result<SandboxedComponents, ApiError
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/sandboxed")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/sandboxed")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let components = response
-            .json::<SandboxedComponents>()
+        let components = crate::api::request::Request::decode::<SandboxedComponents>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_sandboxed_components(&components)?;
@@ -451,22 +480,15 @@ pub async fn load_published_sandboxed_components() -> Result<PublishedSandboxedC
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/sandboxed/published")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/sandboxed/published")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let components = response
-            .json::<PublishedSandboxedComponents>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let components =
+            crate::api::request::Request::decode::<PublishedSandboxedComponents>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         validate_published_sandboxed_components(&components)?;
         Ok(components)
     }
@@ -480,29 +502,36 @@ pub async fn load_published_sandboxed_components() -> Result<PublishedSandboxedC
 pub async fn save_sandboxed_component_draft(
     request: &SaveSandboxedComponentRequest,
 ) -> Result<SandboxedComponentResponse, ApiError> {
-    validate_sandboxed_request(request)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Sandbox,
+        format!("custom_{}", request.slug),
+        save_sandboxed_component_draft_write(request),
+    )
+    .await
+}
+
+async fn save_sandboxed_component_draft_write(
+    request: &SaveSandboxedComponentRequest,
+) -> Result<SandboxedComponentResponse, ApiError> {
+    validate_sandboxed_request(request).map_err(not_submitted)?;
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::post("/api/sandboxed")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(request)
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::post("/api/sandboxed")
+                .json(request)
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let saved = response
-            .json::<SandboxedComponentResponse>()
+        let saved = crate::api::request::Request::decode::<SandboxedComponentResponse>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_sandboxed_record(&saved.component)?;
+        validate_sandboxed_draft_receipt(request, &saved.component)?;
         Ok(saved)
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -515,42 +544,49 @@ pub async fn save_sandboxed_component_draft(
 pub async fn publish_sandboxed_component(
     request: &SaveSandboxedComponentRequest,
 ) -> Result<SandboxedComponentResponse, ApiError> {
-    let saved = save_sandboxed_component_draft(request).await?;
+    crate::configuration_writes::track_with_phase(
+        crate::configuration_writes::ConfigurationKind::Sandbox,
+        format!("custom_{}", request.slug),
+        |phase| publish_sandboxed_component_write(request, phase),
+    )
+    .await
+}
+
+async fn publish_sandboxed_component_write(
+    request: &SaveSandboxedComponentRequest,
+    phase: crate::configuration_writes::WritePhase,
+) -> Result<SandboxedComponentResponse, ApiError> {
+    let saved = save_sandboxed_component_draft_write(request).await?;
     let expected_revision = saved.component.editing_revision;
-    let name = saved.component.name;
+    let name = saved.component.name.clone();
+    phase.sandbox_draft_saved();
     if !is_sandboxed_component_name(&name) {
         return Err(ApiError::InvalidResponse);
     }
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = format!("/api/sandboxed/{}/publish", encode_url_component(&name));
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(
-                &openbot_contracts::sandboxed::SandboxedComponentRevisionRequest {
-                    expected_revision,
-                },
-            )
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::post(&path)
+                .json(
+                    &openbot_contracts::sandboxed::SandboxedComponentRevisionRequest {
+                        expected_revision,
+                    },
+                )
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let published = response
-            .json::<SandboxedComponentResponse>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let published =
+            crate::api::request::Request::decode::<SandboxedComponentResponse>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         validate_sandboxed_record(&published.component)?;
-        if published.component.name != name || !published.component.published {
-            return Err(ApiError::InvalidResponse);
-        }
+        validate_sandboxed_publication_receipt(request, &saved.component, &published.component)?;
         Ok(published)
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -560,38 +596,96 @@ pub async fn publish_sandboxed_component(
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn validate_sandboxed_draft_receipt(
+    request: &SaveSandboxedComponentRequest,
+    saved: &SandboxedComponentRecord,
+) -> Result<(), ApiError> {
+    validate_sandboxed_draft_fields(request, saved)?;
+    if request.expected_revision.unwrap_or(0).checked_add(1) != Some(saved.editing_revision) {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(())
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn validate_sandboxed_draft_fields(
+    request: &SaveSandboxedComponentRequest,
+    saved: &SandboxedComponentRecord,
+) -> Result<(), ApiError> {
+    if saved.name != format!("custom_{}", request.slug)
+        || saved.title != request.title
+        || saved.draft_description != request.description
+        || saved.draft_html != request.html
+        || saved.draft_css != request.css
+        || saved.draft_js_functions != request.js_functions
+        || saved.draft_argument_schema != request.argument_schema
+        || saved.sample_arguments != request.sample_arguments
+    {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(())
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn validate_sandboxed_publication_receipt(
+    request: &SaveSandboxedComponentRequest,
+    saved: &SandboxedComponentRecord,
+    published: &SandboxedComponentRecord,
+) -> Result<(), ApiError> {
+    validate_sandboxed_draft_fields(request, published)?;
+    if !published.published
+        || saved.editing_revision.checked_add(1) != Some(published.editing_revision)
+        || saved.revision.checked_add(1) != Some(published.revision)
+        || published.published_html.as_ref() != Some(&request.html)
+        || published.published_css.as_ref() != Some(&request.css)
+        || published.published_js_functions.as_ref() != Some(&request.js_functions)
+        || published.published_argument_schema.as_ref() != Some(&request.argument_schema)
+    {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(())
+}
+
 /// Delete one fresh-admin browser-authored component.
 pub async fn delete_sandboxed_component(
     name: &str,
     expected_revision: i64,
 ) -> Result<(), ApiError> {
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Sandbox,
+        name.to_owned(),
+        delete_sandboxed_component_write(name, expected_revision),
+    )
+    .await
+}
+
+async fn delete_sandboxed_component_write(
+    name: &str,
+    expected_revision: i64,
+) -> Result<(), ApiError> {
     if expected_revision <= 0 || !is_sandboxed_component_name(name) {
-        return Err(ApiError::InvalidResponse);
+        return Err(ApiError::NotSubmitted);
     }
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = format!("/api/sandboxed/{}", encode_url_component(name));
-        let response = Request::delete(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(
-                &openbot_contracts::sandboxed::SandboxedComponentRevisionRequest {
-                    expected_revision,
-                },
-            )
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::delete(&path)
+                .json(
+                    &openbot_contracts::sandboxed::SandboxedComponentRevisionRequest {
+                        expected_revision,
+                    },
+                )
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let deleted = response
-            .json::<SandboxedComponentDeleted>()
+        let deleted = crate::api::request::Request::decode::<SandboxedComponentDeleted>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if !deleted.ok {
@@ -613,24 +707,16 @@ pub async fn load_components_for_agent(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = format!(
             "/api/components/for-agent/{}",
             encode_url_component(agent_id.as_str())
         );
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let granted = response
-            .json::<GrantedCompiledComponents>()
+        let granted = crate::api::request::Request::decode::<GrantedCompiledComponents>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_granted_components(&granted)?;
@@ -668,23 +754,18 @@ pub async fn decide_component(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = format!("/api/components/{}/decision", encode_url_component(name));
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&request)
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::post(&path)
+                .json(&request)
+                .map_err(|_| ApiError::InvalidResponse)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let decision = response
-            .json::<ComponentDecision>()
+        let decision = crate::api::request::Request::decode::<ComponentDecision>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_component_decision(&decision, functions)?;
@@ -702,20 +783,12 @@ pub async fn load_component_data_functions() -> Result<ComponentDataFunctions, A
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/components/functions")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/components/functions")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let functions = response
-            .json::<ComponentDataFunctions>()
+        let functions = crate::api::request::Request::decode::<ComponentDataFunctions>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_component_data_functions(&functions)?;
@@ -745,23 +818,18 @@ pub async fn call_component_function(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = format!("/api/components/{}/call", encode_url_component(component));
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&request)
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::post(&path)
+                .json(&request)
+                .map_err(|_| ApiError::InvalidResponse)?,
+        )
+        .await?;
         if !matches!(response.status(), 200 | 502) {
             return Err(status_error(response.status()));
         }
-        let result = response
-            .json::<ComponentFunctionCall>()
+        let result = crate::api::request::Request::decode::<ComponentFunctionCall>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_component_function_call(&result, function, response.status())?;
@@ -780,22 +848,15 @@ pub async fn list_pending_component_human_decisions()
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/components/human-decisions")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/components/human-decisions")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let decisions = response
-            .json::<PendingComponentHumanDecisions>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let decisions =
+            crate::api::request::Request::decode::<PendingComponentHumanDecisions>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         validate_pending_component_human_decisions(&decisions)?;
         Ok(decisions)
     }
@@ -814,24 +875,20 @@ pub async fn answer_component_human_decision(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(answer)
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::post(&path)
+                .json(answer)
+                .map_err(|_| ApiError::InvalidResponse)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let resolved = response
-            .json::<ComponentHumanDecisionResolved>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let resolved =
+            crate::api::request::Request::decode::<ComponentHumanDecisionResolved>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         if resolved.decision_id != decision_id || &resolved.answer != answer {
             return Err(ApiError::InvalidResponse);
         }
@@ -849,20 +906,12 @@ pub async fn list_pending_remote_interrupts() -> Result<PendingRemoteInterrupts,
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/me/remote-interrupts")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/me/remote-interrupts")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let pending = response
-            .json::<PendingRemoteInterrupts>()
+        let pending = crate::api::request::Request::decode::<PendingRemoteInterrupts>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_pending_remote_interrupts(&pending)?;
@@ -883,22 +932,17 @@ pub async fn answer_remote_interrupt(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::put(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(answer)
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::put(&path)
+                .json(answer)
+                .map_err(|_| ApiError::InvalidResponse)?,
+        )
+        .await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let resolved = response
-            .json::<RemoteInterruptResolved>()
+        let resolved = crate::api::request::Request::decode::<RemoteInterruptResolved>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if resolved.request_id != request_id || resolved.status != answer.status {
@@ -918,20 +962,12 @@ pub async fn load_mcp_connections() -> Result<McpConnections, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/plugins/connections")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/plugins/connections")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let page = response
-            .json::<McpConnections>()
+        let page = crate::api::request::Request::decode::<McpConnections>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_mcp_connections(&page)?;
@@ -945,27 +981,29 @@ pub async fn load_mcp_connections() -> Result<McpConnections, ApiError> {
 
 /// Ask the Server to mint OAuth state/PKCE and validate its navigation receipt.
 pub async fn begin_mcp_connection(server_id: &str) -> Result<McpOAuthAuthorization, ApiError> {
-    validate_mcp_server_id(server_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::ToolConnections,
+        server_id.to_owned(),
+        begin_mcp_connection_write(server_id),
+    )
+    .await
+}
+
+async fn begin_mcp_connection_write(server_id: &str) -> Result<McpOAuthAuthorization, ApiError> {
+    validate_mcp_server_id(server_id).map_err(not_submitted)?;
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let path = mcp_connect_path(server_id)?;
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let path = mcp_connect_path(server_id).map_err(not_submitted)?;
+        let response = Request::send(Request::post(&path)).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let authorization = response
-            .json::<McpOAuthAuthorization>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let authorization =
+            crate::api::request::Request::decode::<McpOAuthAuthorization>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         validate_authorization_target(&authorization.authorization_url)?;
         Ok(authorization)
     }
@@ -980,25 +1018,28 @@ pub async fn begin_mcp_connection(server_id: &str) -> Result<McpOAuthAuthorizati
 pub async fn disconnect_mcp_connection(
     server_id: &str,
 ) -> Result<McpConnectionDisconnected, ApiError> {
-    validate_mcp_server_id(server_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::ToolConnections,
+        server_id.to_owned(),
+        disconnect_mcp_connection_write(server_id),
+    )
+    .await
+}
+
+async fn disconnect_mcp_connection_write(
+    server_id: &str,
+) -> Result<McpConnectionDisconnected, ApiError> {
+    validate_mcp_server_id(server_id).map_err(not_submitted)?;
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let path = mcp_disconnect_path(server_id)?;
-        let response = Request::delete(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let path = mcp_disconnect_path(server_id).map_err(not_submitted)?;
+        let response = Request::send(Request::delete(&path)).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let receipt = response
-            .json::<McpConnectionDisconnected>()
+        let receipt = crate::api::request::Request::decode::<McpConnectionDisconnected>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if receipt.server_id != server_id {
@@ -1019,25 +1060,22 @@ pub async fn create_channel(agent_id: &BotId) -> Result<ChannelDetail, ApiError>
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let request = Request::post("/api/channels")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
             .json(&CreateChannelRequest {
                 agent_ids: vec![agent_id.clone()],
             })
             .map_err(|_| ApiError::InvalidResponse)?;
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
+        let response = Request::send(request).await?;
         if response.status() != 201 {
             return Err(status_error(response.status()));
         }
-        let channel = response
-            .json::<openbot_contracts::command::ChannelDetailResponse>()
-            .await
-            .map(|response| response.channel)
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let channel = crate::api::request::Request::decode::<
+            openbot_contracts::command::ChannelDetailResponse,
+        >(&response)
+        .await
+        .map(|response| response.channel)
+        .map_err(|_| ApiError::InvalidResponse)?;
         if channel.agent_ids.as_slice() != [agent_id.clone()]
             || channel.thread_id.is_none()
             || !channel.active
@@ -1068,23 +1106,18 @@ pub async fn route_channel_message(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let request = Request::post("/api/route")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
             .json(&RouteChannelRequest {
                 text: text.to_owned(),
                 agent_id: agent_id.cloned(),
             })
             .map_err(|_| ApiError::InvalidResponse)?;
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
+        let response = Request::send(request).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let decision = response
-            .json::<ChannelRoutingDecision>()
+        let decision = crate::api::request::Request::decode::<ChannelRoutingDecision>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_routing_decision(agent_id, &decision)?;
@@ -1178,13 +1211,9 @@ pub async fn begin_thread_run_with_skills_and_model(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = thread_run_path(thread_id.as_str())?;
         let request = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
             .json(&BeginThreadRunBody {
                 model_selection: model_selection.cloned(),
                 run_id: run_id.clone(),
@@ -1194,13 +1223,12 @@ pub async fn begin_thread_run_with_skills_and_model(
                 selected_skill_slugs: selected_skill_slugs.to_vec(),
             })
             .map_err(|_| ApiError::InvalidResponse)?;
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
+        let response = Request::send(request).await?;
         let status = response.status();
         if !matches!(status, 200 | 201) {
             return Err(status_error(status));
         }
-        let started = response
-            .json::<ThreadRunStarted>()
+        let started = crate::api::request::Request::decode::<ThreadRunStarted>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if started.thread_id != *thread_id
@@ -1254,22 +1282,14 @@ pub async fn cancel_thread_run(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = thread_cancel_path(thread_id.as_str(), run_id.as_str())?;
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::post(&path)).await?;
         let status = response.status();
         if !matches!(status, 200 | 202) {
             return Err(status_error(status));
         }
-        let reply = response
-            .json::<ThreadRunCancellation>()
+        let reply = crate::api::request::Request::decode::<ThreadRunCancellation>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         let status_matches = matches!(
@@ -1303,20 +1323,12 @@ pub async fn mint_thread_id() -> Result<ThreadId, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::post("/api/threads/mint")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::post("/api/threads/mint")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<ThreadMinted>()
+        crate::api::request::Request::decode::<ThreadMinted>(&response)
             .await
             .map(|minted| minted.thread_id)
             .map_err(|_| ApiError::InvalidResponse)
@@ -1332,21 +1344,13 @@ pub async fn load_thread_status(thread_id: &ThreadId) -> Result<bool, ApiError> 
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = thread_status_path(thread_id.as_str())?;
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<ThreadStatus>()
+        crate::api::request::Request::decode::<ThreadStatus>(&response)
             .await
             .map(|status| status.known)
             .map_err(|_| ApiError::InvalidResponse)
@@ -1365,23 +1369,16 @@ pub async fn load_thread_conversation(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = thread_conversation_path(thread_id.as_str())?;
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let snapshot = response
-            .json::<ThreadConversationSnapshot>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let snapshot =
+            crate::api::request::Request::decode::<ThreadConversationSnapshot>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         let active_shape_matches =
             snapshot.active_run_id.is_some() == snapshot.active_run_state.is_some();
         let cancellable_matches = !snapshot.active_run_cancellable
@@ -1409,25 +1406,17 @@ pub async fn list_agents(hidden: bool) -> Result<Vec<AgentProfile>, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = if hidden {
             "/api/agents?hidden=true"
         } else {
             "/api/agents"
         };
-        let response = Request::get(path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(path)).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<AgentProfilesResponse>()
+        crate::api::request::Request::decode::<AgentProfilesResponse>(&response)
             .await
             .map(|response| response.agents)
             .map_err(|_| ApiError::InvalidResponse)
@@ -1444,21 +1433,13 @@ pub async fn load_agent(agent_id: &str) -> Result<AgentProfile, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = agent_detail_path(agent_id)?;
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<AgentProfileResponse>()
+        crate::api::request::Request::decode::<AgentProfileResponse>(&response)
             .await
             .map(|response| response.agent)
             .map_err(|_| ApiError::InvalidResponse)
@@ -1472,7 +1453,16 @@ pub async fn load_agent(agent_id: &str) -> Result<AgentProfile, ApiError> {
 
 /// Create one caller-owned Agent; response is the authoritative profile.
 pub async fn create_agent(request: AgentMutationRequest) -> Result<AgentProfile, ApiError> {
-    agent_profile_mutation("/api/agents", "POST", request).await
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        "$create".to_owned(),
+        create_agent_write(request),
+    )
+    .await
+}
+
+async fn create_agent_write(request: AgentMutationRequest) -> Result<AgentProfile, ApiError> {
+    agent_profile_mutation("/api/agents", "POST", request, None).await
 }
 
 /// Update one manageable Agent; response is the authoritative profile.
@@ -1480,26 +1470,42 @@ pub async fn update_agent(
     agent_id: &str,
     request: AgentMutationRequest,
 ) -> Result<AgentProfile, ApiError> {
-    let path = agent_detail_path(agent_id)?;
-    agent_profile_mutation(&path, "PATCH", request).await
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        agent_id.to_owned(),
+        update_agent_write(agent_id, request),
+    )
+    .await
+}
+
+async fn update_agent_write(
+    agent_id: &str,
+    request: AgentMutationRequest,
+) -> Result<AgentProfile, ApiError> {
+    let path = agent_detail_path(agent_id).map_err(not_submitted)?;
+    agent_profile_mutation(&path, "PATCH", request, Some(agent_id)).await
 }
 
 /// Duplicate one visible Agent into a new private managed-slot profile.
 pub async fn duplicate_agent(agent_id: &str) -> Result<AgentProfile, ApiError> {
-    validate_agent_id(agent_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        agent_id.to_owned(),
+        duplicate_agent_write(agent_id),
+    )
+    .await
+}
+
+async fn duplicate_agent_write(agent_id: &str) -> Result<AgentProfile, ApiError> {
+    validate_agent_id(agent_id).map_err(not_submitted)?;
     let path = format!("/api/agents/{}/duplicate", encode_url_component(agent_id));
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
-        agent_profile_response(response).await
+        let response = Request::send(Request::post(&path)).await?;
+        let profile = agent_profile_response(response, 201).await?;
+        validate_agent_duplicate_receipt(agent_id, &profile)?;
+        Ok(profile)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -1510,7 +1516,16 @@ pub async fn duplicate_agent(agent_id: &str) -> Result<AgentProfile, ApiError> {
 
 /// Hide/unhide one visible Agent for only the current actor.
 pub async fn set_agent_hidden(agent_id: &str, hidden: bool) -> Result<(), ApiError> {
-    validate_agent_id(agent_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        agent_id.to_owned(),
+        set_agent_hidden_write(agent_id, hidden),
+    )
+    .await
+}
+
+async fn set_agent_hidden_write(agent_id: &str, hidden: bool) -> Result<(), ApiError> {
+    validate_agent_id(agent_id).map_err(not_submitted)?;
     let path = format!(
         "/api/agents/{}/{}",
         encode_url_component(agent_id),
@@ -1521,29 +1536,39 @@ pub async fn set_agent_hidden(agent_id: &str, hidden: bool) -> Result<(), ApiErr
 
 /// Soft-delete one manageable non-package Agent.
 pub async fn delete_agent(agent_id: &str) -> Result<(), ApiError> {
-    let path = agent_detail_path(agent_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        agent_id.to_owned(),
+        delete_agent_write(agent_id),
+    )
+    .await
+}
+
+async fn delete_agent_write(agent_id: &str) -> Result<(), ApiError> {
+    let path = agent_detail_path(agent_id).map_err(not_submitted)?;
     agent_empty_mutation(&path, "DELETE").await
 }
 
 /// Issue or rotate the one-time callback token for one manageable remote Agent.
 pub async fn issue_agent_callback_token(agent_id: &str) -> Result<CallbackTokenIssued, ApiError> {
-    let path = agent_callback_token_path(agent_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        agent_id.to_owned(),
+        issue_agent_callback_token_write(agent_id),
+    )
+    .await
+}
+
+async fn issue_agent_callback_token_write(agent_id: &str) -> Result<CallbackTokenIssued, ApiError> {
+    let path = agent_callback_token_path(agent_id).map_err(not_submitted)?;
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::post(&path)).await?;
         if response.status() != 201 {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<CallbackTokenIssued>()
+        crate::api::request::Request::decode::<CallbackTokenIssued>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)
     }
@@ -1556,7 +1581,16 @@ pub async fn issue_agent_callback_token(agent_id: &str) -> Result<CallbackTokenI
 
 /// Revoke the current callback token; the remote Agent remains conversational.
 pub async fn revoke_agent_callback_token(agent_id: &str) -> Result<(), ApiError> {
-    let path = agent_callback_token_path(agent_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Agents,
+        agent_id.to_owned(),
+        revoke_agent_callback_token_write(agent_id),
+    )
+    .await
+}
+
+async fn revoke_agent_callback_token_write(agent_id: &str) -> Result<(), ApiError> {
+    let path = agent_callback_token_path(agent_id).map_err(not_submitted)?;
     agent_empty_mutation(&path, "DELETE").await
 }
 
@@ -1567,19 +1601,14 @@ pub async fn test_agent_connection(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-        let builder = Request::post("/api/agents/test-connection")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error);
+        let builder = Request::post("/api/agents/test-connection");
         let outgoing = secret_json(builder, &request)?;
         drop(request);
-        let response = outgoing.send().await.map_err(|_| ApiError::Network)?;
+        let response = Request::send(outgoing).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let verdict = response
-            .json::<AgentConnectionVerdict>()
+        let verdict = crate::api::request::Request::decode::<AgentConnectionVerdict>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if verdict.ok != verdict.reason.is_none()
@@ -1601,28 +1630,29 @@ async fn agent_profile_mutation(
     path: &str,
     method: &'static str,
     request: AgentMutationRequest,
+    expected_id: Option<&str>,
 ) -> Result<AgentProfile, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
         let builder = match method {
             "POST" => Request::post(path),
             "PATCH" => Request::patch(path),
-            _ => return Err(ApiError::InvalidResponse),
+            _ => return Err(ApiError::NotSubmitted),
         };
-        let builder = builder
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error);
-        let outgoing = secret_json(builder, &request)?;
+        let builder = builder;
+        let expected = AgentWriteIntent::new(&request)?;
+        let outgoing = secret_json(builder, &request).map_err(not_submitted)?;
         drop(request);
-        let response = outgoing.send().await.map_err(|_| ApiError::Network)?;
-        agent_profile_response(response).await
+        let response = Request::send(outgoing).await?;
+        let profile =
+            agent_profile_response(response, if expected_id.is_some() { 200 } else { 201 }).await?;
+        expected.validate_receipt(&profile, expected_id)?;
+        Ok(profile)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (path, method, request);
+        let _ = (path, method, request, expected_id);
         Err(ApiError::Unavailable)
     }
 }
@@ -1630,34 +1660,131 @@ async fn agent_profile_mutation(
 #[cfg(target_arch = "wasm32")]
 async fn agent_profile_response(
     response: gloo_net::http::Response,
+    expected_status: u16,
 ) -> Result<AgentProfile, ApiError> {
-    if !matches!(response.status(), 200 | 201) {
+    if response.status() != expected_status {
         return Err(status_error(response.status()));
     }
-    response
-        .json::<AgentProfileResponse>()
+    crate::api::request::Request::decode::<AgentProfileResponse>(&response)
         .await
         .map(|response| response.agent)
         .map_err(|_| ApiError::InvalidResponse)
+}
+
+/// Non-secret fields after the application's existing ECMAScript normalization.
+#[cfg(any(target_arch = "wasm32", test))]
+struct AgentWriteIntent {
+    name: String,
+    title: String,
+    role_description: String,
+    visibility: openbot_contracts::agent::AgentVisibility,
+    endpoint: Option<String>,
+    replacement_auth: bool,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl AgentWriteIntent {
+    fn new(request: &AgentMutationRequest) -> Result<Self, ApiError> {
+        use openbot_contracts::agent::{
+            MAX_AGENT_ENDPOINT_BYTES, MAX_AGENT_NAME_BYTES, MAX_AGENT_ROLE_DESCRIPTION_BYTES,
+            MAX_AGENT_TITLE_BYTES,
+        };
+        use openbot_contracts::text::trim_ecmascript;
+        let name = trim_ecmascript(&request.name);
+        let title = trim_ecmascript(&request.title);
+        let role_description = trim_ecmascript(&request.role_description);
+        let endpoint = request
+            .endpoint
+            .as_deref()
+            .map(trim_ecmascript)
+            .filter(|value| !value.is_empty());
+        if [(name, MAX_AGENT_NAME_BYTES), (title, MAX_AGENT_TITLE_BYTES)]
+            .iter()
+            .any(|(value, limit)| {
+                value.is_empty() || value.len() > *limit || value.chars().any(char::is_control)
+            })
+            || role_description.is_empty()
+            || role_description.len() > MAX_AGENT_ROLE_DESCRIPTION_BYTES
+            || role_description.as_bytes().contains(&0)
+            || endpoint.is_some_and(|value| {
+                value.len() > MAX_AGENT_ENDPOINT_BYTES
+                    || value.chars().any(|c| c.is_whitespace() || c.is_control())
+                    || !(value.starts_with("https://") || value.starts_with("http://"))
+            })
+            || (request.auth.is_some() && endpoint.is_none())
+        {
+            return Err(ApiError::NotSubmitted);
+        }
+        Ok(Self {
+            name: name.to_owned(),
+            title: title.to_owned(),
+            role_description: role_description.to_owned(),
+            visibility: request.visibility,
+            endpoint: endpoint.map(str::to_owned),
+            replacement_auth: request.auth.is_some(),
+        })
+    }
+
+    fn validate_receipt(
+        &self,
+        profile: &AgentProfile,
+        expected_id: Option<&str>,
+    ) -> Result<(), ApiError> {
+        validate_agent_id(profile.id.as_str())?;
+        let create = expected_id.is_none();
+        if expected_id.is_some_and(|id| profile.id.as_str() != id)
+            || profile.name != self.name
+            || profile.title != self.title
+            || profile.role_description != self.role_description
+            || profile.visibility != self.visibility
+            || profile.endpoint != self.endpoint
+            || profile.system_owned
+            || !profile.can_manage
+            || !profile.mine
+            || (create
+                && (profile.hidden
+                    || profile.has_callback_token
+                    || profile.has_auth != self.replacement_auth))
+            || (self.replacement_auth && !profile.has_auth)
+            || (self.endpoint.is_none() && (profile.has_auth || profile.has_callback_token))
+        {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn validate_agent_duplicate_receipt(
+    source_id: &str,
+    profile: &AgentProfile,
+) -> Result<(), ApiError> {
+    validate_agent_id(profile.id.as_str())?;
+    if profile.id.as_str() == source_id
+        || profile.visibility != openbot_contracts::agent::AgentVisibility::Private
+        || profile.endpoint.is_some()
+        || profile.has_auth
+        || profile.has_callback_token
+        || profile.hidden
+        || profile.system_owned
+        || !profile.can_manage
+        || !profile.mine
+    {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(())
 }
 
 async fn agent_empty_mutation(path: &str, method: &'static str) -> Result<(), ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
         let builder = match method {
             "POST" => Request::post(path),
             "DELETE" => Request::delete(path),
-            _ => return Err(ApiError::InvalidResponse),
+            _ => return Err(ApiError::NotSubmitted),
         };
-        let response = builder
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(builder).await?;
         if response.status() != 204 {
             return Err(status_error(response.status()));
         }
@@ -1675,21 +1802,13 @@ pub async fn list_channels(cursor: Option<&str>) -> Result<ChannelPage, ApiError
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = channel_list_path(cursor)?;
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        let page = response
-            .json::<ChannelPage>()
+        let page = crate::api::request::Request::decode::<ChannelPage>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if page.channels.len() > CHANNEL_PAGE_SIZE as usize {
@@ -1709,24 +1828,18 @@ pub async fn load_channel(channel_id: &str) -> Result<ChannelDetail, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = channel_detail_path(channel_id)?;
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<openbot_contracts::command::ChannelDetailResponse>()
-            .await
-            .map(|response| response.channel)
-            .map_err(|_| ApiError::InvalidResponse)
+        crate::api::request::Request::decode::<openbot_contracts::command::ChannelDetailResponse>(
+            &response,
+        )
+        .await
+        .map(|response| response.channel)
+        .map_err(|_| ApiError::InvalidResponse)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -1740,20 +1853,12 @@ pub async fn load_memory_control() -> Result<MemoryControl, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/memories/control")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/memories/control")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<MemoryControl>()
+        crate::api::request::Request::decode::<MemoryControl>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)
     }
@@ -1765,23 +1870,27 @@ pub async fn load_memory_control() -> Result<MemoryControl, ApiError> {
 
 /// Persist and verify the current actor's runtime memory write control.
 pub async fn save_memory_control(writes_enabled: bool) -> Result<MemoryControl, ApiError> {
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Memory,
+        "$control".to_owned(),
+        save_memory_control_write(writes_enabled),
+    )
+    .await
+}
+
+async fn save_memory_control_write(writes_enabled: bool) -> Result<MemoryControl, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let request = Request::put("/api/memories/control")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
             .json(&UpdateMemoryControl { writes_enabled })
-            .map_err(|_| ApiError::InvalidResponse)?;
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
+            .map_err(|_| ApiError::NotSubmitted)?;
+        let response = Request::send(request).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let control = response
-            .json::<MemoryControl>()
+        let control = crate::api::request::Request::decode::<MemoryControl>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if control.writes_enabled != writes_enabled {
@@ -1801,21 +1910,13 @@ pub async fn list_memories(cursor: Option<&str>) -> Result<MemoryPage, ApiError>
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = memory_list_path(cursor)?;
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let page = response
-            .json::<MemoryPage>()
+        let page = crate::api::request::Request::decode::<MemoryPage>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_memory_page(&page)?;
@@ -1824,6 +1925,54 @@ pub async fn list_memories(cursor: Option<&str>) -> Result<MemoryPage, ApiError>
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = cursor;
+        Err(ApiError::Unavailable)
+    }
+}
+
+/// Recall only the current actor's User-scope entries through the existing read-only endpoint.
+pub async fn recall_user_memories(
+    query: &str,
+) -> Result<openbot_contracts::memory::MemoryRecall, ApiError> {
+    if query.trim().is_empty() || query.len() > 4096 || query.as_bytes().contains(&0) {
+        return Err(ApiError::NotSubmitted);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::api::request::Request;
+        use openbot_contracts::memory::{MemoryRecall, MemoryScope, MemoryStatus, RecallMemories};
+        let input = RecallMemories {
+            query: query.to_owned(),
+            tags: Vec::new(),
+            bot_id: None,
+            thread_id: None,
+            limit: Some(50),
+        };
+        let response = Request::send(
+            Request::post("/api/memories/recall")
+                .json(&input)
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
+        if response.status() != 200 {
+            return Err(status_error(response.status()));
+        }
+        let recall = Request::decode::<MemoryRecall>(&response).await?;
+        if recall.memories.iter().any(|record| {
+            record.status != MemoryStatus::Active || record.scope != MemoryScope::User
+        }) {
+            return Err(ApiError::InvalidResponse);
+        }
+        let page = MemoryPage {
+            memories: recall.memories,
+            next_cursor: None,
+        };
+        validate_memory_page(&page)?;
+        Ok(MemoryRecall {
+            memories: page.memories,
+        })
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
         Err(ApiError::Unavailable)
     }
 }
@@ -1841,21 +1990,16 @@ pub async fn remember_memory_record(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
-        let response = Request::post("/api/memories")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&input)
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::post("/api/memories")
+                .json(&input)
+                .map_err(|_| ApiError::InvalidResponse)?,
+        )
+        .await?;
         if response.status() != 201 {
             return Err(status_error(response.status()));
         }
-        let record = response
-            .json::<MemoryRecord>()
+        let record = crate::api::request::Request::decode::<MemoryRecord>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_memory_record(&record)?;
@@ -1883,32 +2027,34 @@ pub async fn correct_memory_record(
     memory_id: &str,
     correction: CorrectMemory,
 ) -> Result<MemoryRecord, ApiError> {
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Memory,
+        memory_id.to_owned(),
+        correct_memory_record_write(memory_id, correction),
+    )
+    .await
+}
+
+async fn correct_memory_record_write(
+    memory_id: &str,
+    correction: CorrectMemory,
+) -> Result<MemoryRecord, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let path = memory_detail_path(memory_id)?;
+        let path = memory_detail_path(memory_id).map_err(not_submitted)?;
         let request = Request::put(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
             .json(&correction)
-            .map_err(|_| ApiError::InvalidResponse)?;
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
+            .map_err(|_| ApiError::NotSubmitted)?;
+        let response = Request::send(request).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let record = response
-            .json::<MemoryRecord>()
+        let record = crate::api::request::Request::decode::<MemoryRecord>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
-        validate_memory_record(&record)?;
-        if record.status != MemoryStatus::Active
-            || record.supersedes_id.as_deref() != Some(memory_id)
-        {
-            return Err(ApiError::InvalidResponse);
-        }
+        validate_memory_correction_receipt(memory_id, &correction, &record)?;
         Ok(record)
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -1918,33 +2064,66 @@ pub async fn correct_memory_record(
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn validate_memory_correction_receipt(
+    original_id: &str,
+    correction: &CorrectMemory,
+    record: &MemoryRecord,
+) -> Result<(), ApiError> {
+    validate_memory_record(record)?;
+    let mut tags = correction.tags.clone();
+    tags.sort();
+    tags.dedup();
+    if record.status != MemoryStatus::Active
+        || record.memory_id == original_id
+        || record.supersedes_id.as_deref() != Some(original_id)
+        || record.content.as_deref() != Some(correction.content.as_str())
+        || record.tags != tags
+        || record.sensitivity != correction.sensitivity
+        || record.expires_at != correction.expires_at
+    {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(())
+}
+
 /// Forbid or delete one owner memory and verify that retained content is erased.
 pub async fn mutate_memory_record(
+    memory_id: &str,
+    mutation: MemoryMutation,
+) -> Result<MemoryRecord, ApiError> {
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Memory,
+        memory_id.to_owned(),
+        mutate_memory_record_write(memory_id, mutation),
+    )
+    .await
+}
+
+async fn mutate_memory_record_write(
     memory_id: &str,
     mutation: MemoryMutation,
 ) -> Result<MemoryRecord, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = match mutation {
-            MemoryMutation::Forbid => format!("{}/forbid", memory_detail_path(memory_id)?),
-            MemoryMutation::Delete => memory_detail_path(memory_id)?,
+            MemoryMutation::Forbid => format!(
+                "{}/forbid",
+                memory_detail_path(memory_id).map_err(not_submitted)?
+            ),
+            MemoryMutation::Delete => memory_detail_path(memory_id).map_err(not_submitted)?,
         };
         let request = match mutation {
             MemoryMutation::Forbid => Request::post(&path),
             MemoryMutation::Delete => Request::delete(&path),
-        }
-        .cache(RequestCache::NoStore)
-        .credentials(RequestCredentials::SameOrigin)
-        .redirect(RequestRedirect::Error);
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
+        };
+        let response = Request::send(request).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let record = response
-            .json::<MemoryRecord>()
+        let record = crate::api::request::Request::decode::<MemoryRecord>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_memory_record(&record)?;
@@ -1969,22 +2148,15 @@ pub async fn load_authentication_capabilities() -> Result<AuthenticationCapabili
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/capabilities")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/capabilities")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let capabilities = response
-            .json::<AuthenticationCapabilities>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let capabilities =
+            crate::api::request::Request::decode::<AuthenticationCapabilities>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         if !capabilities.is_canonical() {
             return Err(ApiError::InvalidResponse);
         }
@@ -2001,23 +2173,16 @@ pub async fn start_environment_sign_in(provider: AuthProviderId) -> Result<Strin
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = environment_sign_in_path(provider);
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::post(&path)).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let started = response
-            .json::<AuthenticationStartResponse>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let started =
+            crate::api::request::Request::decode::<AuthenticationStartResponse>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         validate_oidc_authorization_target(&started.url)?;
         Ok(started.url)
     }
@@ -2035,27 +2200,23 @@ pub async fn start_enterprise_sign_in(email: String) -> Result<(), ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         if email.is_empty() || email.len() > MAX_SSO_ROUTING_EMAIL_BYTES {
             return Err(ApiError::InvalidResponse);
         }
-        let response = Request::post("/api/auth/sso/start")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&EnterpriseSsoStartRequest { email })
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(
+            Request::post("/api/auth/sso/start")
+                .json(&EnterpriseSsoStartRequest { email })
+                .map_err(|_| ApiError::InvalidResponse)?,
+        )
+        .await?;
         if response.status() != 202 {
             return Err(status_error(response.status()));
         }
-        let accepted = response
-            .json::<EnterpriseSsoRoutingAccepted>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let accepted =
+            crate::api::request::Request::decode::<EnterpriseSsoRoutingAccepted>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         if !accepted.accepted {
             return Err(ApiError::InvalidResponse);
         }
@@ -2073,20 +2234,12 @@ pub async fn load_current_user() -> Result<CurrentUser, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/me")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/me")).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<CurrentUserResponse>()
+        crate::api::request::Request::decode::<CurrentUserResponse>(&response)
             .await
             .map(|response| response.user)
             .map_err(|_| ApiError::InvalidResponse)
@@ -2102,20 +2255,12 @@ pub async fn require_admin_status() -> Result<(), ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/admin/status")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/admin/status")).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        let status = response
-            .json::<AdminStatus>()
+        let status = crate::api::request::Request::decode::<AdminStatus>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if status.status != AdminState::Ok {
@@ -2134,20 +2279,12 @@ pub async fn load_action_policy() -> Result<Option<ActionPolicyDocument>, ApiErr
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/computers/policy")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/computers/policy")).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<ActionPolicyResponse>()
+        crate::api::request::Request::decode::<ActionPolicyResponse>(&response)
             .await
             .map(|response| response.policy)
             .map_err(|_| ApiError::InvalidResponse)
@@ -2162,25 +2299,31 @@ pub async fn load_action_policy() -> Result<Option<ActionPolicyDocument>, ApiErr
 pub async fn save_action_policy(
     policy: &ActionPolicyDocument,
 ) -> Result<ActionPolicyDocument, ApiError> {
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Boundaries,
+        "$policy".to_owned(),
+        save_action_policy_write(policy),
+    )
+    .await
+}
+
+async fn save_action_policy_write(
+    policy: &ActionPolicyDocument,
+) -> Result<ActionPolicyDocument, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::put("/api/computers/policy")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(policy)
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
-        if !response.ok() {
+        let response = Request::send(
+            Request::put("/api/computers/policy")
+                .json(policy)
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
+        if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let response = response
-            .json::<ActionPolicyResponse>()
+        let response = crate::api::request::Request::decode::<ActionPolicyResponse>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_action_policy_receipt(policy, response)
@@ -2209,20 +2352,12 @@ pub async fn load_identity_providers() -> Result<Vec<RegisteredIdentityProvider>
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/admin/identity-providers")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/admin/identity-providers")).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        let response = response
-            .json::<IdentityProvidersResponse>()
+        let response = crate::api::request::Request::decode::<IdentityProvidersResponse>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_identity_providers(&response.providers)?;
@@ -2238,34 +2373,42 @@ pub async fn load_identity_providers() -> Result<Vec<RegisteredIdentityProvider>
 pub async fn register_identity_provider(
     request: RegisterIdentityProviderRequest,
 ) -> Result<RegisteredIdentityProvider, ApiError> {
-    let expected_domain = canonical_identity_provider_domains(request.domain())?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::IdentityProviders,
+        request.provider_id().to_owned(),
+        register_identity_provider_write(request),
+    )
+    .await
+}
+
+async fn register_identity_provider_write(
+    request: RegisterIdentityProviderRequest,
+) -> Result<RegisteredIdentityProvider, ApiError> {
+    let expected_domain =
+        canonical_identity_provider_domains(request.domain()).map_err(not_submitted)?;
     if !valid_identity_provider_id(request.provider_id()) {
-        return Err(ApiError::InvalidResponse);
+        return Err(ApiError::NotSubmitted);
     }
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let builder = Request::post("/api/auth/sso/register")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error);
+        let builder = Request::post("/api/auth/sso/register");
         let expected = (
             request.provider_id().to_owned(),
             request.issuer().to_owned(),
             request.protocol(),
         );
-        let outgoing = secret_json(builder, &request)?;
+        let outgoing = secret_json(builder, &request).map_err(not_submitted)?;
         drop(request);
-        let response = outgoing.send().await.map_err(|_| ApiError::Network)?;
-        if !response.ok() {
+        let response = Request::send(outgoing).await?;
+        if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let provider = response
-            .json::<RegisteredIdentityProvider>()
-            .await
-            .map_err(|_| ApiError::InvalidResponse)?;
+        let provider =
+            crate::api::request::Request::decode::<RegisteredIdentityProvider>(&response)
+                .await
+                .map_err(|_| ApiError::InvalidResponse)?;
         validate_identity_provider(&provider)?;
         if provider.provider_id != expected.0
             || provider.issuer != expected.1
@@ -2285,24 +2428,25 @@ pub async fn register_identity_provider(
 
 /// Remove one provider by a validated path segment and require an exact positive receipt.
 pub async fn remove_identity_provider(provider_id: &str) -> Result<(), ApiError> {
-    let path = identity_provider_remove_path(provider_id)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::IdentityProviders,
+        provider_id.to_owned(),
+        remove_identity_provider_write(provider_id),
+    )
+    .await
+}
+
+async fn remove_identity_provider_write(provider_id: &str) -> Result<(), ApiError> {
+    let path = identity_provider_remove_path(provider_id).map_err(not_submitted)?;
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::delete(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
-        if !response.ok() {
+        let response = Request::send(Request::delete(&path)).await?;
+        if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let receipt = response
-            .json::<IdentityProviderRemoved>()
+        let receipt = crate::api::request::Request::decode::<IdentityProviderRemoved>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if !receipt.removed {
@@ -2333,20 +2477,12 @@ pub async fn load_people_page(search: &str, cursor: Option<&str>) -> Result<Peop
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        let page = response
-            .json::<PeoplePage>()
+        let page = crate::api::request::Request::decode::<PeoplePage>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_people_page(&page)?;
@@ -2364,26 +2500,33 @@ pub async fn change_person_role(
     user_id: &str,
     role: openbot_contracts::auth::Role,
 ) -> Result<Person, ApiError> {
-    let path = person_mutation_path(user_id, "role")?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::People,
+        user_id.to_owned(),
+        change_person_role_write(user_id, role),
+    )
+    .await
+}
+
+async fn change_person_role_write(
+    user_id: &str,
+    role: openbot_contracts::auth::Role,
+) -> Result<Person, ApiError> {
+    let path = person_mutation_path(user_id, "role").map_err(not_submitted)?;
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&ChangePersonRole { role })
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
-        if !response.ok() {
+        let response = Request::send(
+            Request::post(&path)
+                .json(&ChangePersonRole { role })
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
+        if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let response = response
-            .json::<PersonResponse>()
+        let response = crate::api::request::Request::decode::<PersonResponse>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_mutated_person(user_id, &response.person)?;
@@ -2401,26 +2544,30 @@ pub async fn change_person_role(
 
 /// Commit one access removal or restoration for a Server-selected person row.
 pub async fn change_person_access(user_id: &str, revoked: bool) -> Result<Person, ApiError> {
-    let path = person_mutation_path(user_id, "access")?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::People,
+        user_id.to_owned(),
+        change_person_access_write(user_id, revoked),
+    )
+    .await
+}
+
+async fn change_person_access_write(user_id: &str, revoked: bool) -> Result<Person, ApiError> {
+    let path = person_mutation_path(user_id, "access").map_err(not_submitted)?;
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .json(&ChangePersonAccess { revoked })
-            .map_err(|_| ApiError::InvalidResponse)?
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
-        if !response.ok() {
+        let response = Request::send(
+            Request::post(&path)
+                .json(&ChangePersonAccess { revoked })
+                .map_err(|_| ApiError::NotSubmitted)?,
+        )
+        .await?;
+        if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let response = response
-            .json::<PersonResponse>()
+        let response = crate::api::request::Request::decode::<PersonResponse>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_mutated_person(user_id, &response.person)?;
@@ -2442,20 +2589,12 @@ pub async fn load_audit_page(cursor: Option<&str>) -> Result<AuditPage, ApiError
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get(&path)).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        let page = response
-            .json::<AuditPage>()
+        let page = crate::api::request::Request::decode::<AuditPage>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_audit_page(&page)?;
@@ -2473,20 +2612,12 @@ pub async fn list_pending_tool_approvals() -> Result<PendingToolApprovals, ApiEr
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/tool-approvals")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/tool-approvals")).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let page = response
-            .json::<PendingToolApprovals>()
+        let page = crate::api::request::Request::decode::<PendingToolApprovals>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if page.approvals.len() > 100 {
@@ -2508,22 +2639,17 @@ pub async fn decide_tool_approval(
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let path = approval_decision_path(approval_id)?;
         let body = serde_json::json!({"decision": decision});
         let request = Request::post(&path)
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
             .json(&body)
             .map_err(|_| ApiError::InvalidResponse)?;
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
+        let response = Request::send(request).await?;
         if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let receipt = response
-            .json::<ToolApprovalResolved>()
+        let receipt = crate::api::request::Request::decode::<ToolApprovalResolved>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         if receipt.approval_id != approval_id || receipt.decision != decision {
@@ -2543,20 +2669,10 @@ pub async fn load_ui_preferences() -> Result<UiPreferences, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/me/preferences")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
-        if !response.ok() {
-            return Err(status_error(response.status()));
-        }
-        let stored = response
-            .json::<UiPreferences>()
+        let response = Request::send(Request::get("/api/me/preferences")).await?;
+        preference_response_status(response.status())?;
+        let stored = crate::api::request::Request::decode::<UiPreferences>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_ui_preference_projection(stored)?;
@@ -2580,20 +2696,13 @@ pub async fn save_ui_preferences(update: UpdateUiPreferences) -> Result<UiPrefer
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let request = Request::put("/api/me/preferences")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
             .json(&update)
             .map_err(|_| ApiError::InvalidResponse)?;
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
-        if !response.ok() {
-            return Err(status_error(response.status()));
-        }
-        let stored = response
-            .json::<UiPreferences>()
+        let response = Request::send(request).await?;
+        preference_response_status(response.status())?;
+        let stored = crate::api::request::Request::decode::<UiPreferences>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_ui_preference_receipt(update, stored)?;
@@ -2602,6 +2711,15 @@ pub async fn save_ui_preferences(update: UpdateUiPreferences) -> Result<UiPrefer
     #[cfg(not(target_arch = "wasm32"))]
     {
         Err(ApiError::Unavailable)
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn preference_response_status(status: u16) -> Result<(), ApiError> {
+    if status == 200 {
+        Ok(())
+    } else {
+        Err(status_error(status))
     }
 }
 
@@ -2658,6 +2776,11 @@ mod ui_preference_receipt_tests {
         };
         assert!(validate_ui_preference_projection(UiPreferences::default()).is_ok());
         assert!(validate_ui_preference_receipt(update, stored).is_ok());
+        // A matching metadata body on Accepted is still not the committed PUT acknowledgement.
+        assert!(preference_response_status(200).is_ok());
+        for status in [201, 202, 204] {
+            assert!(preference_response_status(status).is_err());
+        }
         for invalid in [
             UiPreferences::default(),
             UiPreferences {
@@ -2694,20 +2817,12 @@ pub async fn load_run_cost_budget() -> Result<RunCostBudgetPreference, ApiError>
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/me/run-cost-budget")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/me/run-cost-budget")).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        let preference = response
-            .json::<RunCostBudgetPreference>()
+        let preference = crate::api::request::Request::decode::<RunCostBudgetPreference>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_run_cost_budget_preference(&preference)?;
@@ -2723,24 +2838,30 @@ pub async fn load_run_cost_budget() -> Result<RunCostBudgetPreference, ApiError>
 pub async fn replace_run_cost_budget(
     preference: RunCostBudgetPreference,
 ) -> Result<RunCostBudgetPreference, ApiError> {
-    validate_run_cost_budget_preference(&preference)?;
+    crate::configuration_writes::track(
+        crate::configuration_writes::ConfigurationKind::Preferences,
+        "$budget".to_owned(),
+        replace_run_cost_budget_write(preference),
+    )
+    .await
+}
+
+async fn replace_run_cost_budget_write(
+    preference: RunCostBudgetPreference,
+) -> Result<RunCostBudgetPreference, ApiError> {
+    validate_run_cost_budget_preference(&preference).map_err(not_submitted)?;
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
         let request = Request::put("/api/me/run-cost-budget")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
             .json(&preference)
-            .map_err(|_| ApiError::InvalidResponse)?;
-        let response = request.send().await.map_err(|_| ApiError::Network)?;
-        if !response.ok() {
+            .map_err(|_| ApiError::NotSubmitted)?;
+        let response = Request::send(request).await?;
+        if response.status() != 200 {
             return Err(status_error(response.status()));
         }
-        let stored = response
-            .json::<RunCostBudgetPreference>()
+        let stored = crate::api::request::Request::decode::<RunCostBudgetPreference>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)?;
         validate_run_cost_budget_preference(&stored)?;
@@ -2791,20 +2912,12 @@ pub async fn load_session_status() -> Result<SessionStatus, ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::get("/api/me/session")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::get("/api/me/session")).await?;
         if !response.ok() {
             return Err(status_error(response.status()));
         }
-        response
-            .json::<SessionStatus>()
+        crate::api::request::Request::decode::<SessionStatus>(&response)
             .await
             .map_err(|_| ApiError::InvalidResponse)
     }
@@ -2819,15 +2932,8 @@ pub async fn sign_out_current_session() -> Result<(), ApiError> {
     #[cfg(target_arch = "wasm32")]
     {
         use crate::api::request::Request;
-        use web_sys::{RequestCache, RequestCredentials, RequestRedirect};
 
-        let response = Request::post("/api/auth/sign-out")
-            .cache(RequestCache::NoStore)
-            .credentials(RequestCredentials::SameOrigin)
-            .redirect(RequestRedirect::Error)
-            .send()
-            .await
-            .map_err(|_| ApiError::Network)?;
+        let response = Request::send(Request::post("/api/auth/sign-out")).await?;
         if response.status() != 204 {
             return Err(status_error(response.status()));
         }
@@ -3928,7 +4034,7 @@ fn encode_url_component(value: &str) -> String {
     encoded
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn status_error(status: u16) -> ApiError {
     match status {
         202 => ApiError::ReconciliationRequired,
@@ -4278,6 +4384,49 @@ mod tests {
         assert_eq!(
             validate_sandboxed_record(&changed).unwrap_err(),
             ApiError::InvalidResponse
+        );
+        let request = SaveSandboxedComponentRequest {
+            expected_revision: None,
+            slug: "delivery_eta".to_owned(),
+            title: record.title.clone(),
+            description: record.draft_description.clone(),
+            html: record.draft_html.clone(),
+            css: record.draft_css.clone(),
+            js_functions: record.draft_js_functions.clone(),
+            argument_schema: record.draft_argument_schema.clone(),
+            sample_arguments: record.sample_arguments.clone(),
+        };
+        assert!(validate_sandboxed_draft_receipt(&request, &record).is_ok());
+        let mut wrong_target = record.clone();
+        wrong_target.name = "custom_other".to_owned();
+        assert_eq!(
+            validate_sandboxed_draft_receipt(&request, &wrong_target),
+            Err(ApiError::InvalidResponse)
+        );
+        assert_eq!(
+            validate_sandboxed_draft_receipt(&request, &changed),
+            Err(ApiError::InvalidResponse)
+        );
+        let mut saved = record.clone();
+        saved.revision = 0;
+        let mut published = record.clone();
+        published.editing_revision = 2;
+        assert!(validate_sandboxed_publication_receipt(&request, &saved, &published).is_ok());
+        let mut wrong_editing_revision = record.clone();
+        wrong_editing_revision.editing_revision = 3;
+        assert_eq!(
+            validate_sandboxed_draft_receipt(&request, &wrong_editing_revision),
+            Err(ApiError::InvalidResponse)
+        );
+        assert_eq!(
+            validate_sandboxed_publication_receipt(&request, &record, &record),
+            Err(ApiError::InvalidResponse)
+        );
+        let mut wrong_snapshot = published.clone();
+        wrong_snapshot.published_html = Some("<p>another</p>".into());
+        assert_eq!(
+            validate_sandboxed_publication_receipt(&request, &saved, &wrong_snapshot),
+            Err(ApiError::InvalidResponse)
         );
         let mut shared = component_record("custom_delivery_eta", "Delivery ETA", true);
         shared.kind = CompiledComponentKind::Sandboxed;
@@ -4684,6 +4833,102 @@ mod tests {
             .unwrap_err(),
             ApiError::InvalidResponse,
         );
+    }
+
+    #[test]
+    fn agent_write_ack_must_bind_target_and_normalized_public_intent() {
+        use openbot_contracts::agent::AgentVisibility;
+        let request = AgentMutationRequest {
+            name: "\u{FEFF}Ada ".into(),
+            title: " Assistant ".into(),
+            role_description: " Solve\ncarefully ".into(),
+            visibility: AgentVisibility::Private,
+            endpoint: None,
+            auth: None,
+        };
+        let expected = AgentWriteIntent::new(&request).unwrap();
+        let profile = AgentProfile {
+            id: BotId::new("agent-a"),
+            name: "Ada".into(),
+            title: "Assistant".into(),
+            role_description: "Solve\ncarefully".into(),
+            avatar_seed: "seed".into(),
+            visibility: AgentVisibility::Private,
+            endpoint: None,
+            has_auth: false,
+            has_callback_token: false,
+            hidden: false,
+            system_owned: false,
+            can_manage: true,
+            mine: true,
+        };
+        assert!(expected.validate_receipt(&profile, Some("agent-a")).is_ok());
+        assert!(expected.validate_receipt(&profile, None).is_ok());
+        assert_eq!(
+            expected.validate_receipt(&profile, Some("agent-b")),
+            Err(ApiError::InvalidResponse)
+        );
+        for variant in 0..6 {
+            let mut wrong = profile.clone();
+            match variant {
+                0 => wrong.name.push('x'),
+                1 => wrong.title.push('x'),
+                2 => wrong.role_description.push('x'),
+                3 => wrong.visibility = AgentVisibility::Public,
+                4 => wrong.endpoint = Some("https://other.invalid".into()),
+                _ => wrong.can_manage = false,
+            }
+            assert_eq!(
+                expected.validate_receipt(&wrong, Some("agent-a")),
+                Err(ApiError::InvalidResponse)
+            );
+        }
+        assert_eq!(
+            validate_agent_duplicate_receipt("agent-a", &profile),
+            Err(ApiError::InvalidResponse)
+        );
+        assert!(validate_agent_duplicate_receipt("source", &profile).is_ok());
+        let mut invalid = request;
+        invalid.name.clear();
+        assert!(matches!(
+            AgentWriteIntent::new(&invalid),
+            Err(ApiError::NotSubmitted)
+        ));
+    }
+
+    #[test]
+    fn memory_correction_ack_rejects_a_different_edit_of_the_same_original() {
+        let correction = CorrectMemory {
+            content: "未经规范化的修正".into(),
+            tags: vec!["z".into(), "a".into(), "z".into()],
+            sensitivity: MemorySensitivity::Sensitive,
+            expires_at: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::days(10)),
+        };
+        let mut record = memory_record(
+            "replacement",
+            Some(&correction.content),
+            MemoryStatus::Active,
+        );
+        record.supersedes_id = Some("original".into());
+        record.tags = vec!["a".into(), "z".into()];
+        record.sensitivity = correction.sensitivity;
+        record.expires_at = correction.expires_at;
+        assert!(validate_memory_correction_receipt("original", &correction, &record).is_ok());
+        for variant in 0..6 {
+            let mut wrong = record.clone();
+            match variant {
+                0 => wrong.content = Some("另一份修正".into()),
+                1 => wrong.tags.push("extra".into()),
+                2 => wrong.sensitivity = MemorySensitivity::Normal,
+                3 => wrong.expires_at = None,
+                4 => wrong.supersedes_id = Some("other".into()),
+                _ => wrong.memory_id = "original".into(),
+            }
+            assert_eq!(
+                validate_memory_correction_receipt("original", &correction, &wrong),
+                Err(ApiError::InvalidResponse)
+            );
+        }
     }
 
     #[test]

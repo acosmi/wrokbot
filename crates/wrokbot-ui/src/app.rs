@@ -46,6 +46,7 @@ pub fn App() -> impl IntoView {
 /// Authenticated-mount-owned projections cannot survive a session boundary or accept its late reads.
 #[component]
 fn AuthenticatedWorkspace() -> impl IntoView {
+    provide_context(crate::configuration_writes::ConfigurationWrites::new());
     provide_context(crate::features::channels::run_observation::ObservedRunDirectory::new());
     provide_context(crate::features::approvals::ToolApprovalActions::new());
     provide_context(crate::features::approvals::attention::ComponentDecisionActions::new());
@@ -62,6 +63,7 @@ fn AuthenticatedWorkspace() -> impl IntoView {
     );
     view! {
         <AppLayout>
+            <crate::configuration_writes::ConfigurationWriteNotice />
             <AppRoutes />
         </AppLayout>
     }
