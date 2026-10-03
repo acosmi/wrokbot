@@ -3,6 +3,7 @@
 use leptos::prelude::*;
 use openbot_contracts::command::ChannelSummary;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::api::channel_route_href;
 use crate::i18n::{t_string, use_i18n};
@@ -20,12 +21,7 @@ pub fn ChannelRow(
     let href = channel_route_href(channel.id.as_str()).expect("server channel id is route-safe");
     let visible_name = channel.name;
     let last_message = channel.last_message.unwrap_or_default();
-    let timestamp = channel.last_message_at.map(|at| {
-        (
-            at.to_string(),
-            localized_relative_time(i18n, current_time(), at),
-        )
-    });
+    let timestamp = channel.last_message_at;
     let description = format!("{visible_name} — {last_message}");
     view! {
         <li class="ob-sidebar-list-item">
@@ -39,8 +35,10 @@ pub fn ChannelRow(
                 <span class="ob-channel-copy">
                     <span class="ob-channel-heading">
                         <span class="ob-channel-name">{visible_name}</span>
-                        {timestamp.map(|(datetime, label)| view! {
-                            <time class="ob-channel-time" datetime=datetime>{label}</time>
+                        {timestamp.map(|at| view! {
+                            <time class="ob-channel-time" datetime=at.format(&Rfc3339).ok()>
+                                {move || localized_relative_time(i18n, current_time(), at)}
+                            </time>
                         })}
                     </span>
                     <span class="ob-channel-preview">{last_message}</span>

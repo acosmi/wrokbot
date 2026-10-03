@@ -3150,6 +3150,7 @@ textarea:focus-visible,
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  overflow-anchor: none;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: var(--transcript-scrollbar) transparent;
