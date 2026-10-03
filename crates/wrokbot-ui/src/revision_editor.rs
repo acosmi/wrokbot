@@ -44,6 +44,7 @@ impl AttemptToken {
     pub(crate) const fn edit_serial(self) -> u64 {
         self.edit_serial
     }
+    #[cfg(test)]
     pub(crate) const fn attempt_serial(self) -> u64 {
         self.attempt_serial
     }
@@ -206,6 +207,7 @@ impl EditorCore {
     pub(crate) const fn is_bound(&self) -> bool {
         !matches!(self.binding, Binding::Unbound)
     }
+    #[cfg(test)]
     pub(crate) const fn is_bound_absent(&self) -> bool {
         matches!(self.binding, Binding::Absent)
     }
@@ -215,6 +217,7 @@ impl EditorCore {
     pub(crate) const fn auto_paused(&self) -> bool {
         self.paused
     }
+    #[cfg(test)]
     pub(crate) const fn last_uncertain_attempt(&self) -> Option<AttemptToken> {
         self.uncertain
     }
