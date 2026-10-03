@@ -53,6 +53,7 @@ struct MessageScrollerContext {
     spacer_height: StoredValue<i32>,
     programmatic_scroll: StoredValue<bool>,
     programmatic_generation: StoredValue<u64>,
+    user_scroll_pending: StoredValue<bool>,
     content_change_pending: StoredValue<bool>,
     initialized: StoredValue<bool>,
     resize_scheduled: StoredValue<bool>,
@@ -128,6 +129,7 @@ pub fn MessageScroller(
         spacer_height: StoredValue::new(0),
         programmatic_scroll: StoredValue::new(false),
         programmatic_generation: StoredValue::new(0),
+        user_scroll_pending: StoredValue::new(false),
         content_change_pending: StoredValue::new(false),
         initialized: StoredValue::new(false),
         resize_scheduled: StoredValue::new(false),
@@ -505,7 +507,9 @@ fn sync_content(context: MessageScrollerContext) {
         });
         if let Some(anchor) = new_anchors.last() {
             match context.mode.get_value() {
-                ScrollMode::FreeScrolling => {}
+                ScrollMode::FreeScrolling => {
+                    restore_reading_position(&context, &items);
+                }
                 ScrollMode::FollowingBottom if new_anchors.len() > 1 => {
                     scroll_to_end(context.clone());
                 }
@@ -521,7 +525,9 @@ fn sync_content(context: MessageScrollerContext) {
                 ScrollMode::AnchoredToMessage => {
                     reanchor(context.clone(), &items);
                 }
-                ScrollMode::FreeScrolling => {}
+                ScrollMode::FreeScrolling => {
+                    restore_reading_position(&context, &items);
+                }
             }
         }
     }
@@ -529,6 +535,7 @@ fn sync_content(context: MessageScrollerContext) {
     context.previous_ids.set_value(current_ids);
     context.previous_first_id.set_value(first_id);
     capture_reading_position(&context, &items);
+    context.user_scroll_pending.set_value(false);
     sync_scroll_state(context);
 }
 
@@ -583,6 +590,9 @@ fn capture_reading_position(context: &MessageScrollerContext, items: &[MessageIt
 
 #[cfg(target_arch = "wasm32")]
 fn restore_reading_position(context: &MessageScrollerContext, items: &[MessageItemElement]) {
+    if context.user_scroll_pending.get_value() {
+        return;
+    }
     let Some(reading_id) = context.reading_item_id.get_value() else {
         return;
     };
@@ -645,6 +655,7 @@ fn scroll_to_end(context: MessageScrollerContext) -> bool {
         };
         set_spacer_height(context.clone(), 0);
         context.anchor_id.set_value(None);
+        context.user_scroll_pending.set_value(false);
         context.mode.set_value(if context.auto_scroll {
             ScrollMode::FollowingBottom
         } else {
@@ -665,6 +676,7 @@ fn scroll_to_end(context: MessageScrollerContext) -> bool {
 }
 
 fn handle_user_scroll_intent(context: MessageScrollerContext) {
+    context.user_scroll_pending.set_value(true);
     context.programmatic_scroll.set_value(false);
     context.programmatic_generation.set_value(
         context
@@ -698,7 +710,10 @@ fn handle_scroll(context: MessageScrollerContext) {
             context.mode.set_value(ScrollMode::FollowingBottom);
         }
         let items = message_items(context.content_ref, context.spacer_ref);
-        capture_reading_position(&context, &items);
+        if !context.content_change_pending.get_value() || context.user_scroll_pending.get_value() {
+            capture_reading_position(&context, &items);
+            context.user_scroll_pending.set_value(false);
+        }
         sync_scroll_state(context);
     }
     #[cfg(not(target_arch = "wasm32"))]
