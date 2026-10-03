@@ -1468,7 +1468,8 @@ fn ConversationSurface(
     // 重跑并 dispose 上一次的 owner，把刚发出的 send 连同末尾的 `submitting.set(false)` 一起取消。
     // 结果是排队消息永远发不出去，且 `submitting` 卡在 true 让整个 Composer 死锁。改成在组件 owner
     // 里执行：它活过每一次 Effect 运行，与用户点击 Send 走的是同一个 owner。
-    let composer_owner = Owner::current();
+    // A strong capture would keep the keyed conversation owner alive after a thread switch.
+    let composer_owner = Owner::current().map(|owner| owner.downgrade());
     let was_active = RwSignal::new(false);
     let queue_drain_waiting = RwSignal::new(false);
     Effect::new(move |_| {
@@ -1496,12 +1497,18 @@ fn ConversationSurface(
         queue_drain_waiting.set(false);
         if let Some(run) = run {
             match composer_owner.as_ref() {
-                Some(owner) => owner.with(|| send_now.run(run)),
+                Some(owner) => {
+                    if let Some(owner) = owner.upgrade() {
+                        owner.with(|| send_now.run(run));
+                    }
+                }
                 None => send_now.run(run),
             }
         }
     });
     let retry_snapshot = move |_| {
+        // An explicit read must also recover a fresh thread whose first Begin ACK was lost.
+        allow_missing_snapshot.set(false);
         reload_generation.update(|value| *value = value.saturating_add(1));
     };
 
