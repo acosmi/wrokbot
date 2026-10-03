@@ -387,11 +387,12 @@ fn component_governance_route(path: &str) -> Option<ComponentGovernanceRoute<'_>
     }
 }
 
-/// Validated bundle, typed in-process application and window authority registry.
+/// Window observations kept separately from the actual protocol owner's lifecycle lease.
 struct WindowBindingRegistry {
     next_window_binding_id: HostAtomicU64,
     windows: Arc<RwLock<BTreeMap<String, WindowAuthority>>>,
 }
+/// Recheck this original window and its actual identity source without retaining the owner lease.
 struct WindowRequestBindingGuard {
     registry: Weak<WindowBindingRegistry>,
     owner: RequestBindingOwnerObservation,
@@ -457,6 +458,7 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
     }
 }
 
+/// Validated bundle, typed in-process application and window authority registry.
 pub struct DesktopTauriProtocol {
     assets: StaticAssets,
     index: Arc<str>,
