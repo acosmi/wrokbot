@@ -386,23 +386,25 @@ async fn source_workspace_channel_anchor_and_direct_thread_keep_same_text_distin
 
 #[tokio::test]
 #[ignore = "requires an owned disposable PostgreSQL through OPENBOT_TEST_DATABASE_URL"]
-async fn source_allows_real_queued_running_and_completed_without_mutating_records() {
+async fn source_allows_real_running_and_completed_without_mutating_records() {
     with_fixture("as_lifecycle", false, |fixture| async move {
+        // Begin starts the persisted Run in its own transaction. A second Begin on this Thread
+        // returns LeaseConflict; there is no production queue/promotion path to certify here.
         require(
-            fixture.status().await? == "queued",
-            "begin must create a real queued run",
+            fixture.status().await? == "running",
+            "real Begin must persist the running run before dispatch acknowledgement",
         )?;
         let before = fixture.persisted_state().await?;
         let earliest = fixture.database_now().await?;
-        let queued = fixture.observe().await?;
+        let begun = fixture.observe().await?;
         let latest = fixture.database_now().await?;
         require(
-            queued.observed_at() >= earliest && queued.observed_at() <= latest,
+            begun.observed_at() >= earliest && begun.observed_at() <= latest,
             "observation must use current DB time",
         )?;
         require(
             before == fixture.persisted_state().await?,
-            "queued source read mutated durable records",
+            "pre-dispatch running source read mutated durable records",
         )?;
         let runtime = fixture.runtime()?;
         let claim = runtime
@@ -415,8 +417,12 @@ async fn source_allows_real_queued_running_and_completed_without_mutating_record
             .await
             .map_err(|error| error.to_string())?;
         require(
+            lease.run_id() == &fixture.begin.command.run_id,
+            "dispatch acknowledgement must belong to the observed real run",
+        )?;
+        require(
             fixture.status().await? == "running",
-            "dispatch acknowledgement must start the real run",
+            "dispatch acknowledgement must preserve the real running run",
         )?;
         let before = fixture.persisted_state().await?;
         let running = fixture.observe().await?;
@@ -439,9 +445,13 @@ async fn source_allows_real_queued_running_and_completed_without_mutating_record
             "completed source read mutated durable records",
         )?;
         require(
-            queued.workspace() == running.workspace()
+            begun.workspace() == running.workspace()
                 && running.workspace() == completed.workspace(),
             "ordinary source workspace changed with run state",
+        )?;
+        require(
+            begun.run_id() == running.run_id() && running.run_id() == completed.run_id(),
+            "source observations must remain on the same real run",
         )?;
         // Delete only this fixture's already-completed run through normal enabled triggers. This
         // proves missing-source lookup, not artifact retention or explicit-saved preservation.
