@@ -389,17 +389,20 @@ impl SafeRmcpClient {
             return Err(McpClientError::Transport);
         }
         let http = SafeRmcpHttpClient {
+            selected_url: url.clone(),
             dialer: self.dialer.clone(),
             scheme_policy: self.scheme_policy,
             stall_timeout: self.stall_timeout,
             bearer,
             cancellation,
         };
-        let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint.to_owned());
+        let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str().to_owned());
         config.retry_config = Arc::new(NeverRetry::default());
         config.allow_stateless = true;
         config.reinit_on_expired_session = false;
         config.max_sse_event_size = MAX_MCP_SSE_EVENT_BYTES;
+        #[cfg(test)]
+        let http = selected_target_tests::instrument_http(http, &config);
         let transport = StreamableHttpClientTransport::with_client(http, config);
         let client_info = ClientInfo::new(
             ClientCapabilities::default(),
@@ -636,6 +639,7 @@ pub fn normalize_result(
 
 #[derive(Clone)]
 struct SafeRmcpHttpClient {
+    selected_url: Url,
     dialer: SafeDialer,
     scheme_policy: SchemePolicy,
     stall_timeout: Option<Duration>,
@@ -668,6 +672,14 @@ enum SafeRmcpHttpError {
 }
 
 impl SafeRmcpHttpClient {
+    fn selected_target(&self, uri: &str) -> Result<Url, SafeRmcpHttpError> {
+        let target = Url::parse(uri).map_err(|_| SafeRmcpHttpError::Transport)?;
+        if target != self.selected_url {
+            return Err(SafeRmcpHttpError::Transport);
+        }
+        Ok(self.selected_url.clone())
+    }
+
     fn authorization(
         &self,
         unexpected: Option<String>,
@@ -760,8 +772,9 @@ impl SafeRmcpHttpClient {
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<SafeRmcpHttpError>> {
-        let url = Url::parse(uri.as_ref())
-            .map_err(|_| StreamableHttpError::Client(SafeRmcpHttpError::Transport))?;
+        let url = self
+            .selected_target(uri.as_ref())
+            .map_err(StreamableHttpError::Client)?;
         let body = serde_json::to_vec(&message)?;
         let budget = self.budget(&message).map_err(StreamableHttpError::Client)?;
         let cancellation_error = self
@@ -887,8 +900,9 @@ impl StreamableHttpClient for SafeRmcpHttpClient {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
-        let url = Url::parse(uri.as_ref())
-            .map_err(|_| StreamableHttpError::Client(SafeRmcpHttpError::Transport))?;
+        let url = self
+            .selected_target(uri.as_ref())
+            .map_err(StreamableHttpError::Client)?;
         let headers = self
             .headers(custom_headers, Some(session_id), None)
             .map_err(StreamableHttpError::Client)?;
@@ -948,8 +962,9 @@ impl StreamableHttpClient for SafeRmcpHttpClient {
         futures_util::stream::BoxStream<'static, Result<Sse, SseError>>,
         StreamableHttpError<Self::Error>,
     > {
-        let url = Url::parse(uri.as_ref())
-            .map_err(|_| StreamableHttpError::Client(SafeRmcpHttpError::Transport))?;
+        let url = self
+            .selected_target(uri.as_ref())
+            .map_err(StreamableHttpError::Client)?;
         let headers = self
             .headers(custom_headers, session_id, last_event_id)
             .map_err(StreamableHttpError::Client)?;
@@ -1125,6 +1140,9 @@ fn map_safe_http(error: SafeHttpError) -> StreamableHttpError<SafeRmcpHttpError>
     tracing::debug!(code = %error, "MCP SafeDialer operation failed");
     StreamableHttpError::Client(SafeRmcpHttpError::Transport)
 }
+
+#[cfg(test)]
+mod selected_target_tests;
 
 #[cfg(test)]
 mod tests {
