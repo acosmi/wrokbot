@@ -245,6 +245,7 @@ pub fn validate_artifact_save_provenance(
 /// 校验最多八个原始引用的有界标识形状，逐字节重复即拒绝。
 ///
 /// 不 trim、不归一化、不替换标识；标识按有界 opaque 身份规则检查，不要求 UUID。
+/// 同一 UUID 的大小写别名可通过本形状阶段；后续必须按解析后的真实成果身份再次去重。
 /// 成功不证明引用存在、available 或当前可读；未知/无权对象仍须在后续查找时统一拒绝。
 pub fn validate_artifact_refs(refs: &[String]) -> Result<(), ArtifactInvariantError> {
     if refs.len() > MAX_ARTIFACT_REFS {
@@ -593,6 +594,10 @@ mod tests {
         assert_eq!(validate_artifact_refs(&refs), Ok(()));
         assert_eq!(refs, original);
         assert_eq!(validate_artifact_refs(&[]), Ok(()));
+        // 原始字节不同不证明成果不同；真实记录查找后的身份去重由后续编排负责。
+        let lower_uuid = "01890f3a-5b42-7abc-8123-012345abcdef".to_owned();
+        let uuid_aliases = [lower_uuid.clone(), lower_uuid.to_ascii_uppercase()];
+        assert_eq!(validate_artifact_refs(&uuid_aliases), Ok(()));
     }
 
     #[test]
