@@ -73,6 +73,7 @@
 #![deny(missing_docs)]
 
 pub mod agent;
+pub mod artifacts;
 pub mod audit;
 pub mod auth;
 pub mod budget;

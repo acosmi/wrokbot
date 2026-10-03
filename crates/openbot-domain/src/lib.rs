@@ -52,6 +52,7 @@
 #![deny(missing_docs)]
 
 pub mod agent;
+pub mod artifact;
 pub mod audit;
 pub mod backup;
 pub mod channel;
