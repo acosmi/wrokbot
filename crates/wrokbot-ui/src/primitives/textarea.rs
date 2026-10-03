@@ -36,6 +36,12 @@ pub fn Textarea(
     /// Optional owner submit path: Enter submits, Shift+Enter and IME composition remain text input.
     #[prop(optional)]
     on_submit: Option<UnsyncCallback<()>>,
+    /// Real user input callback; programmatic value hydration never starts autosave.
+    #[prop(optional)]
+    on_edit: Option<UnsyncCallback<()>>,
+    /// Let a revision owner pause autosave during IME composition.
+    #[prop(optional)]
+    on_composition: Option<UnsyncCallback<bool>>,
     #[prop(optional)] preview_state: Option<TextareaPreviewState>,
 ) -> impl IntoView {
     if let Some(controls) = combobox_controls.get() {
@@ -99,9 +105,16 @@ pub fn Textarea(
             on:input=move |event| {
                 value.set(event_target_value(&event));
                 resize_textarea(node_ref);
+                if let Some(callback) = on_edit { let _ = callback.try_run(()); }
             }
-            on:compositionstart=move |_| composing.set_value(true)
-            on:compositionend=move |_| composing.set_value(false)
+            on:compositionstart=move |_| {
+                composing.set_value(true);
+                if let Some(callback) = on_composition { let _ = callback.try_run(true); }
+            }
+            on:compositionend=move |_| {
+                composing.set_value(false);
+                if let Some(callback) = on_composition { let _ = callback.try_run(false); }
+            }
             on:keydown=move |event: KeyboardEvent| {
                 if !composing.get_value() && !event.is_composing()
                     && let Some(callback) = on_keydown { callback.run(event.clone()); }

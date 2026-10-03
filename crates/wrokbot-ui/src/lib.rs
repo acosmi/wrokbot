@@ -48,9 +48,12 @@ pub mod app;
 mod configuration_writes;
 #[cfg(feature = "design-gallery")]
 pub mod design_gallery;
+mod editor_notice;
+mod editor_runtime;
 pub mod features;
 pub mod preferences;
 pub mod primitives;
+mod revision_editor;
 pub mod shell;
 
 /// Generated, strongly typed icon allowlist. The source is `design/icons.toml` plus bundled SVGs.
