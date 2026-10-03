@@ -648,7 +648,8 @@ fn map_sandboxed_component_error(
     error: openbot_application::SandboxedComponentAdministrationError,
 ) -> AgentContextError {
     match error {
-        openbot_application::SandboxedComponentAdministrationError::NotVisible => {
+        openbot_application::SandboxedComponentAdministrationError::NotVisible
+        | openbot_application::SandboxedComponentAdministrationError::StaleSnapshot(_) => {
             AgentContextError::Stale
         }
         openbot_application::SandboxedComponentAdministrationError::Corrupt { .. }

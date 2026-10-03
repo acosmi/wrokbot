@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0037_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0038_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -242,6 +242,13 @@ pub const NATIVE_0037_VERSION: i32 = 37;
 pub const NATIVE_0037_NAME: &str = "native_0037_memory_provenance";
 /// Nullable source run and authorization evidence, with no legacy backfill.
 pub const NATIVE_0037_SQL: &str = include_str!("../../sql/native_0037.sql");
+
+/// Independent sandbox editing CAS and retired stable names.
+pub const NATIVE_0038_VERSION: i32 = 38;
+/// Registered migration identity.
+pub const NATIVE_0038_NAME: &str = "native_0038_sandbox_editing_revision";
+/// Expand-only sandbox editing schema.
+pub const NATIVE_0038_SQL: &str = include_str!("../../sql/native_0038.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -382,6 +389,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0037_VERSION,
         name: NATIVE_0037_NAME,
         sql: NATIVE_0037_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0038_VERSION,
+        name: NATIVE_0038_NAME,
+        sql: NATIVE_0038_SQL,
     },
 ];
 
@@ -585,6 +597,11 @@ pub fn native_0037_checksum() -> String {
 #[must_use]
 pub fn native_0033_checksum() -> String {
     Sha256Digest::of(NATIVE_0033_SQL.as_bytes()).to_hex()
+}
+
+/// SHA-256 of the registered sandbox editing migration.
+pub fn native_0038_checksum() -> String {
+    Sha256Digest::of(NATIVE_0038_SQL.as_bytes()).to_hex()
 }
 
 /// 在一个已到 0012 的数据库上施加当前二进制认识的全部 Rust-owned migrations。
@@ -963,6 +980,7 @@ mod tests {
             .chain(statement_lines(NATIVE_0034_SQL))
             .chain(statement_lines(NATIVE_0035_SQL))
             .chain(statement_lines(NATIVE_0037_SQL))
+            .chain(statement_lines(NATIVE_0038_SQL))
             // Stored trigger bodies contain the specifically authorized exact-slot DELETE.
             // The migration's top-level DDL still has the same expand-only check.
             .chain(
@@ -1100,6 +1118,7 @@ mod tests {
                 .chain(statement_lines(NATIVE_0034_SQL))
                 .chain(statement_lines(NATIVE_0035_SQL))
                 .chain(statement_lines(NATIVE_0037_SQL))
+                .chain(statement_lines(NATIVE_0038_SQL))
                 .chain(
                     NATIVE_0036_SQL
                         .split("$$")
@@ -1189,7 +1208,7 @@ mod tests {
         assert_ne!(native_0035_checksum(), native_0036_checksum());
         assert_eq!(native_0037_checksum().len(), 64);
         assert_ne!(native_0036_checksum(), native_0037_checksum());
-        assert_eq!(MIGRATIONS.len(), 25);
-        assert_eq!(MIGRATIONS[24].version, NATIVE_LATEST_VERSION);
+        assert_eq!(MIGRATIONS.len(), 26);
+        assert_eq!(MIGRATIONS[25].version, NATIVE_LATEST_VERSION);
     }
 }

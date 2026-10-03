@@ -22,6 +22,7 @@ const PUBLIC_0034: &str = include_str!("../../../../fixtures/db/schema-0034.json
 const PUBLIC_0035: &str = include_str!("../../../../fixtures/db/schema-0035.json");
 const PUBLIC_0036: &str = include_str!("../../../../fixtures/db/schema-0036.json");
 const PUBLIC_0037: &str = include_str!("../../../../fixtures/db/schema-0037.json");
+const PUBLIC_0038: &str = include_str!("../../../../fixtures/db/schema-0038.json");
 
 #[derive(Debug, thiserror::Error)]
 pub enum DesktopVaultCanaryError {
@@ -344,6 +345,7 @@ fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraErr
         native::NATIVE_0035_VERSION => PUBLIC_0035,
         native::NATIVE_0036_VERSION => PUBLIC_0036,
         native::NATIVE_0037_VERSION => PUBLIC_0037,
+        native::NATIVE_0038_VERSION => PUBLIC_0038,
         _ => {
             return Err(InfraError::repository_invariant(
                 "desktop_vault_native_schema_unregistered",

@@ -117,84 +117,77 @@ impl SandboxedComponentAdministration for PostgresSandboxedComponentAdministrati
                 field: "argument_schema",
             }
         })?;
+        if let Some(expected) = draft.expected_revision {
+            valid_expected(expected)?;
+        }
         let mut client = self.pool.get().await.map_err(unavailable)?;
         let transaction = client
             .build_transaction()
-            .isolation_level(IsolationLevel::Serializable)
+            .isolation_level(IsolationLevel::ReadCommitted)
             .start()
             .await
             .map_err(query_unavailable)?;
-        let now = database_now(&transaction).await?;
-        if let Some(row) = transaction
+        lock_admin(&transaction, auth).await?;
+        let created = transaction.execute(
+            "INSERT INTO public.components(name,title,kind,draft_description,published_description,
+              published,published_at,updated_by,created_at,updated_at)
+             VALUES($1,$2,'sandboxed',$3,NULL,false,NULL,$4,clock_timestamp(),clock_timestamp())
+             ON CONFLICT(name) DO NOTHING",
+            &[&draft.name,&draft.title,&draft.description,&auth.actor().as_str()],
+        ).await.map_err(query_unavailable)?;
+        lock_governance(&transaction, &draft.name)
+            .await
+            .map_err(|error| {
+                if error == SandboxedComponentAdministrationError::NotVisible {
+                    SandboxedComponentAdministrationError::Conflict
+                } else {
+                    error
+                }
+            })?;
+        if transaction
             .query_opt(
-                "SELECT kind FROM public.components WHERE name=$1 FOR UPDATE",
+                "SELECT name FROM public.sandboxed_component_retired_names WHERE name=$1",
                 &[&draft.name],
             )
             .await
             .map_err(query_unavailable)?
-            && row
-                .try_get::<_, String>("kind")
-                .map_err(|_| corrupt("component_kind"))?
-                != SANDBOXED_KIND
+            .is_some()
         {
             return Err(SandboxedComponentAdministrationError::Conflict);
         }
-
-        let argument_schema = object_value(&draft.argument_schema);
-        let sample_arguments = object_value(&draft.sample_arguments);
-        transaction
-            .execute(
-                "INSERT INTO public.sandboxed_components(
-                   name,title,draft_description,draft_html,draft_css,draft_js_functions,
-                   draft_argument_schema,sample_arguments,revision,published,published_at,
-                   authored_by,created_at,updated_at
-                 ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,0,false,NULL,$9,$10,$10)
-                 ON CONFLICT(name) DO UPDATE SET
-                   title=EXCLUDED.title,draft_description=EXCLUDED.draft_description,
-                   draft_html=EXCLUDED.draft_html,draft_css=EXCLUDED.draft_css,
-                   draft_js_functions=EXCLUDED.draft_js_functions,
-                   draft_argument_schema=EXCLUDED.draft_argument_schema,
-                   sample_arguments=EXCLUDED.sample_arguments,authored_by=EXCLUDED.authored_by,
-                   updated_at=EXCLUDED.updated_at",
-                &[
-                    &draft.name,
-                    &draft.title,
-                    &draft.description,
-                    &draft.html,
-                    &draft.css,
-                    &draft.js_functions,
-                    &argument_schema,
-                    &sample_arguments,
-                    &auth.actor().as_str(),
-                    &now,
-                ],
-            )
-            .await
-            .map_err(query_unavailable)?;
-
-        let governance = transaction
-            .query_opt(
-                "INSERT INTO public.components(
-                   name,title,kind,draft_description,published_description,published,
-                   published_at,updated_by,created_at,updated_at
-                 ) VALUES($1,$2,'sandboxed',$3,NULL,false,NULL,$4,$5,$5)
-                 ON CONFLICT(name) DO UPDATE SET
-                   title=EXCLUDED.title,draft_description=EXCLUDED.draft_description,
-                   updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at
-                 WHERE components.kind='sandboxed'
-                 RETURNING name",
-                &[
-                    &draft.name,
-                    &draft.title,
-                    &draft.description,
-                    &auth.actor().as_str(),
-                    &now,
-                ],
-            )
-            .await
-            .map_err(query_unavailable)?;
-        if governance.is_none() {
-            return Err(SandboxedComponentAdministrationError::Conflict);
+        let previous = locked_record(&transaction, &draft.name).await?;
+        let next_editing = match previous {
+            Some(ref record) => {
+                if draft.expected_revision != Some(record.editing_revision) {
+                    return Err(stale(record)?);
+                }
+                next_editing(record.editing_revision)?
+            }
+            None if created == 1 && draft.expected_revision.is_none() => 1,
+            None if draft.expected_revision.is_some() => {
+                return Err(SandboxedComponentAdministrationError::NotVisible);
+            }
+            None => return Err(corrupt("component_governance")),
+        };
+        let now = database_now(&transaction).await?;
+        transaction.execute(
+            "INSERT INTO public.sandboxed_components(name,title,draft_description,draft_html,draft_css,
+              draft_js_functions,draft_argument_schema,sample_arguments,revision,published,published_at,
+              authored_by,created_at,updated_at,editing_revision)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,0,false,NULL,$9,$10,$10,$11)
+             ON CONFLICT(name) DO UPDATE SET title=EXCLUDED.title,draft_description=EXCLUDED.draft_description,
+              draft_html=EXCLUDED.draft_html,draft_css=EXCLUDED.draft_css,draft_js_functions=EXCLUDED.draft_js_functions,
+              draft_argument_schema=EXCLUDED.draft_argument_schema,sample_arguments=EXCLUDED.sample_arguments,
+              authored_by=EXCLUDED.authored_by,updated_at=EXCLUDED.updated_at,editing_revision=EXCLUDED.editing_revision",
+            &[&draft.name,&draft.title,&draft.description,&draft.html,&draft.css,&draft.js_functions,
+              &object_value(&draft.argument_schema),&object_value(&draft.sample_arguments),&auth.actor().as_str(),&now,&next_editing],
+        ).await.map_err(query_unavailable)?;
+        let changed = transaction.execute(
+            "UPDATE public.components SET title=$2,draft_description=$3,updated_by=$4,updated_at=$5
+             WHERE name=$1 AND kind='sandboxed'", &[&draft.name,&draft.title,&draft.description,&auth.actor().as_str(),&now],
+        ).await.map_err(query_unavailable)?;
+        if changed != 1 {
+            return Err(corrupt("component_governance"));
         }
         append_sandboxed_audit(
             &transaction,
@@ -202,14 +195,13 @@ impl SandboxedComponentAdministration for PostgresSandboxedComponentAdministrati
             &draft.name,
             "component.draft_saved",
             None,
+            next_editing,
             self.checkpoint_key.expose(),
         )
         .await?;
-        let row = transaction
-            .query_one(&record_query("WHERE s.name=$1"), &[&draft.name])
-            .await
-            .map_err(query_unavailable)?;
-        let record = decode_record(&row)?;
+        let record = locked_record(&transaction, &draft.name)
+            .await?
+            .ok_or_else(|| corrupt("sandboxed_component"))?;
         commit(transaction, "sandboxed_component_save").await?;
         Ok(record)
     }
@@ -218,101 +210,55 @@ impl SandboxedComponentAdministration for PostgresSandboxedComponentAdministrati
         &self,
         auth: &AuthContext,
         component_name: &str,
+        expected_revision: i64,
     ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError> {
+        valid_expected(expected_revision)?;
         let mut client = self.pool.get().await.map_err(unavailable)?;
         let transaction = client
             .build_transaction()
-            .isolation_level(IsolationLevel::Serializable)
+            .isolation_level(IsolationLevel::ReadCommitted)
             .start()
             .await
             .map_err(query_unavailable)?;
-        let row = transaction
-            .query_opt(
-                "SELECT s.draft_description,s.draft_html,s.draft_css,s.draft_js_functions,
-                        s.draft_argument_schema,s.revision,c.kind
-                   FROM public.sandboxed_components s
-                   JOIN public.components c ON c.name=s.name
-                  WHERE s.name=$1
-                  FOR UPDATE OF s,c",
-                &[&component_name],
-            )
-            .await
-            .map_err(query_unavailable)?
-            .ok_or(SandboxedComponentAdministrationError::NotVisible)?;
-        if row
-            .try_get::<_, String>("kind")
-            .map_err(|_| corrupt("component_kind"))?
-            != SANDBOXED_KIND
-        {
-            return Err(SandboxedComponentAdministrationError::NotVisible);
+        lock_admin(&transaction, auth).await?;
+        lock_governance(&transaction, component_name).await?;
+        let previous = locked_record(&transaction, component_name)
+            .await?
+            .ok_or_else(|| corrupt("component_governance"))?;
+        if expected_revision != previous.editing_revision {
+            return Err(stale(&previous)?);
         }
-        let revision = row
-            .try_get::<_, i32>("revision")
-            .map_err(|_| corrupt("revision"))?;
-        let next_revision = revision
+        let next_editing = next_editing(previous.editing_revision)?;
+        let next_publication = i32::try_from(previous.revision)
+            .map_err(|_| corrupt("revision"))?
             .checked_add(1)
             .ok_or(SandboxedComponentAdministrationError::Conflict)?;
-        if revision < 0 {
-            return Err(corrupt("revision"));
-        }
         let now = database_now(&transaction).await?;
-        let updated = transaction
-            .execute(
-                "UPDATE public.sandboxed_components SET
-                   published_description=$2,published_html=$3,published_css=$4,
-                   published_js_functions=$5,published_argument_schema=$6,published=true,
-                   published_at=$7,revision=$8,updated_at=$7
-                 WHERE name=$1",
-                &[
-                    &component_name,
-                    &row.try_get::<_, String>("draft_description")
-                        .map_err(|_| corrupt("draft_description"))?,
-                    &row.try_get::<_, String>("draft_html")
-                        .map_err(|_| corrupt("draft_html"))?,
-                    &row.try_get::<_, String>("draft_css")
-                        .map_err(|_| corrupt("draft_css"))?,
-                    &row.try_get::<_, String>("draft_js_functions")
-                        .map_err(|_| corrupt("draft_js_functions"))?,
-                    &row.try_get::<_, Value>("draft_argument_schema")
-                        .map_err(|_| corrupt("draft_argument_schema"))?,
-                    &now,
-                    &next_revision,
-                ],
-            )
-            .await
-            .map_err(query_unavailable)?;
-        let governance_updated = transaction
-            .execute(
-                "UPDATE public.components SET published_description=$2,published=true,
-                        published_at=$3,updated_by=$4,updated_at=$3
-                  WHERE name=$1 AND kind='sandboxed'",
-                &[
-                    &component_name,
-                    &row.try_get::<_, String>("draft_description")
-                        .map_err(|_| corrupt("draft_description"))?,
-                    &now,
-                    &auth.actor().as_str(),
-                ],
-            )
-            .await
-            .map_err(query_unavailable)?;
-        if updated != 1 || governance_updated != 1 {
-            return Err(corrupt("sandboxed_component_publication"));
-        }
+        transaction.execute(
+            "UPDATE public.sandboxed_components SET published_description=draft_description,
+              published_html=draft_html,published_css=draft_css,published_js_functions=draft_js_functions,
+              published_argument_schema=draft_argument_schema,published=true,published_at=$2,
+              revision=$3,editing_revision=$4,updated_at=$2 WHERE name=$1",
+            &[&component_name,&now,&next_publication,&next_editing],
+        ).await.map_err(query_unavailable)?;
+        transaction.execute(
+            "UPDATE public.components SET published_description=draft_description,published=true,
+              published_at=$2,updated_at=$2,updated_by=$3 WHERE name=$1",
+            &[&component_name,&now,&auth.actor().as_str()],
+        ).await.map_err(query_unavailable)?;
         append_sandboxed_audit(
             &transaction,
             auth,
             component_name,
             "component.published",
-            Some(u64::try_from(next_revision).map_err(|_| corrupt("revision"))?),
+            Some(next_publication as u64),
+            next_editing,
             self.checkpoint_key.expose(),
         )
         .await?;
-        let row = transaction
-            .query_one(&record_query("WHERE s.name=$1"), &[&component_name])
-            .await
-            .map_err(query_unavailable)?;
-        let record = decode_record(&row)?;
+        let record = locked_record(&transaction, component_name)
+            .await?
+            .ok_or_else(|| corrupt("sandboxed_component"))?;
         commit(transaction, "sandboxed_component_publish").await?;
         Ok(record)
     }
@@ -321,44 +267,44 @@ impl SandboxedComponentAdministration for PostgresSandboxedComponentAdministrati
         &self,
         auth: &AuthContext,
         component_name: &str,
+        expected_revision: i64,
     ) -> Result<(), SandboxedComponentAdministrationError> {
+        valid_expected(expected_revision)?;
         let mut client = self.pool.get().await.map_err(unavailable)?;
         let transaction = client
             .build_transaction()
-            .isolation_level(IsolationLevel::Serializable)
+            .isolation_level(IsolationLevel::ReadCommitted)
             .start()
             .await
             .map_err(query_unavailable)?;
-        let governance = transaction
-            .query_opt(
-                "SELECT kind FROM public.components WHERE name=$1 FOR UPDATE",
-                &[&component_name],
-            )
-            .await
-            .map_err(query_unavailable)?
-            .ok_or(SandboxedComponentAdministrationError::NotVisible)?;
-        if governance
-            .try_get::<_, String>("kind")
-            .map_err(|_| corrupt("component_kind"))?
-            != SANDBOXED_KIND
-        {
-            return Err(SandboxedComponentAdministrationError::NotVisible);
+        lock_admin(&transaction, auth).await?;
+        lock_governance(&transaction, component_name).await?;
+        let previous = locked_record(&transaction, component_name)
+            .await?
+            .ok_or_else(|| corrupt("component_governance"))?;
+        if expected_revision != previous.editing_revision {
+            return Err(stale(&previous)?);
         }
-        transaction
+        let next_editing = next_editing(previous.editing_revision)?;
+        transaction.execute(
+            "INSERT INTO public.sandboxed_component_retired_names(name,retired_editing_revision,retired_at)
+             VALUES($1,$2,clock_timestamp())", &[&component_name,&next_editing],
+        ).await.map_err(query_unavailable)?;
+        let source_deleted = transaction
             .execute(
                 "DELETE FROM public.sandboxed_components WHERE name=$1",
                 &[&component_name],
             )
             .await
             .map_err(query_unavailable)?;
-        let deleted = transaction
+        let governance_deleted = transaction
             .execute(
                 "DELETE FROM public.components WHERE name=$1 AND kind='sandboxed'",
                 &[&component_name],
             )
             .await
             .map_err(query_unavailable)?;
-        if deleted != 1 {
+        if source_deleted != 1 || governance_deleted != 1 {
             return Err(corrupt("sandboxed_component_delete"));
         }
         append_sandboxed_audit(
@@ -367,6 +313,7 @@ impl SandboxedComponentAdministration for PostgresSandboxedComponentAdministrati
             component_name,
             "component.unpublished",
             None,
+            next_editing,
             self.checkpoint_key.expose(),
         )
         .await?;
@@ -541,12 +488,97 @@ impl SandboxedComponentAdministration for PostgresSandboxedComponentAdministrati
     }
 }
 
+fn valid_expected(value: i64) -> Result<(), SandboxedComponentAdministrationError> {
+    if value <= 0 {
+        Err(SandboxedComponentAdministrationError::InvalidInput {
+            field: "expectedRevision",
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn next_editing(value: i64) -> Result<i64, SandboxedComponentAdministrationError> {
+    value
+        .checked_add(1)
+        .ok_or(SandboxedComponentAdministrationError::Conflict)
+}
+
+fn stale(
+    record: &SandboxedComponentRecord,
+) -> Result<SandboxedComponentAdministrationError, SandboxedComponentAdministrationError> {
+    openbot_contracts::revision::RevisionSnapshot::from_public(
+        record.editing_revision,
+        record.updated_at,
+        record,
+    )
+    .map(SandboxedComponentAdministrationError::StaleSnapshot)
+    .map_err(|_| corrupt("editing_snapshot"))
+}
+
+async fn lock_admin(
+    transaction: &PgTransaction<'_>,
+    auth: &AuthContext,
+) -> Result<(), SandboxedComponentAdministrationError> {
+    transaction
+        .batch_execute("SET LOCAL lock_timeout='5s'")
+        .await
+        .map_err(query_unavailable)?;
+    if !auth.has_role(openbot_contracts::auth::Role::Admin) {
+        return Err(SandboxedComponentAdministrationError::NotVisible);
+    }
+    let generation = i64::try_from(auth.auth_generation().get())
+        .map_err(|_| SandboxedComponentAdministrationError::NotVisible)?;
+    let actor=transaction.query_opt("SELECT u.id FROM public.users u WHERE u.id=$1
+        AND coalesce(u.auth_generation,0)=$2 AND EXISTS(SELECT 1 FROM public.user_roles r WHERE r.user_id=u.id AND r.role='admin')
+        AND NOT EXISTS(SELECT 1 FROM public.revoked_access a WHERE a.email=lower(u.email)) FOR SHARE OF u",
+        &[&auth.actor().as_str(),&generation]).await.map_err(query_unavailable)?;
+    actor
+        .map(|_| ())
+        .ok_or(SandboxedComponentAdministrationError::NotVisible)
+}
+
+async fn lock_governance(
+    transaction: &PgTransaction<'_>,
+    name: &str,
+) -> Result<(), SandboxedComponentAdministrationError> {
+    let row = transaction
+        .query_opt(
+            "SELECT kind FROM public.components WHERE name=$1 FOR UPDATE",
+            &[&name],
+        )
+        .await
+        .map_err(query_unavailable)?
+        .ok_or(SandboxedComponentAdministrationError::NotVisible)?;
+    if row
+        .try_get::<_, String>("kind")
+        .map_err(|_| corrupt("component_kind"))?
+        != SANDBOXED_KIND
+    {
+        return Err(SandboxedComponentAdministrationError::NotVisible);
+    }
+    Ok(())
+}
+
+async fn locked_record(
+    transaction: &PgTransaction<'_>,
+    name: &str,
+) -> Result<Option<SandboxedComponentRecord>, SandboxedComponentAdministrationError> {
+    transaction
+        .query_opt(&record_query("WHERE s.name=$1 FOR UPDATE OF s"), &[&name])
+        .await
+        .map_err(query_unavailable)?
+        .as_ref()
+        .map(decode_record)
+        .transpose()
+}
+
 fn record_query(suffix: &str) -> String {
     format!(
         "SELECT s.name,s.title,s.draft_description,s.draft_html,s.draft_css,
                 s.draft_js_functions,s.draft_argument_schema,s.published_description,
                 s.published_html,s.published_css,s.published_js_functions,
-                s.published_argument_schema,s.sample_arguments,s.revision,s.published,
+                s.published_argument_schema,s.sample_arguments,s.revision,s.editing_revision,s.updated_at,s.published,
                 s.published_at,s.authored_by,c.name AS governance_name,c.title AS governance_title,
                 c.kind AS governance_kind,c.draft_description AS governance_draft_description,
                 c.published_description AS governance_published_description,
@@ -648,6 +680,13 @@ fn decode_record(
             "sample_arguments",
         )?,
         revision: u32::try_from(revision).map_err(|_| corrupt("revision"))?,
+        editing_revision: row
+            .try_get::<_, Option<i64>>("editing_revision")
+            .map_err(|_| corrupt("editing_revision"))?
+            .unwrap_or(1),
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(|_| corrupt("updated_at"))?,
         published,
         published_at: row
             .try_get("published_at")
@@ -853,12 +892,16 @@ async fn append_sandboxed_audit(
     component_name: &str,
     event_type: &'static str,
     revision: Option<u64>,
+    editing_revision: i64,
     checkpoint_key: &[u8],
 ) -> Result<(), SandboxedComponentAdministrationError> {
     let mut facts = vec![AuditFact::ComponentKind(AuditLabel::new(SANDBOXED_KIND))];
     if let Some(revision) = revision {
         facts.push(AuditFact::ComponentRevision(revision));
     }
+    facts.push(AuditFact::ComponentEditingRevision(
+        u64::try_from(editing_revision).map_err(|_| corrupt("editing_revision"))?,
+    ));
     let payload = AuditPayload::from_facts(facts).map_err(|_| corrupt("audit_payload"))?;
     let (id, created_at) = next_event_coordinates(transaction)
         .await

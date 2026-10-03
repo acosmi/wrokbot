@@ -37,6 +37,7 @@ const STARTER_SAMPLE: &str = "{\n  \"title\": \"A worked example\",\n  \"body\":
 
 #[derive(Clone, Copy)]
 struct DraftSignals {
+    known_revision: RwSignal<Option<(String, i64)>>,
     slug: RwSignal<String>,
     title: RwSignal<String>,
     description: RwSignal<String>,
@@ -50,6 +51,7 @@ struct DraftSignals {
 impl DraftSignals {
     fn starter() -> Self {
         Self {
+            known_revision: RwSignal::new(None),
             slug: RwSignal::new(String::new()),
             title: RwSignal::new(String::new()),
             description: RwSignal::new(String::new()),
@@ -64,6 +66,11 @@ impl DraftSignals {
     #[cfg(target_arch = "wasm32")]
     fn request(self) -> SaveSandboxedComponentRequest {
         SaveSandboxedComponentRequest {
+            expected_revision: self
+                .known_revision
+                .get_untracked()
+                .filter(|(name, _)| *name == format!("custom_{}", self.slug.get_untracked()))
+                .map(|(_, revision)| revision),
             slug: self.slug.get_untracked(),
             title: self.title.get_untracked(),
             description: self.description.get_untracked(),
@@ -78,6 +85,8 @@ impl DraftSignals {
     }
 
     fn load(self, component: &SandboxedComponentRecord) {
+        self.known_revision
+            .set(Some((component.name.clone(), component.editing_revision)));
         self.slug.set(
             component
                 .name
@@ -205,7 +214,17 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
         action_error.set(false);
         #[cfg(target_arch = "wasm32")]
         leptos::task::spawn_local_scoped_with_cancellation(async move {
-            match delete_sandboxed_component(&_name).await {
+            let Some(revision) = components
+                .get_untracked()
+                .iter()
+                .find(|c| c.name == _name)
+                .map(|c| c.editing_revision)
+            else {
+                pending.set(false);
+                action_error.set(true);
+                return;
+            };
+            match delete_sandboxed_component(&_name, revision).await {
                 Ok(()) => {
                     delete_open.set(false);
                     deleting.set(None);
@@ -493,6 +512,8 @@ mod tests {
     #[test]
     fn saved_row_identity_changes_with_draft_and_publication_state() {
         let mut component = SandboxedComponentRecord {
+            editing_revision: 1,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             name: "custom_card".to_owned(),
             title: "Card".to_owned(),
             draft_description: "draft".to_owned(),

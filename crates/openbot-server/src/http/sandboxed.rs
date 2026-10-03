@@ -9,7 +9,7 @@ use openbot_contracts::command::{AppCommand, AppReply};
 use openbot_contracts::error::AppError;
 use openbot_contracts::sandboxed::{
     PublishedSandboxedComponents, SandboxedComponentDeleted, SandboxedComponentResponse,
-    SandboxedComponents, SaveSandboxedComponentRequest,
+    SandboxedComponentRevisionRequest, SandboxedComponents, SaveSandboxedComponentRequest,
 };
 
 use crate::auth::{Authenticated, SensitiveOriginAuthenticated};
@@ -71,13 +71,16 @@ pub async fn publish_post(
     State(state): State<ServerState>,
     SensitiveOriginAuthenticated(auth): SensitiveOriginAuthenticated,
     Path(name): Path<String>,
+    body: Result<Json<SandboxedComponentRevisionRequest>, JsonRejection>,
 ) -> Result<(HeaderMap, Json<SandboxedComponentResponse>), HttpError> {
+    let Json(request) = body.map_err(|_| AppError::MalformedPayload { field: "body" })?;
     match state
         .application()
         .execute(
             auth,
             AppCommand::PublishSandboxedComponent {
                 component_name: name,
+                expected_revision: request.expected_revision,
             },
         )
         .await?
@@ -92,13 +95,16 @@ pub async fn delete(
     State(state): State<ServerState>,
     SensitiveOriginAuthenticated(auth): SensitiveOriginAuthenticated,
     Path(name): Path<String>,
+    body: Result<Json<SandboxedComponentRevisionRequest>, JsonRejection>,
 ) -> Result<(HeaderMap, Json<SandboxedComponentDeleted>), HttpError> {
+    let Json(request) = body.map_err(|_| AppError::MalformedPayload { field: "body" })?;
     match state
         .application()
         .execute(
             auth,
             AppCommand::DeleteSandboxedComponent {
                 component_name: name,
+                expected_revision: request.expected_revision,
             },
         )
         .await?
@@ -206,6 +212,8 @@ mod tests {
                 .unwrap()
                 .push(format!("save:{}", draft.name));
             Ok(SandboxedComponentRecord {
+                editing_revision: draft.expected_revision.map_or(1, |r| r + 1),
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
                 name: draft.name.clone(),
                 title: draft.title.clone(),
                 draft_description: draft.description.clone(),
@@ -230,6 +238,7 @@ mod tests {
             &self,
             auth: &AuthContext,
             component_name: &str,
+            _expected_revision: i64,
         ) -> Result<SandboxedComponentRecord, SandboxedComponentAdministrationError> {
             self.calls
                 .lock()
@@ -242,6 +251,7 @@ mod tests {
             &self,
             _auth: &AuthContext,
             component_name: &str,
+            _expected_revision: i64,
         ) -> Result<(), SandboxedComponentAdministrationError> {
             self.calls
                 .lock()
@@ -253,6 +263,8 @@ mod tests {
 
     fn draft_record(actor: &str) -> SandboxedComponentRecord {
         SandboxedComponentRecord {
+            editing_revision: 1,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             name: "custom_delivery_eta".to_owned(),
             title: "Delivery ETA".to_owned(),
             draft_description: "Delivery estimate".to_owned(),
@@ -279,6 +291,7 @@ mod tests {
         record.published_css = Some(record.draft_css.clone());
         record.published_js_functions = Some(record.draft_js_functions.clone());
         record.published_argument_schema = Some(record.draft_argument_schema.clone());
+        record.editing_revision = 2;
         record.revision = 1;
         record.published = true;
         record.published_at = Some(OffsetDateTime::UNIX_EPOCH);
@@ -414,6 +427,7 @@ mod tests {
         assert_eq!(value["code"], "malformed_payload");
 
         let body = serde_json::to_vec(&SaveSandboxedComponentRequest {
+            expected_revision: None,
             slug: "delivery_eta".to_owned(),
             title: "Delivery ETA".to_owned(),
             description: "Delivery estimate".to_owned(),
@@ -441,7 +455,7 @@ mod tests {
             Method::POST,
             "/api/sandboxed/custom_delivery_eta/publish",
             Some("https://app.example.test"),
-            Body::empty(),
+            Body::from(br#"{"expectedRevision":1}"#.to_vec()),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -452,7 +466,7 @@ mod tests {
             Method::DELETE,
             "/api/sandboxed/custom_delivery_eta",
             Some("https://app.example.test"),
-            Body::empty(),
+            Body::from(br#"{"expectedRevision":2}"#.to_vec()),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
