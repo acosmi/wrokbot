@@ -312,8 +312,7 @@ async fn registry_refuses_update_delete_and_truncate_without_changing_binding() 
                 let error = c
                     .batch_execute(&sql)
                     .await
-                    .err()
-                    .expect("append-only mutation must fail");
+                    .expect_err("append-only mutation must fail");
                 assert_eq!(error.code(), Some(&SqlState::RAISE_EXCEPTION));
             }
             drop(c);
@@ -347,13 +346,13 @@ async fn actual_registry_constraints_reject_unknown_shapes_and_keep_full_512_byt
                     let mut values = ["valid-deployment".to_owned(), "valid-tenant".to_owned(), "historical-valid-dataset".to_owned()];
                     values[field] = invalid.clone();
                     let error = c.execute(&insert, &[&values[0], &values[1], &values[2], &1_i16, &"server_first_adoption"])
-                        .await.err().expect("实际 SQL CHECK 必须拒绝无效 identity");
+                        .await.expect_err("实际 SQL CHECK 必须拒绝无效 identity");
                     assert_eq!(error.code(), Some(&SqlState::CHECK_VIOLATION));
                 }
             }
             for (schema, origin) in [(0_i16,"server_first_adoption"), (2_i16,"server_first_adoption"), (1_i16,"unknown_origin")] {
                 let error = c.execute(&insert, &[&"valid-deployment", &"valid-tenant", &"valid-dataset", &schema, &origin])
-                    .await.err().expect("SQL 只能保存已知 schema 与 origin");
+                    .await.expect_err("SQL 只能保存已知 schema 与 origin");
                 assert_eq!(error.code(), Some(&SqlState::CHECK_VIOLATION));
             }
             let deployment = "é".repeat(256);
