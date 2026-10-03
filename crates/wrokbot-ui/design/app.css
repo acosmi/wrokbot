@@ -3994,9 +3994,7 @@ textarea:focus-visible,
 summary {
   list-style: none;
 }
-summary::-webkit-details-marker,
-.ob-sidebar-current,
-.ob-channel-avatar {
+summary::-webkit-details-marker {
   display: none;
 }
 summary:focus-visible {

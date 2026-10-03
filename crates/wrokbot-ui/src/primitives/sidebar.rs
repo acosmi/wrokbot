@@ -357,11 +357,6 @@ pub fn SidebarNavLink(
             >
                 <IconView icon size=IconSize::Navigation />
                 <span class="ob-sidebar-link-label">{move || visible_label.get()}</span>
-                <Show when=move || current.get().unwrap_or(false)>
-                    <span class="ob-sidebar-current" aria-hidden="true">
-                        <IconView icon=Icon::Check size=IconSize::Inline />
-                    </span>
-                </Show>
             </a>
         </li>
     }
