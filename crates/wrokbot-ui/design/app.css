@@ -4578,9 +4578,9 @@ html[data-window-chrome="macos-overlay"] .ob-shell-topbar > .ob-sidebar-trigger 
 .ob-pane { display: contents; }
 .ob-workspace-tools { margin-left: auto; }
 .ob-workspace-tools .ob-modal-trigger { background: transparent; color: var(--fg-muted); font-size: 12px; padding: 7px 9px; }
-.ob-pane .ob-modal-layer { top: var(--chrome-height); }
+.ob-pane .ob-modal-layer { top: var(--chrome-height); z-index: var(--z-dialog); }
 .ob-pane .ob-modal-layer[data-inline] { position: absolute; inset: 0 0 0 auto; width: var(--pane-width); z-index: var(--z-sticky); }
-.ob-pane .ob-modal-panel { display: flex; flex-direction: column; width: min(100vw,600px); height: 100%; max-height: none; padding: 0; border-radius: 0; background: var(--bg-pane); }
+.ob-pane .ob-modal-panel { width: min(100vw,600px); height: 100%; max-height: none; padding: 0; border-radius: 0; background: var(--bg-pane); }
 .ob-pane .ob-modal-layer[data-inline] > .ob-modal-panel { width: 100%; border: 0; border-left: 1px solid var(--border); box-shadow: none; }
 .ob-pane .ob-modal-header { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .ob-pane-header { display: flex; flex: 0 0 56px; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); }

@@ -506,3 +506,10 @@ Web使用现有隔离合成HTTP/ApplicationService宿主，模型目录与保存
 同候选72项隔离合成Web检查通过，其中38项在P3产物上重跑既有发送/FIFO/Unknown/菜单/owner回归。新增原thread401/403/404读失败清理最小Run关联并在后续无active快照不复活、当前Run空输出不借历史答案、三类决策202跨路由与终态锁、50到1项Unknown分页等均通过；零JS异常、外部请求或panic，宿主实际退出。首轮69通过/3失败只因新增QA定位器匹配多个alert，原runner/module/日志/截图保持；仅QA修正后重跑，同一产品输入未变。证据索引摘要27af4c0a03a892591b7a8c76e8ab4abd876cd793e97167f8e32024417f3ee1d0，独立源码复核未发现新增阻断，最终同候选证据复核仍待结。
 
 最终Web CSS131045/131072（120KiB预警、仅余27字节），WASM gzip3640187/3670016、字体740216/819200、external1/inline0，限额未变；P4先落实旧页规则差量清理。构建/检查/宿主停止后再次清理自有native缓存2247979474逻辑字节，固定工具与host SHA未变，清理后空闲14909440000字节；保留QA、必要产物和其它窗口。oracle missing、最终像素、native56/实机操作、实际200%与读屏、生产PG/电脑/成果和通用effect回读依赖仍open；合成Web不是真实宿主L3/L4全量验收。
+
+
+## UI5-P3 独立视觉反例与继续返修
+
+2026-10-03 UTC：精确133508虽八检查/72合成Web通过，独立reviewer检查701px原PNG发现600px右Sheet的左部被sidebar遮住，Results/Computer标签与正文不可见，故不给GO。几何rect未检测paint遮挡；保留该候选、证据索引、截图与原通过记录，不将其标合并/验收。PR #105保持draft，后续只记录事实的ledger提交e303438未替代产品复核。
+
+按已冻结层级为P3的模态overlay使用既有dialog层，inline仍sticky；不新增z值、不改通用token、权限或移动合同，并删除同规则重复的基础flex声明以守预算。新增各边界的文本Range/elementFromPoint与scrim覆盖核验，补展开/折叠sidebar、焦点返回及草稿保持；返修精确候选检查与独立复核待执行。
