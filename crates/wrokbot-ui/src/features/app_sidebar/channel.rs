@@ -6,7 +6,6 @@ use time::OffsetDateTime;
 
 use crate::api::channel_route_href;
 use crate::i18n::{t_string, use_i18n};
-use crate::primitives::{Avatar, AvatarSize};
 
 /// Rich channel navigation row used inside the shared Sidebar children.
 #[component]
@@ -19,17 +18,6 @@ pub fn ChannelRow(
 ) -> impl IntoView {
     let i18n = use_i18n();
     let href = channel_route_href(channel.id.as_str()).expect("server channel id is route-safe");
-    let avatar_principal = if channel.agent_ids.is_empty() {
-        channel.id.as_str().to_owned()
-    } else {
-        channel
-            .agent_ids
-            .iter()
-            .map(|id| id.as_str())
-            .collect::<Vec<_>>()
-            .join("\u{001f}")
-    };
-    let avatar_name = channel.name.clone();
     let visible_name = channel.name;
     let last_message = channel.last_message.unwrap_or_default();
     let timestamp = channel.last_message_at.map(|at| {
@@ -48,13 +36,6 @@ pub fn ChannelRow(
                 aria-current=move || current.get().unwrap_or(false).then_some("page")
                 data-state=move || current.get().unwrap_or(false).then_some("current")
             >
-                <span class="ob-channel-avatar" aria-hidden="true">
-                    <Avatar
-                        principal_id=avatar_principal
-                        name=avatar_name
-                        size=AvatarSize::Medium
-                    />
-                </span>
                 <span class="ob-channel-copy">
                     <span class="ob-channel-heading">
                         <span class="ob-channel-name">{visible_name}</span>
