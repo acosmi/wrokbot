@@ -26,6 +26,70 @@ fn fingerprint(value: &Value) -> Result<Value, String> {
     Ok(json!({"count":value.as_array().map_or(0,Vec::len),"sha256":wire["currentSha256"]}))
 }
 
+fn sandbox_governance(full: &Value, case: &Case, row: &Value) -> Result<Value, String> {
+    if case.object != "sandbox" {
+        return Ok(Value::Null);
+    }
+    let id = case
+        .object_id
+        .as_deref()
+        .ok_or("observer_sandbox_identity")?;
+    let components = full["components"]
+        .as_array()
+        .ok_or("observer_sandbox_components_shape")?;
+    let sources = full["sandboxed_components"]
+        .as_array()
+        .ok_or("observer_sandbox_sources_shape")?;
+    let is_selected = |value: &&Value| value.get("name").and_then(Value::as_str) == Some(id);
+    let mut selected = components.iter().filter(is_selected);
+    let selected = selected
+        .next()
+        .filter(|_| selected.next().is_none())
+        .ok_or("observer_sandbox_governance_identity")?;
+    let safe_columns = [
+        "name",
+        "title",
+        "kind",
+        "draft_description",
+        "published_description",
+        "published",
+        "published_at",
+        "updated_by",
+        "created_at",
+        "updated_at",
+    ];
+    let selected_object = selected
+        .as_object()
+        .filter(|value| {
+            value.len() == safe_columns.len()
+                && safe_columns
+                    .iter()
+                    .all(|column| value.contains_key(*column))
+        })
+        .ok_or("observer_sandbox_governance_shape")?;
+    if selected_object["kind"].as_str() != Some("sandboxed")
+        || row.get("name").and_then(Value::as_str) != Some(id)
+        || sources.iter().filter(is_selected).count() != 1
+    {
+        return Err("observer_sandbox_governance_identity".to_owned());
+    }
+    // Keep the original whole-relation fingerprints. These finite projections distinguish
+    // the selected draft metadata update from publication or changes to another object.
+    let other_rows = components
+        .iter()
+        .filter(|value| !is_selected(value))
+        .cloned()
+        .collect();
+    let other_sources = sources
+        .iter()
+        .filter(|value| !is_selected(value))
+        .cloned()
+        .collect();
+    Ok(json!({"selected":selected,
+        "otherRows":fingerprint(&Value::Array(other_rows))?,
+        "otherSourceRows":fingerprint(&Value::Array(other_sources))?}))
+}
+
 pub(super) async fn probe(pool: &Pool, case: &Case) -> Result<Value, String> {
     let mut connection = pool.get().await.map_err(|_| "observer_connection")?;
     let transaction = connection
@@ -73,6 +137,7 @@ pub(super) async fn probe(pool: &Pool, case: &Case) -> Result<Value, String> {
         .await
         .map_err(|_| "observer_finite_snapshot")?
         .get(0);
+    let sandbox_governance = sandbox_governance(&full, case, &row)?;
     let fault_exists: bool = transaction
         .query_one(
             "SELECT to_regclass('public.r415_fault_hits') IS NOT NULL",
@@ -114,6 +179,7 @@ pub(super) async fn probe(pool: &Pool, case: &Case) -> Result<Value, String> {
     Ok(
         json!({"caseId":case.id,"object":case.object,"objectId":case.object_id,
         "row":row,"revision":revision,"business":business,"audit":audit,"faultHits":fault_hits,
+        "sandboxGovernance":sandbox_governance,
         "observer":{"backendPid":pid,"isolation":"read committed","readOnly":true},
         "privateColumnBoundary":"encrypted_value/signature represented only by SQL MD5 before canonical public SHA256; no plaintext/ciphertext output"}),
     )
