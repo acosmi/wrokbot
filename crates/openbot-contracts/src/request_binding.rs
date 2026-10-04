@@ -30,8 +30,30 @@ pub enum HostRequestBindingError {
     /// 依赖、争用或有界等待不可用。
     Unavailable,
 }
+/// 已登记成果联合校验的等价非 Serde Future 返回类型；不改变输出或生命周期。
+pub type ArtifactReadCurrentCheck<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError>>
+            + Send
+            + 'a,
+    >,
+>;
+
 /// 受信 Rust host 的当前验证 port；任意 Rust 实现不自动取得可信身份。
 pub trait HostRequestBindingGuard: Send + Sync {
+    /// 真实原宿主与成果来源的最后联合观察；未安装该真实消费者时封闭拒绝。
+    fn verify_artifact_read_current_before<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+        _target: &'a dyn ArtifactReadCurrentTarget,
+        _deadline: std::time::Instant,
+    ) -> ArtifactReadCurrentCheck<'a> {
+        Box::pin(async {
+            Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ))
+        })
+    }
     /// 每次执行真实当前验证；结果不是持久权限。
     fn verify_current<'a>(
         &'a self,
@@ -47,6 +69,54 @@ pub trait HostRequestBindingGuard: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>> {
         Box::pin(async { Err(HostRequestBindingError::Unavailable) })
     }
+}
+
+/// 当次真实记录的非 Serde 借用比较值；不授读取权限。
+pub struct ArtifactReadRecordFacts<'a> {
+    /// 当前数据库实际成果 ID。
+    pub artifact_id: &'a str,
+    /// 当前数据库实际摘要。
+    pub sha256: &'a str,
+    /// 当前数据库实际长度。
+    pub byte_length: u64,
+    /// 当前记录及操作的真实来源 ID。
+    pub source: &'a crate::artifacts::ArtifactRegistrationReceipt,
+    /// 当前真实 workspace。
+    pub workspace: &'a crate::artifacts::ArtifactWorkspace,
+}
+/// 受信真实 reader 的私有目标 port；任意 Rust 实现不自动成为生产 authority。
+pub trait ArtifactReadCurrentTarget: Send + Sync {
+    /// 有界 ID 仅供真实 own-Pool 查询；不是票据。
+    fn lookup_id(&self) -> &str;
+    /// 精确适配器身份；必须另经真实 same-Pool enrollment。
+    fn matches_authority(&self, authority: &Arc<()>) -> bool;
+    /// 原六项身份及实际 binding 必须一致。
+    fn matches_auth(&self, auth: &AuthContext) -> bool;
+    /// 当次真实记录必须匹配原实际 reader 的记录。
+    fn matches_current_record(&self, actual: ArtifactReadRecordFacts<'_>) -> bool;
+    /// 原 FD/root/marker 的同步尾检；无 await、无正文读取。
+    fn verify_physical_current(&self) -> Result<(), ArtifactReadCurrentError>;
+}
+/// 联合读取观察的封闭 Rust 错误；不新增公开错误协议。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArtifactReadCurrentError {
+    /// 原当前宿主绑定失效或依赖不可用。
+    Host(HostRequestBindingError),
+    /// 当前成果或来源不存在/不可见。
+    NotVisible,
+    /// 当前可见来源下的脱敏 gone 状态。
+    Gone(crate::artifacts::ArtifactGoneStatus),
+    /// 字节、记录或实际生产依赖不能闭合。
+    Unavailable,
+}
+/// 最后真实联合观察的同步宿主/window/clock 见证；不能成为永久授权。
+pub trait ArtifactReadTailWitness: Send + Sync {
+    /// 原 deadline 下的当前同步尾检；不执行额外异步查询。
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError>;
 }
 struct OwnerState {
     closed: AtomicBool,
@@ -450,5 +520,90 @@ impl RequestBindingIssuer {
             && !self.state.closed.load(Ordering::SeqCst)
             && matches!(&identity.epoch, Epoch::Window { label: original, id }
                 if original == label && *id == binding_id)
+    }
+}
+
+struct OriginalArtifactReadTail {
+    original: VerifiedHostRequestBinding,
+    witness: Box<dyn ArtifactReadTailWitness>,
+}
+impl ArtifactReadTailWitness for OriginalArtifactReadTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.original
+            .check_artifact_read_attachment(auth, deadline)?;
+        self.witness.verify_current(auth, deadline)?;
+        self.original.check_artifact_read_attachment(auth, deadline)
+    }
+}
+impl VerifiedHostRequestBinding {
+    fn check_artifact_read_attachment(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        if !self.attached_to(auth)
+            || !auth
+                .request_binding()
+                .is_some_and(|current| self.identity.same_binding(current.identity()))
+            || self.identity.owner.closed.load(Ordering::SeqCst)
+        {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ));
+        }
+        Ok(())
+    }
+    /// 执行实际原宿主与成果来源的最后联合观察；返回封闭同步见证而不是正文。
+    pub async fn verify_artifact_read_current_before(
+        &self,
+        auth: &AuthContext,
+        target: &dyn ArtifactReadCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError> {
+        self.check_artifact_read_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        let outcome = self
+            .guard
+            .verify_artifact_read_current_before(auth, target, deadline)
+            .await;
+        // Invalidate even an old error when the actual original owner vanished while awaiting.
+        self.check_artifact_read_attachment(auth, deadline)?;
+        let witness = outcome?;
+        self.verify_artifact_read_tail(auth, target, witness.as_ref(), deadline)?;
+        Ok(Box::new(OriginalArtifactReadTail {
+            original: self.clone(),
+            witness,
+        }))
+    }
+    /// 最后同步 handoff 尾检：原 binding、真实 FD/root 及宿主/window/clock，无 await。
+    pub fn verify_artifact_read_tail(
+        &self,
+        auth: &AuthContext,
+        target: &dyn ArtifactReadCurrentTarget,
+        witness: &dyn ArtifactReadTailWitness,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.check_artifact_read_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        target.verify_physical_current()?;
+        witness.verify_current(auth, deadline)?;
+        self.check_artifact_read_attachment(auth, deadline)
     }
 }

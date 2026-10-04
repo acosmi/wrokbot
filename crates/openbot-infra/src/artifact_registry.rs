@@ -14,7 +14,9 @@ use time::OffsetDateTime;
 use tokio_postgres::{IsolationLevel, Row};
 
 use crate::db::desktop_local::DesktopLocalDatabase;
-use crate::db::desktop_vault_canary::VerifiedDesktopVaultCanary;
+use crate::db::desktop_vault_canary::{
+    VerifiedDesktopArtifactReadProvenance, VerifiedDesktopVaultCanary,
+};
 use crate::db::{native, schema_facts};
 
 /// Ordered, nonsecret PostgreSQL catalog facts for the internal registry and its actual guard.
@@ -192,6 +194,7 @@ impl core::fmt::Debug for VerifiedArtifactDatasetBinding {
 pub struct ArtifactDatasetRegistry {
     pool: Pool,
     binding: VerifiedArtifactDatasetBinding,
+    desktop_read_provenance: Option<VerifiedDesktopArtifactReadProvenance>,
 }
 
 impl core::fmt::Debug for ArtifactDatasetRegistry {
@@ -274,7 +277,11 @@ impl ArtifactDatasetRegistry {
             .await
             .map_err(|_| ArtifactRegistryError::Unavailable)?;
         drop(client);
-        Ok(Self { pool, binding })
+        Ok(Self {
+            pool,
+            binding,
+            desktop_read_provenance: None,
+        })
     }
 
     /// Adopt the original dataset only after a current cryptographic same-database proof.
@@ -357,7 +364,11 @@ impl ArtifactDatasetRegistry {
         {
             return Err(corrupt("desktop_proof"));
         }
-        Ok(Self { pool, binding })
+        Ok(Self {
+            pool,
+            binding,
+            desktop_read_provenance: Some(proof.artifact_read_provenance()),
+        })
     }
 
     #[must_use]
@@ -376,6 +387,33 @@ impl ArtifactDatasetRegistry {
         std::ptr::eq(self.pool.manager(), pool.manager())
             && self.binding.deployment_id == deployment.as_str()
             && self.binding.tenant_id == tenant.as_str()
+    }
+
+    /// Genuine Desktop adoption is required; historical initial_origin is insufficient.
+    #[must_use]
+    pub(crate) fn matches_desktop_read_installation(
+        &self,
+        installation: &crate::auth::single_user::desktop_local::DesktopLocalAuthority,
+    ) -> bool {
+        self.desktop_read_provenance.as_ref().is_some_and(|proof| {
+            proof.matches_installation(installation)
+                && self.binding.deployment_id == installation.auth_context().deployment().as_str()
+                && self.binding.tenant_id == installation.auth_context().tenant().as_str()
+        })
+    }
+
+    /// Compare the actual final joint statement with the original cryptographic tuple/digest.
+    pub(crate) fn matches_desktop_read_current_row(
+        &self,
+        row: &Row,
+    ) -> Result<bool, ArtifactRegistryError> {
+        self.desktop_read_provenance
+            .as_ref()
+            .map_or(Ok(false), |proof| {
+                proof
+                    .matches_current_row(row)
+                    .map_err(|_| corrupt("desktop_read_current"))
+            })
     }
 
     /// Reobserve the exact immutable tuple through this repository's own pool.

@@ -48,6 +48,10 @@ use openbot_application::runtime_capabilities::{
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::error::{AppError, SensitiveWriteReason};
 use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use openbot_contracts::request_binding::{
+    ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadTailWitness,
+};
 use openbot_contracts::request_binding::{
     HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind, RequestBindingIssuer,
     RequestBindingOwnerLease, RequestBindingOwnerObservation, ServerSessionBindingIdentity,
@@ -58,6 +62,8 @@ use openbot_domain::identity::session::{
     SessionHashKey, SessionLifetimePolicy, SessionState, SessionToken, SessionTokenHash,
     TrustedOrigins, authorize_fresh_origin_write, authorize_sensitive_write, evaluate_session,
 };
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority;
 use openbot_infra::auth::sso::ReadOnlySsoCapabilitySource;
 use openbot_infra::runtime_capability_facts::{
     PostgresRuntimeCapabilityFacts, RuntimeCapabilityCollectorFactory,
@@ -476,6 +482,8 @@ struct ServerSessionProbeState {
     deployment: DeploymentId,
     tenant: TenantId,
     capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    artifact_read_authority: std::sync::OnceLock<Weak<PostgresArtifactReadAuthority>>,
 }
 
 struct ServerSessionRowTuple {
@@ -489,6 +497,8 @@ struct ServerSessionRowTuple {
 struct ServerSessionCurrentGuard {
     probe: Weak<ServerSessionProbeState>,
     owner: RequestBindingOwnerObservation,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    issuer: RequestBindingIssuer,
     original: AuthContext,
     row: ServerSessionRowTuple,
 }
@@ -501,6 +511,66 @@ const CURRENT_SESSION_SQL: &str = "SELECT s.id,s.user_id,s.token,s.expires_at,s.
     WHERE s.id=$1 AND s.user_id=$2 AND s.token=$3 AND s.created_at=$4 AND s.auth_generation=$5";
 
 impl HostRequestBindingGuard for ServerSessionCurrentGuard {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn verify_artifact_read_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn ArtifactReadCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> openbot_contracts::request_binding::ArtifactReadCurrentCheck<'a> {
+        Box::pin(async move {
+            if auth != &self.original || !self.owner.is_current() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let probe = self.probe.upgrade().ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ))?;
+            let authority = probe
+                .artifact_read_authority
+                .get()
+                .and_then(Weak::upgrade)
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ))?;
+            let binding = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?;
+            let epoch = self
+                .issuer
+                .borrow_server_session_epoch(binding.identity())
+                .map_err(ArtifactReadCurrentError::Host)?;
+            if deadline <= std::time::Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            let result = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                authority.observe_server_session(auth, target, epoch, probe.lifetime, deadline),
+            )
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable));
+            if !self.owner.is_current() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let witness = ServerArtifactReadTail {
+                probe: self.probe.clone(),
+                owner: self.owner.clone(),
+                issuer: self.issuer.clone(),
+                original: auth.clone(),
+                inner: result??,
+            };
+            witness.verify_current(auth, deadline)?;
+            Ok(Box::new(witness) as Box<dyn ArtifactReadTailWitness>)
+        })
+    }
+
     fn verify_current<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -542,6 +612,60 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
             }
             result?
         })
+    }
+}
+
+/// The pending read keeps only observations; it cannot keep the resolver owner's lease alive.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct ServerArtifactReadTail {
+    probe: Weak<ServerSessionProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+    inner: Box<dyn ArtifactReadTailWitness>,
+}
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl ArtifactReadTailWitness for ServerArtifactReadTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        let original = self
+            .original
+            .request_binding()
+            .ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Missing,
+            ))?;
+        if auth != &self.original
+            || !self.owner.is_current()
+            || self.probe.upgrade().is_none()
+            || !auth.request_binding().is_some_and(|current| {
+                original.identity().same_binding(current.identity())
+                    && self.issuer.owns_identity(current.identity())
+            })
+        {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        if deadline <= std::time::Instant::now() {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ));
+        }
+        self.inner.verify_current(auth, deadline)?;
+        if !self.owner.is_current() || self.probe.upgrade().is_none() {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        if deadline <= std::time::Instant::now() {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -691,6 +815,8 @@ impl PostgresSessionAuthResolver {
             deployment: deployment.clone(),
             tenant: tenant.clone(),
             capability_facts: std::sync::OnceLock::new(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            artifact_read_authority: std::sync::OnceLock::new(),
         });
         Ok(Self {
             pool,
@@ -704,6 +830,24 @@ impl PostgresSessionAuthResolver {
                 probe,
             }),
         })
+    }
+
+    /// Enroll the concrete actual same-Pool artifact owner once, without owning its lease.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub fn install_artifact_read_authority(
+        &self,
+        authority: &Arc<PostgresArtifactReadAuthority>,
+    ) -> Result<(), HostRequestBindingError> {
+        if !self.binding_owner.issuer.observation().is_current()
+            || !authority.matches_pool_scope(&self.pool, &self.deployment, &self.tenant)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        self.binding_owner
+            .probe
+            .artifact_read_authority
+            .set(Arc::downgrade(authority))
+            .map_err(|_| HostRequestBindingError::Unavailable)
     }
 
     /// Permanently close this actual resolver owner's bindings before shutdown.
@@ -820,6 +964,8 @@ impl PostgresSessionAuthResolver {
         let guard = Arc::new(ServerSessionCurrentGuard {
             probe: Arc::downgrade(&self.binding_owner.probe),
             owner: self.binding_owner.issuer.observation(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            issuer: self.binding_owner.issuer.clone(),
             original: context.clone(),
             row: ServerSessionRowTuple {
                 id: session_id.clone(),

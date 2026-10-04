@@ -143,6 +143,28 @@ impl core::fmt::Debug for StoreBoundArtifactReader {
 }
 
 impl StoreBoundArtifactReader {
+    pub(crate) const fn record_snapshot(&self) -> &ObservedArtifactReadRecord {
+        &self.record
+    }
+
+    /// Current original FD/root/marker tail; bounded sync checks only, no body read or await.
+    pub(crate) fn verify_physical_current(&self) -> Result<(), ArtifactReadBridgeError> {
+        if self.failed {
+            return Err(ArtifactByteError::Io.into());
+        }
+        if !self.record.matches_store(&self.store) {
+            return Err(ArtifactStoreError::BindingMismatch.into());
+        }
+        let _guard = self
+            .store
+            .io
+            .try_lock()
+            .map_err(|_| ArtifactStoreError::Busy)?;
+        self.store.check_current()?;
+        self.reader.verify_current_descriptor()?;
+        self.store.check_current()?;
+        Ok(())
+    }
     /// Observe at most the frozen 4MiB physical chunk. Failure is terminal and wipes the entire
     /// caller buffer, including bytes not handed off; success grants no later public handoff.
     pub fn read_observed_chunk(

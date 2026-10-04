@@ -66,6 +66,65 @@ pub struct VerifiedDesktopVaultCanary {
     encrypted_canary_digest: Sha256Digest,
 }
 
+/// Sealed facts copied only from a cryptographically verified real Desktop database.
+/// This is not a second proof constructor or a live host-owner lease.
+pub(crate) struct VerifiedDesktopArtifactReadProvenance {
+    system_identifier: String,
+    database_oid: u32,
+    dataset_id: String,
+    deployment_id: String,
+    tenant_id: String,
+    key_id: String,
+    key_version: i32,
+    encrypted_canary_digest: Sha256Digest,
+}
+
+impl VerifiedDesktopArtifactReadProvenance {
+    pub(crate) fn matches_installation(
+        &self,
+        installation: &crate::auth::single_user::desktop_local::DesktopLocalAuthority,
+    ) -> bool {
+        let scope = installation.auth_context();
+        self.deployment_id == scope.deployment().as_str()
+            && self.tenant_id == scope.tenant().as_str()
+    }
+
+    pub(crate) fn matches_current_row(
+        &self,
+        row: &tokio_postgres::Row,
+    ) -> Result<bool, super::RowDecodeError> {
+        fn column<T: for<'a> tokio_postgres::types::FromSql<'a>>(
+            row: &tokio_postgres::Row,
+            name: &'static str,
+        ) -> Result<Option<T>, super::RowDecodeError> {
+            row.try_get(name).map_err(|source| {
+                super::RowDecodeError::column("desktop_vault_canaries", name, source)
+            })
+        }
+        let encrypted: Option<String> = column(row, "read_canary_encrypted")?;
+        Ok(
+            column::<String>(row, "read_database_system_identifier")?.as_deref()
+                == Some(self.system_identifier.as_str())
+                && column::<u32>(row, "read_database_oid")? == Some(self.database_oid)
+                && column::<String>(row, "read_canary_dataset")?.as_deref()
+                    == Some(self.dataset_id.as_str())
+                && column::<String>(row, "read_canary_deployment")?.as_deref()
+                    == Some(self.deployment_id.as_str())
+                && column::<String>(row, "read_canary_tenant")?.as_deref()
+                    == Some(self.tenant_id.as_str())
+                && column::<String>(row, "read_canary_key")?.as_deref()
+                    == Some(self.key_id.as_str())
+                && column::<i32>(row, "read_canary_key_version")? == Some(self.key_version)
+                && column::<i16>(row, "read_canary_schema")? == Some(1)
+                && encrypted.as_ref().is_some_and(|value| {
+                    !value.is_empty()
+                        && value.len() <= 4096
+                        && Sha256Digest::of(value.as_bytes()) == self.encrypted_canary_digest
+                }),
+        )
+    }
+}
+
 /// Exact native/public layout observed before an existing Desktop dataset may verify its canary.
 /// This read-only fact is not a migration, key-store, or business authority.
 pub struct ValidatedDesktopVaultLayout {
@@ -81,6 +140,18 @@ impl ValidatedDesktopVaultLayout {
 }
 
 impl VerifiedDesktopVaultCanary {
+    pub(crate) fn artifact_read_provenance(&self) -> VerifiedDesktopArtifactReadProvenance {
+        VerifiedDesktopArtifactReadProvenance {
+            system_identifier: self.system_identifier.clone(),
+            database_oid: self.database_oid,
+            dataset_id: self.dataset_id.clone(),
+            deployment_id: self.deployment_id.clone(),
+            tenant_id: self.tenant_id.clone(),
+            key_id: self.key_id.clone(),
+            key_version: self.key_version,
+            encrypted_canary_digest: self.encrypted_canary_digest,
+        }
+    }
     pub fn dataset_id(&self) -> &str {
         &self.dataset_id
     }

@@ -112,8 +112,8 @@ pub use approval_admin::{
     decide_tool_approval, list_pending_tool_approvals, subscribe_tool_approval_activity,
 };
 pub use artifacts::{
-    ArtifactAdministration, ArtifactAdministrationError, NoArtifactAdministration,
-    get_artifact_metadata, save_run_message_text_artifact,
+    ArtifactAdministration, ArtifactAdministrationError, CurrentArtifactReadChunk,
+    NoArtifactAdministration, get_artifact_metadata, save_run_message_text_artifact,
 };
 pub use builtin_tools::{
     BUILTIN_TOOL_CATALOG_GENERATION, CommittedMemoryEffect, REMEMBER_TOOL_NAME,

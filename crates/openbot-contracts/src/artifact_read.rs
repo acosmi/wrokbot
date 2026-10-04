@@ -1,0 +1,78 @@
+//! R414/R425 私有实际读取的完整初始化 RAII 缓冲；不是公开 byte wire。
+
+use crate::artifacts::MAX_ARTIFACT_READ_CHUNK_BYTES;
+use crate::auth::AuthContext;
+use crate::request_binding::{
+    ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadTailWitness,
+    VerifiedHostRequestBinding,
+};
+use zeroize::{Zeroize, Zeroizing};
+
+/// 等待真实当前 handoff 的全4MiB清零缓冲；worker 不返回裸正文 Vec。
+pub struct PendingArtifactReadBuffer {
+    bytes: Zeroizing<Vec<u8>>,
+    actual_length: Option<usize>,
+    failed: bool,
+}
+impl PendingArtifactReadBuffer {
+    /// 精确初始化冻结的4MiB；实际长度登记不截短清零范围。
+    pub fn new_initialized() -> Result<Self, ArtifactReadCurrentError> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(MAX_ARTIFACT_READ_CHUNK_BYTES)
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        bytes.resize(MAX_ARTIFACT_READ_CHUNK_BYTES, 0);
+        Ok(Self {
+            bytes: Zeroizing::new(bytes),
+            actual_length: None,
+            failed: false,
+        })
+    }
+    /// 只供受信实际 blocking reader 写入；不是出站正文 getter。
+    #[doc(hidden)]
+    pub fn initialized_mut(&mut self) -> &mut [u8] {
+        self.bytes.as_mut_slice()
+    }
+    /// 登记当次真实 IO 长度，仅一次；错误永久拒绝这个 pending 缓冲。
+    #[doc(hidden)]
+    pub fn record_actual_length(&mut self, length: usize) -> Result<(), ArtifactReadCurrentError> {
+        if self.failed || self.actual_length.is_some() || length > MAX_ARTIFACT_READ_CHUNK_BYTES {
+            self.wipe();
+            return Err(ArtifactReadCurrentError::Unavailable);
+        }
+        self.actual_length = Some(length);
+        Ok(())
+    }
+    /// 实际已完成 IO 的长度元数据；不公开正文。
+    #[must_use]
+    pub const fn actual_length(&self) -> Option<usize> {
+        self.actual_length
+    }
+    /// 清零整个初始化 allocation 并永久拒绝复用；Drop 亦通过 Zeroizing 清零。
+    pub fn wipe(&mut self) {
+        self.bytes.as_mut_slice().zeroize();
+        self.actual_length = None;
+        self.failed = true;
+    }
+    /// 唯一受信正文释放：原 binding/真实 FD/真实宿主尾检后同步移交。
+    #[doc(hidden)]
+    pub fn handoff(
+        mut self,
+        auth: &AuthContext,
+        original: &VerifiedHostRequestBinding,
+        target: &dyn ArtifactReadCurrentTarget,
+        witness: &dyn ArtifactReadTailWitness,
+        deadline: std::time::Instant,
+    ) -> Result<Vec<u8>, ArtifactReadCurrentError> {
+        let length = self
+            .actual_length
+            .filter(|_| !self.failed)
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        self.bytes[length..].zeroize();
+        original.verify_artifact_read_tail(auth, target, witness, deadline)?;
+        // All checks and suffix clearing precede the sole successful raw Vec extraction.
+        let mut bytes = std::mem::take(&mut *self.bytes);
+        bytes.truncate(length);
+        Ok(bytes)
+    }
+}

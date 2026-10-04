@@ -92,6 +92,11 @@ pub mod application_assembly;
     any(target_os = "macos", target_os = "linux")
 ))]
 pub mod artifact_administration;
+#[cfg(all(
+    feature = "server-runtime",
+    any(target_os = "macos", target_os = "linux")
+))]
+pub use artifact_administration::artifact_read_authority;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod artifact_bytes;
 pub mod artifact_registry;
