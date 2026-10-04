@@ -63,6 +63,7 @@ mod reconciliation_tests;
 pub mod remote_interrupts;
 pub mod routing;
 pub mod run_cost_budget;
+pub mod runtime_capabilities;
 pub mod sandbox_runner;
 pub mod sandboxed;
 pub mod screen;
@@ -711,6 +712,10 @@ pub fn router(state: ServerState) -> Router {
         )
         .route("/api/me", get(admin::me))
         .route(
+            runtime_capabilities::RUNTIME_CAPABILITIES_PATH,
+            get(runtime_capabilities::get).head(runtime_capabilities::reject_head),
+        )
+        .route(
             "/api/me/model-connections",
             get(model_connections::list).post(model_connections::create),
         )
@@ -790,6 +795,9 @@ pub fn router(state: ServerState) -> Router {
         ))
         .layer(axum::middleware::from_fn(
             threads::reconciliation_response_policy,
+        ))
+        .layer(axum::middleware::from_fn(
+            runtime_capabilities::response_policy,
         ))
         .layer(axum::middleware::from_fn(record_http_metrics))
         .layer(axum::middleware::from_fn(trace_request))

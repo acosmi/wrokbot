@@ -47,6 +47,10 @@ use crate::repo::tools::PostgresToolJournal;
 use crate::routing::PostgresChannelRouting;
 use crate::run_cost_budget::PostgresRunCostBudgetAdministration;
 use crate::run_runtime::{DEFAULT_DISPATCH_CLAIM_DURATION, PostgresRunRuntime};
+use crate::runtime_capability_facts::{
+    PostgresRuntimeCapabilityFacts, RuntimeCapabilityAssemblyFactsInput,
+    RuntimeCapabilityCollectorFactory,
+};
 use crate::sandboxed_components::PostgresSandboxedComponentAdministration;
 use crate::store::plugin_user_credential::PostgresOwnedCredentialRetirer;
 use crate::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
@@ -104,6 +108,8 @@ pub struct PostgresApplicationAssemblyInput {
     pub screen_sessions: Arc<dyn ScreenSessionAdministration>,
     /// Actual authoritative artifact dependency, or a truthful unavailable default when absent.
     pub artifacts: Option<Arc<dyn ArtifactAdministration>>,
+    /// Only a trusted actual host can build the optional observer from these exact dependencies.
+    pub runtime_capabilities: Option<Arc<dyn RuntimeCapabilityCollectorFactory>>,
     pub remote_agent_probe: Arc<dyn RemoteAguiTransport>,
     pub managed_slot_available: bool,
     pub channel_routing_provider: ChannelRoutingProviderInput,
@@ -145,6 +151,7 @@ impl core::fmt::Debug for PostgresApplicationAssemblyInput {
 
 /// Shared assembly output plus the background/lifecycle adapters its host must retain.
 pub struct PostgresApplicationAssembly {
+    pub runtime_capability_facts: Option<Arc<PostgresRuntimeCapabilityFacts>>,
     pub application: Arc<dyn ApplicationService>,
     pub run_runtime: Arc<dyn RunRuntime>,
     pub remote_interrupts: Arc<PostgresRemoteInterruptCoordinator>,
@@ -184,6 +191,10 @@ impl core::fmt::Debug for PostgresApplicationAssembly {
 impl PostgresApplicationAssembly {
     /// Stop background reconcilers before dropping database-backed adapter handles.
     pub async fn shutdown(self) {
+        if let Some(facts) = &self.runtime_capability_facts {
+            facts.close();
+            facts.drain().await;
+        }
         self.mcp_revocation_reconciler.stop().await;
     }
 }
@@ -215,6 +226,7 @@ pub async fn assemble_postgres_application(
         ui_preferences,
         screen_sessions,
         artifacts,
+        runtime_capabilities,
         remote_agent_probe,
         managed_slot_available,
         channel_routing_provider,
@@ -405,6 +417,39 @@ pub async fn assemble_postgres_application(
         )
         .map_err(|_| fail("model_connections"))?,
     );
+    let channels = ChannelRepo::new(pool.clone());
+    let runtime_capability_facts = runtime_capabilities
+        .as_ref()
+        .map(|_| {
+            PostgresRuntimeCapabilityFacts::from_assembly(RuntimeCapabilityAssemblyFactsInput {
+                pool: pool.clone(),
+                deployment: deployment.clone(),
+                tenant: tenant.clone(),
+                policy: policy_store.clone(),
+                vault: credential_vault.clone(),
+                default_key_id: credential_key_id.clone(),
+                environment_key: channel_routing_provider
+                    .environment_api_key
+                    .as_ref()
+                    .map(|key| Arc::new(SecretBytes::new(key.expose().to_vec()))),
+                channels: channels.clone(),
+                people: people.clone(),
+                threads: thread_directory.clone(),
+                tools: tool_control.clone(),
+                models: model_connections.clone(),
+            })
+            .map(Arc::new)
+        })
+        .transpose()
+        .map_err(|_| fail("runtime_capability_dependencies"))?;
+    let runtime_capability_collector = match (&runtime_capabilities, &runtime_capability_facts) {
+        (Some(factory), Some(facts)) => Some(
+            factory
+                .build(Arc::clone(facts))
+                .map_err(|_| fail("runtime_capability_host"))?,
+        ),
+        _ => None,
+    };
     let channel_routing = build_channel_routing(
         pool.clone(),
         model,
@@ -414,7 +459,6 @@ pub async fn assemble_postgres_application(
         stall_timeout,
         channel_routing_provider,
     )?;
-    let channels = ChannelRepo::new(pool.clone());
     let components = Arc::new(
         PostgresComponentAdministration::new(pool.clone(), audit_key.to_vec())
             .map_err(|_| fail("components"))?
@@ -452,9 +496,14 @@ pub async fn assemble_postgres_application(
         Some(artifacts) => application.with_artifacts(artifacts),
         None => application,
     };
+    let application = match runtime_capability_collector {
+        Some(collector) => application.with_runtime_capabilities(collector),
+        None => application,
+    };
     let application: Arc<dyn ApplicationService> = Arc::new(application);
     let mcp_revocation_reconciler = McpRevocationReconciler::start(mcp_connections.clone());
     Ok(PostgresApplicationAssembly {
+        runtime_capability_facts,
         application,
         run_runtime,
         remote_interrupts,

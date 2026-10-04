@@ -56,6 +56,18 @@ pub enum SingleUserPrincipalCurrentError {
 }
 
 impl VerifiedSingleUserPrincipal {
+    /// Pool provenance for the trusted composition root; this is not user authority.
+    #[must_use]
+    pub fn matches_pool_scope(&self, pool: &Pool) -> bool {
+        std::ptr::eq(self.pool.manager(), pool.manager())
+    }
+    #[cfg(feature = "server-runtime")]
+    pub fn matches_capability_facts(
+        &self,
+        facts: &crate::runtime_capability_facts::PostgresRuntimeCapabilityFacts,
+    ) -> bool {
+        facts.matches_pool_scope(&self.pool, self.auth.deployment(), self.auth.tenant())
+    }
     /// Borrow the startup snapshot; runtime data access must still recheck its generation.
     #[must_use]
     pub const fn auth_context(&self) -> &AuthContext {
@@ -73,15 +85,30 @@ impl VerifiedSingleUserPrincipal {
     /// The five-second budget covers acquisition, the read-only transaction and rollback.
     /// Timeout cancels this wait; it does not assert that a database worker has already stopped.
     pub async fn verify_current(&self) -> Result<(), SingleUserPrincipalCurrentError> {
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            self.verify_current_inner(),
+        self.verify_current_before(std::time::Instant::now() + std::time::Duration::from_secs(5))
+            .await
+    }
+
+    /// Reobserve the retained principal within an existing absolute request budget.
+    pub async fn verify_current_before(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<(), SingleUserPrincipalCurrentError> {
+        if deadline <= std::time::Instant::now() {
+            return Err(SingleUserPrincipalCurrentError::Unavailable);
+        }
+        tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            self.verify_current_inner(deadline),
         )
         .await
         .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?
     }
 
-    async fn verify_current_inner(&self) -> Result<(), SingleUserPrincipalCurrentError> {
+    async fn verify_current_inner(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<(), SingleUserPrincipalCurrentError> {
         let mut client = self
             .pool
             .get()
@@ -95,8 +122,12 @@ impl VerifiedSingleUserPrincipal {
             .await
             .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
         let observation = async {
+            let remaining = deadline.checked_duration_since(std::time::Instant::now())
+                .ok_or(SingleUserPrincipalCurrentError::Unavailable)?;
+            let milliseconds = remaining.as_millis().min(5_000);
+            if milliseconds == 0 { return Err(SingleUserPrincipalCurrentError::Unavailable); }
             transaction
-                .batch_execute("SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='5s'")
+                .batch_execute(&format!("SET LOCAL statement_timeout='{milliseconds}ms'; SET LOCAL lock_timeout='{milliseconds}ms'"))
                 .await
                 .map_err(|_| SingleUserPrincipalCurrentError::Unavailable)?;
             let row = transaction

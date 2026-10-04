@@ -78,6 +78,98 @@ pub(crate) struct DynamicSsoStore {
     vault: SsoConfigVault,
     audit_key: Arc<SecretBytes>,
     reserved_provider_ids: Arc<BTreeSet<String>>,
+    configured_environment_provider_ids: Arc<BTreeSet<String>>,
+}
+
+/// A non-Serde read capability issued by the actual SSO service. It never migrates or probes.
+#[derive(Clone)]
+pub struct ReadOnlySsoCapabilitySource {
+    pub(super) store: DynamicSsoStore,
+}
+
+impl ReadOnlySsoCapabilitySource {
+    #[must_use]
+    pub fn matches_pool_scope(&self, pool: &Pool) -> bool {
+        std::ptr::eq(self.store.pool.manager(), pool.manager())
+    }
+    pub(crate) fn matches_tenant(&self, tenant: &openbot_contracts::ids::TenantId) -> bool {
+        self.store.vault.matches_tenant(tenant)
+    }
+
+    pub(crate) fn observe_rows(
+        &self,
+        rows: &serde_json::Value,
+    ) -> openbot_domain::runtime_capabilities::ConfigFact {
+        use openbot_domain::runtime_capabilities::ConfigFact;
+        let Some(rows) = rows.as_array() else {
+            return ConfigFact::Unknown;
+        };
+        if rows.len() > 256 || self.store.configured_environment_provider_ids.len() > 256 {
+            return ConfigFact::Unknown;
+        }
+        let mut present = !self.store.configured_environment_provider_ids.is_empty();
+        let mut invalid = false;
+        for row in rows {
+            if row.get("bounded").and_then(serde_json::Value::as_bool) != Some(true) {
+                return ConfigFact::Unknown;
+            }
+            let Some(provider) = row.get("provider_id").and_then(serde_json::Value::as_str) else {
+                return ConfigFact::Unknown;
+            };
+            let Some(issuer) = row.get("issuer").and_then(serde_json::Value::as_str) else {
+                return ConfigFact::Unknown;
+            };
+            let Some(domain) = row.get("domain").and_then(serde_json::Value::as_str) else {
+                return ConfigFact::Unknown;
+            };
+            if self.store.stored_provider_id(provider).is_err()
+                || domains_from_column(domain).is_err()
+                || !row
+                    .get("organization_id")
+                    .is_some_and(serde_json::Value::is_null)
+            {
+                invalid = true;
+                continue;
+            }
+            let oidc = row.get("oidc_config").and_then(serde_json::Value::as_str);
+            let saml = row.get("saml_config").and_then(serde_json::Value::as_str);
+            let (column, stored) = match (oidc, saml) {
+                (Some(value), None) if validated_issuer(issuer).is_ok() => {
+                    (SsoSecretColumn::Oidc, value)
+                }
+                (None, Some(value)) if validate_saml_entity_id(issuer).is_ok() => {
+                    (SsoSecretColumn::Saml, value)
+                }
+                _ => {
+                    invalid = true;
+                    continue;
+                }
+            };
+            let Ok(opened) = self.store.vault.open(provider, column, stored.to_owned()) else {
+                return ConfigFact::Unknown;
+            };
+            // Legacy plaintext/envelopes need the write migration path; GET cannot prove them live.
+            if opened.needs_migration {
+                return ConfigFact::Unknown;
+            }
+            let Ok(config) = decode_v2(&opened.plaintext) else {
+                invalid = true;
+                continue;
+            };
+            if super::config::validate_readonly_config(column, &config).is_err() {
+                invalid = true;
+                continue;
+            }
+            present = true;
+        }
+        if present {
+            ConfigFact::Present
+        } else if invalid {
+            ConfigFact::Invalid
+        } else {
+            ConfigFact::Missing
+        }
+    }
 }
 
 impl DynamicSsoStore {
@@ -93,6 +185,7 @@ impl DynamicSsoStore {
         }
         let mut reserved_provider_ids: BTreeSet<String> =
             environment_provider_ids.into_iter().collect();
+        let configured_environment_provider_ids = Arc::new(reserved_provider_ids.clone());
         reserved_provider_ids.extend(
             ["credential", "email-password", "anonymous", "sso"]
                 .into_iter()
@@ -103,6 +196,7 @@ impl DynamicSsoStore {
             vault,
             audit_key: Arc::new(SecretBytes::new(audit_key)),
             reserved_provider_ids: Arc::new(reserved_provider_ids),
+            configured_environment_provider_ids,
         })
     }
 

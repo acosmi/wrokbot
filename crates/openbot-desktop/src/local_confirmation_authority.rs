@@ -17,6 +17,13 @@ pub(crate) struct PostgresLocalConfirmationAuthority {
 
 #[cfg(feature = "desktop-local-runtime")]
 impl PostgresLocalConfirmationAuthority {
+    pub(crate) fn matches_runtime_scope(
+        &self,
+        pool: &openbot_infra::db::pool::DatabasePool,
+        installation: &openbot_infra::auth::single_user::desktop_local::DesktopLocalAuthority,
+    ) -> bool {
+        std::ptr::eq(self.pool.manager(), pool.manager()) && &self.installation == installation
+    }
     pub(crate) fn new(
         installation: openbot_infra::auth::single_user::desktop_local::DesktopLocalAuthority,
         pool: openbot_infra::db::pool::DatabasePool,
@@ -29,6 +36,7 @@ impl PostgresLocalConfirmationAuthority {
     async fn verify_binding_current(
         &self,
         expected: &AuthContext,
+        deadline: std::time::Instant,
     ) -> Result<(), openbot_contracts::HostRequestBindingError> {
         use openbot_contracts::HostRequestBindingError;
         use openbot_infra::auth::single_user::desktop_local::{
@@ -58,8 +66,11 @@ impl PostgresLocalConfirmationAuthority {
             .await
             .map_err(|_| HostRequestBindingError::Unavailable)?;
         let observation = async {
+            let remaining = deadline.checked_duration_since(std::time::Instant::now()).ok_or(HostRequestBindingError::Unavailable)?;
+            let milliseconds = remaining.as_millis().min(5_000);
+            if milliseconds == 0 { return Err(HostRequestBindingError::Unavailable); }
             transaction
-                .batch_execute("SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='5s'")
+                .batch_execute(&format!("SET LOCAL statement_timeout='{milliseconds}ms'; SET LOCAL lock_timeout='{milliseconds}ms'"))
                 .await
                 .map_err(|_| HostRequestBindingError::Unavailable)?;
             let row = transaction
@@ -168,10 +179,30 @@ impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAut
                 + 'a,
         >,
     > {
+        self.verify_current_before(
+            expected,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+    }
+
+    fn verify_current_before<'a>(
+        &'a self,
+        expected: &'a AuthContext,
+        deadline: std::time::Instant,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), openbot_contracts::HostRequestBindingError>>
+                + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async move {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                self.verify_binding_current(expected),
+            if deadline <= std::time::Instant::now() {
+                return Err(openbot_contracts::HostRequestBindingError::Unavailable);
+            }
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                self.verify_binding_current(expected, deadline),
             )
             .await
             .unwrap_or(Err(openbot_contracts::HostRequestBindingError::Unavailable))

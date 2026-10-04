@@ -107,6 +107,7 @@ async fn shared_postgres_application_assembly_executes_real_command() {
                 ),
                 screen_sessions: Arc::new(openbot_application::NoScreenSessionAdministration),
                 artifacts: None,
+                runtime_capabilities: None,
                 remote_agent_probe: Arc::new(ClosedRemoteProbe),
                 managed_slot_available: false,
                 channel_routing_provider: ChannelRoutingProviderInput {

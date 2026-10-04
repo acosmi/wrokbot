@@ -1,7 +1,7 @@
 //! Local-only orchestration. Window admission and receipt installation run as owned host jobs.
 //! The host executes each job on its native main thread under the current windows-map read lock.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
@@ -84,6 +84,28 @@ impl RequestBudget {
 
     fn sample(&self) -> Result<ClockSample, AppError> {
         let mut clocks = self.clocks.lock().map_err(|_| unavailable())?;
+        let monotonic = Instant::now();
+        let wall = SystemTime::now();
+        if monotonic < clocks.last_monotonic || wall < clocks.last_wall {
+            return Err(unavailable());
+        }
+        let elapsed_monotonic = monotonic
+            .checked_duration_since(clocks.began_monotonic)
+            .ok_or_else(unavailable)?;
+        let elapsed_wall = wall
+            .duration_since(clocks.began_wall)
+            .map_err(|_| unavailable())?;
+        if elapsed_monotonic >= self.wait || elapsed_wall >= self.wait {
+            return Err(unavailable());
+        }
+        clocks.last_monotonic = monotonic;
+        clocks.last_wall = wall;
+        Ok(ClockSample::new(monotonic, wall))
+    }
+
+    // Only the new capability tail uses this bounded, no-wait clock observation.
+    fn sample_nowait(&self) -> Result<ClockSample, AppError> {
+        let mut clocks = self.clocks.try_lock().map_err(|_| unavailable())?;
         let monotonic = Instant::now();
         let wall = SystemTime::now();
         if monotonic < clocks.last_monotonic || wall < clocks.last_wall {
@@ -247,6 +269,84 @@ pub(crate) struct LocalConfirmationService {
     test_wait: Duration,
 }
 
+/// Per-request same-service/same-grant observation, retaining no native owner or lifecycle lease.
+pub(crate) struct LocalCapabilityStatusObservation {
+    service: Weak<LocalConfirmationService>,
+    grant: GrantHandle,
+    original: AuthContext,
+    closed: CancellationToken,
+    budget: RequestBudget,
+}
+
+impl LocalCapabilityStatusObservation {
+    pub(crate) fn current_fact(
+        &self,
+        expected: &AuthContext,
+        deadline: openbot_application::runtime_capabilities::CapabilityDeadline,
+        prior: openbot_domain::runtime_capabilities::LocalConfirmationFact,
+    ) -> Result<
+        openbot_domain::runtime_capabilities::LocalConfirmationFact,
+        openbot_application::runtime_capabilities::RuntimeCapabilitiesCollectionError,
+    > {
+        use openbot_application::runtime_capabilities::RuntimeCapabilitiesCollectionError as Error;
+        use openbot_contracts::desktop::local_confirmation::LocalConfirmationState;
+        use openbot_domain::runtime_capabilities::LocalConfirmationFact as Fact;
+        deadline.check()?;
+        if self.closed.is_cancelled()
+            || expected != &self.original
+            || !expected
+                .request_binding()
+                .zip(self.original.request_binding())
+                .is_some_and(|(left, right)| left.identity().same_binding(right.identity()))
+        {
+            return Err(Error::NotCurrent);
+        }
+        let service = self.service.upgrade().ok_or(Error::NotCurrent)?;
+        let available = service
+            .native
+            .as_ref()
+            .is_some_and(|native| native.is_available());
+        let now = self
+            .budget
+            .sample_nowait()
+            .map_err(|_| Error::Unavailable)?;
+        let current = match self.grant.status_nowait(now, available) {
+            Err(ConfirmationError::StaleClockSample) => self.grant.status_nowait(
+                self.budget
+                    .sample_nowait()
+                    .map_err(|_| Error::Unavailable)?,
+                available,
+            ),
+            result => result,
+        }
+        .map_err(|error| match error {
+            ConfirmationError::NotCurrent | ConfirmationError::InvalidScope => Error::NotCurrent,
+            _ => Error::Unavailable,
+        })?;
+        let fact = match current.state {
+            LocalConfirmationState::Fresh => Fact::Fresh,
+            LocalConfirmationState::Pending => Fact::Pending,
+            LocalConfirmationState::Required => Fact::Required,
+            LocalConfirmationState::Unavailable => Fact::Unavailable,
+        };
+        deadline.check()?;
+        // A grant expiring after a prior Fresh observation is retained as the closed expiry fact.
+        Ok(
+            if matches!(prior, Fact::Fresh | Fact::Expired) && fact == Fact::Required {
+                Fact::Expired
+            } else if fact == Fact::Fresh && prior != Fact::Fresh && prior != Fact::Unknown {
+                prior
+            } else {
+                fact
+            },
+        )
+    }
+
+    pub(crate) fn matches_service(&self, service: &Arc<LocalConfirmationService>) -> bool {
+        Weak::ptr_eq(&self.service, &Arc::downgrade(service))
+    }
+}
+
 pub(crate) fn sample_now() -> ClockSample {
     ClockSample::new(Instant::now(), SystemTime::now())
 }
@@ -276,6 +376,38 @@ fn unavailable() -> AppError {
 }
 
 impl LocalConfirmationService {
+    pub(crate) fn capability_status_observation(
+        self: &Arc<Self>,
+        grant: &GrantHandle,
+        expected: &AuthContext,
+        closed: &CancellationToken,
+        deadline: openbot_application::runtime_capabilities::CapabilityDeadline,
+    ) -> Result<
+        LocalCapabilityStatusObservation,
+        openbot_application::runtime_capabilities::RuntimeCapabilitiesCollectionError,
+    > {
+        use openbot_application::runtime_capabilities::RuntimeCapabilitiesCollectionError as Error;
+        deadline.check()?;
+        if closed.is_cancelled() {
+            return Err(Error::NotCurrent);
+        }
+        let mut budget =
+            RequestBudget::new(deadline.remaining()?).map_err(|_| Error::Unavailable)?;
+        budget.deadline = tokio::time::Instant::from_std(deadline.deadline());
+        let observation = LocalCapabilityStatusObservation {
+            service: Arc::downgrade(self),
+            grant: grant.clone(),
+            original: expected.clone(),
+            closed: closed.clone(),
+            budget,
+        };
+        observation.current_fact(
+            expected,
+            deadline,
+            openbot_domain::runtime_capabilities::LocalConfirmationFact::Unknown,
+        )?;
+        Ok(observation)
+    }
     pub(crate) fn new(
         instance_id: &str,
         authority: Arc<dyn LocalConfirmationAuthority>,

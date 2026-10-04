@@ -12,3 +12,4 @@ pub use config::{
 };
 pub use saml::SamlStart;
 pub use service::{DynamicSsoError, DynamicSsoService, DynamicSsoStart, SsoRouteReceipt};
+pub use store::ReadOnlySsoCapabilitySource;
