@@ -1460,8 +1460,6 @@ pub(crate) async fn prepare_desktop_local_runtime(
     let screen_hub = match ScreenHub::new(DEFAULT_SCREEN_VIEWERS_PER_STREAM) {
         Ok(hub) => hub,
         Err(_) => {
-            #[cfg(test)]
-            eprintln!("ARTIFACT_LIFECYCLE_LOCAL_STARTUP_FAILURE stage=screen_hub");
             return Err(
                 cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
             );
@@ -1483,8 +1481,6 @@ pub(crate) async fn prepare_desktop_local_runtime(
         ) {
             Ok(port) => Arc::new(port),
             Err(_) => {
-                #[cfg(test)]
-                eprintln!("ARTIFACT_LIFECYCLE_LOCAL_STARTUP_FAILURE stage=ui_preferences");
                 return Err(
                     cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
                 );
@@ -1496,8 +1492,6 @@ pub(crate) async fn prepare_desktop_local_runtime(
         let artifact_store = match data_plane.open_artifact_store(artifact_policy).await {
             Ok(store) => store,
             Err(_) => {
-                #[cfg(test)]
-                eprintln!("ARTIFACT_LIFECYCLE_LOCAL_STARTUP_FAILURE stage=artifact_store");
                 return Err(
                     cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
                 );
@@ -1511,8 +1505,6 @@ pub(crate) async fn prepare_desktop_local_runtime(
         ) {
             Ok(port) => Arc::new(port),
             Err(_) => {
-                #[cfg(test)]
-                eprintln!("ARTIFACT_LIFECYCLE_LOCAL_STARTUP_FAILURE stage=artifact_administration");
                 return Err(
                     cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
                 );
@@ -1534,10 +1526,6 @@ pub(crate) async fn prepare_desktop_local_runtime(
         ) {
             Ok(factory) => factory,
             Err(_) => {
-                #[cfg(test)]
-                eprintln!(
-                    "ARTIFACT_LIFECYCLE_LOCAL_STARTUP_FAILURE stage=runtime_capability_factory"
-                );
                 return Err(
                     cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
                 );
@@ -1578,8 +1566,6 @@ pub(crate) async fn prepare_desktop_local_runtime(
     {
         Ok(assembly) => assembly,
         Err(_) => {
-            #[cfg(test)]
-            eprintln!("ARTIFACT_LIFECYCLE_LOCAL_STARTUP_FAILURE stage=application_assembly");
             return Err(
                 cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
             );

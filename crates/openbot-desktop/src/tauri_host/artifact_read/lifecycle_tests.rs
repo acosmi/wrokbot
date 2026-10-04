@@ -281,7 +281,24 @@ impl OwnedRoot {
             .mode(0o700)
             .create(&path)
             .map_err(|error| error.to_string())?;
-        Ok(Self(path, true))
+        let mut owned = Self(path, true);
+        let before = std::fs::symlink_metadata(&owned.0).map_err(|error| error.to_string())?;
+        let canonical = std::fs::canonicalize(&owned.0).map_err(|error| error.to_string())?;
+        let after = std::fs::symlink_metadata(&canonical).map_err(|error| error.to_string())?;
+        require(
+            before.file_type().is_dir()
+                && !before.file_type().is_symlink()
+                && after.file_type().is_dir()
+                && !after.file_type().is_symlink()
+                && before.dev() == after.dev()
+                && before.ino() == after.ino()
+                && before.uid() == after.uid()
+                && before.mode() & 0o7777 == 0o700
+                && after.mode() & 0o7777 == 0o700,
+            "owned Local root canonicalization changed the original private inode",
+        )?;
+        owned.0 = canonical;
+        Ok(owned)
     }
 }
 impl Drop for OwnedRoot {
