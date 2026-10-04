@@ -822,13 +822,13 @@ async fn original_fd(
             "original_fd_tuple_presence_not_proven",
         )?;
         let sample = matches.first().copied();
-        if let Some(expected) = expected {
-            if present {
-                require(
-                    sample == Some(expected),
-                    "original_numeric_fd_reopened_or_replaced",
-                )?;
-            }
+        if let Some(expected) = expected
+            && present
+        {
+            require(
+                sample == Some(expected),
+                "original_numeric_fd_reopened_or_replaced",
+            )?;
         }
         if let Some(before) = stable {
             require(before == sample, "original_fd_two_samples_not_stable")?;
