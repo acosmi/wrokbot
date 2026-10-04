@@ -1260,3 +1260,6 @@ V7-IMPL-008 private provenance correction entry: Early independent static review
 
 
 V7-IMPL-008 product test path correction: The original publication hook rejected a newly registered unit-test path because its directory component is reserved for local artifacts. The test moved to an ordinary source path, preserving every test byte and the private module name; only its path annotation changed. The hook and policy remain intact, and the failed normal commit receipt is preserved. No runtime or source acceptance is claimed. Registration receipt SHA-256 d5ec3848f5c7fa806edceabc1f4591c46f9b33aaaa80ba819a9c25a84b792f7e.
+
+
+V7-IMPL-008 precise test compilation correction: Source5492 passed nine new Contracts and four new Application cases with exact inputs. Infra unit test compile then exited101 before PostgreSQL startup because its new test module omitted two existing type imports. Raw failure and source5492 results remain preserved. Only these two test imports are corrected under a new entry; all23 production files and54 case identities stay unchanged. A new normal candidate requires fresh directed validation. Registration receipt SHA-256 ed9fec8afcee4f7ed70cc7c826dd425ef9dcf737456888809c6d60a4a02adb95.

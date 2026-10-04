@@ -31,7 +31,10 @@ use uuid::Uuid;
 
 use super::*;
 use crate::artifact_bytes::{ArtifactByteError, MAX_ARTIFACT_READ_CHUNK_BYTES};
-use crate::artifact_store::{ArtifactReadBridgeError, StoreBoundArtifactReader};
+use crate::artifact_registry::ArtifactDatasetRegistry;
+use crate::artifact_store::{
+    ArtifactReadBridgeError, DatasetBoundArtifactStore, StoreBoundArtifactReader,
+};
 use crate::auth::single_user::desktop_local::{
     CurrentOsUserAppDataRoot, DesktopLocalAuthorityStore,
 };
