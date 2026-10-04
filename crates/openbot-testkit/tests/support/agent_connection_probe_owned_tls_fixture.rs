@@ -48,6 +48,8 @@ pub(super) fn late(mode: &str) -> bool {
 }
 
 pub(super) type ProbeObservations = Arc<Mutex<Vec<Value>>>;
+type OwnedListenerOutcome = (usize, usize, usize, Vec<String>);
+type OwnedChildOutcome = (u64, Result<u64, String>);
 
 #[derive(Clone)]
 pub(super) struct WireView {
@@ -95,7 +97,7 @@ impl DnsResolver for Resolver {
 pub(super) struct OwnedWire {
     view: WireView,
     stop: Option<oneshot::Sender<()>>,
-    task: Option<JoinHandle<(usize, usize, usize, Vec<String>)>>,
+    task: Option<JoinHandle<OwnedListenerOutcome>>,
     listener_closed_before_test: bool,
 }
 
@@ -427,7 +429,7 @@ impl OwnedWire {
 }
 
 fn collect_join(
-    result: Option<Result<(u64, Result<u64, String>), tokio::task::JoinError>>,
+    result: Option<Result<OwnedChildOutcome, tokio::task::JoinError>>,
     shared: &Shared,
     failed: &mut usize,
     errors: &mut Vec<String>,
