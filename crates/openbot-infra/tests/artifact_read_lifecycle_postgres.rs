@@ -375,7 +375,7 @@ impl Fixture {
         require(length != 0, "zero_available_artifact_is_not_an_oracle")?;
         let message_id = format!("{}:input", self.begin.command.run_id.as_str());
         let changed = self.pool.get().await.map_err(|_| "owned_pool_get_failed")?.execute(
-            "UPDATE public.messages SET content=jsonb_set(content,'{text}',to_jsonb($1::text)) WHERE id=$2",
+            "UPDATE public.messages SET content=jsonb_set(content,'{text}',to_jsonb($1::text)) WHERE message_id=$2",
             &[&payload, &message_id],
         ).await.map_err(|_| "owned_source_update_failed")?;
         require(changed == 1, "owned_source_update_not_single_row")?;
