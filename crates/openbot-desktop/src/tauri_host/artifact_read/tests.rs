@@ -1141,26 +1141,120 @@ async fn actual_local_final_canary_cipher_row_is_rechecked_after_installation_pr
 async fn actual_local_worker_ack_then_final_joint_wait_observes_current_generation_commit() {
     use tracing::instrument::WithSubscriber as _;
     with_fixture("local_read_real_final_wait", |fixture| Box::pin(async move {
+
         let protocol = Arc::new(fixture.protocol()?);
         protocol.bind_window("main", fixture.original.clone(), None).map_err(|error| error.to_string())?;
+        let mut controller = fixture.pool().get().await.map_err(|error| error.to_string())?;
+        let observer = fixture.pool().get().await.map_err(|error| error.to_string())?;
+        let controller_pid: i32 = controller.query_one("SELECT pg_backend_pid()", &[]).await
+            .map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())?;
+        let observer_pid: i32 = observer.query_one("SELECT pg_backend_pid()", &[]).await
+            .map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())?;
+        let activity_capacity_bytes: i64 = observer.query_one(
+            "SELECT pg_size_bytes(current_setting('track_activity_query_size'))", &[],
+        ).await.map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())?;
+        require(controller_pid != observer_pid, "actual controller and observer PIDs were not distinct")?;
+        require(activity_capacity_bytes >= 16_384, "owned Local activity query width was not actually sixteen KiB")?;
+        let mut diagnostic = HostReadWaitDiagnostic {
+            controller_pid,
+            observer_pid,
+            activity_capacity_bytes,
+            ..HostReadWaitDiagnostic::default()
+        };
         let gate = TracePhaseGate::new();
         let dispatch = tracing::Dispatch::new(ReadPhaseSubscriber(gate.clone()));
-        let called = protocol.clone(); let id = fixture.receipt.artifact_id.clone();
-        let task = tokio::spawn(async move { called.read_current_artifact_chunk("main", id).await }.with_subscriber(dispatch));
-        tokio::time::timeout(Duration::from_secs(5), gate.entered.notified()).await.map_err(|_| "actual Local IO/final-ready phases were not observed".to_owned())?;
-        require(gate.io_seen.load(Ordering::SeqCst) && gate.ready_seen.load(Ordering::SeqCst), "actual Local worker ACK did not precede final-ready")?;
-        let mut controller = fixture.pool().get().await.map_err(|error| error.to_string())?;
-        let transaction = controller.transaction().await.map_err(|error| error.to_string())?;
-        let blocker: i32 = transaction.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|error| error.to_string())?.get(0);
-        transaction.batch_execute("SET LOCAL lock_timeout='1s'; LOCK TABLE public.users IN ACCESS EXCLUSIVE MODE").await.map_err(|error| error.to_string())?;
+        let called = protocol.clone();
+        let id = fixture.receipt.artifact_id.clone();
+        let mut task = Some(tokio::spawn(
+            async move { called.read_current_artifact_chunk("main", id).await }.with_subscriber(dispatch),
+        ));
+        let notification = tokio::time::timeout(Duration::from_secs(5), gate.entered.notified()).await;
+        let entered_at = std::time::Instant::now();
+        diagnostic.io_seen = gate.io_seen.load(Ordering::SeqCst);
+        diagnostic.ready_seen = gate.ready_seen.load(Ordering::SeqCst);
+        let mut failure = notification
+            .map_err(|_| "actual Local IO/final-ready phases were not observed".to_owned())
+            .and_then(|_| require(diagnostic.io_seen && diagnostic.ready_seen, "actual Local worker ACK did not precede final-ready"))
+            .err();
+        let mut transaction = if failure.is_none() {
+            match controller.transaction().await {
+                Ok(transaction) => Some(transaction),
+                Err(error) => {
+                    failure = Some(error.to_string());
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let attempted: Result<i32, String> = if let Some(error) = failure {
+            Err(error)
+        } else {
+            async {
+                transaction.as_ref().expect("actual controller transaction retained")
+                    .batch_execute("SET LOCAL lock_timeout='1s'; LOCK TABLE public.users IN ACCESS EXCLUSIVE MODE").await.map_err(|error| error.to_string())?;
+                diagnostic.controller_lock_ack = true;
+                diagnostic.entered_notification_to_lock_ack_ms = Some(entered_at.elapsed().as_millis());
+                diagnostic.barrier_timed_out_before_release = Some(gate.timed_out.load(Ordering::SeqCst));
+                diagnostic.read_task_finished_before_release = Some(task.as_ref().expect("original reader retained").is_finished());
+                require(diagnostic.barrier_timed_out_before_release == Some(false), "Local trace barrier timed out instead of controller release")?;
+                gate.release();
+                let observed = actual_final_wait(&observer, controller_pid, &mut diagnostic).await;
+                diagnostic.barrier_timed_out_after_observation = Some(gate.timed_out.load(Ordering::SeqCst));
+                diagnostic.read_task_finished_after_observation = Some(task.as_ref().expect("original reader retained").is_finished());
+                let waiter = observed?;
+                require(diagnostic.barrier_timed_out_after_observation == Some(false), "Local trace barrier timed out instead of controller release")?;
+                transaction.as_ref().expect("actual controller transaction retained")
+                    .execute("UPDATE public.users SET auth_generation=NULL WHERE id=$1", &[&fixture.original.actor().as_str()]).await.map_err(|error| error.to_string())?;
+                transaction.take().expect("actual controller transaction retained")
+                    .commit().await.map_err(|error| error.to_string())?;
+                diagnostic.controller_commit_ack = true;
+                Ok(waiter)
+            }.await
+        };
         gate.release();
-        let waiter = actual_final_wait(fixture.pool(), blocker).await?;
-        require(!gate.timed_out.load(Ordering::SeqCst), "Local trace barrier timed out instead of controller release")?;
-        transaction.execute("UPDATE public.users SET auth_generation=NULL WHERE id=$1", &[&fixture.original.actor().as_str()]).await.map_err(|error| error.to_string())?;
-        transaction.commit().await.map_err(|error| error.to_string())?;
-        eprintln!("ARTIFACT_CURRENT_LOCAL_FINAL_WAIT io_ack=true final_marker=true wait_type=Lock blocker_pid={blocker} waiter_pid={waiter} controller_commit_ack=true");
-        require(matches!(task.await.map_err(|error| error.to_string())?, Err(AppError::Unauthenticated)), "actual Local final statement did not observe committed NULL current generation")
-    })).await;
+        if let Some(transaction) = transaction.take() {
+            diagnostic.controller_rollback_attempted = true;
+            diagnostic.controller_rollback_ack = transaction.rollback().await.is_ok();
+        }
+        let joined = task.take().expect("original reader retained").await;
+        let read_result = match joined {
+            Ok(result) => {
+                diagnostic.reader_join_ack = true;
+                diagnostic.reader_join_outcome = Some("read_result");
+                diagnostic.reader_terminal_class = Some(host_read_terminal_class(&result));
+                Ok(result)
+            }
+            Err(error) => {
+                let (closed, failure) = if error.is_panic() {
+                    ("read_task_panicked", "actual read task panicked")
+                } else {
+                    ("read_task_cancelled", "actual read task was cancelled")
+                };
+                diagnostic.reader_join_outcome = Some(closed);
+                Err(failure.to_owned())
+            }
+        };
+        let outcome = match attempted {
+            Err(original_failure) => Err(original_failure),
+            Ok(waiter) => match read_result {
+                Ok(Err(AppError::Unauthenticated)) => {
+                    eprintln!("ARTIFACT_CURRENT_LOCAL_FINAL_WAIT io_ack=true final_marker=true wait_type=Lock blocker_pid={controller_pid} waiter_pid={waiter} controller_commit_ack=true");
+                    Ok(())
+                }
+                Ok(_) => Err("actual Local final statement did not observe committed NULL current generation".to_owned()),
+                Err(error) => Err(error),
+            },
+        };
+        if outcome.is_err() {
+            emit_host_read_wait_diagnostic(&diagnostic);
+        }
+        drop(transaction);
+        drop(observer);
+        drop(controller);
+        drop(protocol);
+        outcome
+     })).await;
 }
 
 struct TracePhaseGate {
@@ -1238,30 +1332,163 @@ impl tracing::Subscriber for ReadPhaseSubscriber {
         }
     }
 }
-async fn actual_final_wait(pool: &pool::DatabasePool, blocker: i32) -> Result<i32, String> {
-    let width: i64 = pool
-        .get()
-        .await
-        .map_err(|error| error.to_string())?
-        .query_one(
-            "SELECT pg_size_bytes(current_setting('track_activity_query_size'))",
-            &[],
-        )
-        .await
-        .map_err(|error| error.to_string())?
-        .get(0);
-    require(
-        width >= 16_384,
-        "owned Local activity query width was not actually sixteen KiB",
-    )?;
+#[derive(Default)]
+struct HostReadWaitDiagnostic {
+    controller_pid: i32,
+    observer_pid: i32,
+    io_seen: bool,
+    ready_seen: bool,
+    controller_lock_ack: bool,
+    entered_notification_to_lock_ack_ms: Option<u128>,
+    barrier_timed_out_before_release: Option<bool>,
+    barrier_timed_out_after_observation: Option<bool>,
+    read_task_finished_before_release: Option<bool>,
+    activity_capacity_bytes: i64,
+    observer_samples: u32,
+    marker_candidates: i32,
+    marker_active_candidates: i32,
+    marker_idle_in_transaction_candidates: i32,
+    marker_idle_candidates: i32,
+    marker_other_state_candidates: i32,
+    marker_lock_candidates: i32,
+    exact_waiter_count: i32,
+    exact_waiter_pid: Option<i32>,
+    read_task_finished_after_observation: Option<bool>,
+    controller_commit_ack: bool,
+    controller_rollback_attempted: bool,
+    controller_rollback_ack: bool,
+    reader_join_ack: bool,
+    reader_join_outcome: Option<&'static str>,
+    reader_terminal_class: Option<&'static str>,
+}
+
+fn host_read_terminal_class(result: &Result<Vec<u8>, AppError>) -> &'static str {
+    match result {
+        Ok(_) => "body_returned",
+        Err(AppError::Unauthenticated) => "unauthenticated",
+        Err(AppError::DependencyUnavailable {
+            dependency: "host_request_binding",
+        }) => "host_request_binding_unavailable",
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        }) => "artifacts_unavailable",
+        Err(_) => "other_closed_error",
+    }
+}
+
+fn emit_host_read_wait_diagnostic(diagnostic: &HostReadWaitDiagnostic) {
+    let sampled = diagnostic.observer_samples > 0;
+    let observer_sample_status = if sampled { "sampled" } else { "not_sampled" };
+    let exact_waiter_pid = if sampled {
+        diagnostic.exact_waiter_pid
+    } else {
+        None
+    };
+    eprintln!(
+        concat!(
+            "ARTIFACT_CURRENT_LOCAL_FINAL_WAIT_DIAGNOSTIC controller_pid={} observer_pid={} io_seen={} ready_seen={} ",
+            "controller_lock_ack={} entered_notification_to_lock_ack_ms={:?} ",
+            "barrier_timed_out_before_release={:?} barrier_timed_out_after_observation={:?} ",
+            "read_task_finished_before_release={:?} activity_capacity_bytes={} ",
+            "observer_samples={} observer_sample_status={} marker_candidates={:?} ",
+            "marker_active_candidates={:?} marker_idle_in_transaction_candidates={:?} ",
+            "marker_idle_candidates={:?} marker_other_state_candidates={:?} ",
+            "marker_lock_candidates={:?} exact_waiter_count={:?} exact_waiter_pid={:?} ",
+            "read_task_finished_after_observation={:?} controller_commit_ack={} ",
+            "controller_rollback_attempted={} controller_rollback_ack={} reader_join_ack={} ",
+            "reader_join_outcome={:?} reader_terminal_class={:?} ",
+            "ack_semantics=\"true=actual successful ACK; false=ACK not obtained, ",
+            "not proof that an effect did not occur\""
+        ),
+        diagnostic.controller_pid,
+        diagnostic.observer_pid,
+        diagnostic.io_seen,
+        diagnostic.ready_seen,
+        diagnostic.controller_lock_ack,
+        diagnostic.entered_notification_to_lock_ack_ms,
+        diagnostic.barrier_timed_out_before_release,
+        diagnostic.barrier_timed_out_after_observation,
+        diagnostic.read_task_finished_before_release,
+        diagnostic.activity_capacity_bytes,
+        diagnostic.observer_samples,
+        observer_sample_status,
+        sampled.then_some(diagnostic.marker_candidates),
+        sampled.then_some(diagnostic.marker_active_candidates),
+        sampled.then_some(diagnostic.marker_idle_in_transaction_candidates),
+        sampled.then_some(diagnostic.marker_idle_candidates),
+        sampled.then_some(diagnostic.marker_other_state_candidates),
+        sampled.then_some(diagnostic.marker_lock_candidates),
+        sampled.then_some(diagnostic.exact_waiter_count),
+        exact_waiter_pid,
+        diagnostic.read_task_finished_after_observation,
+        diagnostic.controller_commit_ack,
+        diagnostic.controller_rollback_attempted,
+        diagnostic.controller_rollback_ack,
+        diagnostic.reader_join_ack,
+        diagnostic.reader_join_outcome,
+        diagnostic.reader_terminal_class,
+    );
+}
+
+async fn actual_final_wait(
+    observer: &tokio_postgres::Client,
+    blocker: i32,
+    diagnostic: &mut HostReadWaitDiagnostic,
+) -> Result<i32, String> {
     for _ in 0..150 {
-        let rows = pool.get().await.map_err(|error| error.to_string())?.query(
-            "SELECT a.pid FROM pg_catalog.pg_stat_activity a WHERE a.datname=current_database()
-                AND a.pid<>pg_backend_pid() AND a.query LIKE '%/* artifact_current_host_joint_read_after_io */%'
-                AND a.wait_event_type='Lock' AND $1=ANY(pg_catalog.pg_blocking_pids(a.pid))", &[&blocker],
+        let row = observer.query_one(
+            r#"SELECT COUNT(*)::integer AS marker_candidates,
+       COUNT(*) FILTER (WHERE a.state='active')::integer AS marker_active_candidates,
+       COUNT(*) FILTER (WHERE a.state='idle in transaction')::integer AS marker_idle_in_transaction_candidates,
+       COUNT(*) FILTER (WHERE a.state='idle')::integer AS marker_idle_candidates,
+       COUNT(*) FILTER (WHERE a.state IS NULL OR a.state NOT IN ('active','idle in transaction','idle'))::integer AS marker_other_state_candidates,
+       COUNT(*) FILTER (WHERE a.wait_event_type='Lock')::integer AS marker_lock_candidates,
+       COUNT(*) FILTER (WHERE a.wait_event_type='Lock'
+                        AND $1=ANY(pg_catalog.pg_blocking_pids(a.pid)))::integer AS exact_waiter_count,
+       MIN(a.pid) FILTER (WHERE a.wait_event_type='Lock'
+                          AND $1=ANY(pg_catalog.pg_blocking_pids(a.pid))) AS exact_waiter_pid
+FROM pg_catalog.pg_stat_activity a
+WHERE a.datname=current_database()
+  AND a.pid<>pg_backend_pid()
+  AND a.query LIKE '%/* artifact_current_host_joint_read_after_io */%'"#,
+            &[&blocker],
         ).await.map_err(|error| error.to_string())?;
-        if rows.len() == 1 {
-            return rows[0].try_get(0).map_err(|error| error.to_string());
+        let marker_candidates: i32 = row
+            .try_get("marker_candidates")
+            .map_err(|error| error.to_string())?;
+        let marker_active_candidates: i32 = row
+            .try_get("marker_active_candidates")
+            .map_err(|error| error.to_string())?;
+        let marker_idle_in_transaction_candidates: i32 = row
+            .try_get("marker_idle_in_transaction_candidates")
+            .map_err(|error| error.to_string())?;
+        let marker_idle_candidates: i32 = row
+            .try_get("marker_idle_candidates")
+            .map_err(|error| error.to_string())?;
+        let marker_other_state_candidates: i32 = row
+            .try_get("marker_other_state_candidates")
+            .map_err(|error| error.to_string())?;
+        let marker_lock_candidates: i32 = row
+            .try_get("marker_lock_candidates")
+            .map_err(|error| error.to_string())?;
+        let exact_waiter_count: i32 = row
+            .try_get("exact_waiter_count")
+            .map_err(|error| error.to_string())?;
+        let exact_waiter_pid: Option<i32> = row
+            .try_get("exact_waiter_pid")
+            .map_err(|error| error.to_string())?;
+        diagnostic.marker_candidates = marker_candidates;
+        diagnostic.marker_active_candidates = marker_active_candidates;
+        diagnostic.marker_idle_in_transaction_candidates = marker_idle_in_transaction_candidates;
+        diagnostic.marker_idle_candidates = marker_idle_candidates;
+        diagnostic.marker_other_state_candidates = marker_other_state_candidates;
+        diagnostic.marker_lock_candidates = marker_lock_candidates;
+        diagnostic.exact_waiter_count = exact_waiter_count;
+        diagnostic.exact_waiter_pid = exact_waiter_pid;
+        diagnostic.observer_samples += 1;
+        if exact_waiter_count == 1 {
+            return exact_waiter_pid
+                .ok_or_else(|| "actual exact Lock waiter PID was not decoded".to_owned());
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }

@@ -197,17 +197,7 @@ impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAut
         auth: &'a AuthContext,
         target: &'a dyn openbot_contracts::request_binding::ArtifactReadCurrentTarget,
         deadline: std::time::Instant,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        Box<dyn openbot_contracts::request_binding::ArtifactReadTailWitness>,
-                        openbot_contracts::request_binding::ArtifactReadCurrentError,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> openbot_contracts::request_binding::ArtifactReadCurrentCheck<'a> {
         Box::pin(async move {
             use openbot_contracts::request_binding::{
                 ArtifactReadCurrentError, HostRequestBindingError,

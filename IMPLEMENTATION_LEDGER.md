@@ -1288,3 +1288,22 @@ Latest main includes COMP-014 through PR #129: six added Testkit files and its a
 ### V7-IMPL-008 — exact owned correction freeze before fresh execution
 
 The registered test corrections are authored and scoped formatting passed; all 54 new outer case identities and their final refusal and lock/commit assertions remain. Independent entry review approved the single Desktop canonical role projection; it is now corrected to the established Admin plus User context, with strict raw database role and provenance checks preserved. The other 22 production files are byte-identical to the previous candidate. This preparation has executed zero new runtime cases. Earlier 37 passing and 17 failing cases remain bound to their original candidate; Local final-query lock evidence is still pending. Normal integration of current main and fresh directed verification precede source and publication acceptance.
+
+### V7-IMPL-008 — strict library check correction registered
+
+The current candidate passed all 22 existing internal-read regression cases. Its focused strict library check then failed on the new host observation Future return type complexity. Before editing, this task registers an equivalent, documented Rust type alias in Contracts and the same return annotation in its Server and Desktop implementations. Pinning, Send, lifetime, result and error types and method bodies remain identical; no lint suppression, runtime behavior, migration or wire change is introduced. Both final host lock observations and remaining directed regressions remain pending.
+
+
+### V7-IMPL-008 Host final-wait diagnostic registration 14
+
+Registered before editing the two existing Server and Desktop Local final-wait cases and their private observers. The current source executed all 54 new cases: 52 passed and both final controller Lock observations failed; neither failed case supplies final-wait or COMMIT acceptance. Reserve live controller and observer connections before the same real consumer, keep the original timeout and polling budgets, and record only closed scalar diagnostics. A failed premise remains a failure after explicit rollback acknowledgement and actual reader-task join. All other 52 case definitions and all product behavior are preserved by this diagnostic; the separately registered equivalent Future alias is unchanged. No new case, migration, wire entry, runtime acceptance or ready status is introduced. Independent entry review precedes author release.
+
+
+### V7-IMPL-008 diagnostic validity registration 14A
+
+The independent entry review rejected ambiguous unobserved diagnostic defaults. Before author release, registered a closed sampled/not-sampled label and optional outputs for four original gate/task observations. Emit absent values for marker/state/Lock counts when no real observer sample was acquired; set observation values only after actual sampling. A false acknowledgement means no acknowledgement was obtained and does not prove that an effect never occurred. The original two failed Lock premises, all budgets, real wait acceptance, rollback/join cleanup, other 52 cases and product behavior remain unchanged. This registration supplies no runtime acceptance.
+
+
+### V7-IMPL-008 diagnostic formatting correction 14B
+
+The two registered private Host diagnostics are authored, with all other 52 case definitions and 23 frozen production inputs preserved. The first scoped formatter failed on exactly two whitespace-only lines; that original failure is retained. Registered and removed only those two blank-line spaces, then the same scoped formatter passed. No timeout, predicate, method behavior, case identity or runtime acceptance changed. A clean new source and fresh directed execution remain pending.

@@ -30,6 +30,15 @@ pub enum HostRequestBindingError {
     /// 依赖、争用或有界等待不可用。
     Unavailable,
 }
+/// 已登记成果联合校验的等价非 Serde Future 返回类型；不改变输出或生命周期。
+pub type ArtifactReadCurrentCheck<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError>>
+            + Send
+            + 'a,
+    >,
+>;
+
 /// 受信 Rust host 的当前验证 port；任意 Rust 实现不自动取得可信身份。
 pub trait HostRequestBindingGuard: Send + Sync {
     /// 真实原宿主与成果来源的最后联合观察；未安装该真实消费者时封闭拒绝。
@@ -38,13 +47,7 @@ pub trait HostRequestBindingGuard: Send + Sync {
         _auth: &'a AuthContext,
         _target: &'a dyn ArtifactReadCurrentTarget,
         _deadline: std::time::Instant,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError>>
-                + Send
-                + 'a,
-        >,
-    > {
+    ) -> ArtifactReadCurrentCheck<'a> {
         Box::pin(async {
             Err(ArtifactReadCurrentError::Host(
                 HostRequestBindingError::Unavailable,

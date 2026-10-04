@@ -517,14 +517,7 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
         auth: &'a AuthContext,
         target: &'a dyn ArtifactReadCurrentTarget,
         deadline: std::time::Instant,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError>,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> openbot_contracts::request_binding::ArtifactReadCurrentCheck<'a> {
         Box::pin(async move {
             if auth != &self.original || !self.owner.is_current() {
                 return Err(ArtifactReadCurrentError::Host(
