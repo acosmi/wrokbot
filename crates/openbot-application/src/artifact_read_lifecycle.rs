@@ -14,15 +14,19 @@ use openbot_contracts::request_binding::{
     VerifiedHostRequestBinding,
 };
 
+/// Producer port for sequential blocks bound to one original authenticated host operation.
 #[async_trait]
 pub trait ArtifactReadOperation: Send {
+    /// Admit and observe the next original block; its pending owner retains the in-flight slot.
     async fn next_block(
         &mut self,
         auth: &AuthContext,
     ) -> Result<CurrentArtifactReadBlock, AppError>;
+    /// Permanently stop this original operation; actual resource disposal remains producer-owned.
     fn close(&mut self);
 }
 
+/// Application-owned operation enforcing the original six auth facts and exact host binding.
 pub struct CurrentArtifactReadOperation {
     auth: AuthContext,
     original: VerifiedHostRequestBinding,
@@ -56,6 +60,7 @@ impl CurrentArtifactReadOperation {
             closed: false,
         })
     }
+    /// Check the original binding and request the next block; cancelling this waiter closes the port.
     pub async fn next_block(
         &mut self,
         auth: &AuthContext,
@@ -81,6 +86,7 @@ impl CurrentArtifactReadOperation {
         attempt.completed = true;
         result
     }
+    /// Permanently close this application operation and signal its actual producer to stop.
     pub fn close(&mut self) {
         self.closed = true;
         self.port.close();
@@ -103,6 +109,7 @@ impl Drop for Attempt<'_> {
     }
 }
 
+/// Pending original allocation and lease retained through current observation and synchronous handoff.
 pub struct CurrentArtifactReadBlock {
     pending: Option<PendingArtifactReadBuffer>,
     lease: Option<Box<dyn ArtifactReadAllocationLease>>,
@@ -165,6 +172,7 @@ impl CurrentArtifactReadBlock {
             )
             .map_err(AppError::from)
     }
+    /// Recheck the current tail and transfer the original leased prefix; verified empty EOF returns None.
     pub fn handoff(
         mut self,
         auth: &AuthContext,
