@@ -820,25 +820,29 @@ async fn observe_http(
         && state.directory.armed.load(Ordering::SeqCst)
         && !state.directory.released.load(Ordering::SeqCst)
     {
-        let gate = async {
-            if request.uri().query().is_some() {
-                return Err("directory_original_get_query_changed".to_owned());
-            }
-            let current = case(&state).await?;
-            let cookies = request.headers().get_all(axum::http::header::COOKIE);
+        let request_has_query = request.uri().query().is_some();
+        let request_cookies = (|| {
             let mut found = Vec::new();
-            for header in cookies {
+            for header in request.headers().get_all(axum::http::header::COOKIE) {
                 let header = header
                     .to_str()
-                    .map_err(|_| "directory_original_cookie_invalid")?;
+                    .map_err(|_| "directory_original_cookie_invalid".to_owned())?;
                 for value in header.split(';') {
                     if let Some((name, value)) = value.trim().split_once('=')
                         && name == "openbot_session"
                     {
-                        found.push(value);
+                        found.push(value.to_owned());
                     }
                 }
             }
+            Ok::<Vec<String>, String>(found)
+        })();
+        let gate = async {
+            if request_has_query {
+                return Err("directory_original_get_query_changed".to_owned());
+            }
+            let current = case(&state).await?;
+            let found = request_cookies?;
             if found.len() != 1 || found[0] != current.cookie_token {
                 return Err("directory_original_get_session_mismatch".to_owned());
             }
