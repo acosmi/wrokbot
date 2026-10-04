@@ -600,6 +600,19 @@ impl Drop for OwnedFdOracleChild {
         }
     }
 }
+struct FdOracleObserverCancellation {
+    stopped: Arc<AtomicBool>,
+    completed: bool,
+}
+impl Drop for FdOracleObserverCancellation {
+    fn drop(&mut self) {
+        if !self.completed {
+            // Observer cancellation requests stop. The blocking worker retains its
+            // original Child until actual kill/reap; observer Drop is no end ACK.
+            self.stopped.store(true, Ordering::SeqCst);
+        }
+    }
+}
 fn oracle_pipe_nonblocking(pipe: &impl std::os::fd::AsFd) -> Result<(), &'static str> {
     let flags = rustix::fs::fcntl_getfl(pipe).map_err(|_| "owned_fd_oracle_nonblocking_failed")?;
     rustix::fs::fcntl_setfl(pipe, flags | rustix::fs::OFlags::NONBLOCK)
@@ -639,14 +652,29 @@ fn read_oracle_pipe(
     }
     Ok(())
 }
-async fn fd_sample() -> Result<Vec<FileFields>, String> {
+fn fd_sample_blocking(
+    submitted: Instant,
+    deadline: Instant,
+    stopped: &AtomicBool,
+) -> Result<Vec<FileFields>, String> {
+    if stopped.load(Ordering::SeqCst) {
+        return Err("owned_fd_oracle_observer_cancelled".into());
+    }
+    if Instant::now() >= deadline {
+        return Err("owned_fd_oracle_absolute_deadline".into());
+    }
     let tool = Path::new("/usr/sbin/lsof");
     let metadata = fs::metadata(tool).map_err(|_| "owned_fd_oracle_tool_unavailable")?;
     require(
         metadata.is_file() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
         "owned_fd_oracle_tool_identity",
     )?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    if stopped.load(Ordering::SeqCst) {
+        return Err("owned_fd_oracle_observer_cancelled".into());
+    }
+    if Instant::now() >= deadline {
+        return Err("owned_fd_oracle_absolute_deadline".into());
+    }
     let child = Command::new(tool)
         .args(["-nP", "-a", "-p", &std::process::id().to_string(), "-FfDi"])
         .stdin(Stdio::null())
@@ -676,35 +704,61 @@ async fn fd_sample() -> Result<Vec<FileFields>, String> {
     let mut stdout_eof = false;
     let mut stderr_eof = false;
     let mut status = None;
-    loop {
-        if Instant::now() >= deadline {
-            return Err("owned_fd_oracle_absolute_deadline".into());
+    let mut completed_polls = 0_u32;
+    let sampling = (|| {
+        loop {
+            if stopped.load(Ordering::SeqCst) {
+                return Err("owned_fd_oracle_observer_cancelled");
+            }
+            if Instant::now() >= deadline {
+                return Err("owned_fd_oracle_absolute_deadline");
+            }
+            read_oracle_pipe(
+                &mut stdout,
+                &mut stdout_bytes,
+                64 * 1024,
+                &mut stdout_eof,
+                "owned_fd_oracle_stdout_failed",
+            )?;
+            read_oracle_pipe(
+                &mut stderr,
+                &mut stderr_bytes,
+                8 * 1024,
+                &mut stderr_eof,
+                "owned_fd_oracle_stderr_failed",
+            )?;
+            if status.is_none() {
+                status = owned.try_status()?;
+            }
+            completed_polls = completed_polls.saturating_add(1);
+            if stopped.load(Ordering::SeqCst) {
+                return Err("owned_fd_oracle_observer_cancelled");
+            }
+            if Instant::now() >= deadline {
+                return Err("owned_fd_oracle_absolute_deadline");
+            }
+            if stdout_eof && stderr_eof && status.is_some() {
+                break;
+            }
+            std::thread::sleep(
+                Duration::from_millis(1).min(deadline.saturating_duration_since(Instant::now())),
+            );
         }
-        read_oracle_pipe(
-            &mut stdout,
-            &mut stdout_bytes,
-            64 * 1024,
-            &mut stdout_eof,
-            "owned_fd_oracle_stdout_failed",
-        )?;
-        read_oracle_pipe(
-            &mut stderr,
-            &mut stderr_bytes,
-            8 * 1024,
-            &mut stderr_eof,
-            "owned_fd_oracle_stderr_failed",
-        )?;
-        if status.is_none() {
-            status = owned.try_status()?;
-        }
-        if Instant::now() >= deadline {
-            return Err("owned_fd_oracle_absolute_deadline".into());
-        }
-        if stdout_eof && stderr_eof && status.is_some() {
-            break;
-        }
-        let next_poll = (Instant::now() + Duration::from_millis(1)).min(deadline);
-        tokio::time::sleep_until(tokio::time::Instant::from_std(next_poll)).await;
+        Ok::<_, &'static str>(())
+    })();
+    if let Err(reason) = sampling {
+        // These are bounded owned-buffer/child progress facts, never FD paths
+        // or raw captures. False EOF ACK means ACK not obtained; None exit
+        // status means not observed, never a proved negative process state.
+        eprintln!(
+            "OWNED_FD_ORACLE_FAILURE reason={reason} child_pid={} completed_polls={completed_polls} captured_stdout_bytes={} captured_stderr_bytes={} stdout_eof_ack={stdout_eof} stderr_eof_ack={stderr_eof} observed_exit_success={:?} elapsed_ms={}",
+            owned.child.id(),
+            stdout_bytes.len(),
+            stderr_bytes.len(),
+            status.map(|value: ExitStatus| value.success()),
+            submitted.elapsed().as_millis(),
+        );
+        return Err(reason.into());
     }
     require(
         stdout_bytes.len() <= 64 * 1024 && stderr_bytes.len() <= 8 * 1024,
@@ -715,6 +769,21 @@ async fn fd_sample() -> Result<Vec<FileFields>, String> {
         "owned_fd_oracle_exit_or_warning",
     )?;
     parse_fields(&stdout_bytes)
+}
+async fn fd_sample() -> Result<Vec<FileFields>, String> {
+    let submitted = Instant::now();
+    let deadline = submitted + Duration::from_secs(5);
+    let stopped = Arc::new(AtomicBool::new(false));
+    let mut observer = FdOracleObserverCancellation {
+        stopped: Arc::clone(&stopped),
+        completed: false,
+    };
+    let result =
+        tokio::task::spawn_blocking(move || fd_sample_blocking(submitted, deadline, &stopped))
+            .await
+            .map_err(|_| "owned_fd_oracle_worker_join_failed")?;
+    observer.completed = true; // The real worker has returned, not merely detached.
+    result
 }
 fn device(metadata: &fs::Metadata) -> u64 {
     if cfg!(target_os = "macos") {
