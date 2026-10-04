@@ -79,6 +79,7 @@ impl PendingArtifactReadBuffer {
 
 /// 原allocation的生产库存凭证；成功交付仅改变phase，Drop才释放在途槽。
 pub trait ArtifactReadAllocationLease: Send + Sync {
+    /// Validate and mark the original pending allocation handed off without releasing its lease.
     fn mark_handed_off(&self) -> Result<(), ArtifactReadCurrentError>;
 }
 
@@ -89,14 +90,17 @@ pub struct LeasedArtifactReadBlock {
     lease: Option<Box<dyn ArtifactReadAllocationLease>>,
 }
 impl LeasedArtifactReadBlock {
+    /// Borrow the actual observed prefix while retaining the original full initialized allocation.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.actual_length]
     }
+    /// Return the actual observed prefix length, excluding the retained initialized suffix.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.actual_length
     }
+    /// Report whether the actual observed prefix is empty; this does not release its allocation.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.actual_length == 0
