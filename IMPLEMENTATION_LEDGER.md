@@ -1350,3 +1350,38 @@ The predecessor source actually passed 290 unique cases: 54 new and 236 existing
 Ordinary test configuration qualifies the unchanged MCP test warning. WASM compilation qualifies its existing proc-macro-error2 2.0.1 future-compatibility notice. New Infra, Server and Local positive payloads are actual 49, 57 and 60 byte saved canaries; the production initialized buffer bound is 4 MiB, and larger byte boundaries remain separately identified existing regression evidence. The five-second budget covers the post-IO joint observation. There is no new migration, public command or route. Sequential original-FD operation, leased allocation, physical executing-worker cancellation and drain, once-only ten-minute handles, public transport, deletion/expiry, backup/restore, readiness and full artifact and backend completion remain open.
 
 Dedicated stopped-batch maintenance has cumulatively removed 24,558,213,046 unique logical bytes across 28,461 paths. Native Cargo locks were released after each accepted cleanup, preserving active dependencies, all referenced execution artifacts, QA and other windows. Volume free-space observations are recorded separately. Publication and actual exact-head review precede normal task merge; the sustained implementation goal continues.
+
+
+### 2026-10-04T08:38:39.340889+00:00 - V7-IMPL-009 retained reader and leased allocation lifecycle registration
+
+009 is registered before product edits in its independent worktree at actual current main deb7c2a3b4a555dae69241147db5087c6cb70192, following normal PR #131 delivery deb7c2a3b4a555dae69241147db5087c6cb70192. The finite scope is Rust-only original-FD sequential operation, one original leased allocation in flight and real registered worker/resource drain, with actual Server and Desktop Local ownership integration. Eighteen production paths and six new test containers are claimed; twelve distinct outer cases require thirty-nine inline matrix premises, with no executions yet. Shared interfaces and exact Local owned-closing-job, legacy worker inventory and kernel own-PID oracle hunks are frozen before independent entry. No migration or public command/route is claimed. Original first-chunk Vec signatures and case identities remain; successful extracted raw Vec allocation lifetime is explicitly untracked by the finite drain. The one-use ten-minute handle, public transport, deletion/expiry, backup/restore, readiness, full artifact scope and complete backend goal remain open. COMP016 and UI5 ownership remain separate.
+
+
+### 2026-10-04T08:50:04.373794+00:00 - V7-IMPL-009 precise Local tracker getter registration
+
+Before product edits, the already claimed Local confirmation/protocol hunks additionally register the crate-private actual-authority lifecycle getter used by real issuer/window close and owner Drop. It upgrades only the existing Weak authority and returns its same tracker, with no new authority, Pool, identity input, route or migration. A missing observer is not a zero-inventory or drained acknowledgement. The eighteen product paths, six new test containers and twelve outer cases remain unchanged; independent entry and code release are pending.
+
+
+### 2026-10-04T08:54:36.117102+00:00 - V7-IMPL-009 genuine Local test protocol getter registration
+
+The already claimed Local background test hunk now precisely registers a cfg(test), crate-private borrowed getter for the original prepared production protocol. It lets the new lifecycle tests exercise the genuine window/Application/worker composition and original owned closing job. It mints no replacement data plane, authority or runtime entry, does not alter the registered test-state hook, and preserves explicit authority closure before drain. Actual last-owner Drop assertions must distinguish the true last owner from a single clone. Product paths and the twelve outer cases remain unchanged; independent entry and product authoring are pending.
+
+
+### 2026-10-04T09:02:48.268593+00:00 - V7-IMPL-009 actual EOF and legacy worker oracle clarification
+
+Before product edits, the sequential-size case is bound to actual saved lengths1/4MiB/4MiB+1/64MiB and a genuine zero-byte verified EOF block on the original FD of a nonempty saved artifact. The existing producer and record decoder reject zero-length available saved records; the earlier prospective zero-record positive is corrected, not bypassed with a fixture or claimed passed. Case identity and the twelve outer/thirty-nine inline premises remain unchanged. The already claimed authority worker hunk uses actual at-most64KiB segments for both new and legacy workers, with a partial event only before remaining real IO; legacy Vec ownership remains explicitly untracked after extraction. No new producer, decoder, SQL, route or migration is authorized; source/runtime acceptance remains pending.
+
+
+### 2026-10-04T09:10:52.940920+00:00 - V7-IMPL-009 final entry accepted and scoped parallel implementation released
+
+The final independent pre-edit entry review accepts the formally registered lifecycle scope and its three clarifications. Root verified the exact delivered base, registration inputs and unchanged product paths before releasing the two previously claimed author scopes: core/infra plus four new test containers, and host wiring plus two new test containers. The twelve outer cases contain thirty-nine required inline premises; actual new runtime observations remain zero. Root owns serial compilation, owned database fixtures, Git and shared handoff updates. Source, runtime, publication, readiness, full R414 and full-scope completion remain pending.
+
+
+### 2026-10-04T09:22:31.946089+00:00 - V7-IMPL-009 private startup failure latch registered
+
+Before the field edit, the existing owned desktop closing-job hunk registers a private startup success boolean derived from real synchronous authority closure and, when present, real state observation installation. Both required operations run independently; a short circuit must not skip observation installation or the read tracker closure. A startup failure keeps the original owner for actual cleanup and permanently prevents a success projection. This implements the already registered failure latch, adds no public interface, migration or budget, and retains the twelve/thirty-nine denominator. Final independent source and runtime review remains pending.
+
+
+### 2026-10-04T09:47:37.408321+00:00 - V7-IMPL-009 actual closing acknowledgement test observation registered
+
+Before editing the getter, the existing private test-state hunk registers a borrowed observation of the actual drain, PostgreSQL and job-finish acknowledgement timestamps and actual outcome. Missing observations or poisoned locks remain unproven. The real desktop shutdown test must verify these original job facts; a Failed phase or absent child PID alone cannot prove clean resource acknowledgements. This adds no runtime authority, public transport, migration or budget and retains the twelve/thirty-nine denominator. Runtime and final independent source/oracle review remain pending.

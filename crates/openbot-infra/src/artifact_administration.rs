@@ -36,6 +36,8 @@ use crate::thread_directory::reconciliation_visibility::VISIBLE_RUN;
 
 #[path = "artifact_read_authority.rs"]
 pub mod artifact_read_authority;
+#[path = "artifact_read_lifecycle.rs"]
+pub mod artifact_read_lifecycle;
 
 const WAIT: Duration = Duration::from_secs(5);
 const PG_PHASE: Duration = Duration::from_secs(30);
@@ -1051,6 +1053,21 @@ impl PostgresArtifactAdministration {
 
 #[async_trait]
 impl ArtifactAdministration for PostgresArtifactAdministration {
+    async fn open_host_bound_read_operation(
+        &self,
+        auth: &AuthContext,
+        artifact_id: &str,
+    ) -> Result<openbot_application::CurrentArtifactReadOperation, openbot_contracts::error::AppError>
+    {
+        let authority = self.read_authority.get().ok_or(
+            openbot_contracts::error::AppError::DependencyUnavailable {
+                dependency: "artifacts",
+            },
+        )?;
+        authority
+            .open_host_bound_read_operation(auth, artifact_id)
+            .await
+    }
     async fn read_host_bound_chunk(
         &self,
         auth: &AuthContext,
