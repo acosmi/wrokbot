@@ -272,6 +272,7 @@ pub(super) async fn run(config: pool::DatabaseConfig) -> Result<(), String> {
         ),
         screen_sessions: Arc::new(openbot_application::NoScreenSessionAdministration),
         artifacts: None,
+        runtime_capabilities: None,
         remote_agent_probe: Arc::new(UnavailableRemote(remote_calls.clone())),
         managed_slot_available: false,
         channel_routing_provider: ChannelRoutingProviderInput {
