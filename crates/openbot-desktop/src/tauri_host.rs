@@ -6,6 +6,7 @@ mod assets;
 mod local_confirmation;
 mod memories;
 mod model_connections;
+pub(crate) mod runtime_capabilities;
 mod session_status;
 mod window_chrome;
 
@@ -391,6 +392,11 @@ fn component_governance_route(path: &str) -> Option<ComponentGovernanceRoute<'_>
 struct WindowBindingRegistry {
     next_window_binding_id: HostAtomicU64,
     windows: Arc<RwLock<BTreeMap<String, WindowAuthority>>>,
+    #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+    local_confirmation_slot: Arc<OnceLock<Weak<LocalConfirmationService>>>,
+    #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+    runtime_capability_facts:
+        OnceLock<Weak<openbot_infra::runtime_capability_facts::PostgresRuntimeCapabilityFacts>>,
 }
 /// Recheck this original window and its actual identity source without retaining the owner lease.
 struct WindowRequestBindingGuard {
@@ -441,12 +447,31 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
     > {
+        self.verify_current_before(auth, std::time::Instant::now() + Duration::from_secs(5))
+    }
+
+    fn verify_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        deadline: std::time::Instant,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             self.check_window(auth)?;
-            let result = tokio::time::timeout(Duration::from_secs(5), async {
+            if deadline <= std::time::Instant::now() {
+                return Err(HostRequestBindingError::Unavailable);
+            }
+            let result = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
                 match (&self.source, &self.upstream) {
-                    (Some(source), _) => source.verify_current(&self.expected).await,
-                    (None, Some(upstream)) => upstream.verify_current(&self.expected).await,
+                    (Some(source), _) => {
+                        source.verify_current_before(&self.expected, deadline).await
+                    }
+                    (None, Some(upstream)) => {
+                        upstream
+                            .verify_current_before(&self.expected, deadline)
+                            .await
+                    }
                     (None, None) => Err(HostRequestBindingError::Missing),
                 }
             })
@@ -469,6 +494,9 @@ pub struct DesktopTauriProtocol {
     request_binding_lease: RequestBindingOwnerLease,
     request_binding_issuer: RequestBindingIssuer,
     current_identity_source: Option<Arc<dyn HostRequestBindingGuard>>,
+    #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+    local_capability_authority:
+        Option<Arc<crate::local_confirmation_authority::PostgresLocalConfirmationAuthority>>,
     os_locale: UiLocale,
     first_frame_projection: Option<crate::DesktopUiPreferenceStore>,
     #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
@@ -575,11 +603,17 @@ impl DesktopTauriProtocol {
             window_registry: Arc::new(WindowBindingRegistry {
                 next_window_binding_id: HostAtomicU64::new(1),
                 windows: Arc::clone(&windows),
+                #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+                local_confirmation_slot: Arc::new(OnceLock::new()),
+                #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+                runtime_capability_facts: OnceLock::new(),
             }),
             windows,
             request_binding_lease,
             request_binding_issuer,
             current_identity_source: None,
+            #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+            local_capability_authority: None,
             os_locale: detect_os_locale(),
             first_frame_projection: None,
             #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
@@ -598,6 +632,15 @@ impl DesktopTauriProtocol {
     /// Close the actual protocol owner before resource teardown; Arc allocation is not liveness.
     pub fn close_request_bindings(&self) {
         self.request_binding_lease.close();
+        #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+        if let Some(facts) = self
+            .window_registry
+            .runtime_capability_facts
+            .get()
+            .and_then(Weak::upgrade)
+        {
+            facts.close();
+        }
     }
 
     #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
@@ -605,6 +648,7 @@ impl DesktopTauriProtocol {
         mut self,
         source: Arc<crate::local_confirmation_authority::PostgresLocalConfirmationAuthority>,
     ) -> Self {
+        self.local_capability_authority = Some(source.clone());
         self.current_identity_source = Some(source);
         self
     }
@@ -833,6 +877,9 @@ impl DesktopTauriProtocol {
             }
         };
         let path = request.uri().path().to_owned();
+        if path == "/api/me/capabilities" {
+            return self.runtime_capabilities_request(request, authority).await;
+        }
         if path == "/api/me" {
             return self.current_user(request, authority).await;
         }
@@ -3318,6 +3365,10 @@ mod local_confirmation_tests;
 #[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
 #[path = "tauri_host/current_request_binding_local_tests.rs"]
 mod current_request_binding_local_tests;
+
+#[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
+#[path = "tauri_host/runtime_capabilities_local_tests.rs"]
+mod runtime_capabilities_local_tests;
 
 #[cfg(test)]
 mod tests {

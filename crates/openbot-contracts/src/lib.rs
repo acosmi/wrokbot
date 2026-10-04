@@ -95,6 +95,7 @@ pub mod reconciliation;
 pub mod remote_interrupt;
 pub mod request_binding;
 pub mod revision;
+pub mod runtime_capabilities;
 pub mod sandboxed;
 pub mod screen;
 mod secret_text;
@@ -105,8 +106,8 @@ pub mod ui;
 
 // R425 非 Serde 受信宿主接口。
 pub use request_binding::{
-    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingIdentity,
-    HostRequestBindingKind, RequestBindingAttachError, RequestBindingIssuer,
-    RequestBindingOwnerLease, RequestBindingOwnerObservation, ServerSessionBindingIdentity,
-    VerifiedHostRequestBinding,
+    BorrowedServerSessionEpoch, HostRequestBindingError, HostRequestBindingGuard,
+    HostRequestBindingIdentity, HostRequestBindingKind, MAX_SERVER_SESSION_EPOCH_LOOKUP_BYTES,
+    RequestBindingAttachError, RequestBindingIssuer, RequestBindingOwnerLease,
+    RequestBindingOwnerObservation, ServerSessionBindingIdentity, VerifiedHostRequestBinding,
 };

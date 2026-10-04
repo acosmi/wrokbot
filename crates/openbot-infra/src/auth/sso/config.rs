@@ -441,6 +441,43 @@ pub(crate) enum DecodedSecretConfig {
     Saml(SamlSecretConfig),
 }
 
+/// Apply the same registration validators without sealing, discovery or normalization writes.
+pub(crate) fn validate_readonly_config(
+    column: super::vault::SsoSecretColumn,
+    config: &DecodedSecretConfig,
+) -> Result<(), SsoConfigError> {
+    match (column, config) {
+        (super::vault::SsoSecretColumn::Oidc, DecodedSecretConfig::Oidc(config)) => {
+            validate_nonempty_bounded(&config.client_id, MAX_IDENTITY_PROVIDER_CLIENT_ID_BYTES)
+                .map_err(|_| SsoConfigError::ShapeRejected)?;
+            if config.client_secret.is_empty()
+                || config.client_secret.len() > MAX_IDENTITY_PROVIDER_CLIENT_SECRET_BYTES
+            {
+                return Err(SsoConfigError::SecretRejected);
+            }
+            if let Some(segments) = &config.group_claim_path {
+                GroupClaimPath::from_segments(segments)
+                    .map_err(|_| SsoConfigError::GroupMappingRejected)?;
+            }
+            Ok(())
+        }
+        (super::vault::SsoSecretColumn::Saml, DecodedSecretConfig::Saml(config)) => {
+            validate_https_url(&config.entry_point)?;
+            if config.metadata.is_empty()
+                || config.metadata.len() > MAX_IDENTITY_PROVIDER_METADATA_BYTES
+            {
+                return Err(SsoConfigError::MetadataRejected);
+            }
+            validate_attribute_name(&config.email_attribute)?;
+            if let Some(attribute) = &config.group_attribute {
+                validate_attribute_name(attribute)?;
+            }
+            Ok(())
+        }
+        _ => Err(SsoConfigError::ProtocolAmbiguous),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LegacyOidcConfig {

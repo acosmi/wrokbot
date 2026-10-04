@@ -41,6 +41,10 @@
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use http::request::Parts;
+use openbot_application::runtime_capabilities::{
+    CapabilityDeadline, RuntimeCapabilitiesCollectionError, RuntimeCapabilitiesCollector,
+    RuntimeCapabilitiesFuture, RuntimeCapabilityHostScope, RuntimeCapabilityObservationResult,
+};
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::error::{AppError, SensitiveWriteReason};
 use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
@@ -53,6 +57,11 @@ use openbot_domain::identity::session::{
     LiveSession, SensitiveWriteApproved, SensitiveWriteRejection, SensitiveWriteRequest,
     SessionHashKey, SessionLifetimePolicy, SessionState, SessionToken, SessionTokenHash,
     TrustedOrigins, authorize_fresh_origin_write, authorize_sensitive_write, evaluate_session,
+};
+use openbot_infra::auth::sso::ReadOnlySsoCapabilitySource;
+use openbot_infra::runtime_capability_facts::{
+    PostgresRuntimeCapabilityFacts, RuntimeCapabilityCollectorFactory,
+    RuntimeCapabilityRevisionOwner,
 };
 use std::sync::{Arc, Weak};
 use time::OffsetDateTime;
@@ -71,6 +80,14 @@ use crate::telemetry::ACTOR_ID_FIELD;
 /// 构造性的 —— 一个拿不到 body 的实现不可能"从请求体里读身份"。
 #[async_trait]
 pub trait AuthResolver: Send + Sync {
+    /// Only an actual resolver can issue a factory retaining its private owner provenance.
+    fn runtime_capability_factory(
+        &self,
+        _sso: Option<ReadOnlySsoCapabilitySource>,
+    ) -> Result<Arc<dyn RuntimeCapabilityCollectorFactory>, RuntimeCapabilitiesCollectionError>
+    {
+        Err(RuntimeCapabilitiesCollectionError::MissingHostSource)
+    }
     /// 从请求的认证材料解析出权威身份。
     ///
     /// # Errors
@@ -458,6 +475,7 @@ struct ServerSessionProbeState {
     lifetime: SessionLifetimePolicy,
     deployment: DeploymentId,
     tenant: TenantId,
+    capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
 }
 
 struct ServerSessionRowTuple {
@@ -489,6 +507,19 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
     > {
+        self.verify_current_before(
+            auth,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+    }
+
+    fn verify_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        deadline: std::time::Instant,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             if auth != &self.original || !self.owner.is_current() {
                 return Err(HostRequestBindingError::NotCurrent);
@@ -497,9 +528,12 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
                 .probe
                 .upgrade()
                 .ok_or(HostRequestBindingError::NotCurrent)?;
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                self.observe_current(&probe),
+            if deadline <= std::time::Instant::now() {
+                return Err(HostRequestBindingError::Unavailable);
+            }
+            let result = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                self.observe_current(&probe, deadline),
             )
             .await
             .map_err(|_| HostRequestBindingError::Unavailable);
@@ -515,6 +549,7 @@ impl ServerSessionCurrentGuard {
     async fn observe_current(
         &self,
         probe: &ServerSessionProbeState,
+        deadline: std::time::Instant,
     ) -> Result<(), HostRequestBindingError> {
         let mut client = probe
             .pool
@@ -529,8 +564,11 @@ impl ServerSessionCurrentGuard {
             .await
             .map_err(|_| HostRequestBindingError::Unavailable)?;
         let observation = async {
+            let remaining = deadline.checked_duration_since(std::time::Instant::now()).ok_or(HostRequestBindingError::Unavailable)?;
+            let milliseconds = remaining.as_millis().min(5_000);
+            if milliseconds == 0 { return Err(HostRequestBindingError::Unavailable); }
             transaction
-                .batch_execute("SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='5s'")
+                .batch_execute(&format!("SET LOCAL statement_timeout='{milliseconds}ms'; SET LOCAL lock_timeout='{milliseconds}ms'"))
                 .await
                 .map_err(|_| HostRequestBindingError::Unavailable)?;
             let row = transaction
@@ -652,6 +690,7 @@ impl PostgresSessionAuthResolver {
             lifetime,
             deployment: deployment.clone(),
             tenant: tenant.clone(),
+            capability_facts: std::sync::OnceLock::new(),
         });
         Ok(Self {
             pool,
@@ -670,6 +709,15 @@ impl PostgresSessionAuthResolver {
     /// Permanently close this actual resolver owner's bindings before shutdown.
     pub fn close_request_bindings(&self) {
         self.binding_owner.lease.close();
+        if let Some(facts) = self
+            .binding_owner
+            .probe
+            .capability_facts
+            .get()
+            .and_then(Weak::upgrade)
+        {
+            facts.close();
+        }
     }
 
     async fn resolve_token(&self, token: &str) -> Result<ResolvedAuth, AppError> {
@@ -820,8 +868,20 @@ impl core::fmt::Debug for PostgresSessionAuthResolver {
 
 #[async_trait]
 impl AuthResolver for PostgresSessionAuthResolver {
+    fn runtime_capability_factory(
+        &self,
+        sso: Option<ReadOnlySsoCapabilitySource>,
+    ) -> Result<Arc<dyn RuntimeCapabilityCollectorFactory>, RuntimeCapabilitiesCollectionError>
+    {
+        Ok(Arc::new(ServerRuntimeCapabilityFactory {
+            source: ServerCapabilitySource::Session(Arc::downgrade(&self.binding_owner.probe)),
+            issuer: self.binding_owner.issuer.clone(),
+            revision: Arc::new(RuntimeCapabilityRevisionOwner::new()?),
+            sso,
+        }))
+    }
     fn close_request_bindings(&self) {
-        self.binding_owner.lease.close();
+        Self::close_request_bindings(self);
     }
     async fn resolve(&self, parts: &Parts) -> Result<AuthContext, AppError> {
         self.resolve_with_assurance(parts)
@@ -907,6 +967,7 @@ struct SingleUserBindingOwner {
 
 struct SingleUserProbeState {
     principal: openbot_infra::auth::single_user::VerifiedSingleUserPrincipal,
+    capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
 }
 
 struct SingleUserCurrentGuard {
@@ -921,6 +982,19 @@ impl HostRequestBindingGuard for SingleUserCurrentGuard {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
     > {
+        self.verify_current_before(
+            auth,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+    }
+
+    fn verify_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        deadline: std::time::Instant,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             if !self.owner.is_current() {
                 return Err(HostRequestBindingError::NotCurrent);
@@ -932,16 +1006,11 @@ impl HostRequestBindingGuard for SingleUserCurrentGuard {
             if probe.principal.auth_context() != auth {
                 return Err(HostRequestBindingError::NotCurrent);
             }
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                probe.principal.verify_current(),
-            )
-            .await
-            .map_err(|_| HostRequestBindingError::Unavailable);
+            let result = probe.principal.verify_current_before(deadline).await;
             if !self.owner.is_current() {
                 return Err(HostRequestBindingError::NotCurrent);
             }
-            result?.map_err(|error| match error {
+            result.map_err(|error| match error {
                 openbot_infra::auth::single_user::SingleUserPrincipalCurrentError::NotCurrent => {
                     HostRequestBindingError::NotCurrent
                 }
@@ -980,7 +1049,10 @@ impl SingleUserAuthResolver {
             binding_owner: Some(Arc::new(SingleUserBindingOwner {
                 lease,
                 issuer,
-                probe: Arc::new(SingleUserProbeState { principal }),
+                probe: Arc::new(SingleUserProbeState {
+                    principal,
+                    capability_facts: std::sync::OnceLock::new(),
+                }),
             })),
         }
     }
@@ -989,6 +1061,9 @@ impl SingleUserAuthResolver {
     pub fn close_request_bindings(&self) {
         if let Some(owner) = &self.binding_owner {
             owner.lease.close();
+            if let Some(facts) = owner.probe.capability_facts.get().and_then(Weak::upgrade) {
+                facts.close();
+            }
         }
     }
 
@@ -1046,6 +1121,22 @@ impl SingleUserAuthResolver {
 
 #[async_trait]
 impl AuthResolver for SingleUserAuthResolver {
+    fn runtime_capability_factory(
+        &self,
+        sso: Option<ReadOnlySsoCapabilitySource>,
+    ) -> Result<Arc<dyn RuntimeCapabilityCollectorFactory>, RuntimeCapabilitiesCollectionError>
+    {
+        let owner = self
+            .binding_owner
+            .as_ref()
+            .ok_or(RuntimeCapabilitiesCollectionError::MissingHostSource)?;
+        Ok(Arc::new(ServerRuntimeCapabilityFactory {
+            source: ServerCapabilitySource::SingleUser(Arc::downgrade(&owner.probe)),
+            issuer: owner.issuer.clone(),
+            revision: Arc::new(RuntimeCapabilityRevisionOwner::new()?),
+            sso,
+        }))
+    }
     fn close_request_bindings(&self) {
         Self::close_request_bindings(self);
     }
@@ -1055,6 +1146,195 @@ impl AuthResolver for SingleUserAuthResolver {
 
     async fn resolve_with_assurance(&self, _parts: &Parts) -> Result<ResolvedAuth, AppError> {
         self.resolved()
+    }
+}
+
+enum ServerCapabilitySource {
+    Session(Weak<ServerSessionProbeState>),
+    SingleUser(Weak<SingleUserProbeState>),
+}
+
+struct ServerRuntimeCapabilityFactory {
+    source: ServerCapabilitySource,
+    issuer: RequestBindingIssuer,
+    revision: Arc<RuntimeCapabilityRevisionOwner>,
+    sso: Option<ReadOnlySsoCapabilitySource>,
+}
+
+struct ServerRuntimeCapabilitiesCollector {
+    factory: ServerRuntimeCapabilityFactory,
+    facts: Arc<PostgresRuntimeCapabilityFacts>,
+}
+
+impl RuntimeCapabilityCollectorFactory for ServerRuntimeCapabilityFactory {
+    fn build(
+        &self,
+        facts: Arc<PostgresRuntimeCapabilityFacts>,
+    ) -> Result<Arc<dyn RuntimeCapabilitiesCollector>, RuntimeCapabilitiesCollectionError> {
+        use RuntimeCapabilitiesCollectionError as Error;
+        if !self.issuer.observation().is_current() {
+            return Err(Error::NotCurrent);
+        }
+        let source = match &self.source {
+            ServerCapabilitySource::Session(weak) => {
+                let probe = weak.upgrade().ok_or(Error::NotCurrent)?;
+                if !facts.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant) {
+                    return Err(Error::MissingHostSource);
+                }
+                probe
+                    .capability_facts
+                    .set(Arc::downgrade(&facts))
+                    .map_err(|_| Error::MissingHostSource)?;
+                ServerCapabilitySource::Session(weak.clone())
+            }
+            ServerCapabilitySource::SingleUser(weak) => {
+                let probe = weak.upgrade().ok_or(Error::NotCurrent)?;
+                if !probe.principal.matches_capability_facts(&facts) {
+                    return Err(Error::MissingHostSource);
+                }
+                probe
+                    .capability_facts
+                    .set(Arc::downgrade(&facts))
+                    .map_err(|_| Error::MissingHostSource)?;
+                ServerCapabilitySource::SingleUser(weak.clone())
+            }
+        };
+        Ok(Arc::new(ServerRuntimeCapabilitiesCollector {
+            factory: ServerRuntimeCapabilityFactory {
+                source,
+                issuer: self.issuer.clone(),
+                revision: self.revision.clone(),
+                sso: self.sso.clone(),
+            },
+            facts,
+        }))
+    }
+}
+
+impl ServerRuntimeCapabilitiesCollector {
+    async fn current_facts(
+        &self,
+        auth: &AuthContext,
+        deadline: CapabilityDeadline,
+    ) -> Result<
+        openbot_infra::runtime_capability_facts::RuntimeCapabilityJointSnapshot,
+        RuntimeCapabilitiesCollectionError,
+    > {
+        use RuntimeCapabilitiesCollectionError as Error;
+        deadline.check()?;
+        let binding = auth.request_binding().ok_or(Error::MissingHostSource)?;
+        if !self.factory.issuer.owns_identity(binding.identity())
+            || !self.factory.issuer.observation().is_current()
+        {
+            return Err(Error::NotCurrent);
+        }
+        let scope = RuntimeCapabilityHostScope::for_server(
+            &self.factory.issuer,
+            auth,
+            self.factory.revision.runtime_epoch(),
+        )?;
+        match &self.factory.source {
+            ServerCapabilitySource::Session(weak) => {
+                let probe = weak.upgrade().ok_or(Error::NotCurrent)?;
+                let epoch = self
+                    .factory
+                    .issuer
+                    .borrow_server_session_epoch(binding.identity())
+                    .map_err(|error| match error {
+                        HostRequestBindingError::NotCurrent => Error::NotCurrent,
+                        HostRequestBindingError::Missing => Error::MissingHostSource,
+                        HostRequestBindingError::Unavailable => Error::Unavailable,
+                    })?;
+                self.facts
+                    .observe_server_session(
+                        auth,
+                        epoch,
+                        probe.lifetime,
+                        &scope,
+                        self.factory.sso.as_ref(),
+                        deadline,
+                    )
+                    .await
+            }
+            ServerCapabilitySource::SingleUser(weak) => {
+                let probe = weak.upgrade().ok_or(Error::NotCurrent)?;
+                self.facts
+                    .observe_single_user(
+                        auth,
+                        &probe.principal,
+                        &scope,
+                        self.factory.sso.as_ref(),
+                        deadline,
+                    )
+                    .await
+            }
+        }
+    }
+}
+
+impl RuntimeCapabilitiesCollector for ServerRuntimeCapabilitiesCollector {
+    fn observe<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        deadline: CapabilityDeadline,
+    ) -> RuntimeCapabilitiesFuture<'a> {
+        Box::pin(async move {
+            let scope = RuntimeCapabilityHostScope::for_server(
+                &self.factory.issuer,
+                auth,
+                self.factory.revision.runtime_epoch(),
+            )?;
+            let facts = self.current_facts(auth, deadline).await?;
+            facts.into_observation(scope, &self.factory.revision.next()?)
+        })
+    }
+    fn finalize<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        observed: RuntimeCapabilityObservationResult,
+        deadline: CapabilityDeadline,
+    ) -> RuntimeCapabilitiesFuture<'a> {
+        Box::pin(async move {
+            // Authenticate the original concrete epoch even if the first observation failed.
+            let current = self.current_facts(auth, deadline).await?;
+            let observed = observed?;
+            if !observed.scope().matches_auth(auth) {
+                return Err(RuntimeCapabilitiesCollectionError::NotCurrent);
+            }
+            Ok(current.apply(observed))
+        })
+    }
+    fn tail_current(
+        &self,
+        auth: &AuthContext,
+        finalized: RuntimeCapabilityObservationResult,
+        deadline: CapabilityDeadline,
+    ) -> RuntimeCapabilityObservationResult {
+        if !self.factory.issuer.observation().is_current() || !self.facts.is_current() {
+            return Err(RuntimeCapabilitiesCollectionError::NotCurrent);
+        }
+        deadline.check()?;
+        let binding = auth
+            .request_binding()
+            .ok_or(RuntimeCapabilitiesCollectionError::MissingHostSource)?;
+        if !self.factory.issuer.owns_identity(binding.identity()) {
+            return Err(RuntimeCapabilitiesCollectionError::NotCurrent);
+        }
+        match &self.factory.source {
+            ServerCapabilitySource::Session(source) if source.strong_count() == 0 => {
+                return Err(RuntimeCapabilitiesCollectionError::NotCurrent);
+            }
+            ServerCapabilitySource::SingleUser(source) if source.strong_count() == 0 => {
+                return Err(RuntimeCapabilitiesCollectionError::NotCurrent);
+            }
+            _ => {}
+        }
+        let observation = finalized?;
+        if !observation.scope().matches_auth(auth) {
+            return Err(RuntimeCapabilitiesCollectionError::NotCurrent);
+        }
+        deadline.check()?;
+        Ok(observation)
     }
 }
 

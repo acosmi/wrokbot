@@ -37,6 +37,16 @@ pub trait HostRequestBindingGuard: Send + Sync {
         &'a self,
         auth: &'a AuthContext,
     ) -> Pin<Box<dyn Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>>;
+    /// Verify under the caller's original absolute use-case deadline.
+    /// An implementation without a true budget-aware source remains unavailable; the
+    /// old fixed-budget path must not silently extend this request's remaining time.
+    fn verify_current_before<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+        _deadline: std::time::Instant,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>> {
+        Box::pin(async { Err(HostRequestBindingError::Unavailable) })
+    }
 }
 struct OwnerState {
     closed: AtomicBool,
@@ -226,6 +236,40 @@ impl VerifiedHostRequestBinding {
         }
         result
     }
+    /// Perform current host validation using one original monotonic use-case deadline.
+    /// The guard receives the same deadline, and elapsed or closed results are withheld.
+    pub async fn verify_current_before(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        let same_binding = auth
+            .request_binding()
+            .is_some_and(|current| self.identity.same_binding(current.identity()));
+        if !self.attached_to(auth)
+            || !same_binding
+            || self.identity.owner.closed.load(Ordering::SeqCst)
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let result = self.guard.verify_current_before(auth, deadline).await;
+        let same_binding = auth
+            .request_binding()
+            .is_some_and(|current| self.identity.same_binding(current.identity()));
+        if !self.attached_to(auth)
+            || !same_binding
+            || self.identity.owner.closed.load(Ordering::SeqCst)
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        result
+    }
     pub(crate) fn matches_auth(&self, auth: &AuthContext) -> bool {
         self.attached_to(auth)
     }
@@ -336,5 +380,75 @@ impl RequestBindingIssuer {
             Epoch::Window { label, id },
             guard,
         )
+    }
+}
+
+/// Internal readonly lookup capacity; not a session-save or public-wire validity limit.
+pub const MAX_SERVER_SESSION_EPOCH_LOOKUP_BYTES: usize = 512;
+
+/// Issuer-owned borrowed original session epoch for a trusted own-Pool decoder.
+/// No token getter, Serde or Debug is provided. Matching this epoch alone is not current
+/// authorization: the decoder must also check expiry, idle, current ACL and namespace.
+pub struct BorrowedServerSessionEpoch<'a> {
+    epoch: &'a ServerSessionBindingIdentity,
+}
+impl BorrowedServerSessionEpoch<'_> {
+    /// Bounded original lookup key; never a bearer token or public locator.
+    #[must_use]
+    pub fn lookup_id(&self) -> &str {
+        &self.epoch.id
+    }
+    /// Compare an actual decoded row with all original immutable epoch values.
+    #[must_use]
+    pub fn matches_raw_row(
+        &self,
+        id: &str,
+        user_id: &str,
+        token_column: &str,
+        created_at: OffsetDateTime,
+        issued_auth_generation: i64,
+    ) -> bool {
+        self.epoch.id == id
+            && self.epoch.user.as_str() == user_id
+            && self.epoch.token_column == token_column
+            && self.epoch.created == created_at
+            && u64::try_from(issued_auth_generation).ok() == Some(self.epoch.issued.get())
+    }
+}
+impl RequestBindingIssuer {
+    /// Borrow only this running issuer's original session epoch, for readonly observation.
+    /// Capacity failures are unavailable and do not invalidate historical session rows.
+    #[doc(hidden)]
+    pub fn borrow_server_session_epoch<'a>(
+        &self,
+        identity: &'a HostRequestBindingIdentity,
+    ) -> Result<BorrowedServerSessionEpoch<'a>, HostRequestBindingError> {
+        if !self.owns_identity(identity) || self.state.closed.load(Ordering::SeqCst) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let Epoch::Session(epoch) = &identity.epoch else {
+            return Err(HostRequestBindingError::Missing);
+        };
+        if epoch.id.is_empty()
+            || epoch.id.len() > MAX_SERVER_SESSION_EPOCH_LOOKUP_BYTES
+            || epoch.id.chars().any(char::is_control)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        Ok(BorrowedServerSessionEpoch { epoch })
+    }
+    /// Match this running issuer's original opaque window epoch without exposing it.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn matches_desktop_window_epoch(
+        &self,
+        identity: &HostRequestBindingIdentity,
+        label: &str,
+        binding_id: u64,
+    ) -> bool {
+        self.owns_identity(identity)
+            && !self.state.closed.load(Ordering::SeqCst)
+            && matches!(&identity.epoch, Epoch::Window { label: original, id }
+                if original == label && *id == binding_id)
     }
 }

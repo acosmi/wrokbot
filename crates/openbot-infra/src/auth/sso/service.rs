@@ -152,6 +152,14 @@ pub struct DynamicSsoService {
 }
 
 impl DynamicSsoService {
+    /// Borrow the actual immutable environment identities and pure Vault/configuration reader.
+    /// This does not call discovery, the migrating loader, or a protocol health probe.
+    #[must_use]
+    pub fn capability_source(&self) -> super::store::ReadOnlySsoCapabilitySource {
+        super::store::ReadOnlySsoCapabilitySource {
+            store: self.store.clone(),
+        }
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: Pool,

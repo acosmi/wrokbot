@@ -74,6 +74,9 @@ pub struct CredentialRecordVault {
 }
 
 impl CredentialRecordVault {
+    pub(crate) fn matches_tenant(&self, tenant: &TenantId) -> bool {
+        &self.tenant == tenant
+    }
     /// 以当前单版本 KEK 构造；同一把 key 同时承担上游 v1 兼容读。
     #[must_use]
     pub fn single_key(tenant: TenantId, current_version: KeyVersion, key: WrappingKey) -> Self {

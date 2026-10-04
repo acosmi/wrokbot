@@ -27,6 +27,21 @@ use uuid::Uuid;
 
 const COLUMNS: &str = "c.id,c.name,c.protocol,c.endpoint,c.model,c.enabled,c.revision,c.current_secret_id,c.created_at,c.updated_at,EXISTS(SELECT 1 FROM public.model_connection_secrets s WHERE s.id=c.current_secret_id AND s.connection_id=c.id AND s.deployment_id=c.deployment_id AND s.tenant_id=c.tenant_id AND s.owner_user_id=c.owner_user_id AND s.retired_at IS NULL) AS has_credential";
 
+/// Reuse create/update validation in the non-effectful capability inventory.
+pub(crate) fn readonly_configuration_valid(
+    name: &str,
+    protocol: openbot_contracts::model_connections::CustomModelProtocol,
+    endpoint: &str,
+    model: &str,
+    revision: Option<i64>,
+) -> bool {
+    revision.is_some_and(|value| value > 0)
+        && openbot_application::model_connections::normalize_model_configuration(
+            name, protocol, endpoint, model, true,
+        )
+        .is_ok()
+}
+
 /// One configured deployment/tenant; no caller can manufacture another scope or owner.
 pub struct PostgresModelConnections {
     pool: deadpool_postgres::Pool,

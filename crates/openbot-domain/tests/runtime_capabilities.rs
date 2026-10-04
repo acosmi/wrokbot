@@ -106,6 +106,7 @@ fn facts_all_ready() -> RuntimeCapabilityFacts {
         account_bridge_source: BridgeSourceFact::Available,
         backup_config: ConfigFact::Present,
         sso_config: ConfigFact::Present,
+        sso_provider: ProviderFact::Available,
         pairing_config: ConfigFact::Present,
         model_provider: ProviderFact::Available,
         computer_source: SourceFact::Present,
@@ -930,4 +931,42 @@ fn controller_model_sources_do_not_share_readiness() {
         projection.status(CapabilityId::ModelAccountBridge).state(),
         CapabilityState::Unconfigured
     );
+}
+
+#[test]
+fn sso_protocol_unproven_or_lost_does_not_become_ready_from_configuration() {
+    for (provider, reason) in [
+        (ProviderFact::Unknown, ReasonCode::ProviderUnproven),
+        (ProviderFact::Disconnected, ReasonCode::ProviderDisconnected),
+        (ProviderFact::Expired, ReasonCode::ProviderExpired),
+    ] {
+        let mut facts = facts_all_ready();
+        facts.sso_provider = provider;
+        let status = project_current(&facts)
+            .unwrap()
+            .status(CapabilityId::DynamicSso);
+        assert_eq!(status.state(), CapabilityState::Unavailable);
+        assert_eq!(status.reason_code(), reason);
+    }
+}
+#[test]
+fn missing_sso_configuration_does_not_add_an_unrelated_provider_blocker() {
+    let mut facts = facts_all_ready();
+    facts.sso_config = ConfigFact::Missing;
+    facts.sso_provider = ProviderFact::Unknown;
+    let status = project_current(&facts)
+        .unwrap()
+        .status(CapabilityId::DynamicSso);
+    assert_eq!(status.state(), CapabilityState::Unconfigured);
+    assert_eq!(status.reason_code(), ReasonCode::ConfigurationMissing);
+}
+#[test]
+fn present_sso_with_permission_and_provider_blockers_still_refuses_projection() {
+    let mut facts = facts_all_ready();
+    facts.sso_provider = ProviderFact::Unknown;
+    facts.product_permissions[11] = PermissionFact::Denied;
+    assert!(matches!(
+        project_current(&facts),
+        Err(ProjectionFault::UnresolvedBlockers(_))
+    ));
 }
