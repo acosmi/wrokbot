@@ -103,6 +103,18 @@ pub const MAX_CHANNEL_ROUTING_REASON_CODE_POINTS: usize = 500;
 /// Memory 管理页上限。
 pub const MAX_MEMORY_PAGE: u32 = 100;
 
+// Internally tagged unit variants otherwise ignore their remaining map fields.
+// Apply this closed empty-map check only to the new input-free capability command.
+fn deserialize_runtime_capabilities_input<'de, D>(deserializer: D) -> Result<(), D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct NoRuntimeCapabilitiesInput {}
+    NoRuntimeCapabilitiesInput::deserialize(deserializer).map(|_| ())
+}
+
 /// 应用层命令。封闭 enum。
 ///
 /// 线上表示是 internally tagged（`kind` 字段），并且 `deny_unknown_fields`：多送一个字段
@@ -111,6 +123,9 @@ pub const MAX_MEMORY_PAGE: u32 = 100;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppCommand {
+    /// Read the actual current host's closed capability projection without inputs.
+    #[serde(deserialize_with = "deserialize_runtime_capabilities_input")]
+    GetRuntimeCapabilities,
     /// Explicit save of the current actor's real PG user message.
     SaveRunMessageTextArtifact(crate::artifacts::SaveRunMessageTextArtifact),
     /// Current-source-authorized metadata selector, never byte access.
@@ -611,6 +626,8 @@ pub enum AppCommand {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AppReply {
+    /// Current-authenticated closed runtime capability projection.
+    RuntimeCapabilities(crate::runtime_capabilities::RuntimeCapabilitiesResponse),
     /// Content-free positive local registration fact.
     ArtifactRegistrationReceipt(crate::artifacts::ArtifactRegistrationReceipt),
     /// Current-authorized artifact metadata with distinct live/tombstone shapes.

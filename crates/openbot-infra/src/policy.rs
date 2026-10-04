@@ -100,6 +100,18 @@ impl PolicyStore {
         self.current.borrow().raw.clone()
     }
 
+    /// The immutable composition input, usable only when a fresh database snapshot has no row.
+    /// This deliberately does not expose the watch cache as a current capability observation.
+    pub(crate) fn configured_fallback(&self) -> Option<ActionPolicy> {
+        self.configured.clone()
+    }
+
+    pub(crate) fn owns_pool(&self, pool: &Pool) -> bool {
+        self.database
+            .as_ref()
+            .is_some_and(|owned| std::ptr::eq(owned.manager(), pool.manager()))
+    }
+
     /// 同步取得预编译 policy；读取只 clone `Arc`，不在 acting 热路径重新解析 CEL。
     #[must_use]
     pub fn compiled(&self) -> Arc<CompiledActionPolicy> {

@@ -99,6 +99,7 @@ pub const TRACE_ONLY_SPAN_FIELDS: &[&str] = &["actor_id", "operation", "error.co
 #[must_use]
 pub const fn command_kind(command: &AppCommand) -> &'static str {
     match command {
+        AppCommand::GetRuntimeCapabilities => "get_runtime_capabilities",
         AppCommand::SaveRunMessageTextArtifact(_) => "save_run_message_text_artifact",
         AppCommand::GetArtifactMetadata(_) => "get_artifact_metadata",
         AppCommand::Health => "health",
@@ -256,6 +257,7 @@ mod tests {
                 }),
                 "get_artifact_metadata",
             ),
+            (AppCommand::GetRuntimeCapabilities, "get_runtime_capabilities"),
             (AppCommand::Health, "health"),
             (
                 AppCommand::ListVisibleChannels {

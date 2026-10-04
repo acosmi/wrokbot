@@ -553,6 +553,117 @@ impl GrantHandle {
         };
         state.observe(now).is_ok() && self.remaining(&state, now).is_ok_and(|seconds| seconds > 0)
     }
+
+    /// Capability-only synchronous observation: contention and poison withhold facts.
+    /// Observe the original shared grant and clocks, without waiting for either mutex.
+    /// A health loss can invalidate authority; recovery cannot restore it here.
+    pub(crate) fn status_nowait(
+        &self,
+        now: ClockSample,
+        native_available: bool,
+    ) -> Result<LocalConfirmationStatus, ConfirmationError> {
+        let failed_lock = |error| match error {
+            std::sync::TryLockError::WouldBlock => ConfirmationError::Busy,
+            std::sync::TryLockError::Poisoned(_) => ConfirmationError::Poisoned,
+        };
+        let mut state = self.shared.state.try_lock().map_err(failed_lock)?;
+        // Both guards have distinct types, so use a second closure at this typed boundary.
+        let mut binding = self.binding.state.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => ConfirmationError::Busy,
+            std::sync::TryLockError::Poisoned(_) => ConfirmationError::Poisoned,
+        })?;
+        if !native_available {
+            state.invalidate(ConfirmationError::Unavailable);
+            state.available = false;
+        }
+        state.observe(now)?;
+        if binding.revoked || state.shutdown {
+            return Err(ConfirmationError::NotCurrent);
+        }
+        let remaining_seconds = match binding.grant {
+            None => 0,
+            Some(grant)
+                if grant.epoch != state.epoch
+                    || grant.grant_epoch != state.grant_epoch
+                    || !state.available =>
+            {
+                binding.grant = None;
+                0
+            }
+            Some(grant) => {
+                let elapsed = match now.elapsed_since(grant.succeeded_at) {
+                    Ok(elapsed) => elapsed,
+                    Err(error) => {
+                        binding.grant = None;
+                        return Err(error);
+                    }
+                };
+                if elapsed >= FRESH {
+                    binding.grant = None;
+                    0
+                } else {
+                    let remaining = FRESH - elapsed;
+                    remaining.as_secs() as u32 + u32::from(remaining.subsec_nanos() != 0)
+                }
+            }
+        };
+        let status = if !state.available {
+            LocalConfirmationState::Unavailable
+        } else if state.pending.as_ref().is_some_and(|pending| {
+            pending.phase.active()
+                && !pending.cancellation.is_cancelled()
+                && Arc::ptr_eq(&pending.binding, &self.binding)
+        }) {
+            LocalConfirmationState::Pending
+        } else if remaining_seconds > 0 {
+            LocalConfirmationState::Fresh
+        } else {
+            LocalConfirmationState::Required
+        };
+        Ok(LocalConfirmationStatus {
+            state: status,
+            remaining_seconds: if status == LocalConfirmationState::Fresh {
+                remaining_seconds
+            } else {
+                0
+            },
+        })
+    }
+
+    /// Test-only downgrade of an already issued grant; cannot create or extend one.
+    /// This is an expiry counterexample, not evidence that 900 real seconds elapsed.
+    #[cfg(test)]
+    pub(crate) fn expire_existing_grant_for_test(&self) -> Result<(), ConfirmationError> {
+        let state = self
+            .shared
+            .state
+            .try_lock()
+            .map_err(|_| ConfirmationError::Busy)?;
+        let mut binding = self
+            .binding
+            .state
+            .try_lock()
+            .map_err(|_| ConfirmationError::Busy)?;
+        if state.shutdown || binding.revoked {
+            return Err(ConfirmationError::NotCurrent);
+        }
+        let grant = binding
+            .grant
+            .as_mut()
+            .ok_or(ConfirmationError::Unavailable)?;
+        let monotonic = grant
+            .succeeded_at
+            .monotonic
+            .checked_sub(FRESH)
+            .ok_or(ConfirmationError::Exhausted)?;
+        let wall = grant
+            .succeeded_at
+            .wall
+            .checked_sub(FRESH)
+            .ok_or(ConfirmationError::Exhausted)?;
+        grant.succeeded_at = ClockSample::new(monotonic, wall);
+        Ok(())
+    }
 }
 
 impl ConfirmationAttempt {
@@ -743,3 +854,109 @@ impl NativeCompletionToken {
 #[cfg(test)]
 #[path = "local_confirmation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod capability_nowait_tests {
+    use super::*;
+    use openbot_contracts::auth::AuthGeneration;
+    use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
+
+    fn sample() -> ClockSample {
+        ClockSample::new(Instant::now(), SystemTime::now())
+    }
+
+    fn fixture(fresh: bool) -> (LocalConfirmationCoordinator, GrantHandle) {
+        let auth = AuthContext::for_test(
+            DeploymentId::new("capability-nowait-deployment"),
+            TenantId::new("capability-nowait-tenant"),
+            ActorId::new("capability-nowait-actor"),
+            [Role::Admin],
+            AuthGeneration::new(1),
+            true,
+        );
+        let coordinator =
+            LocalConfirmationCoordinator::new("capability-nowait-instance", true).unwrap();
+        let grant = coordinator.register_binding(91, &auth).unwrap();
+        if fresh {
+            let mut attempt = coordinator.begin(&grant, &auth, sample()).unwrap();
+            let native = attempt.start_native(sample()).unwrap();
+            let succeeded = sample();
+            assert_eq!(
+                native.record_outcome(NativeOutcome::Succeeded { at: succeeded }, sample()),
+                Ok(NativeDisposition::NeedsPostcheck)
+            );
+            native.native_stopped();
+            attempt.install(&grant, &auth, sample()).unwrap();
+        }
+        (coordinator, grant)
+    }
+
+    #[test]
+    fn capability_status_never_waits_for_coordinator_or_binding_mutex() {
+        let (_coordinator, grant) = fixture(true);
+        let coordinator_guard = grant.shared.state.lock().unwrap();
+        let began = Instant::now();
+        assert_eq!(
+            grant.status_nowait(sample(), true),
+            Err(ConfirmationError::Busy)
+        );
+        assert!(began.elapsed() < Duration::from_millis(100));
+        drop(coordinator_guard);
+        let binding_guard = grant.binding.state.lock().unwrap();
+        let began = Instant::now();
+        assert_eq!(
+            grant.status_nowait(sample(), true),
+            Err(ConfirmationError::Busy)
+        );
+        assert!(began.elapsed() < Duration::from_millis(100));
+        drop(binding_guard);
+        assert_eq!(
+            grant.status_nowait(sample(), true).unwrap().state,
+            LocalConfirmationState::Fresh
+        );
+    }
+
+    #[test]
+    fn capability_expiry_downgrade_only_removes_a_real_existing_grant() {
+        let (_coordinator, grant) = fixture(true);
+        assert_eq!(
+            grant.status_nowait(sample(), true).unwrap().state,
+            LocalConfirmationState::Fresh
+        );
+        grant.expire_existing_grant_for_test().unwrap();
+        let status = grant.status_nowait(sample(), true).unwrap();
+        assert_eq!(status.state, LocalConfirmationState::Required);
+        assert_eq!(status.remaining_seconds, 0);
+    }
+
+    #[test]
+    fn capability_expiry_fixture_cannot_issue_a_missing_grant() {
+        let (_coordinator, grant) = fixture(false);
+        assert_eq!(
+            grant.expire_existing_grant_for_test(),
+            Err(ConfirmationError::Unavailable)
+        );
+        assert_eq!(
+            grant.status_nowait(sample(), true).unwrap().state,
+            LocalConfirmationState::Required
+        );
+    }
+
+    #[test]
+    fn capability_native_health_recovery_cannot_revive_the_previous_grant() {
+        let (coordinator, grant) = fixture(true);
+        assert_eq!(
+            grant.status_nowait(sample(), false).unwrap().state,
+            LocalConfirmationState::Unavailable
+        );
+        assert_eq!(
+            grant.status_nowait(sample(), true).unwrap().state,
+            LocalConfirmationState::Unavailable
+        );
+        coordinator.set_available(true);
+        assert_eq!(
+            grant.status_nowait(sample(), true).unwrap().state,
+            LocalConfirmationState::Required
+        );
+    }
+}

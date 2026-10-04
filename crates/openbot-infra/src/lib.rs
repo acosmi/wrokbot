@@ -108,6 +108,8 @@ pub mod backup;
 mod channel_activity;
 #[cfg(feature = "server-runtime")]
 pub mod component_catalogue;
+#[cfg(feature = "server-runtime")]
+pub mod runtime_capability_facts;
 // Credential administration includes MCP retirement and belongs to the full shared runtime;
 // the standalone Desktop Vault/bootstrap graph only needs the lower-level `vault` module.
 #[cfg(feature = "server-runtime")]

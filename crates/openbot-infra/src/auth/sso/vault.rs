@@ -52,6 +52,9 @@ pub(crate) struct SsoConfigVault {
 }
 
 impl SsoConfigVault {
+    pub(crate) fn matches_tenant(&self, tenant: &TenantId) -> bool {
+        &self.tenant == tenant
+    }
     pub(crate) fn single_key(tenant: TenantId, version: KeyVersion, key: WrappingKey) -> Self {
         let key = Arc::new(key);
         Self {
