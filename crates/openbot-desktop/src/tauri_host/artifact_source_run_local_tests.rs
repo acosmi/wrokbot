@@ -1058,7 +1058,7 @@ async fn original_window_tail(
             original
                 .as_ref()
                 .unwrap()
-                .source_run_artifact_ids_binding_current("main", &peer_authority),
+                .source_run_artifact_ids_binding_current_for_test("main", &peer_authority),
             Err(AppError::Unauthenticated)
         ),
         "foreign same-label/id original owner was accepted by bounded source consumer",
