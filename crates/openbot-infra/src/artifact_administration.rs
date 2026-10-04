@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use deadpool_postgres::Pool;
 use openbot_application::{ArtifactAdministration, ArtifactAdministrationError};
 use openbot_contracts::artifacts::{
-    ArtifactMetadata, ArtifactRecordMetadata, ArtifactRegistrationReceipt, ArtifactRetentionClass,
-    ArtifactTombstone, ArtifactWorkspace, SaveRunMessageTextArtifact, canonical_artifact_uuid_v7,
-    is_valid_artifact_identity, is_valid_artifact_sha256,
+    ArtifactGoneStatus, ArtifactMetadata, ArtifactRecordMetadata, ArtifactRegistrationReceipt,
+    ArtifactRetentionClass, ArtifactTombstone, ArtifactWorkspace, SaveRunMessageTextArtifact,
+    canonical_artifact_uuid_v7, is_valid_artifact_identity, is_valid_artifact_sha256,
 };
 use openbot_contracts::auth::AuthContext;
 use openbot_contracts::ids::thread::ThreadIdentity;
@@ -26,6 +26,7 @@ use time::OffsetDateTime;
 use tokio_postgres::{IsolationLevel, Row, Transaction};
 use uuid::Uuid;
 
+use crate::artifact_bytes::ArtifactBlob;
 use crate::artifact_registry::{ARTIFACT_REGISTRY_SCHEMA_SQL, ArtifactDatasetRegistry};
 use crate::artifact_store::{
     ArtifactByteObservationState, DatasetBoundArtifactStore, VerifiedArtifactByteObservation,
@@ -113,6 +114,42 @@ pub struct PostgresArtifactAdministration {
     audit_key: SecretBytes,
 }
 
+/// A single owned-PG record/source snapshot bound to its exact actual byte-store owner.
+///
+/// Private construction prevents a metadata DTO or caller-provided digest from becoming a
+/// descriptor. This value is deliberately not a current session/window ticket: authorization
+/// can change after its final PostgreSQL statement. A future public byte handoff must recheck
+/// its own current host and source authority. Move this value into the actual blocking job;
+/// dropping a future waiting for that job does not stop IO or release the job's root owner.
+pub struct ObservedArtifactReadRecord {
+    store: Arc<DatasetBoundArtifactStore>,
+    blob: ArtifactBlob,
+    auth_snapshot: AuthContext,
+    source_snapshot: ArtifactRegistrationReceipt,
+    workspace_snapshot: ArtifactWorkspaceKey,
+}
+
+impl core::fmt::Debug for ObservedArtifactReadRecord {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ObservedArtifactReadRecord")
+            .field("record_and_source", &"<redacted snapshot>")
+            .finish()
+    }
+}
+
+impl ObservedArtifactReadRecord {
+    pub(crate) fn matches_store(&self, store: &Arc<DatasetBoundArtifactStore>) -> bool {
+        Arc::ptr_eq(&self.store, store)
+            && self.source_snapshot.artifact_id == self.blob.id().to_string()
+            && self.source_snapshot.owner_actor_id == *self.auth_snapshot.actor()
+            && is_valid_artifact_identity(self.workspace_snapshot.id())
+    }
+
+    pub(crate) const fn blob(&self) -> &ArtifactBlob {
+        &self.blob
+    }
+}
+
 impl PostgresArtifactAdministration {
     /// Compose actual current owners; a second Pool or caller-created transaction is not accepted.
     pub fn new(
@@ -129,6 +166,210 @@ impl PostgresArtifactAdministration {
             store,
             policy,
             audit_key,
+        })
+    }
+
+    /// Observe one currently visible available record using only this adapter's actual Pool.
+    ///
+    /// The final RC statement jointly observes the unchanged R398 source predicate, the exact
+    /// saved message relationship, operation payload and current dataset/store tuple. The
+    /// explicit read-only rollback completes before the snapshot is returned. No physical IO,
+    /// session renewal, audit event or current byte-delivery authority is produced here.
+    pub async fn observe_read_record(
+        &self,
+        auth: &AuthContext,
+        artifact_id: &str,
+    ) -> Result<ObservedArtifactReadRecord, ArtifactAdministrationError> {
+        #[cfg(test)]
+        return self
+            .observe_read_record_inner(auth, artifact_id, None)
+            .await;
+        #[cfg(not(test))]
+        self.observe_read_record_inner(auth, artifact_id).await
+    }
+
+    async fn observe_read_record_inner(
+        &self,
+        auth: &AuthContext,
+        artifact_id: &str,
+        #[cfg(test)] final_query_gate: Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    ) -> Result<ObservedArtifactReadRecord, ArtifactAdministrationError> {
+        tokio::time::timeout(PG_PHASE, async {
+            let id = canonical_artifact_uuid_v7(artifact_id).ok_or(
+                ArtifactAdministrationError::InvalidInput {
+                    field: "artifactId",
+                },
+            )?;
+            self.check_namespace(auth)?;
+            verify_artifact_registration_schema(self.registry.pool()).await?;
+            let mut client = self.connection().await?;
+            let tx = client
+                .build_transaction()
+                .isolation_level(IsolationLevel::ReadCommitted)
+                .read_only(true)
+                .start()
+                .await
+                .map_err(|_| unavailable())?;
+            // Every statement outcome, including an error, is retained until rollback is
+            // explicitly awaited. Timeout/drop does not prove the server worker has finished.
+            let outcome = async {
+                setup(&tx).await?;
+                let b = self.registry.binding();
+                let seed = tx.query_opt(
+                    "SELECT source_thread_id,source_run_id FROM openbot_internal.artifact_records \
+                     WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 \
+                       AND artifact_id=$4 AND owner_actor_id=$5",
+                    &[&b.deployment_id(), &b.tenant_id(), &b.dataset_id(), &id,
+                      &auth.actor().as_str()],
+                ).await.map_err(|_| unavailable())?
+                    .ok_or(ArtifactAdministrationError::NotVisible)?;
+                let thread: String = value(&seed, "source_thread_id")?;
+                let run: String = value(&seed, "source_run_id")?;
+                let generation = i64::try_from(auth.auth_generation().get())
+                    .map_err(|_| ArtifactAdministrationError::NotVisible)?;
+                let physical = self.store.physical_binding();
+                // Tests coordinate after the actual preflight/seed, then still require the
+                // final statement's real PG lock wait. No gate exists in release builds.
+                #[cfg(test)]
+                if let Some((reached, proceed)) = final_query_gate {
+                    reached.send(()).map_err(|_| unavailable())?;
+                    proceed.await.map_err(|_| unavailable())?;
+                }
+                let row = tx
+                    .query_opt(
+                        observed_read_sql(),
+                        &[
+                            &thread,
+                            &run,
+                            &auth.actor().as_str(),
+                            &auth.deployment().as_str(),
+                            &auth.tenant().as_str(),
+                            &generation,
+                            &id,
+                            &b.dataset_id(),
+                            &b.binding_schema(),
+                            &b.initial_origin(),
+                            &b.created_at(),
+                            &self.store.store_id().to_string(),
+                            &physical.device(),
+                            &physical.inode(),
+                            &physical.uid(),
+                        ],
+                    )
+                    .await
+                    .map_err(|_| unavailable())?
+                    .ok_or(ArtifactAdministrationError::NotVisible)?;
+                self.decode_read_record(auth, &row)
+            }
+            .await;
+            tx.rollback().await.map_err(|_| unavailable())?;
+            outcome
+        })
+        .await
+        .map_err(|_| unavailable())?
+    }
+
+    fn decode_read_record(
+        &self,
+        auth: &AuthContext,
+        row: &Row,
+    ) -> Result<ObservedArtifactReadRecord, ArtifactAdministrationError> {
+        if !value::<bool>(row, "current_store_binding")?
+            || !self.store.matches_registry_owner(&self.registry)
+        {
+            return Err(unavailable());
+        }
+        let status: String = value(row, "status")?;
+        match status.as_str() {
+            "deleted" => {
+                return Err(ArtifactAdministrationError::Gone {
+                    status: ArtifactGoneStatus::Deleted,
+                });
+            }
+            "expired" => {
+                return Err(ArtifactAdministrationError::Gone {
+                    status: ArtifactGoneStatus::Expired,
+                });
+            }
+            "failed_partial" => return Err(unavailable()),
+            "available" => {}
+            _ => return Err(corrupt("read_status")),
+        }
+        let source = decode_receipt(row)?; // Actual row IDs, never a historical receipt lookup.
+        if source.owner_actor_id != *auth.actor()
+            || canonical_artifact_uuid_v7(&source.artifact_id).as_deref()
+                != Some(source.artifact_id.as_str())
+            || canonical_artifact_uuid_v7(&source.operation_id).as_deref()
+                != Some(source.operation_id.as_str())
+            || canonical_artifact_uuid_v7(&source.request_id).as_deref()
+                != Some(source.request_id.as_str())
+            || !ThreadIdentity::is_plausible(&source.source_thread_id)
+            || !is_valid_artifact_identity(source.source_run_id.as_str())
+            || !is_valid_artifact_identity(&source.source_message_id)
+            || source.source_call_seq.is_some()
+            || source.source_attempt_seq.is_some()
+        {
+            return Err(corrupt("read_source_snapshot"));
+        }
+        let kind: String = value(row, "workspace_kind")?;
+        let workspace_id: String = value(row, "workspace_id")?;
+        let workspace = ArtifactWorkspaceKey::new(
+            match kind.as_str() {
+                "channel" => openbot_domain::artifact::ArtifactWorkspaceKind::Channel,
+                "thread" => openbot_domain::artifact::ArtifactWorkspaceKind::Thread,
+                _ => return Err(corrupt("read_workspace")),
+            },
+            &workspace_id,
+        )
+        .map_err(|_| corrupt("read_workspace"))?;
+        let length = unsigned(value(row, "byte_length")?)?;
+        let sha256: String = value(row, "sha256")?;
+        if length == 0
+            || !is_valid_artifact_sha256(&sha256)
+            || value::<String>(row, "media_type")? != MEDIA
+            || value::<String>(row, "retention_class")? != "explicit_saved"
+            || value::<Option<String>>(row, "saved_by")?.as_deref() != Some(auth.actor().as_str())
+            || value::<Option<OffsetDateTime>>(row, "saved_at")?.is_none()
+            || value::<String>(row, "source_workspace_kind")? != kind
+            || value::<String>(row, "source_workspace_id")? != workspace_id
+        {
+            return Err(corrupt("read_record_payload"));
+        }
+        // A current record alone cannot select another operation's bytes or invent installed
+        // bytes for an unresolved/partial operation. All nullable actual fields must be real.
+        if value::<Option<String>>(row, "op_state")?.as_deref() != Some("available")
+            || value::<Option<String>>(row, "op_store_id")?.as_deref()
+                != Some(self.store.store_id().to_string().as_str())
+            || value::<Option<String>>(row, "op_workspace_kind")?.as_deref() != Some(kind.as_str())
+            || value::<Option<String>>(row, "op_workspace_id")?.as_deref()
+                != Some(workspace_id.as_str())
+            || value::<Option<String>>(row, "op_expected_sha256")?.as_deref()
+                != Some(sha256.as_str())
+            || value::<Option<i64>>(row, "op_expected_bytes")? != Some(integer(length)?)
+            || value::<Option<i64>>(row, "op_charged_bytes")? != Some(integer(length)?)
+            || value::<Option<bool>>(row, "op_actual_absent")? != Some(false)
+            || value::<Option<i64>>(row, "op_actual_byte_length")? != Some(integer(length)?)
+            || value::<Option<String>>(row, "op_actual_sha256")?.as_deref() != Some(sha256.as_str())
+            || value::<Option<String>>(row, "op_actual_location")?.as_deref() != Some("object")
+            || value::<Option<String>>(row, "op_observation_phase")?.as_deref() != Some("installed")
+        {
+            return Err(corrupt("read_operation_payload"));
+        }
+        let blob = ArtifactBlob::from_record(
+            Uuid::parse_str(&source.artifact_id).map_err(|_| corrupt("read_artifact_id"))?,
+            length,
+            parse_digest(&sha256)?,
+        )
+        .map_err(|_| corrupt("read_blob_binding"))?;
+        Ok(ObservedArtifactReadRecord {
+            store: Arc::clone(&self.store),
+            blob,
+            auth_snapshot: auth.clone(),
+            source_snapshot: source,
+            workspace_snapshot: workspace,
         })
     }
 
@@ -1114,3 +1355,39 @@ const fn unavailable() -> ArtifactAdministrationError {
 const fn corrupt(field: &'static str) -> ArtifactAdministrationError {
     ArtifactAdministrationError::Corrupt { field }
 }
+
+fn observed_read_sql() -> &'static str {
+    static SQL: OnceLock<String> = OnceLock::new();
+    SQL.get_or_init(|| format!("{VISIBLE_RUN} \
+        /* artifact_private_read_record_snapshot */ \
+        SELECT a.*, \
+          CASE t.anchor_kind WHEN 'channel' THEN 'channel' WHEN 'direct_bot' THEN 'thread' END AS source_workspace_kind, \
+          CASE t.anchor_kind WHEN 'channel' THEN t.anchor_id WHEN 'direct_bot' THEN t.thread_id END AS source_workspace_id, \
+          o.state AS op_state,o.store_id AS op_store_id,o.workspace_kind AS op_workspace_kind,o.workspace_id AS op_workspace_id, \
+          o.expected_sha256 AS op_expected_sha256,o.expected_bytes AS op_expected_bytes,o.charged_bytes AS op_charged_bytes, \
+          o.actual_absent AS op_actual_absent,o.actual_byte_length AS op_actual_byte_length,o.actual_sha256 AS op_actual_sha256, \
+          o.actual_location AS op_actual_location,o.observation_phase AS op_observation_phase, \
+          EXISTS(SELECT 1 FROM openbot_internal.artifact_dataset_bindings d \
+             JOIN openbot_internal.artifact_store_bindings s USING(deployment_id,tenant_id,dataset_id) \
+             WHERE d.deployment_id=$4 AND d.tenant_id=$5 AND d.dataset_id=$8 AND d.binding_schema=$9 \
+               AND d.initial_origin=$10 AND d.created_at=$11 AND s.store_id=$12 \
+               AND s.root_device=$13 AND s.root_inode=$14 AND s.root_uid=$15) AS current_store_binding \
+        FROM visible_run r JOIN openbot_internal.artifact_records a \
+          ON a.source_thread_id=r.thread_id AND a.source_run_id=r.run_id \
+        JOIN public.threads t ON t.thread_id=r.thread_id \
+        JOIN public.messages m ON m.message_id=a.source_message_id AND m.thread_id=a.source_thread_id \
+          AND m.run_id=a.source_run_id AND m.actor_id=a.owner_actor_id AND m.role='user' \
+        LEFT JOIN openbot_internal.artifact_save_operations o \
+          ON o.deployment_id=a.deployment_id AND o.tenant_id=a.tenant_id AND o.dataset_id=a.dataset_id \
+          AND o.operation_id=a.operation_id AND o.artifact_id=a.artifact_id AND o.request_id=a.request_id \
+          AND o.owner_actor_id=a.owner_actor_id AND o.source_thread_id=a.source_thread_id \
+          AND o.source_run_id=a.source_run_id AND o.source_message_id=a.source_message_id \
+          AND o.source_call_seq IS NOT DISTINCT FROM a.source_call_seq \
+          AND o.source_attempt_seq IS NOT DISTINCT FROM a.source_attempt_seq \
+        WHERE a.owner_actor_id=$3 AND a.deployment_id=$4 AND a.tenant_id=$5 \
+          AND a.artifact_id=$7 AND a.dataset_id=$8"))
+}
+
+#[cfg(test)]
+#[path = "artifact_read_bridge_tests.rs"]
+mod read_bridge_tests;

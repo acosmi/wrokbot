@@ -1157,3 +1157,16 @@ Independent finite product review 2d384a36 consumes separate non-author actual Q
 Actual native POST counts remain separate: Direct 12 (5 mint, 5 Begin, 2 Memory), Retry 12 (2 routing audit, 2 Create, 2 mint, 4 fresh Begin, 2 replay), FIFO 7 (2 Create, 5 Begin); independent audit GETs are not counted as native UI requests. Original 503 and controlled transport failures remain in full raw records. All browser/context/host resources closed and all source/host/QA/artifact inputs remained unchanged. This publication adds only the ledger to the executed product files.
 
 Old Direct leakage and Retry failures remain historical evidence. Full P9, complete 194 actions, 37 acceptance IDs, 245 goldens, native/production and final pixels are still open; the independent visual reference is missing. Next genuinely preparable cases are Channel Stop and Channel exact retry. Required skills/remote/compiled data and backend-dependent P5-P8 delivery retain their real dependency status, and the continuous UI goal remains active.
+
+
+## V7-IMPL-007 — private artifact read foundation registered
+
+A separate branch starts at actual main e31319a8521c458e6e6b538646617de48288d351. The registered scope is an opaque current own-pool artifact-record snapshot consumed by the same retained dataset-bound store, then verified file-descriptor opening and bounded physical byte chunks. Shared interfaces are observe_read_record, ObservedArtifactReadRecord, open_observed_record, StoreBoundArtifactReader and ArtifactReadBridgeError, with private constructors and no public transport. Only artifact_administration.rs, artifact_store.rs and the new private artifact_read_bridge_tests.rs are claimed. No migration is allocated; existing save, metadata and source predicates retain their semantics.
+
+This foundation develops independently of the capability API while normal merge order remains after task 006. Snapshot observation does not establish current host authority, per-block authorization or a one-use read handle. The author source and tests are in progress, with no executed test, source GO, PR or delivery claim. Actual compilation, temporary PostgreSQL, precise candidate checks and independent review remain pending. All full reading, lifecycle, backup and other backend scope remains open.
+
+### V7-IMPL-007 私有记录到文件读取：本地编写检查点（尚未交付）
+
+在 main `e31319a8521c458e6e6b538646617de48288d351` 的独立分支完成实际数据库记录快照到原字节存储文件描述符的私有桥接。记录读取保留既有来源判据、最后联合查询及显式只读事务 rollback；文件读取核原存储归属、根目录、完整摘要和真实文件，分块失败清空输出缓冲。范围不含公开下载、当前宿主字节交接、清理生命周期或迁移。
+
+作者阶段第一轮新数据库用例为 20 通过、1 测试等待前提失败；原始失败保留。后续诊断实测发现模式校验先被锁阻塞，登记并加入仅测试构建使用的同步点后，精确单用例实际通过：最终查询确实等锁、撤权提交回执成功、读取拒绝。此同步点走同一真实读取流程，发布构建不含同步点。当前版本仍待冻结提交后的全部 22 新用例、相关旧回归、严格检查及非作者独立验收；尚无本任务 PR 或交付声明。
