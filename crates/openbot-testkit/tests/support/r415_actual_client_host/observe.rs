@@ -30,10 +30,14 @@ fn sandbox_governance(full: &Value, case: &Case, row: &Value) -> Result<Value, S
     if case.object != "sandbox" {
         return Ok(Value::Null);
     }
-    let id = case
-        .object_id
-        .as_deref()
-        .ok_or("observer_sandbox_identity")?;
+    let Some(id) = case.object_id.as_deref() else {
+        // prepare observes a genuine absent baseline before the HTTP seed and identity binding.
+        return if row.is_null() {
+            Ok(Value::Null)
+        } else {
+            Err("observer_unbound_sandbox_row".to_owned())
+        };
+    };
     let components = full["components"]
         .as_array()
         .ok_or("observer_sandbox_components_shape")?;
