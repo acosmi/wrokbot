@@ -1317,3 +1317,10 @@ On the clean new source, both existing Host final-wait cases actually passed wit
 ### V7-IMPL-008 test future spawn registration 17
 
 On the current frozen source all 54 new cases and 136 existing artifact regressions passed; Server and Desktop Local compilation, scoped format and diff checks passed. Ordinary Infra library/tests Clippy returned zero but reported one new redundant async wrapper in an owned test, separately from the unchanged MCP warning. Before editing, registered only replacement of that spawn argument with the same original physical future. The future still moves once into the same Tokio task and preserves its output, abort, gate and observation predicates. No production code, case identity, timeout, interface or migration changes. Independent entry and fresh exact-candidate checks are required; this is not final source acceptance.
+
+
+### V7-IMPL-008 current-main integration registration 18
+
+Source 08da2dd2b49120e9a98568f32e96547bce8f6b16 actually passed 290 distinct cases: 54 new and 236 existing. The original Host aggregate expected seven Local binding cases but eight actually passed; that failed count adapter and all eight original results remain preserved. The remaining 19 Local capability cases and Contracts/UI WASM compilation completed separately. These executions retain their source identity.
+
+Fresh main 33b21768c88849204a00c063633f260b31a095b9 includes delivered PR #130. Its only product changes are two new Testkit fixture files and three existing dev dependency edges in Testkit and the lockfile; all package versions, sources and checksums remain. None overlaps this task's 30 owned paths. Register normal main integration before editing and preserve both ledger histories by appending the exact incoming ledger suffix. The integrated candidate must verify the affected Testkit and assembly cases, production and ordinary test lint, actual runtime and WASM compilation, scoped format and diff. The previous 290 cases are not relabelled to the integrated commit. No interface, migration, ready or full-scope acceptance is added.
