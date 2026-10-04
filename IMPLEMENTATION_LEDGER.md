@@ -1352,6 +1352,46 @@ Ordinary test configuration qualifies the unchanged MCP test warning. WASM compi
 Dedicated stopped-batch maintenance has cumulatively removed 24,558,213,046 unique logical bytes across 28,461 paths. Native Cargo locks were released after each accepted cleanup, preserving active dependencies, all referenced execution artifacts, QA and other windows. Volume free-space observations are recorded separately. Publication and actual exact-head review precede normal task merge; the sustained implementation goal continues.
 
 
+### 2026-10-04T08:38:39.340889+00:00 - V7-IMPL-009 retained reader and leased allocation lifecycle registration
+
+009 is registered before product edits in its independent worktree at actual current main deb7c2a3b4a555dae69241147db5087c6cb70192, following normal PR #131 delivery deb7c2a3b4a555dae69241147db5087c6cb70192. The finite scope is Rust-only original-FD sequential operation, one original leased allocation in flight and real registered worker/resource drain, with actual Server and Desktop Local ownership integration. Eighteen production paths and six new test containers are claimed; twelve distinct outer cases require thirty-nine inline matrix premises, with no executions yet. Shared interfaces and exact Local owned-closing-job, legacy worker inventory and kernel own-PID oracle hunks are frozen before independent entry. No migration or public command/route is claimed. Original first-chunk Vec signatures and case identities remain; successful extracted raw Vec allocation lifetime is explicitly untracked by the finite drain. The one-use ten-minute handle, public transport, deletion/expiry, backup/restore, readiness, full artifact scope and complete backend goal remain open. COMP016 and UI5 ownership remain separate.
+
+
+### 2026-10-04T08:50:04.373794+00:00 - V7-IMPL-009 precise Local tracker getter registration
+
+Before product edits, the already claimed Local confirmation/protocol hunks additionally register the crate-private actual-authority lifecycle getter used by real issuer/window close and owner Drop. It upgrades only the existing Weak authority and returns its same tracker, with no new authority, Pool, identity input, route or migration. A missing observer is not a zero-inventory or drained acknowledgement. The eighteen product paths, six new test containers and twelve outer cases remain unchanged; independent entry and code release are pending.
+
+
+### 2026-10-04T08:54:36.117102+00:00 - V7-IMPL-009 genuine Local test protocol getter registration
+
+The already claimed Local background test hunk now precisely registers a cfg(test), crate-private borrowed getter for the original prepared production protocol. It lets the new lifecycle tests exercise the genuine window/Application/worker composition and original owned closing job. It mints no replacement data plane, authority or runtime entry, does not alter the registered test-state hook, and preserves explicit authority closure before drain. Actual last-owner Drop assertions must distinguish the true last owner from a single clone. Product paths and the twelve outer cases remain unchanged; independent entry and product authoring are pending.
+
+
+### 2026-10-04T09:02:48.268593+00:00 - V7-IMPL-009 actual EOF and legacy worker oracle clarification
+
+Before product edits, the sequential-size case is bound to actual saved lengths1/4MiB/4MiB+1/64MiB and a genuine zero-byte verified EOF block on the original FD of a nonempty saved artifact. The existing producer and record decoder reject zero-length available saved records; the earlier prospective zero-record positive is corrected, not bypassed with a fixture or claimed passed. Case identity and the twelve outer/thirty-nine inline premises remain unchanged. The already claimed authority worker hunk uses actual at-most64KiB segments for both new and legacy workers, with a partial event only before remaining real IO; legacy Vec ownership remains explicitly untracked after extraction. No new producer, decoder, SQL, route or migration is authorized; source/runtime acceptance remains pending.
+
+
+### 2026-10-04T09:10:52.940920+00:00 - V7-IMPL-009 final entry accepted and scoped parallel implementation released
+
+The final independent pre-edit entry review accepts the formally registered lifecycle scope and its three clarifications. Root verified the exact delivered base, registration inputs and unchanged product paths before releasing the two previously claimed author scopes: core/infra plus four new test containers, and host wiring plus two new test containers. The twelve outer cases contain thirty-nine required inline premises; actual new runtime observations remain zero. Root owns serial compilation, owned database fixtures, Git and shared handoff updates. Source, runtime, publication, readiness, full R414 and full-scope completion remain pending.
+
+
+### 2026-10-04T09:22:31.946089+00:00 - V7-IMPL-009 private startup failure latch registered
+
+Before the field edit, the existing owned desktop closing-job hunk registers a private startup success boolean derived from real synchronous authority closure and, when present, real state observation installation. Both required operations run independently; a short circuit must not skip observation installation or the read tracker closure. A startup failure keeps the original owner for actual cleanup and permanently prevents a success projection. This implements the already registered failure latch, adds no public interface, migration or budget, and retains the twelve/thirty-nine denominator. Final independent source and runtime review remains pending.
+
+
+### 2026-10-04T09:47:37.408321+00:00 - V7-IMPL-009 actual closing acknowledgement test observation registered
+
+Before editing the getter, the existing private test-state hunk registers a borrowed observation of the actual drain, PostgreSQL and job-finish acknowledgement timestamps and actual outcome. Missing observations or poisoned locks remain unproven. The real desktop shutdown test must verify these original job facts; a Failed phase or absent child PID alone cannot prove clean resource acknowledgements. This adds no runtime authority, public transport, migration or budget and retains the twelve/thirty-nine denominator. Runtime and final independent source/oracle review remain pending.
+
+
+### 2026-10-04T10:49:56.475747+00:00 - V7-IMPL-009 current-main132 integration registered
+
+The observed normal main132 merge adds three inherited Testkit current-client fixtures and an append-only public ledger, with no production change or overlap with the twenty-four owned paths. The registered Local strict diagnostics received equivalent condition/expression repairs without a lint exemption. Normal integration preserves both complete ledger histories. The resulting exact candidate requires current production checks, twelve new lifecycle cases, fifty-four original read cases, related artifact and host regressions, and compilation of the inherited actual-client fixture. No new migration or public transport is introduced; source, runtime and readiness remain pending.
+
+
 ### V7-COMP-016 - actual original Custom 401 and current-run result
 
 Previous finite model Save/capability task COMP015 was delivered by its single PR #130 through normal matched-head admin merge 33b21768c88849204a00c063633f260b31a095b9 at 2026-10-04T07:30:04Z. Its two accepted cases retain their original a6507914cf16f390f9afd2c5217dbb308480f6f8 source identity. Incoming main deb7c2a3b4a555dae69241147db5087c6cb70192 was normally integrated; its complete 319382-byte ledger, original COMP015 body and earlier history remain unchanged before this append.
@@ -1389,3 +1429,12 @@ Directed current native02, WASM02, three-file fmt02 and target strict Clippy eac
 Independent finite SOURCE is GO, SHA256 `fe1fbbf6fe4d47f534b916e7a6bf61098996714945b34abf626e371c2c918027`; exact source candidate `e93ebd7a5f272baa3e27b9437eed4225a90f62986303fc0e1931c5e45e6d48cd` and independent runtime ENTRY `9e47457fbb3d9f19a8e8b1ca32d40d02e38578202c3420d1e400d30f3361e356` bind all original evidence. This append preserves the complete324603-byte prior ledger prefix, including original COMP015 and COMP016 records. Runtime remains bound to sourcee031; the final ledger-only HEAD needs separate SOURCE carry and independent LEDGER before this one task PR's normal matched-head admin delivery. User standing autonomous work/admin authorization applies; no repeated human business confirmation, hook bypass, force, protection change, private-spec/QA upload, full CI or manual Actions.
 
 Previous one-task COMP016 / PR132 actually merged normally with admin at2026-10-04T10:39:48Z by acosmi-fushihua, merge05cc6bc720d01b52e31fb0f7dc80fa67ef3d3b98; original runtime99/final69 identities remain intact. COMP017 is a finite completion, not whole-goal acceptance. C4-C7 and two already-delivered carrier groups remain open; full Unknown disposition, new UI/capability consumer, native OS and Artifact expansion are excluded. The following Models-refresh plan remains readonly, with no new task implementation before this delivery.
+
+
+### 2026-10-04T14:49:44.100378+00:00 - V7-IMPL-009 finite retained-reader and host lifecycle verification
+
+Artifact reads retain their original verified operation across blocks and actual worker/descriptor/allocation ownership through cancellation. Pending and leased initialized allocations are wiped before the next slot is released. Original host inventories close admission and acknowledge drain only after real resources end; Local closing jobs order actual read drain before owned PostgreSQL shutdown and retain failed/expired outcomes after late cleanup.
+
+Actual validation belongs to source111206c8289ae420252998c8ec769eefe9583c91: five production Clippy configurations,12 new outer tests/39 inline premises,54 previous current-read tests and236 related tests pass;302 unique runtime tests/303 executions include one Local correction replay.44 actual commands plus owned fixture stop/process-absence facts are preserved. Current source e8b89532de29ceba9dc2733e83c74be42779de84 integrates main8bff54c4baadf1e21147876bffbe5f60c1fc3fcb through normal hooks and retains all1255 predecessor inputs exactly; three added mainline Testkit inputs receive one actual offline/locked/j1 no-run exit0. Distinct independent finite source/runtime carry passes, with no rerun or relabelling of predecessor runtime.
+
+The5s observation starts after physical IO and covers rollback plus synchronous tail; successful old bareVec results remain UNTRACKED. FD assertions are selected owned-process snapshots, and Server process-level signal/HTTP exit remains structurally reviewed. Old failures and warning qualifications remain. Public one-use bytewire,delete/expiry,backup/restore,M1 references,fullArtifact readiness and overall backend goal remain open. This entry prepares the unique normal publication candidate; remote PR and exact-head merge still await their independent stages.

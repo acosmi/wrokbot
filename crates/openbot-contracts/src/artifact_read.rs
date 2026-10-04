@@ -76,3 +76,81 @@ impl PendingArtifactReadBuffer {
         Ok(bytes)
     }
 }
+
+/// 原allocation的生产库存凭证；成功交付仅改变phase，Drop才释放在途槽。
+pub trait ArtifactReadAllocationLease: Send + Sync {
+    /// Validate and mark the original pending allocation handed off without releasing its lease.
+    fn mark_handed_off(&self) -> Result<(), ArtifactReadCurrentError>;
+}
+
+/// 保留完整初始化allocation的非Clone正文借用；无Vec提取或可变出口。
+pub struct LeasedArtifactReadBlock {
+    bytes: Zeroizing<Vec<u8>>,
+    actual_length: usize,
+    lease: Option<Box<dyn ArtifactReadAllocationLease>>,
+}
+impl LeasedArtifactReadBlock {
+    /// Borrow the actual observed prefix while retaining the original full initialized allocation.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.actual_length]
+    }
+    /// Return the actual observed prefix length, excluding the retained initialized suffix.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.actual_length
+    }
+    /// Report whether the actual observed prefix is empty; this does not release its allocation.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.actual_length == 0
+    }
+}
+impl Drop for LeasedArtifactReadBlock {
+    fn drop(&mut self) {
+        self.bytes.as_mut_slice().zeroize();
+        #[cfg(test)]
+        lifecycle_tests::observe_live_wiped(&self.bytes);
+        // Observe only live wiped memory, then actually end allocation ownership before
+        // releasing the slot. A concurrently admitted next block cannot overlap this owner.
+        drop(std::mem::take(&mut self.bytes));
+        drop(self.lease.take());
+    }
+}
+impl PendingArtifactReadBuffer {
+    /// 同一真实allocation先与lease共同入RAII，再执行所有可能失败的检查。
+    #[doc(hidden)]
+    pub fn handoff_leased(
+        mut self,
+        auth: &AuthContext,
+        original: &VerifiedHostRequestBinding,
+        target: &dyn ArtifactReadCurrentTarget,
+        witness: &dyn ArtifactReadTailWitness,
+        deadline: std::time::Instant,
+        lease: Box<dyn ArtifactReadAllocationLease>,
+    ) -> Result<LeasedArtifactReadBlock, ArtifactReadCurrentError> {
+        let recorded = self.actual_length;
+        let failed = self.failed;
+        let mut block = LeasedArtifactReadBlock {
+            bytes: Zeroizing::new(std::mem::take(&mut *self.bytes)),
+            actual_length: 0,
+            lease: Some(lease),
+        };
+        let length = recorded
+            .filter(|length| !failed && *length <= MAX_ARTIFACT_READ_CHUNK_BYTES)
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        block.bytes[length..].zeroize();
+        original.verify_artifact_read_tail(auth, target, witness, deadline)?;
+        block
+            .lease
+            .as_ref()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?
+            .mark_handed_off()?;
+        block.actual_length = length;
+        Ok(block)
+    }
+}
+
+#[cfg(test)]
+#[path = "artifact_read/lifecycle_tests.rs"]
+mod lifecycle_tests;

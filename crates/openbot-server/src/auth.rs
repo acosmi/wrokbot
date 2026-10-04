@@ -476,6 +476,21 @@ struct ServerSessionBindingOwner {
     probe: Arc<ServerSessionProbeState>,
 }
 
+impl Drop for ServerSessionBindingOwner {
+    fn drop(&mut self) {
+        self.lease.close();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(authority) = self
+            .probe
+            .artifact_read_authority
+            .get()
+            .and_then(Weak::upgrade)
+        {
+            authority.read_lifecycle().close_issuer(&self.issuer);
+        }
+    }
+}
+
 struct ServerSessionProbeState {
     pool: deadpool_postgres::Pool,
     lifetime: SessionLifetimePolicy,
@@ -853,6 +868,18 @@ impl PostgresSessionAuthResolver {
     /// Permanently close this actual resolver owner's bindings before shutdown.
     pub fn close_request_bindings(&self) {
         self.binding_owner.lease.close();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(authority) = self
+            .binding_owner
+            .probe
+            .artifact_read_authority
+            .get()
+            .and_then(Weak::upgrade)
+        {
+            authority
+                .read_lifecycle()
+                .close_issuer(&self.binding_owner.issuer);
+        }
         if let Some(facts) = self
             .binding_owner
             .probe

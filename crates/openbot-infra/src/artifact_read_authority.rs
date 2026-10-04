@@ -21,6 +21,12 @@ use openbot_domain::identity::roles::resolve_effective_role;
 use openbot_domain::identity::session::{SessionLifetimePolicy, SessionState, evaluate_session};
 use time::OffsetDateTime;
 use tokio_postgres::{IsolationLevel, Row};
+use tracing::instrument::WithSubscriber;
+
+use super::artifact_read_lifecycle::{
+    AllocationLease, ArtifactReadLifecycle, LifecycleReadOperation, PendingReadOwnership,
+    PhysicalResourceLease, ReadOperationState, ReadPhase,
+};
 
 use super::{ObservedArtifactReadRecord, PostgresArtifactAdministration};
 use crate::artifact_store::StoreBoundArtifactReader;
@@ -33,6 +39,7 @@ use crate::auth::single_user::desktop_local::{
 pub struct PostgresArtifactReadAuthority {
     administration: Weak<PostgresArtifactAdministration>,
     identity: Arc<()>,
+    lifecycle: Arc<ArtifactReadLifecycle>,
     #[cfg(test)]
     final_query_gate: Mutex<
         Option<(
@@ -49,9 +56,28 @@ impl PostgresArtifactReadAuthority {
         Self {
             administration: Arc::downgrade(administration),
             identity: Arc::new(()),
+            lifecycle: ArtifactReadLifecycle::new(),
             #[cfg(test)]
             final_query_gate: Mutex::new(None),
         }
+    }
+
+    /// The exact same authority/root inventory, never a request-created tracker.
+    pub fn read_lifecycle(&self) -> Arc<ArtifactReadLifecycle> {
+        Arc::clone(&self.lifecycle)
+    }
+
+    pub(super) async fn open_host_bound_read_operation(
+        self: &Arc<Self>,
+        auth: &AuthContext,
+        artifact_id: &str,
+    ) -> Result<openbot_application::CurrentArtifactReadOperation, AppError> {
+        let state = ReadOperationState::new(Arc::clone(self), auth.clone(), artifact_id.to_owned());
+        self.lifecycle.register(&state)?;
+        openbot_application::CurrentArtifactReadOperation::from_trusted_operation(
+            auth.clone(),
+            Box::new(LifecycleReadOperation { state }),
+        )
     }
 
     /// Prove enrollment in this adapter's actual Pool manager and original namespace.
@@ -104,6 +130,57 @@ impl PostgresArtifactReadAuthority {
         auth: &AuthContext,
         artifact_id: &str,
     ) -> Result<CurrentArtifactReadChunk, AppError> {
+        let state = ReadOperationState::new(Arc::clone(self), auth.clone(), artifact_id.to_owned());
+        self.lifecycle.register(&state)?;
+        let job = self.lifecycle.admit(&state.stopped)?;
+        state.begin()?;
+        let dispatcher = tracing::dispatcher::get_default(Clone::clone);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let authority = Arc::clone(self);
+        let collected = Arc::clone(&state);
+        tokio::spawn(
+            async move {
+                let mut result = authority
+                    .read_first_chunk_collected(&collected, dispatcher)
+                    .await;
+                if result.is_ok() {
+                    let pending_recorded = match collected.data.lock() {
+                        Ok(mut data) => {
+                            data.phase = ReadPhase::Pending;
+                            true
+                        }
+                        Err(_) => false,
+                    };
+                    if !pending_recorded {
+                        result = Err(ArtifactReadCurrentError::Unavailable.into());
+                    }
+                }
+                if result.is_err() {
+                    collected.finish_failed();
+                }
+                drop(sender.send(result));
+                drop(job);
+            }
+            .with_current_subscriber(),
+        );
+        let mut attempt = LegacyReadAttempt {
+            state,
+            completed: false,
+        };
+        let result = receiver
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        attempt.completed = true;
+        result
+    }
+
+    async fn read_first_chunk_collected(
+        self: &Arc<Self>,
+        state: &Arc<ReadOperationState>,
+        dispatcher: tracing::Dispatch,
+    ) -> Result<CurrentArtifactReadChunk, AppError> {
+        let auth = &state.auth;
+        let artifact_id = state.artifact_id.as_str();
         let original = auth
             .request_binding()
             .ok_or_else(|| AppError::from(host_unavailable()))?;
@@ -127,19 +204,31 @@ impl PostgresArtifactReadAuthority {
             Ok(snapshot) => {
                 let identity = Arc::clone(&self.identity);
                 let store = Arc::clone(&administration.store);
+                let state = Arc::clone(state);
+                let resource = self.lifecycle.resource();
                 tokio::task::spawn_blocking(move || {
-                    // Every initialized byte, including the unread suffix, remains owned by
-                    // this RAII value on worker error, abandoned JoinHandle and cancelled await.
-                    let mut pending = PendingArtifactReadBuffer::new_initialized()?;
-                    let mut reader = store
-                        .open_observed_record(snapshot)
-                        .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
-                    let length = reader
-                        .read_observed_chunk(pending.initialized_mut())
-                        .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
-                    pending.record_actual_length(length)?;
-                    let target = Arc::new(ActualArtifactReadTarget::from_reader(identity, reader));
-                    Ok::<_, ArtifactReadCurrentError>(ArtifactReadWorkerResult { pending, target })
+                    tracing::dispatcher::with_default(&dispatcher, || {
+                        let resource = resource;
+                        // Every initialized byte, including the unread suffix, remains owned by
+                        // this RAII value on worker error, abandoned JoinHandle and cancelled await.
+                        let mut pending = PendingArtifactReadBuffer::new_initialized()?;
+                        let mut reader = store
+                            .open_observed_record(snapshot)
+                            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+                        read_segments(&mut reader, &mut pending, &state, 0)?;
+                        let target: Arc<dyn ArtifactReadCurrentTarget> =
+                            Arc::new(TrackedArtifactReadTarget {
+                                inner: Arc::new(ActualArtifactReadTarget::from_reader(
+                                    identity, reader,
+                                )),
+                                state: Arc::clone(&state),
+                                _resource: resource,
+                            });
+                        Ok::<_, ArtifactReadCurrentError>(ArtifactReadWorkerResult {
+                            pending,
+                            target,
+                        })
+                    })
                 })
                 .await
                 .map_err(|_| ArtifactReadCurrentError::Unavailable)
@@ -181,6 +270,154 @@ impl PostgresArtifactReadAuthority {
             target,
             witness,
             deadline,
+        )
+    }
+
+    pub(super) async fn read_operation_block(
+        self: &Arc<Self>,
+        state: &Arc<ReadOperationState>,
+    ) -> Result<openbot_application::CurrentArtifactReadBlock, AppError> {
+        let auth = &state.auth;
+        let original = auth
+            .request_binding()
+            .ok_or_else(|| AppError::from(host_unavailable()))?;
+        original
+            .verify_current(auth)
+            .await
+            .map_err(|error| AppError::from(ArtifactReadCurrentError::Host(error)))?;
+        let administration = self
+            .administration
+            .upgrade()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        let (reader, position) = {
+            let mut data = state
+                .data
+                .try_lock()
+                .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+            (data.reader.take(), data.position)
+        };
+        let input = match reader {
+            Some(reader) => Ok(ReadInput::Retained(reader)),
+            None => administration
+                .observe_read_record(auth, &state.artifact_id)
+                .await
+                .map(ReadInput::Fresh)
+                .map_err(source_error),
+        };
+        let worker = match input {
+            Ok(input) => {
+                {
+                    let mut data = state
+                        .data
+                        .try_lock()
+                        .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+                    if data.resource.is_none() {
+                        data.resource = Some(self.lifecycle.resource());
+                    }
+                }
+                let worker_state = Arc::clone(state);
+                let dispatcher = tracing::dispatcher::get_default(Clone::clone);
+                let store = Arc::clone(&administration.store);
+                tokio::task::spawn_blocking(move || {
+                    tracing::dispatcher::with_default(&dispatcher, || {
+                        let mut pending = PendingArtifactReadBuffer::new_initialized()?;
+                        let mut reader = match input {
+                            ReadInput::Retained(reader) => reader,
+                            ReadInput::Fresh(snapshot) => store
+                                .open_observed_record(snapshot)
+                                .map_err(|_| ArtifactReadCurrentError::Unavailable)?,
+                        };
+                        let read =
+                            read_segments(&mut reader, &mut pending, &worker_state, position);
+                        Ok::<_, ArtifactReadCurrentError>(OperationWorkerResult {
+                            pending,
+                            reader,
+                            read,
+                        })
+                    })
+                })
+                .await
+                .map_err(|_| ArtifactReadCurrentError::Unavailable)
+                .and_then(|result| result)
+            }
+            Err(error) => Err(error),
+        };
+        let mut owned = match worker {
+            Ok(result) => {
+                let mut data = state
+                    .data
+                    .try_lock()
+                    .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+                data.reader = Some(result.reader);
+                data.phase = ReadPhase::FinalJoint;
+                if let Ok(position) = &result.read {
+                    data.position = *position;
+                }
+                data.eof = result.pending.actual_length() == Some(0);
+                drop(data);
+                (
+                    Some(PendingReadOwnership {
+                        pending: Some(result.pending),
+                        lease: Some(Box::new(AllocationLease::new(Arc::clone(state)))),
+                    }),
+                    result.read.map(|_| ()),
+                )
+            }
+            Err(error) => (None, Err(error)),
+        };
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .ok_or_else(|| AppError::from(host_unavailable()))?;
+        let target: Arc<dyn ArtifactReadCurrentTarget> = if owned.0.is_some() {
+            tracing::trace!(
+                artifact_read_phase = "actual_io_completed_before_joint",
+                "artifact_read_current_phase"
+            );
+            Arc::new(RetainedOperationTarget::from_state(
+                Arc::clone(&self.identity),
+                state,
+            )?)
+        } else {
+            Arc::new(RequestedArtifactReadTarget {
+                id: state.artifact_id.clone(),
+                auth: auth.clone(),
+                identity: Arc::clone(&self.identity),
+            })
+        };
+        // Missing/physical errors use this same anchored host-first statement, never early404.
+        let witness = original
+            .verify_artifact_read_current_before(auth, target.as_ref(), deadline)
+            .await?;
+        owned.1?;
+        let owner = owned
+            .0
+            .as_mut()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        {
+            let mut data = state
+                .data
+                .try_lock()
+                .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+            if state.is_stopped() {
+                return Err(ArtifactReadCurrentError::Unavailable.into());
+            }
+            data.phase = ReadPhase::Pending;
+        }
+        let pending = owner
+            .pending
+            .take()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        let lease = owner
+            .lease
+            .take()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        openbot_application::CurrentArtifactReadBlock::from_trusted_observation(
+            pending,
+            auth.clone(),
+            target,
+            witness,
+            deadline,
+            lease,
         )
     }
 
@@ -313,7 +550,164 @@ enum CurrentHost<'a> {
 
 struct ArtifactReadWorkerResult {
     pending: PendingArtifactReadBuffer,
-    target: Arc<ActualArtifactReadTarget>,
+    target: Arc<dyn ArtifactReadCurrentTarget>,
+}
+
+struct LegacyReadAttempt {
+    state: Arc<ReadOperationState>,
+    completed: bool,
+}
+impl Drop for LegacyReadAttempt {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.state.close();
+        }
+    }
+}
+struct TrackedArtifactReadTarget {
+    inner: Arc<ActualArtifactReadTarget>,
+    state: Arc<ReadOperationState>,
+    _resource: PhysicalResourceLease,
+}
+impl ArtifactReadCurrentTarget for TrackedArtifactReadTarget {
+    fn lookup_id(&self) -> &str {
+        self.inner.lookup_id()
+    }
+    fn matches_authority(&self, identity: &Arc<()>) -> bool {
+        self.inner.matches_authority(identity)
+    }
+    fn matches_auth(&self, auth: &AuthContext) -> bool {
+        self.inner.matches_auth(auth)
+    }
+    fn matches_current_record(&self, facts: ArtifactReadRecordFacts<'_>) -> bool {
+        self.inner.matches_current_record(facts)
+    }
+    fn verify_physical_current(&self) -> Result<(), ArtifactReadCurrentError> {
+        if self._resource.is_closed() || self.state.is_stopped() {
+            return Err(ArtifactReadCurrentError::Unavailable);
+        }
+        self.inner.verify_physical_current()
+    }
+}
+enum ReadInput {
+    Fresh(ObservedArtifactReadRecord),
+    Retained(StoreBoundArtifactReader),
+}
+struct OperationWorkerResult {
+    pending: PendingArtifactReadBuffer,
+    reader: StoreBoundArtifactReader,
+    read: Result<u64, ArtifactReadCurrentError>,
+}
+fn read_segments(
+    reader: &mut StoreBoundArtifactReader,
+    pending: &mut PendingArtifactReadBuffer,
+    state: &ReadOperationState,
+    mut position: u64,
+) -> Result<u64, ArtifactReadCurrentError> {
+    const SEGMENT: usize = 64 * 1024;
+    let expected = reader.record_snapshot().blob().byte_length();
+    let mut actual = 0;
+    while actual < openbot_contracts::artifacts::MAX_ARTIFACT_READ_CHUNK_BYTES {
+        if state.is_stopped() {
+            pending.wipe();
+            return Err(ArtifactReadCurrentError::Unavailable);
+        }
+        let end =
+            (actual + SEGMENT).min(openbot_contracts::artifacts::MAX_ARTIFACT_READ_CHUNK_BYTES);
+        let count = reader
+            .read_observed_chunk(&mut pending.initialized_mut()[actual..end])
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        actual += count;
+        position = position
+            .checked_add(count as u64)
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        if count == 0 {
+            break;
+        }
+        if actual == SEGMENT && position < expected {
+            tracing::trace!(
+                artifact_read_lifecycle_phase = "physical_segment_completed_before_more_io",
+                "artifact_read_lifecycle_phase"
+            );
+        }
+    }
+    if state.is_stopped() {
+        pending.wipe();
+        return Err(ArtifactReadCurrentError::Unavailable);
+    }
+    pending.record_actual_length(actual)?;
+    Ok(position)
+}
+
+struct RetainedOperationTarget {
+    identity: Arc<()>,
+    auth: AuthContext,
+    source: ArtifactRegistrationReceipt,
+    workspace: ArtifactWorkspace,
+    sha256: String,
+    byte_length: u64,
+    state: Weak<ReadOperationState>,
+}
+impl RetainedOperationTarget {
+    fn from_state(
+        identity: Arc<()>,
+        state: &Arc<ReadOperationState>,
+    ) -> Result<Self, ArtifactReadCurrentError> {
+        let data = state
+            .data
+            .try_lock()
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        let reader = data
+            .reader
+            .as_ref()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        let record = reader.record_snapshot();
+        Ok(Self {
+            identity,
+            auth: record.auth_snapshot.clone(),
+            source: record.source_snapshot.clone(),
+            workspace: workspace(record),
+            sha256: Sha256Digest::from_bytes(*record.blob().sha256()).to_hex(),
+            byte_length: record.blob().byte_length(),
+            state: Arc::downgrade(state),
+        })
+    }
+}
+impl ArtifactReadCurrentTarget for RetainedOperationTarget {
+    fn lookup_id(&self) -> &str {
+        &self.source.artifact_id
+    }
+    fn matches_authority(&self, identity: &Arc<()>) -> bool {
+        Arc::ptr_eq(&self.identity, identity)
+    }
+    fn matches_auth(&self, auth: &AuthContext) -> bool {
+        same_original_auth(&self.auth, auth)
+    }
+    fn matches_current_record(&self, actual: ArtifactReadRecordFacts<'_>) -> bool {
+        actual.artifact_id == self.source.artifact_id
+            && actual.sha256 == self.sha256
+            && actual.byte_length == self.byte_length
+            && actual.source == &self.source
+            && actual.workspace == &self.workspace
+    }
+    fn verify_physical_current(&self) -> Result<(), ArtifactReadCurrentError> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        if state.is_stopped() {
+            return Err(ArtifactReadCurrentError::Unavailable);
+        }
+        let data = state
+            .data
+            .try_lock()
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        data.reader
+            .as_ref()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?
+            .verify_physical_current()
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)
+    }
 }
 
 struct ActualArtifactReadTarget {

@@ -8,8 +8,10 @@
 use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::task::{Context as TaskContext, Poll};
+use std::time::{Duration, Instant};
 
 use openbot_application::tenant::package::{LoadedTenantPackage, TenantPackageError};
 use openbot_computer::screen::{
@@ -424,6 +426,7 @@ struct RuntimeStateInner {
     startup_complete: bool,
     lifecycle: Option<Arc<DesktopWindowLifecycle>>,
     owner: Option<Box<dyn RuntimeShutdownOwner>>,
+    closing_observation: Option<Arc<DesktopLocalClosingObservation>>,
 }
 
 /// Managed state shared by Tauri setup, window callbacks, commands, and the run-loop exit fence.
@@ -442,6 +445,7 @@ impl DesktopLocalRuntimeState {
                 startup_complete: false,
                 lifecycle: None,
                 owner: None,
+                closing_observation: None,
             }),
             changed: tokio::sync::watch::channel(()).0,
         })
@@ -454,6 +458,30 @@ impl DesktopLocalRuntimeState {
             .lock()
             .map(|inner| inner.phase)
             .unwrap_or(DesktopLocalRuntimePhase::Failed)
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn closing_acknowledgements_for_reviewed_test(
+        &self,
+    ) -> Option<(
+        Option<Instant>,
+        Option<Instant>,
+        Option<Instant>,
+        Option<bool>,
+    )> {
+        let observation = self.inner.lock().ok()?.closing_observation.clone()?;
+        let facts = observation.facts.lock().ok()?;
+        Some((
+            facts.drain_ack_at,
+            facts.postgres_ack_at,
+            facts.job_finished_at,
+            match facts.outcome {
+                Some(DesktopLocalClosingOutcome::Succeeded) => Some(true),
+                Some(DesktopLocalClosingOutcome::Failed) => Some(false),
+                Some(DesktopLocalClosingOutcome::Unknown) | None => None,
+            },
+        ))
     }
 
     fn note_exit_requested(&self) -> Result<bool, DesktopLocalRuntimeError> {
@@ -547,6 +575,22 @@ impl DesktopLocalRuntimeState {
             inner.owner = None;
         }
         self.changed.send_replace(());
+    }
+
+    fn install_closing_observation(
+        &self,
+        observation: Arc<DesktopLocalClosingObservation>,
+    ) -> Result<(), DesktopLocalRuntimeError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| DesktopLocalRuntimeError::State)?;
+        if inner.closing_observation.is_some() || inner.phase != DesktopLocalRuntimePhase::Stopping
+        {
+            return Err(DesktopLocalRuntimeError::State);
+        }
+        inner.closing_observation = Some(observation);
+        Ok(())
     }
 
     fn fail_startup(&self) {
@@ -644,21 +688,136 @@ impl Drop for StartupCompletion {
     }
 }
 
-// A failed task still wakes the native joiner with failure. This guard is not a replacement for
-// PostgreSQL stop/wait and does not turn an unexpected panic/Drop into a clean shutdown receipt.
-struct ShutdownCompletion(Arc<DesktopLocalRuntimeState>);
-impl Drop for ShutdownCompletion {
-    fn drop(&mut self) {
-        if self.0.phase() == DesktopLocalRuntimePhase::Stopping {
-            self.0.finish_shutdown(false);
-            observe_exit("shutdown_task", "failed");
+struct DesktopLocalClosingCompletion {
+    state: Arc<DesktopLocalRuntimeState>,
+    exit: Option<(tauri::AppHandle<Wry>, i32)>,
+}
+
+struct DesktopLocalClosingObservation {
+    facts: Mutex<DesktopLocalClosingFacts>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DesktopLocalClosingOutcome {
+    Succeeded,
+    Failed,
+    Unknown,
+}
+
+// Private observations are deliberately not a public teardown-ack API.
+#[allow(dead_code)]
+struct DesktopLocalClosingFacts {
+    started: Instant,
+    deadline: Instant,
+    job_spawned_at: Option<Instant>,
+    job_entered_at: Option<Instant>,
+    drain_ack_at: Option<Instant>,
+    postgres_ack_at: Option<Instant>,
+    job_finished_at: Option<Instant>,
+    waiter_ack_observed_at: Option<Instant>,
+    waiter_detached_at: Option<Instant>,
+    outcome: Option<DesktopLocalClosingOutcome>,
+}
+
+impl DesktopLocalClosingObservation {
+    fn update(&self, update: impl FnOnce(&mut DesktopLocalClosingFacts)) -> bool {
+        match self.facts.lock() {
+            Ok(mut facts) => {
+                update(&mut facts);
+                true
+            }
+            Err(_) => false,
         }
     }
 }
 
-#[async_trait::async_trait]
+// This guard belongs to the actual job. An observer disappearing cannot run native completion.
+struct ShutdownCompletion {
+    completion: Option<DesktopLocalClosingCompletion>,
+    observation: Arc<DesktopLocalClosingObservation>,
+    completed: bool,
+}
+
+impl ShutdownCompletion {
+    fn finish(&mut self, succeeded: bool) -> bool {
+        let observed = self.observation.update(|facts| {
+            facts.job_finished_at = Some(Instant::now());
+            facts.outcome = Some(if succeeded {
+                DesktopLocalClosingOutcome::Succeeded
+            } else {
+                DesktopLocalClosingOutcome::Failed
+            });
+        });
+        let succeeded = succeeded && observed;
+        if let Some(completion) = self.completion.take() {
+            completion.state.finish_shutdown(succeeded);
+            observe_exit("shutdown", if succeeded { "ok" } else { "failed" });
+            if let Some((app_handle, requested_exit_code)) = completion.exit {
+                exit_if_live(
+                    &completion.state,
+                    &app_handle,
+                    if succeeded { requested_exit_code } else { 1 },
+                );
+            }
+        }
+        self.completed = true;
+        succeeded
+    }
+}
+
+impl Drop for ShutdownCompletion {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        self.observation
+            .update(|facts| facts.outcome = Some(DesktopLocalClosingOutcome::Unknown));
+        if let Some(completion) = &self.completion
+            && completion.state.phase() == DesktopLocalRuntimePhase::Stopping
+        {
+            completion.state.finish_shutdown(false);
+            observe_exit("shutdown_task", "unknown");
+        }
+    }
+}
+
+pub(crate) struct DesktopLocalShutdownWaiter {
+    reply: tokio::sync::oneshot::Receiver<Result<(), DesktopLocalRuntimeError>>,
+    observation: Arc<DesktopLocalClosingObservation>,
+    reply_observed: bool,
+}
+
+impl Future for DesktopLocalShutdownWaiter {
+    type Output = Result<(), DesktopLocalRuntimeError>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.reply).poll(context) {
+            Poll::Ready(Ok(result)) => {
+                self.reply_observed = true;
+                self.observation
+                    .update(|facts| facts.waiter_ack_observed_at = Some(Instant::now()));
+                Poll::Ready(result)
+            }
+            Poll::Ready(Err(_)) => Poll::Ready(Err(DesktopLocalRuntimeError::Shutdown)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for DesktopLocalShutdownWaiter {
+    fn drop(&mut self) {
+        if !self.reply_observed {
+            self.observation
+                .update(|facts| facts.waiter_detached_at = Some(Instant::now()));
+        }
+    }
+}
+
 trait RuntimeShutdownOwner: Send {
-    async fn shutdown(self: Box<Self>) -> Result<(), DesktopLocalRuntimeError>;
+    fn start_closing(
+        self: Box<Self>,
+        completion: Option<DesktopLocalClosingCompletion>,
+    ) -> DesktopLocalShutdownWaiter;
 }
 
 struct DesktopLocalBackgroundOwner {
@@ -667,6 +826,7 @@ struct DesktopLocalBackgroundOwner {
     agent_host: Option<DesktopAgentHost>,
     assembly: Option<PostgresApplicationAssembly>,
     data_plane: Option<RunningDesktopLocalDataPlane>,
+    read_lifecycle: Arc<openbot_infra::artifact_read_lifecycle::ArtifactReadLifecycle>,
 }
 
 impl Drop for DesktopLocalBackgroundOwner {
@@ -675,41 +835,152 @@ impl Drop for DesktopLocalBackgroundOwner {
     }
 }
 
-#[async_trait::async_trait]
 impl RuntimeShutdownOwner for DesktopLocalBackgroundOwner {
-    async fn shutdown(mut self: Box<Self>) -> Result<(), DesktopLocalRuntimeError> {
-        // Invalidate the real protocol owner before any resource is moved or drained.
-        let authority_ok = self.lifecycle.shutdown_authority().is_ok();
-        let data_plane = self.data_plane.take();
-        let agent_host = self.agent_host.take();
-        let assembly = self.assembly.take();
-        let non_database = async {
-            // Poll every stop signal before waiting: one slow relay must not prevent cancellation
-            // of the Agent or the reconciler. All three share the existing five-second window.
-            let (transport, (), (), ()) = tokio::join!(
-                self.transport.shutdown(),
-                async {
-                    if let Some(host) = agent_host {
-                        host.stop().await;
-                    }
-                },
-                async {
-                    if let Some(assembly) = assembly {
-                        assembly.shutdown().await;
-                    }
-                },
-                self.lifecycle.wait_local_confirmation_stopped(),
-            );
-            authority_ok && transport.within_deadline
-        };
-        let database = async {
-            match data_plane {
-                Some(data_plane) => data_plane.shutdown().await.is_ok(),
-                None => false,
-            }
-        };
-        finish_shutdown_stages(non_database, database, crate::cancel::SHUTDOWN_DEADLINE).await
+    fn start_closing(
+        self: Box<Self>,
+        completion: Option<DesktopLocalClosingCompletion>,
+    ) -> DesktopLocalShutdownWaiter {
+        start_owned_local_closing_job(self, completion)
     }
+}
+
+struct DesktopLocalClosingJob {
+    owner: Box<DesktopLocalBackgroundOwner>,
+    deadline: Instant,
+    tracker: Arc<openbot_infra::artifact_read_lifecycle::ArtifactReadLifecycle>,
+    reply: tokio::sync::oneshot::Sender<Result<(), DesktopLocalRuntimeError>>,
+    observation: Arc<DesktopLocalClosingObservation>,
+    completion: ShutdownCompletion,
+    startup_ok: bool,
+}
+
+fn start_owned_local_closing_job(
+    owner: Box<DesktopLocalBackgroundOwner>,
+    completion: Option<DesktopLocalClosingCompletion>,
+) -> DesktopLocalShutdownWaiter {
+    let started = Instant::now();
+    let deadline = started + crate::cancel::SHUTDOWN_DEADLINE;
+    let observation = Arc::new(DesktopLocalClosingObservation {
+        facts: Mutex::new(DesktopLocalClosingFacts {
+            started,
+            deadline,
+            job_spawned_at: None,
+            job_entered_at: None,
+            drain_ack_at: None,
+            postgres_ack_at: None,
+            job_finished_at: None,
+            waiter_ack_observed_at: None,
+            waiter_detached_at: None,
+            outcome: None,
+        }),
+    });
+    // Each operation runs even if another close or state installation failed.
+    let authority_ok = owner.lifecycle.shutdown_authority().is_ok();
+    let tracker = Arc::clone(&owner.read_lifecycle);
+    tracker.close();
+    let state_install_ok = match &completion {
+        Some(completion) => completion
+            .state
+            .install_closing_observation(Arc::clone(&observation))
+            .is_ok(),
+        None => true,
+    };
+    let (reply, receiver) = tokio::sync::oneshot::channel();
+    let job = DesktopLocalClosingJob {
+        owner,
+        deadline,
+        tracker,
+        reply,
+        observation: Arc::clone(&observation),
+        completion: ShutdownCompletion {
+            completion,
+            observation: Arc::clone(&observation),
+            completed: false,
+        },
+        startup_ok: authority_ok && state_install_ok,
+    };
+    // The actual owner and data plane belong to this job before the observer can be returned.
+    tauri::async_runtime::spawn(run_owned_local_closing_job(job));
+    observation.update(|facts| facts.job_spawned_at = Some(Instant::now()));
+    DesktopLocalShutdownWaiter {
+        reply: receiver,
+        observation,
+        reply_observed: false,
+    }
+}
+
+async fn run_owned_local_closing_job(job: DesktopLocalClosingJob) {
+    let DesktopLocalClosingJob {
+        mut owner,
+        deadline,
+        tracker,
+        reply,
+        observation,
+        mut completion,
+        startup_ok,
+    } = job;
+    let mut observations_ok =
+        observation.update(|facts| facts.job_entered_at = Some(Instant::now()));
+    let agent_host = owner.agent_host.take();
+    let assembly = owner.assembly.take();
+    // The data plane stays in owner, outside all deadline-limited subfutures.
+    let non_database = async {
+        let (transport, (), (), ()) = tokio::join!(
+            owner.transport.shutdown(),
+            async {
+                if let Some(host) = agent_host {
+                    host.stop().await;
+                }
+            },
+            async {
+                if let Some(assembly) = assembly {
+                    assembly.shutdown().await;
+                }
+            },
+            owner.lifecycle.wait_local_confirmation_stopped(),
+        );
+        transport.within_deadline
+    };
+    let (non_database, drain) = tokio::join!(
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), non_database),
+        tracker.drain_before(deadline),
+    );
+    let non_database_ok = match non_database {
+        Ok(true) => {
+            observe_exit("non_database", "ok");
+            true
+        }
+        Ok(false) => {
+            observe_exit("non_database", "failed");
+            false
+        }
+        Err(_) => {
+            observe_exit("non_database", "timed_out");
+            false
+        }
+    };
+    // This result is latched. Late drain can clean up but cannot renew the original budget.
+    let drain_in_deadline = drain.is_ok();
+    if !drain_in_deadline {
+        let _late_cleanup_ack = tracker.drain().await;
+    }
+    observations_ok &= observation.update(|facts| facts.drain_ack_at = Some(Instant::now()));
+    let database_ok = match owner.data_plane.take() {
+        Some(data_plane) => data_plane.shutdown().await.is_ok(),
+        None => false,
+    };
+    if database_ok {
+        observations_ok &= observation.update(|facts| facts.postgres_ack_at = Some(Instant::now()));
+    }
+    observe_exit("postgresql", if database_ok { "ok" } else { "failed" });
+    let succeeded = completion.finish(
+        startup_ok && observations_ok && non_database_ok && drain_in_deadline && database_ok,
+    );
+    let _observer_received = reply.send(if succeeded {
+        Ok(())
+    } else {
+        Err(DesktopLocalRuntimeError::Shutdown)
+    });
 }
 
 pub(crate) struct PreparedDesktopLocalRuntime {
@@ -743,8 +1014,35 @@ impl PreparedDesktopLocalRuntime {
         &self.pool
     }
 
-    pub(crate) async fn shutdown(self) -> Result<(), DesktopLocalRuntimeError> {
-        self.owner.shutdown().await
+    pub(crate) fn protocol(&self) -> &Arc<DesktopTauriProtocol> {
+        &self.protocol
+    }
+
+    pub(crate) fn shutdown(self) -> DesktopLocalShutdownWaiter {
+        self.owner.start_closing(None)
+    }
+
+    pub(crate) fn start_closing_for_reviewed_test(
+        self,
+    ) -> Result<(Arc<DesktopLocalRuntimeState>, DesktopLocalShutdownWaiter), DesktopLocalRuntimeError>
+    {
+        let state = DesktopLocalRuntimeState::new();
+        let mut owner = Some(self.owner);
+        if let Err(error) = state.install_owner(&mut owner, self.lifecycle) {
+            if let Some(owner) = owner {
+                drop(owner.start_closing(None));
+            }
+            return Err(error);
+        }
+        state.mark_ready()?;
+        let owner = state
+            .begin_shutdown()?
+            .ok_or(DesktopLocalRuntimeError::State)?;
+        let waiter = owner.start_closing(Some(DesktopLocalClosingCompletion {
+            state: Arc::clone(&state),
+            exit: None,
+        }));
+        Ok((state, waiter))
     }
 }
 
@@ -825,7 +1123,7 @@ pub fn register_desktop_local_runtime(
                     }
                 };
                 if setup_slot.install(Arc::clone(&prepared.protocol)).is_err() {
-                    let _ = prepared.owner.shutdown().await;
+                    let _ = prepared.owner.start_closing(None).await;
                     setup_state.fail_startup();
                     exit_if_live(&setup_state, &app_handle, 1);
                     return;
@@ -842,7 +1140,7 @@ pub fn register_desktop_local_runtime(
                     .is_err()
                 {
                     if let Some(owner) = owner {
-                        let _ = owner.shutdown().await;
+                        let _ = owner.start_closing(None).await;
                     }
                     setup_state.fail_startup();
                     exit_if_live(&setup_state, &app_handle, 1);
@@ -1014,19 +1312,7 @@ fn start_shutdown(
         }
     };
     observe_exit("shutdown", "begin");
-    tauri::async_runtime::spawn(async move {
-        let _completion = ShutdownCompletion(Arc::clone(&state));
-        let succeeded = owner.shutdown().await.is_ok();
-        state.finish_shutdown(succeeded);
-        observe_exit("shutdown", if succeeded { "ok" } else { "failed" });
-        if let Some((app_handle, requested_exit_code)) = exit {
-            exit_if_live(
-                &state,
-                &app_handle,
-                if succeeded { requested_exit_code } else { 1 },
-            );
-        }
-    });
+    drop(owner.start_closing(Some(DesktopLocalClosingCompletion { state, exit })));
 }
 
 async fn finish_shutdown_stages(
@@ -1211,7 +1497,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
                 );
             }
         };
-        let port = match openbot_infra::artifact_administration::PostgresArtifactAdministration::new(
+        match openbot_infra::artifact_administration::PostgresArtifactAdministration::new(
             data_plane.artifact_dataset_owner(),
             artifact_store,
             artifact_policy,
@@ -1223,8 +1509,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
                     cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
                 );
             }
-        };
-        port
+        }
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> =
@@ -1394,6 +1679,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
         agent_host: Some(agent_host),
         assembly: Some(assembly),
         data_plane: Some(data_plane),
+        read_lifecycle: artifact_administration.read_authority().read_lifecycle(),
     });
     Ok(PreparedDesktopLocalRuntime {
         auth,
@@ -1613,11 +1899,66 @@ mod tests {
 
     struct CountingOwner(Arc<AtomicUsize>);
 
-    #[async_trait]
     impl RuntimeShutdownOwner for CountingOwner {
-        async fn shutdown(self: Box<Self>) -> Result<(), DesktopLocalRuntimeError> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+        fn start_closing(
+            self: Box<Self>,
+            completion: Option<DesktopLocalClosingCompletion>,
+        ) -> DesktopLocalShutdownWaiter {
+            start_mock_closing_job(completion, async move {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+    }
+
+    fn start_mock_closing_job(
+        completion: Option<DesktopLocalClosingCompletion>,
+        work: impl Future<Output = Result<(), DesktopLocalRuntimeError>> + Send + 'static,
+    ) -> DesktopLocalShutdownWaiter {
+        let started = Instant::now();
+        let observation = Arc::new(DesktopLocalClosingObservation {
+            facts: Mutex::new(DesktopLocalClosingFacts {
+                started,
+                deadline: started + crate::cancel::SHUTDOWN_DEADLINE,
+                job_spawned_at: None,
+                job_entered_at: None,
+                drain_ack_at: None,
+                postgres_ack_at: None,
+                job_finished_at: None,
+                waiter_ack_observed_at: None,
+                waiter_detached_at: None,
+                outcome: None,
+            }),
+        });
+        let state_ok = match &completion {
+            Some(completion) => completion
+                .state
+                .install_closing_observation(observation.clone())
+                .is_ok(),
+            None => true,
+        };
+        let mut completion = ShutdownCompletion {
+            completion,
+            observation: observation.clone(),
+            completed: false,
+        };
+        let (reply, receiver) = tokio::sync::oneshot::channel();
+        let job_observation = observation.clone();
+        tauri::async_runtime::spawn(async move {
+            job_observation.update(|facts| facts.job_entered_at = Some(Instant::now()));
+            let succeeded = work.await.is_ok();
+            let succeeded = completion.finish(state_ok && succeeded);
+            let _received = reply.send(if succeeded {
+                Ok(())
+            } else {
+                Err(DesktopLocalRuntimeError::Shutdown)
+            });
+        });
+        observation.update(|facts| facts.job_spawned_at = Some(Instant::now()));
+        DesktopLocalShutdownWaiter {
+            reply: receiver,
+            observation,
+            reply_observed: false,
         }
     }
 
@@ -2084,7 +2425,7 @@ mod tests {
         assert!(!protocol.is_window_bound("main").unwrap());
         let owner = state.begin_shutdown().unwrap().unwrap();
         assert_eq!(state.phase(), DesktopLocalRuntimePhase::Stopping);
-        owner.shutdown().await.unwrap();
+        owner.start_closing(None).await.unwrap();
         state.finish_shutdown(true);
         assert_eq!(state.phase(), DesktopLocalRuntimePhase::Stopped);
         assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
@@ -2098,17 +2439,21 @@ mod tests {
         succeeds: bool,
     }
 
-    #[async_trait]
     impl RuntimeShutdownOwner for PausedOwner {
-        async fn shutdown(self: Box<Self>) -> Result<(), DesktopLocalRuntimeError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            self.entered.notify_one();
-            self.release.notified().await;
-            if self.succeeds {
-                Ok(())
-            } else {
-                Err(DesktopLocalRuntimeError::Shutdown)
-            }
+        fn start_closing(
+            self: Box<Self>,
+            completion: Option<DesktopLocalClosingCompletion>,
+        ) -> DesktopLocalShutdownWaiter {
+            start_mock_closing_job(completion, async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.entered.notify_one();
+                self.release.notified().await;
+                if self.succeeds {
+                    Ok(())
+                } else {
+                    Err(DesktopLocalRuntimeError::Shutdown)
+                }
+            })
         }
     }
 
