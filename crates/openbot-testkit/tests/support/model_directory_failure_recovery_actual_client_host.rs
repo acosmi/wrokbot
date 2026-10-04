@@ -1527,10 +1527,10 @@ pub(super) async fn run(config: pool::DatabaseConfig) -> Result<(), String> {
     {
         facts.close();
     }
-    if let Some(stop) = stop_sender {
-        if stop.send(()).is_err() {
-            close_errors.push("http_listener_stop_send");
-        }
+    if let Some(stop) = stop_sender
+        && stop.send(()).is_err()
+    {
+        close_errors.push("http_listener_stop_send");
     }
     // Release our own actual lock before joining the original server. Otherwise
     // an early browser failure could leave graceful shutdown waiting on the List.
