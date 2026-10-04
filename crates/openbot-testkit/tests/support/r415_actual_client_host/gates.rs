@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
@@ -12,6 +12,12 @@ use tokio::sync::{Mutex, Notify};
 
 use super::{Case, State, control, observe, read_fault};
 
+const HELD_TAIL_NOT_STARTED: u8 = 0;
+const HELD_TAIL_ACTIVE: u8 = 1;
+const HELD_TAIL_FINALIZED: u8 = 2;
+const HELD_TAIL_DROPPED: u8 = 3;
+const HELD_TAIL_FAILED_DEADLINE: u8 = 4;
+
 pub(super) struct Gate {
     id: String,
     case: Case,
@@ -20,6 +26,7 @@ pub(super) struct Gate {
     mode: String,
     baseline: Value,
     state: Mutex<GateState>,
+    held_tail: AtomicU8,
     changed: Notify,
 }
 
@@ -27,9 +34,79 @@ struct GateState {
     phase: &'static str,
     arrival: Option<Value>,
     disposition: Option<&'static str>,
+    requested_disposition: Option<&'static str>,
     error: Option<&'static str>,
     request_sequence: Option<u64>,
     producer_status: Option<u16>,
+}
+
+// This guard covers only the held tail after the real producer and independent
+// committed observer have established arrival. Earlier cancellation is unobserved.
+struct HeldTailGuard {
+    gate: Arc<Gate>,
+}
+
+impl HeldTailGuard {
+    fn new(gate: Arc<Gate>) -> Self {
+        gate.held_tail.store(HELD_TAIL_ACTIVE, Ordering::Release);
+        Self { gate }
+    }
+
+    fn finish(&self, observation: u8) {
+        self.gate.held_tail.store(observation, Ordering::Release);
+    }
+}
+
+impl Drop for HeldTailGuard {
+    fn drop(&mut self) {
+        if self
+            .gate
+            .held_tail
+            .compare_exchange(
+                HELD_TAIL_ACTIVE,
+                HELD_TAIL_DROPPED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            // Synchronous observation only: no worker, asynchronous Drop or timeout inference.
+            self.gate.changed.notify_waiters();
+        }
+    }
+}
+
+fn held_tail_observation(gate: &Gate) -> &'static str {
+    match gate.held_tail.load(Ordering::Acquire) {
+        HELD_TAIL_ACTIVE => "active",
+        HELD_TAIL_FINALIZED => "handler-finalized",
+        HELD_TAIL_DROPPED => "dropped-after-commit",
+        HELD_TAIL_FAILED_DEADLINE => "failed-owned-deadline",
+        _ => "not-started",
+    }
+}
+
+fn observe_dropped_tail(gate: &Gate, guard: &mut GateState) -> bool {
+    if gate.held_tail.load(Ordering::Acquire) == HELD_TAIL_DROPPED
+        && matches!(guard.phase, "arrived" | "releasing")
+        && guard.arrival.is_some()
+        && guard.producer_status.is_some()
+        && guard.request_sequence.is_some()
+        && guard.error.is_none()
+    {
+        guard.phase = "disposed-after-commit";
+        guard.disposition = Some("observed-held-tail-drop-after-commit");
+        true
+    } else {
+        false
+    }
+}
+
+fn dropped_result(gate: &Gate) -> Value {
+    json!({"gateId":gate.id,"caseId":gate.case.id,
+        "completion":"held-tail-dropped-after-commit",
+        "disposition":"observed-held-tail-drop-after-commit",
+        "limitation":"actual held future dropped after real producer and independent committed arrival; body not finalized, HTTP receipt and browser consumption unobserved"})
 }
 
 pub(super) async fn arm(state: &State, message: &Value) -> Result<Value, String> {
@@ -75,10 +152,12 @@ pub(super) async fn arm(state: &State, message: &Value) -> Result<Value, String>
             phase: "armed",
             arrival: None,
             disposition: None,
+            requested_disposition: None,
             error: None,
             request_sequence: None,
             producer_status: None,
         }),
+        held_tail: AtomicU8::new(HELD_TAIL_NOT_STARTED),
         changed: Notify::new(),
     });
     gates.insert(id.to_owned(), gate);
@@ -146,24 +225,41 @@ pub(super) async fn release(state: &State, message: &Value, lose: bool) -> Resul
         if lose && gate.mode != "lose-body" {
             return Err("gate_mode_mismatch".to_owned());
         }
+        guard.requested_disposition = Some(disposition);
+        if observe_dropped_tail(&gate, &mut guard) {
+            return if lose {
+                Err("gate_disposed_before_loss".to_owned())
+            } else {
+                Ok(dropped_result(&gate))
+            };
+        }
         guard.disposition = Some(disposition);
         guard.phase = "releasing";
     }
     gate.changed.notify_waiters();
-    // A reply is emitted only once the owned handler has actually finalized its body choice.
+    // Normal completion requires actual body finalization. A synchronous post-arrival
+    // Drop has a separate typed outcome and can never be accepted as successful loss.
     tokio::time::timeout(Duration::from_secs(4),async {
         loop {
-            let notified=gate.changed.notified(); let guard=gate.state.lock().await;
-            if guard.phase=="completed" {return Ok(json!({"gateId":gate.id,"caseId":gate.case.id,"disposition":disposition,
-                "limitation":if lose {"actual producer response body replaced empty after committed observer; not TCP drop or browser delivery"} else {"handler finalized real response; browser completion independently observed"}}));}
+            let notified=gate.changed.notified(); let mut guard=gate.state.lock().await;
+            if guard.phase=="completed" {
+                if gate.held_tail.load(Ordering::Acquire)!=HELD_TAIL_FINALIZED {return Err("gate_handler_completion_unobserved".to_owned());}
+                return Ok(json!({"gateId":gate.id,"caseId":gate.case.id,"disposition":disposition,"completion":"handler-finalized",
+                "limitation":if lose {"actual producer response body replaced empty after committed observer; not TCP drop or browser delivery"} else {"handler finalized real response; browser completion requires separate observation"}}));}
             if guard.phase=="failed" {return Err("gate_handler_failed".to_owned());}
+            if observe_dropped_tail(&gate,&mut guard) {
+                return if lose {Err("gate_disposed_before_loss".to_owned())} else {Ok(dropped_result(&gate))};
+            }
             drop(guard); notified.await;
         }
     }).await.map_err(|_|"gate_release_join_timeout".to_owned())?
 }
 
 fn terminal(phase: &str) -> bool {
-    matches!(phase, "completed" | "failed" | "closed")
+    matches!(
+        phase,
+        "completed" | "failed" | "closed" | "disposed-after-commit"
+    )
 }
 
 pub(super) async fn open_count(state: &State) -> usize {
@@ -215,6 +311,7 @@ pub(super) async fn records(state: &State) -> Vec<Value> {
         records.push(json!({"gateId":gate.id,"caseId":gate.case.id,"object":gate.case.object,
             "method":gate.method,"path":gate.path,"mode":gate.mode,"phase":guard.phase,
             "error":guard.error,"disposition":guard.disposition,
+            "requestedDisposition":guard.requested_disposition,"heldTailObservation":held_tail_observation(&gate),
             "producerObserved":guard.producer_status.is_some(),"producerStatus":guard.producer_status,
             "requestSequence":guard.request_sequence}));
     }
@@ -249,7 +346,17 @@ pub(super) async fn close_all(state: &State) {
     for gate in gates {
         let mut guard = gate.state.lock().await;
         if !terminal(guard.phase) {
-            guard.disposition = Some("teardown-owned-gate");
+            if guard.requested_disposition.is_none() {
+                guard.requested_disposition = Some("teardown-owned-gate");
+            }
+            if observe_dropped_tail(&gate, &mut guard) {
+                drop(guard);
+                gate.changed.notify_waiters();
+                continue;
+            }
+            if guard.disposition.is_none() {
+                guard.disposition = Some("teardown-owned-gate");
+            }
             if guard.phase == "armed" {
                 guard.phase = "closed";
             } else {
@@ -397,7 +504,7 @@ pub(super) async fn observe_response(
         fail(&gate, "producer_did_not_commit_selected_revision").await;
         return Response::from_parts(parts, Body::from(bytes));
     }
-    {
+    let held_tail = {
         let mut guard = gate.state.lock().await;
         // Teardown may have happened during the real producer; never re-arm a disposed gate.
         if guard.phase != "producing" {
@@ -411,7 +518,8 @@ pub(super) async fn observe_response(
             "request":metadata,"producerResponse":{"status":status.as_u16(),"body":body_value},"committed":committed,"held":true}),
         );
         guard.phase = "arrived";
-    }
+        HeldTailGuard::new(gate.clone())
+    };
     gate.changed.notify_waiters();
     let disposition = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
@@ -432,6 +540,8 @@ pub(super) async fn observe_response(
         }
         Ok(Some(_)) => Body::from(bytes),
         _ => {
+            // A deadline is a failure observation, not evidence of future disposal.
+            held_tail.finish(HELD_TAIL_FAILED_DEADLINE);
             fail(&gate, "owned_gate_deadline").await;
             return Response::from_parts(parts, Body::from(bytes));
         }
@@ -439,6 +549,7 @@ pub(super) async fn observe_response(
     {
         let mut guard = gate.state.lock().await;
         guard.phase = "completed";
+        held_tail.finish(HELD_TAIL_FINALIZED);
     }
     gate.changed.notify_waiters();
     Response::from_parts(parts, body)
