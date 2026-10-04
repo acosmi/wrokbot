@@ -12,7 +12,7 @@ use openbot_contracts::{
         MAX_THREAD_MESSAGE_BYTES, ThreadConversationSnapshot, ThreadHistoryRole, ThreadRunAnchor,
         ThreadRunEvent, ThreadRunEventKind, ThreadRunStarted,
     },
-    ids::{ActorId, BotId, RunId, ThreadId, ThreadIdentity},
+    ids::{ActorId, BotId, RunId, ThreadId, thread::ThreadIdentity},
     people::CurrentUser,
 };
 use sha2::{Digest, Sha256};
@@ -20,10 +20,13 @@ use zeroize::Zeroizing;
 
 use super::composer::model_intents::RunIntent;
 use crate::{
-    api::artifacts::{MetadataError, SaveError},
+    api::artifacts::MetadataError,
     i18n::{t, use_i18n},
     primitives::{Button, ButtonSize, ButtonVariant},
 };
+
+#[cfg(target_arch = "wasm32")]
+use crate::api::artifacts::SaveError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ActorObservation {

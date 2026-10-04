@@ -8,7 +8,7 @@ use openbot_contracts::{
         canonical_artifact_uuid_v7, is_valid_artifact_identity, is_valid_artifact_sha256,
     },
     command::ThreadRunAnchor,
-    ids::{ActorId, ThreadIdentity},
+    ids::{ActorId, thread::ThreadIdentity},
 };
 
 use super::ApiError;
