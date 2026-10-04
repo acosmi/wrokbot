@@ -79,10 +79,17 @@ pub(super) async fn observe(
     {
         return Err(ArtifactReadCurrentError::Unavailable);
     }
-    let administration = authority.administration.upgrade().ok_or_else(host_unavailable)?;
-    administration.check_namespace(auth).map_err(|_| host_not_current())?;
+    let administration = authority
+        .administration
+        .upgrade()
+        .ok_or_else(host_unavailable)?;
+    administration
+        .check_namespace(auth)
+        .map_err(|_| host_not_current())?;
     if let CurrentHost::Desktop(installation) = &host
-        && !administration.registry.matches_desktop_read_installation(installation)
+        && !administration
+            .registry
+            .matches_desktop_read_installation(installation)
     {
         return Err(host_unavailable());
     }
@@ -106,49 +113,87 @@ async fn observe_inner(
         .await
         .map_err(|_| host_unavailable())?;
     remaining(deadline)?;
-    let mut client = administration.registry.pool().get().await.map_err(|_| host_unavailable())?;
-    let tx = client.build_transaction()
+    let mut client = administration
+        .registry
+        .pool()
+        .get()
+        .await
+        .map_err(|_| host_unavailable())?;
+    let tx = client
+        .build_transaction()
         .isolation_level(IsolationLevel::ReadCommitted)
         .read_only(true)
-        .start().await.map_err(|_| host_unavailable())?;
+        .start()
+        .await
+        .map_err(|_| host_unavailable())?;
     let outcome = async {
         let millis = remaining(deadline)?.as_millis().clamp(1, 5000);
         tx.batch_execute(&format!(
             "SET LOCAL statement_timeout='{millis}ms'; SET LOCAL lock_timeout='{millis}ms'"
-        )).await.map_err(|_| host_unavailable())?;
+        ))
+        .await
+        .map_err(|_| host_unavailable())?;
         let binding = administration.registry.binding();
         let physical = administration.store.physical_binding();
-        let generation = i64::try_from(auth.auth_generation().get()).map_err(|_| host_not_current())?;
+        let generation =
+            i64::try_from(auth.auth_generation().get()).map_err(|_| host_not_current())?;
         let session_id = match &host {
             CurrentHost::Session { epoch, .. } => Some(epoch.lookup_id()),
             CurrentHost::Desktop(_) => None,
         };
         remaining(deadline)?;
-        tracing::trace!(source_run_ids_phase = "joint_statement_ready", "source_run_artifact_ids_current_phase");
-        let row = tx.query_one(current_sql(matches!(&host, CurrentHost::Desktop(_))), &[
-            &target.source_thread_id(), &target.source_run_id(), &auth.actor().as_str(),
-            &auth.deployment().as_str(), &auth.tenant().as_str(), &generation,
-            &binding.dataset_id(), &binding.binding_schema(), &binding.initial_origin(),
-            &binding.created_at(), &administration.store.store_id().to_string(),
-            &physical.device(), &physical.inode(), &physical.uid(), &session_id,
-        ]).await.map_err(|_| host_unavailable())?;
+        tracing::trace!(
+            source_run_ids_phase = "joint_statement_ready",
+            "source_run_artifact_ids_current_phase"
+        );
+        let row = tx
+            .query_one(
+                current_sql(matches!(&host, CurrentHost::Desktop(_))),
+                &[
+                    &target.source_thread_id(),
+                    &target.source_run_id(),
+                    &auth.actor().as_str(),
+                    &auth.deployment().as_str(),
+                    &auth.tenant().as_str(),
+                    &generation,
+                    &binding.dataset_id(),
+                    &binding.binding_schema(),
+                    &binding.initial_origin(),
+                    &binding.created_at(),
+                    &administration.store.store_id().to_string(),
+                    &physical.device(),
+                    &physical.inode(),
+                    &physical.uid(),
+                    &session_id,
+                ],
+            )
+            .await
+            .map_err(|_| host_unavailable())?;
         // The host is classified first even for a missing source or corrupt materialized row.
         let witness = decode_host(administration, auth, &row, &host)?;
         let source = decode_source(administration, target, &row);
-        tracing::trace!(source_run_ids_phase = "joint_result_observed_before_rollback", "source_run_artifact_ids_current_phase");
+        tracing::trace!(
+            source_run_ids_phase = "joint_result_observed_before_rollback",
+            "source_run_artifact_ids_current_phase"
+        );
         Ok::<_, ArtifactReadCurrentError>((witness, source))
-    }.await;
+    }
+    .await;
     #[cfg(test)]
     let rollback = rollback_with_reviewed_pending_gate(authority, tx, deadline).await;
     #[cfg(not(test))]
     let rollback = {
         let _ = authority;
         tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), tx.rollback())
-            .await.map_err(|_| host_unavailable())?
+            .await
+            .map_err(|_| host_unavailable())?
             .map_err(|_| host_unavailable())
     };
     if rollback.is_ok() {
-        tracing::trace!(source_run_ids_phase = "rollback_acknowledged_before_tail", "source_run_artifact_ids_current_phase");
+        tracing::trace!(
+            source_run_ids_phase = "rollback_acknowledged_before_tail",
+            "source_run_artifact_ids_current_phase"
+        );
     }
     if let Ok((witness, _)) = &outcome {
         witness.verify_current(auth, deadline)?;
@@ -168,15 +213,21 @@ fn decode_source(
     if !row.try_get::<_, bool>("source_visible").map_err(field)? {
         return Err(ArtifactReadCurrentError::NotVisible);
     }
-    if !row.try_get::<_, bool>("current_store_binding").map_err(field)?
-        || !administration.store.matches_registry_owner(&administration.registry)
+    if !row
+        .try_get::<_, bool>("current_store_binding")
+        .map_err(field)?
+        || !administration
+            .store
+            .matches_registry_owner(&administration.registry)
         || !row.try_get::<_, bool>("records_valid").map_err(field)?
     {
         return Err(ArtifactReadCurrentError::Unavailable);
     }
     let artifact_ids: Vec<String> = row.try_get("artifact_ids").map_err(field)?;
     if artifact_ids.len() > 32
-        || artifact_ids.iter().any(|id| canonical_artifact_uuid_v7(id).as_deref() != Some(id.as_str()))
+        || artifact_ids
+            .iter()
+            .any(|id| canonical_artifact_uuid_v7(id).as_deref() != Some(id.as_str()))
         || artifact_ids.windows(2).any(|pair| pair[0] >= pair[1])
     {
         return Err(ArtifactReadCurrentError::Unavailable);
@@ -290,26 +341,38 @@ async fn rollback_with_reviewed_pending_gate(
 ) -> Result<(), ArtifactReadCurrentError> {
     use std::future::{Future as _, poll_fn};
     use std::task::Poll;
-    let gate = authority.source_run_ids_rollback_gate.lock()
-        .map_err(|_| host_unavailable())?.take();
+    let gate = authority
+        .source_run_ids_rollback_gate
+        .lock()
+        .map_err(|_| host_unavailable())?
+        .take();
     let mut original = Box::pin(tx.rollback());
     let limit = tokio::time::Instant::from_std(deadline);
     let Some(gate) = gate else {
-        return tokio::time::timeout_at(limit, original).await
-            .map_err(|_| host_unavailable())?.map_err(|_| host_unavailable());
+        return tokio::time::timeout_at(limit, original)
+            .await
+            .map_err(|_| host_unavailable())?
+            .map_err(|_| host_unavailable());
     };
     let first = poll_fn(|cx| match original.as_mut().poll(cx) {
         Poll::Pending => Poll::Ready(None),
         Poll::Ready(result) => Poll::Ready(Some(result)),
-    }).await;
+    })
+    .await;
     let result = if let Some(result) = first {
         // A Ready first poll is an actual result, never a fabricated Pending observation.
         result
     } else {
-        gate.first_pending.send(()).map_err(|_| host_unavailable())?;
-        tokio::time::timeout_at(limit, gate.resume).await
-            .map_err(|_| host_unavailable())?.map_err(|_| host_unavailable())?;
-        tokio::time::timeout_at(limit, original).await.map_err(|_| host_unavailable())?
+        gate.first_pending
+            .send(())
+            .map_err(|_| host_unavailable())?;
+        tokio::time::timeout_at(limit, gate.resume)
+            .await
+            .map_err(|_| host_unavailable())?
+            .map_err(|_| host_unavailable())?;
+        tokio::time::timeout_at(limit, original)
+            .await
+            .map_err(|_| host_unavailable())?
     };
     // False qualifies an actually returned error. Timeout/Drop sends no presumed ACK.
     let _ = gate.actual_ack.send(result.is_ok());

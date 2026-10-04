@@ -64,8 +64,8 @@ use openbot_contracts::request_binding::{
     ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadTailWitness,
     HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingIdentity,
     HostRequestBindingKind, RequestBindingIssuer, RequestBindingOwnerLease,
-    RequestBindingOwnerObservation, VerifiedHostRequestBinding,
-    SourceRunArtifactIdsCurrentCheck, SourceRunArtifactIdsCurrentTarget,
+    RequestBindingOwnerObservation, SourceRunArtifactIdsCurrentCheck,
+    SourceRunArtifactIdsCurrentTarget, VerifiedHostRequestBinding,
 };
 use openbot_contracts::sandboxed::{
     SandboxedComponentRevisionRequest, SaveSandboxedComponentRequest,
@@ -453,18 +453,22 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
         deadline: Instant,
     ) -> SourceRunArtifactIdsCurrentCheck<'a> {
         Box::pin(async move {
-            self.check_window(auth).map_err(ArtifactReadCurrentError::Host)?;
+            self.check_window(auth)
+                .map_err(ArtifactReadCurrentError::Host)?;
             if deadline <= Instant::now() {
                 return Err(ArtifactReadCurrentError::Host(
                     HostRequestBindingError::Unavailable,
                 ));
             }
-            let binding = auth.request_binding().ok_or(ArtifactReadCurrentError::Host(
-                HostRequestBindingError::Missing,
-            ))?;
-            if !self.issuer.matches_desktop_window_epoch(
-                binding.identity(), &self.label, self.id,
-            ) {
+            let binding = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?;
+            if !self
+                .issuer
+                .matches_desktop_window_epoch(binding.identity(), &self.label, self.id)
+            {
                 return Err(ArtifactReadCurrentError::Host(
                     HostRequestBindingError::NotCurrent,
                 ));
@@ -478,7 +482,8 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
             )
             .await
             .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable));
-            self.check_window(auth).map_err(ArtifactReadCurrentError::Host)?;
+            self.check_window(auth)
+                .map_err(ArtifactReadCurrentError::Host)?;
             let (inner, outcome) = result??;
             let witness = WindowReadTail {
                 window: WindowRequestBindingGuard {
@@ -495,7 +500,10 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
                 inner,
             };
             witness.verify_current(auth, deadline)?;
-            Ok((Box::new(witness) as Box<dyn ArtifactReadTailWitness>, outcome))
+            Ok((
+                Box::new(witness) as Box<dyn ArtifactReadTailWitness>,
+                outcome,
+            ))
         })
     }
 
@@ -1065,7 +1073,10 @@ impl DesktopTauriProtocol {
     /// Handle one custom-protocol request. Public for deterministic host-adapter tests.
     pub async fn handle(&self, label: &str, mut request: Request<Vec<u8>>) -> Response<Vec<u8>> {
         if request.uri().path() == "/api/artifacts/source-runs"
-            || request.uri().path().starts_with("/api/artifacts/source-runs/")
+            || request
+                .uri()
+                .path()
+                .starts_with("/api/artifacts/source-runs/")
         {
             let authority = {
                 let windows = match self.window_registry.windows.try_read() {

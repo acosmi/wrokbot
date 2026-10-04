@@ -1,32 +1,35 @@
 //! Owned-PG metadata tests with a trusted-test issuer. Genuine host proof is tested separately.
 
-use std::fs::{self,File};
-use std::future::Future;
-use std::os::unix::fs::DirBuilderExt as _;
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::sync::{Arc,Weak};
-use std::time::{Duration,Instant};
-use openbot_application::{ArtifactAdministration,BeginThreadRunRequest,ThreadDirectory};
-use openbot_contracts::artifacts::{ArtifactRegistrationReceipt,GetSourceRunArtifactIds,SourceRunArtifactIds,SaveRunMessageTextArtifact};
-use openbot_contracts::auth::{AuthContext,AuthContextBuilder,AuthGeneration,Role};
-use openbot_contracts::command::{BeginThreadRun,ThreadRunAnchor};
-use openbot_contracts::error::AppError;
-use openbot_contracts::ids::thread::ThreadIdentity;
-use openbot_contracts::ids::{ActorId,BotId,ChannelId,DeploymentId,RunId,TenantId};
-use openbot_contracts::request_binding::*;
-use openbot_domain::artifact::ArtifactQuotaPolicy;
-use openbot_domain::audit::hash::Sha256Digest;
-use openbot_domain::identity::session::SessionLifetimePolicy;
-use openbot_domain::vault::SecretBytes;
 use crate::artifact_administration::PostgresArtifactAdministration;
 use crate::artifact_read_authority::PostgresArtifactReadAuthority;
 use crate::artifact_registry::ArtifactDatasetRegistry;
 use crate::artifact_store::DatasetBoundArtifactStore;
 use crate::db::pool::DatabaseConfig;
-use crate::db::{baseline,native,pool};
-use crate::thread_directory::{DEFAULT_THREAD_LEASE_DURATION,PostgresThreadDirectory};
+use crate::db::{baseline, native, pool};
+use crate::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
 use deadpool_postgres::Pool;
+use openbot_application::{ArtifactAdministration, BeginThreadRunRequest, ThreadDirectory};
+use openbot_contracts::artifacts::{
+    ArtifactRegistrationReceipt, GetSourceRunArtifactIds, SaveRunMessageTextArtifact,
+    SourceRunArtifactIds,
+};
+use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
+use openbot_contracts::command::{BeginThreadRun, ThreadRunAnchor};
+use openbot_contracts::error::AppError;
+use openbot_contracts::ids::thread::ThreadIdentity;
+use openbot_contracts::ids::{ActorId, BotId, ChannelId, DeploymentId, RunId, TenantId};
+use openbot_contracts::request_binding::*;
+use openbot_domain::artifact::ArtifactQuotaPolicy;
+use openbot_domain::audit::hash::Sha256Digest;
+use openbot_domain::identity::session::SessionLifetimePolicy;
+use openbot_domain::vault::SecretBytes;
+use std::fs::{self, File};
+use std::future::Future;
+use std::os::unix::fs::DirBuilderExt as _;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -35,12 +38,14 @@ mod harness {
     include!("../../../../test-support/postgres_harness.rs");
 }
 use super::*;
-const DEPLOYMENT:&str="artifact-read-owned-deployment";
-const TENANT:&str="artifact-read-owned-tenant";
-const OWNER:&str="read-owner";
-const OTHER:&str="read-other";
-const EXACT:&str="  SOURCE_IDS_OWNED_MESSAGE\n成果 café 🦀\t  ";
-fn require(ok:bool,msg:&'static str)->Result<(),String> { if ok {Ok(())}else{Err(msg.to_owned())} }
+const DEPLOYMENT: &str = "artifact-read-owned-deployment";
+const TENANT: &str = "artifact-read-owned-tenant";
+const OWNER: &str = "read-owner";
+const OTHER: &str = "read-other";
+const EXACT: &str = "  SOURCE_IDS_OWNED_MESSAGE\n成果 café 🦀\t  ";
+fn require(ok: bool, msg: &'static str) -> Result<(), String> {
+    if ok { Ok(()) } else { Err(msg.to_owned()) }
+}
 struct OwnedRoot(PathBuf);
 impl OwnedRoot {
     fn new() -> Result<Self, String> {
@@ -252,23 +257,51 @@ impl Fixture {
             .map_err(|e| e.to_string())
     }
     fn input(&self) -> GetSourceRunArtifactIds {
-        GetSourceRunArtifactIds { source_thread_id:self.begin.command.thread_id.clone(), source_run_id:self.begin.command.run_id.clone() }
+        GetSourceRunArtifactIds {
+            source_thread_id: self.begin.command.thread_id.clone(),
+            source_run_id: self.begin.command.run_id.clone(),
+        }
     }
     async fn ids(&self) -> Result<SourceRunArtifactIds, String> {
-        openbot_application::get_source_run_artifact_ids(self.administration.as_ref(), &self.auth(), self.input())
-            .await.map_err(|_| "current source IDs observation refused".to_owned())
+        openbot_application::get_source_run_artifact_ids(
+            self.administration.as_ref(),
+            &self.auth(),
+            self.input(),
+        )
+        .await
+        .map_err(|_| "current source IDs observation refused".to_owned())
     }
-    async fn outcome(&self, input: GetSourceRunArtifactIds) -> Result<SourceRunArtifactIds, AppError> {
-        openbot_application::get_source_run_artifact_ids(self.administration.as_ref(), &self.auth(), input).await
+    async fn outcome(
+        &self,
+        input: GetSourceRunArtifactIds,
+    ) -> Result<SourceRunArtifactIds, AppError> {
+        openbot_application::get_source_run_artifact_ids(
+            self.administration.as_ref(),
+            &self.auth(),
+            input,
+        )
+        .await
     }
-    fn object(&self,id:&str)->PathBuf { self.root.0.join("objects").join(id) }
-    async fn sql(&self, sql:&str)->Result<(),String> {
-        self.pool.get().await.map_err(|_| "fixture pool unavailable".to_owned())?
-            .batch_execute(sql).await.map_err(|_| "owned fixture mutation failed".to_owned())
+    fn object(&self, id: &str) -> PathBuf {
+        self.root.0.join("objects").join(id)
+    }
+    async fn sql(&self, sql: &str) -> Result<(), String> {
+        self.pool
+            .get()
+            .await
+            .map_err(|_| "fixture pool unavailable".to_owned())?
+            .batch_execute(sql)
+            .await
+            .map_err(|_| "owned fixture mutation failed".to_owned())
     }
 }
 fn lifetime() -> SessionLifetimePolicy {
-    SessionLifetimePolicy::new(time::Duration::minutes(30),time::Duration::hours(1),time::Duration::seconds(1)).unwrap()
+    SessionLifetimePolicy::new(
+        time::Duration::minutes(30),
+        time::Duration::hours(1),
+        time::Duration::seconds(1),
+    )
+    .unwrap()
 }
 struct CoreSessionGuard {
     issuer: RequestBindingIssuer,
@@ -276,27 +309,48 @@ struct CoreSessionGuard {
     lifetime: SessionLifetimePolicy,
 }
 impl HostRequestBindingGuard for CoreSessionGuard {
-    fn verify_current<'a>(&'a self,_:&'a AuthContext)->Pin<Box<dyn Future<Output=Result<(),HostRequestBindingError>>+Send+'a>> {
+    fn verify_current<'a>(
+        &'a self,
+        _: &'a AuthContext,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>> {
         Box::pin(async { Err(HostRequestBindingError::Unavailable) })
     }
     fn verify_source_run_artifact_ids_current_before<'a>(
-        &'a self,auth:&'a AuthContext,target:&'a dyn SourceRunArtifactIdsCurrentTarget,deadline:Instant,
-    )->SourceRunArtifactIdsCurrentCheck<'a> {
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn SourceRunArtifactIdsCurrentTarget,
+        deadline: Instant,
+    ) -> SourceRunArtifactIdsCurrentCheck<'a> {
         Box::pin(async move {
-            let authority=self.authority.upgrade().ok_or(ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable))?;
-            let identity=auth.request_binding().ok_or(ArtifactReadCurrentError::Host(HostRequestBindingError::Missing))?.identity();
-            let epoch=self.issuer.borrow_server_session_epoch(identity).map_err(ArtifactReadCurrentError::Host)?;
-            authority.observe_source_run_ids_server_session(auth,target,epoch,self.lifetime,deadline).await
+            let authority = self
+                .authority
+                .upgrade()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ))?;
+            let identity = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?
+                .identity();
+            let epoch = self
+                .issuer
+                .borrow_server_session_epoch(identity)
+                .map_err(ArtifactReadCurrentError::Host)?;
+            authority
+                .observe_source_run_ids_server_session(auth, target, epoch, self.lifetime, deadline)
+                .await
         })
     }
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
-#[ignore="requires owned disposable PostgreSQL through OPENBOT_TEST_DATABASE_URL"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned disposable PostgreSQL through OPENBOT_TEST_DATABASE_URL"]
 async fn actual_rollback_pending_ack_precedes_original_binding_tail_for_all_outcomes() {
     for source in 0..3 {
-        for expire in [false,true] {
-            let tag=format!("source_ids_rollback_{source}_{}",u8::from(expire));
+        for expire in [false, true] {
+            let tag = format!("source_ids_rollback_{source}_{}", u8::from(expire));
             harness::with_temp_database(&harness::admin_config(&tag),&tag,|config| async move {
                 let f=Fixture::new(config,false).await?;
                 let saved=f.save().await?;

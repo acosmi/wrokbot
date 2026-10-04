@@ -226,7 +226,10 @@ impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAut
             tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
                 authority.observe_source_run_ids_desktop_local(
-                    auth, target, &self.installation, deadline,
+                    auth,
+                    target,
+                    &self.installation,
+                    deadline,
                 ),
             )
             .await

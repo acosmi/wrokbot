@@ -1059,10 +1059,13 @@ impl ArtifactAdministration for PostgresArtifactAdministration {
         input: &openbot_contracts::artifacts::GetSourceRunArtifactIds,
         deadline: std::time::Instant,
     ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
-        let authority = self.read_authority.get().ok_or(
-            openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable,
-        )?;
-        authority.source_run_artifact_ids_current(auth, input, deadline).await
+        let authority = self
+            .read_authority
+            .get()
+            .ok_or(openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable)?;
+        authority
+            .source_run_artifact_ids_current(auth, input, deadline)
+            .await
     }
     async fn open_host_bound_read_operation(
         &self,

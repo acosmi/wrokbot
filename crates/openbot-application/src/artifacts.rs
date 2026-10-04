@@ -231,36 +231,49 @@ pub async fn get_source_run_artifact_ids(
             return Err(AppError::MalformedPayload { field });
         }
     }
-    let original = auth.request_binding().cloned().ok_or(
-        AppError::DependencyUnavailable { dependency: "host_request_binding" },
-    )?;
+    let original = auth
+        .request_binding()
+        .cloned()
+        .ok_or(AppError::DependencyUnavailable {
+            dependency: "host_request_binding",
+        })?;
     let deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_secs(5))
-        .ok_or(AppError::DependencyUnavailable { dependency: "host_request_binding" })?;
-    original.check_source_run_artifact_ids_attachment(auth, deadline)
+        .ok_or(AppError::DependencyUnavailable {
+            dependency: "host_request_binding",
+        })?;
+    original
+        .check_source_run_artifact_ids_attachment(auth, deadline)
         .map_err(current_read_error)?;
-    let outcome = port.observe_source_run_artifact_ids_current(auth, &input, deadline).await;
-    original.check_source_run_artifact_ids_attachment(auth, deadline)
+    let outcome = port
+        .observe_source_run_artifact_ids_current(auth, &input, deadline)
+        .await;
+    original
+        .check_source_run_artifact_ids_attachment(auth, deadline)
         .map_err(current_read_error)?;
     let (witness, source) = outcome.map_err(current_read_error)?;
     // Preserve the source/shape refusal until the original current host tail has been checked.
-    let source = source.map_err(|error| match error {
-        openbot_contracts::request_binding::ArtifactReadCurrentError::Gone(_) =>
-            openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable,
-        other => other,
-    }).and_then(|ids| {
-        if ids.source_thread_id != input.source_thread_id
-            || ids.source_run_id != input.source_run_id
-            || ids.artifact_ids.len() > 32
-            || ids.artifact_ids.iter().any(|id| !canonical_id(id))
-            || ids.artifact_ids.windows(2).any(|pair| pair[0] >= pair[1])
-        {
-            Err(openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable)
-        } else {
-            Ok(ids)
-        }
-    });
-    original.verify_source_run_artifact_ids_tail(auth, witness.as_ref(), deadline)
+    let source = source
+        .map_err(|error| match error {
+            openbot_contracts::request_binding::ArtifactReadCurrentError::Gone(_) => {
+                openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable
+            }
+            other => other,
+        })
+        .and_then(|ids| {
+            if ids.source_thread_id != input.source_thread_id
+                || ids.source_run_id != input.source_run_id
+                || ids.artifact_ids.len() > 32
+                || ids.artifact_ids.iter().any(|id| !canonical_id(id))
+                || ids.artifact_ids.windows(2).any(|pair| pair[0] >= pair[1])
+            {
+                Err(openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable)
+            } else {
+                Ok(ids)
+            }
+        });
+    original
+        .verify_source_run_artifact_ids_tail(auth, witness.as_ref(), deadline)
         .map_err(current_read_error)?;
     source.map_err(current_read_error)
 }

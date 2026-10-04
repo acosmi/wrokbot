@@ -90,7 +90,10 @@ pub async fn source_run_ids(
             && (!raw_path.next().is_some_and(|byte| byte.is_ascii_hexdigit())
                 || !raw_path.next().is_some_and(|byte| byte.is_ascii_hexdigit()))
         {
-            return Err(AppError::MalformedPayload { field: "source_run" }.into());
+            return Err(AppError::MalformedPayload {
+                field: "source_run",
+            }
+            .into());
         }
     }
     let Path((thread_id, run_id)) = source.map_err(|_| AppError::MalformedPayload {

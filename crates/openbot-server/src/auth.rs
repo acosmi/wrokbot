@@ -550,9 +550,11 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
                 .ok_or(ArtifactReadCurrentError::Host(
                     HostRequestBindingError::Unavailable,
                 ))?;
-            let binding = auth.request_binding().ok_or(ArtifactReadCurrentError::Host(
-                HostRequestBindingError::Missing,
-            ))?;
+            let binding = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?;
             let epoch = self
                 .issuer
                 .borrow_server_session_epoch(binding.identity())
@@ -565,7 +567,11 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
             let result = tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
                 authority.observe_source_run_ids_server_session(
-                    auth, target, epoch, probe.lifetime, deadline,
+                    auth,
+                    target,
+                    epoch,
+                    probe.lifetime,
+                    deadline,
                 ),
             )
             .await
@@ -584,7 +590,10 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
                 inner,
             };
             witness.verify_current(auth, deadline)?;
-            Ok((Box::new(witness) as Box<dyn ArtifactReadTailWitness>, source))
+            Ok((
+                Box::new(witness) as Box<dyn ArtifactReadTailWitness>,
+                source,
+            ))
         })
     }
 

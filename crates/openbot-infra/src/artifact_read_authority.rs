@@ -111,7 +111,14 @@ impl PostgresArtifactReadAuthority {
         lifetime: SessionLifetimePolicy,
         deadline: Instant,
     ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
-        source_run_ids::observe(self, auth, target, CurrentHost::Session { epoch, lifetime }, deadline).await
+        source_run_ids::observe(
+            self,
+            auth,
+            target,
+            CurrentHost::Session { epoch, lifetime },
+            deadline,
+        )
+        .await
     }
 
     /// Observe IDs only with the original real Local installation and its current sealed canary.
@@ -122,7 +129,14 @@ impl PostgresArtifactReadAuthority {
         installation: &DesktopLocalAuthority,
         deadline: Instant,
     ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
-        source_run_ids::observe(self, auth, target, CurrentHost::Desktop(installation), deadline).await
+        source_run_ids::observe(
+            self,
+            auth,
+            target,
+            CurrentHost::Desktop(installation),
+            deadline,
+        )
+        .await
     }
 
     pub(super) async fn source_run_artifact_ids_current(
