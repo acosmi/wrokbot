@@ -279,7 +279,12 @@ impl Fixture {
             pool,
             resolver,
             application,
-            router: openbot_server::router(state),
+            router: openbot_server::router(state).layer(axum::Extension(
+                axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    std::net::Ipv4Addr::LOCALHOST,
+                    40_010,
+                ))),
+            )),
             receipt,
             empty,
             root,
