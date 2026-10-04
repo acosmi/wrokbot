@@ -24,6 +24,7 @@ use openbot_contracts::sandboxed::is_sandboxed_component_name;
 use openbot_contracts::text::trim_ecmascript;
 use sha2::{Digest, Sha256};
 
+use super::artifacts::{ArtifactMessageActions, ArtifactSourceObserver};
 use super::run_observation::{ObservedRunDirectory, OutputPhase, RunObservation};
 #[cfg(target_arch = "wasm32")]
 use crate::api::desktop_transport::{
@@ -846,6 +847,7 @@ fn ConversationSurface(
     let streaming_agent_seed = StoredValue::new(agent_seed.clone());
     let streaming_agent_name = StoredValue::new(agent_name.clone());
     let thread_id = RwSignal::new(thread);
+    let artifact_source = ArtifactSourceObserver::new(thread_id, agent_id, run_anchor);
     let allow_missing_snapshot = RwSignal::new(fresh_thread);
     let observed_runs = expect_context::<ObservedRunDirectory>();
     let state = RwSignal::new(ConversationState {
@@ -872,6 +874,7 @@ fn ConversationSurface(
         stream_error,
         reload_generation,
         allow_missing_snapshot,
+        artifact_source,
     );
     let component_attention =
         expect_context::<crate::features::approvals::attention::ComponentDecisionActions>();
@@ -1155,6 +1158,7 @@ fn ConversationSurface(
                 submitting.set(false);
                 return;
             };
+            artifact_source.stage_begin(&attempt);
             let result = begin_thread_run_with_skills_and_model(
                 resolved_thread,
                 &attempt.agent_id,
@@ -1165,6 +1169,7 @@ fn ConversationSurface(
                 attempt.model_selection.as_ref(),
             )
             .await;
+            artifact_source.begin_reply(&attempt.run_id, result.as_ref().map_err(|_| ()));
             match &result {
                 Ok(_) => ticket.accepted(),
                 Err(error) => ticket.failed(*error),
@@ -1572,6 +1577,7 @@ fn ConversationSurface(
                                         component_ask_disabled
                                         on_remember
                                         memory_available=thread_id.get().is_some()
+                                        artifact_source
                                     />
                                 }
                             }
@@ -1841,8 +1847,10 @@ fn TranscriptMessage(
     component_ask_disabled: Signal<bool>,
     on_remember: UnsyncCallback<(String, String)>,
     memory_available: bool,
+    artifact_source: ArtifactSourceObserver,
 ) -> impl IntoView {
     let i18n = use_i18n();
+    let artifact_message_id = message.id.clone();
     let remember_source = (message.id.clone(), message.content.clone());
     let can_remember = memory_available
         && matches!(
@@ -1917,6 +1925,7 @@ fn TranscriptMessage(
                     }}</MessageHeader>
                     {body}
                     {can_remember.then(|| view! { <MessageFooter><Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=move |_| on_remember.run(remember_source.clone())>{move || t!(i18n, memory.remember_action)}</Button></MessageFooter> })}
+                    {user.then(|| view! { <MessageFooter><ArtifactMessageActions message_id=artifact_message_id source=artifact_source/></MessageFooter> })}
                 </MessageContent>
             </Message>
         </MessageScrollerItem>
@@ -2001,6 +2010,7 @@ fn install_conversation_sync(
     stream_error: RwSignal<bool>,
     generation: RwSignal<u64>,
     allow_missing_snapshot: RwSignal<bool>,
+    artifact_source: ArtifactSourceObserver,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -2059,8 +2069,12 @@ fn install_conversation_sync(
                 if is_tauri_host() {
                     let expected_thread = thread.clone();
                     let handlers = DesktopStructuredHandlers::new(
-                        move |event| match apply_thread_stream_event(event, &expected_thread, state)
-                        {
+                        move |event| match apply_thread_stream_event(
+                            event,
+                            &expected_thread,
+                            state,
+                            artifact_source,
+                        ) {
                             ThreadStreamOutcome::Keep => true,
                             ThreadStreamOutcome::Reload => false,
                             ThreadStreamOutcome::Error => {
@@ -2101,7 +2115,14 @@ fn install_conversation_sync(
                     }
                     return;
                 }
-                match open_event_source(&thread, cursor, state, stream_error, generation) {
+                match open_event_source(
+                    &thread,
+                    cursor,
+                    state,
+                    stream_error,
+                    generation,
+                    artifact_source,
+                ) {
                     Ok(opened) => {
                         if generation.get_untracked() == current_generation {
                             connection.set_value(Some(opened));
@@ -2129,6 +2150,7 @@ fn install_conversation_sync(
         stream_error,
         generation,
         allow_missing_snapshot,
+        artifact_source,
     );
 }
 
@@ -2144,10 +2166,14 @@ fn apply_thread_stream_event(
     event: AppEvent,
     expected_thread: &ThreadId,
     state: RwSignal<ConversationState>,
+    artifact_source: ArtifactSourceObserver,
 ) -> ThreadStreamOutcome {
     match event {
         AppEvent::ThreadRunEvent(event) => {
             let effect = state.try_update(|state| apply_live_event(state, expected_thread, &event));
+            if matches!(&effect, Some(Ok(_))) {
+                artifact_source.native_event(&event);
+            }
             match effect {
                 Some(Ok(LiveEffect::ReloadSnapshot)) | Some(Err(())) => ThreadStreamOutcome::Reload,
                 Some(Ok(LiveEffect::None)) => ThreadStreamOutcome::Keep,
@@ -2181,6 +2207,7 @@ fn open_event_source(
     state: RwSignal<ConversationState>,
     stream_error: RwSignal<bool>,
     generation: RwSignal<u64>,
+    artifact_source: ArtifactSourceObserver,
 ) -> Result<EventConnection, ()> {
     let path = thread_event_stream_path(thread, cursor).map_err(|_| ())?;
     let source = EventSource::new(&path).map_err(|_| ())?;
@@ -2201,7 +2228,7 @@ fn open_event_source(
             event_source.close();
             return;
         };
-        match apply_thread_stream_event(event, &expected_thread, state) {
+        match apply_thread_stream_event(event, &expected_thread, state, artifact_source) {
             ThreadStreamOutcome::Keep => {}
             ThreadStreamOutcome::Reload => {
                 generation.update(|value| *value = value.saturating_add(1));
