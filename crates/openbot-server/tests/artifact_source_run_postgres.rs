@@ -436,6 +436,19 @@ async fn actual_session_router_lists_only_its_visible_source_ids_with_no_store()
         let expected=serde_json::json!({"sourceThreadId":original.source_thread_id,"sourceRunId":original.source_run_id,"artifactIds":[fixture.receipt.artifact_id]});
         for cookie in [COOKIE_A,COOKIE_B] {
             let facts=request(fixture.router.clone(),cookie,Method::GET,&uri,"").await?;
+            let diagnostic_code = facts.value.as_ref().and_then(|value| value.get("code")).and_then(serde_json::Value::as_str)
+                .filter(|code| matches!(*code, "unauthenticated" | "forbidden" | "not_visible" | "malformed_payload" | "dependency_unavailable"))
+                .unwrap_or("absent_or_other");
+            eprintln!(
+                "SOURCE_RUN_SERVER_PUBLIC_SHAPE status={} code={} key_count={:?} thread_match={} run_match={} ids_count={:?} ids_match={} dto_match={}",
+                facts.status.as_u16(), diagnostic_code,
+                facts.value.as_ref().and_then(serde_json::Value::as_object).map(|object| object.len()),
+                facts.value.as_ref().and_then(|value| value.get("sourceThreadId")) == expected.get("sourceThreadId"),
+                facts.value.as_ref().and_then(|value| value.get("sourceRunId")) == expected.get("sourceRunId"),
+                facts.value.as_ref().and_then(|value| value.get("artifactIds")).and_then(serde_json::Value::as_array).map(|ids| ids.len()),
+                facts.value.as_ref().and_then(|value| value.get("artifactIds")) == expected.get("artifactIds"),
+                facts.value.as_ref() == Some(&expected),
+            );
             require(facts.status==StatusCode::OK && facts.value==Some(expected.clone()),"actual source route changed identity or added byte fields")?;
         }
         let a=fixture.auth(COOKIE_A).await?;
