@@ -837,10 +837,10 @@ pub(super) async fn run(config: pool::DatabaseConfig) -> Result<(), String> {
     if let Some(auth) = auth_owner {
         auth.close_request_bindings();
     }
-    if let Some(assembled) = &assembly {
-        if let Some(facts) = &assembled.runtime_capability_facts {
-            facts.close();
-        }
+    if let Some(assembled) = &assembly
+        && let Some(facts) = &assembled.runtime_capability_facts
+    {
+        facts.close();
     }
     if let Some(stop) = stop_sender {
         let _ = stop.send(());
@@ -909,6 +909,9 @@ pub(super) async fn run(config: pool::DatabaseConfig) -> Result<(), String> {
         false
     };
     let wire_record: WireRecord = wire.finish().await;
+    if wire_record.requests.len() != wire_record.counts.http {
+        close_errors.push("owned_tls_request_capture_incomplete");
+    }
     if wire_record.failed != 0 {
         close_errors.push("owned_tls_child_failed");
     }
