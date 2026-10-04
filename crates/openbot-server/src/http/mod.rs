@@ -142,6 +142,20 @@ impl ServerState {
         self.inner.auth.as_ref()
     }
 
+    /// Read one current first chunk for a trusted Rust consumer; no HTTP route is added.
+    pub async fn read_current_artifact_chunk(
+        &self,
+        parts: &http::request::Parts,
+        artifact_id: String,
+    ) -> Result<Vec<u8>, openbot_contracts::error::AppError> {
+        let auth = self.auth_resolver().resolve(parts).await?;
+        let pending = self
+            .application()
+            .read_current_artifact_chunk(auth.clone(), artifact_id)
+            .await?;
+        pending.handoff(&auth)
+    }
+
     /// 已声明的 readiness 判据。**可以是空的，而空 = not ready**（见
     /// [`crate::readiness`] 模块文档）。
     #[must_use]

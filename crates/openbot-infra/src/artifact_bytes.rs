@@ -523,6 +523,14 @@ pub struct ArtifactBlobReader {
     failed: bool,
 }
 impl ArtifactBlobReader {
+    /// Recheck the original retained FD without reading bytes or reopening another object.
+    #[cfg(feature = "server-runtime")]
+    pub(crate) fn verify_current_descriptor(&self) -> Result<(), ArtifactByteError> {
+        if self.failed {
+            return Err(ArtifactByteError::Io);
+        }
+        self.check_observation()
+    }
     /// 在调用方缓冲中返回 ≤4MiB；修改/截断/替换拒绝，EOF 返回0。
     /// 外部单次句柄/单在途响应限制仍必须由 transport 的句柄管理器落实。
     pub fn read_chunk(&mut self, output: &mut [u8]) -> Result<usize, ArtifactByteError> {

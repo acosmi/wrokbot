@@ -73,6 +73,7 @@
 #![deny(missing_docs)]
 
 pub mod agent;
+pub mod artifact_read;
 pub mod artifacts;
 pub mod audit;
 pub mod auth;
@@ -105,6 +106,11 @@ pub mod tool;
 pub mod ui;
 
 // R425 非 Serde 受信宿主接口。
+pub use artifact_read::PendingArtifactReadBuffer;
+pub use request_binding::{
+    ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadRecordFacts,
+    ArtifactReadTailWitness,
+};
 pub use request_binding::{
     BorrowedServerSessionEpoch, HostRequestBindingError, HostRequestBindingGuard,
     HostRequestBindingIdentity, HostRequestBindingKind, MAX_SERVER_SESSION_EPOCH_LOOKUP_BYTES,

@@ -1,5 +1,6 @@
 //! Tauri 2.11.5 custom-protocol adapter for the shared Leptos bundle.
 
+mod artifact_read;
 mod artifacts;
 mod assets;
 #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
@@ -59,8 +60,10 @@ use openbot_contracts::reconciliation::{
 };
 use openbot_contracts::remote_interrupt::{RemoteInterruptAnswer, RemoteInterruptResolved};
 use openbot_contracts::request_binding::{
-    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind, RequestBindingIssuer,
-    RequestBindingOwnerLease, RequestBindingOwnerObservation, VerifiedHostRequestBinding,
+    ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadTailWitness,
+    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingIdentity,
+    HostRequestBindingKind, RequestBindingIssuer, RequestBindingOwnerLease,
+    RequestBindingOwnerObservation, VerifiedHostRequestBinding,
 };
 use openbot_contracts::sandboxed::{
     SandboxedComponentRevisionRequest, SaveSandboxedComponentRequest,
@@ -441,6 +444,71 @@ impl WindowRequestBindingGuard {
     }
 }
 impl HostRequestBindingGuard for WindowRequestBindingGuard {
+    fn verify_artifact_read_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn ArtifactReadCurrentTarget,
+        deadline: Instant,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.check_window(auth)
+                .map_err(ArtifactReadCurrentError::Host)?;
+            if deadline <= Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            let binding = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?;
+            if !self
+                .issuer
+                .matches_desktop_window_epoch(binding.identity(), &self.label, self.id)
+            {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let source = self.source.as_ref().ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ))?;
+            let result = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                source.verify_artifact_read_current_before(auth, target, deadline),
+            )
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable));
+            self.check_window(auth)
+                .map_err(ArtifactReadCurrentError::Host)?;
+            let inner = result??;
+            let witness = WindowReadTail {
+                window: WindowRequestBindingGuard {
+                    registry: self.registry.clone(),
+                    owner: self.owner.clone(),
+                    issuer: self.issuer.clone(),
+                    label: self.label.clone(),
+                    id: self.id,
+                    expected: self.expected.clone(),
+                    source: None,
+                    upstream: None,
+                },
+                original: binding.identity().clone(),
+                inner,
+            };
+            witness.verify_current(auth, deadline)?;
+            Ok(Box::new(witness) as Box<dyn ArtifactReadTailWitness>)
+        })
+    }
+
     fn verify_current<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -480,6 +548,51 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
             self.check_window(auth)?;
             result
         })
+    }
+}
+
+/// Only weak window observations and the actual joint-query tail, without a host lease.
+struct WindowReadTail {
+    window: WindowRequestBindingGuard,
+    original: HostRequestBindingIdentity,
+    inner: Box<dyn ArtifactReadTailWitness>,
+}
+impl ArtifactReadTailWitness for WindowReadTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.window
+            .check_window(auth)
+            .map_err(ArtifactReadCurrentError::Host)?;
+        if !auth.request_binding().is_some_and(|binding| {
+            self.original.same_binding(binding.identity())
+                && self.window.issuer.matches_desktop_window_epoch(
+                    binding.identity(),
+                    &self.window.label,
+                    self.window.id,
+                )
+        }) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        if deadline <= Instant::now() {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ));
+        }
+        self.inner.verify_current(auth, deadline)?;
+        self.window
+            .check_window(auth)
+            .map_err(ArtifactReadCurrentError::Host)?;
+        if deadline <= Instant::now() {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ));
+        }
+        Ok(())
     }
 }
 

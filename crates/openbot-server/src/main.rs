@@ -258,6 +258,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?;
     initialize_single_user(&pool, single_user).await?;
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let mut artifact_session_resolver: Option<PostgresSessionAuthResolver> = None;
     let (auth, sensitive, floor, oidc_login): AuthAssembly = if let Some(config) = auth_config {
         let oidc = build_oidc_login(
             &config,
@@ -277,6 +279,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?;
         let sensitive =
             SensitiveWriteSecurity::new(config.session_lifetime, config.trusted_origins.clone());
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            artifact_session_resolver = Some(resolver.clone());
+        }
         (
             Arc::new(resolver),
             sensitive,
@@ -360,7 +366,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 )
                 .await?,
             );
-            Some(Arc::new(
+            let administration = Arc::new(
                 openbot_infra::artifact_administration::PostgresArtifactAdministration::new(
                     Arc::clone(&artifact_datasets),
                     store,
@@ -368,7 +374,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     SecretBytes::new(audit_key.expose().to_vec()),
                 )
                 .map_err(|_| startup_error("artifact_administration_unavailable"))?,
-            ))
+            );
+            if let Some(resolver) = &artifact_session_resolver {
+                resolver
+                    .install_artifact_read_authority(&administration.read_authority())
+                    .map_err(|_| startup_error("artifact_read_authority_unavailable"))?;
+            }
+            Some(administration)
         } else {
             None
         };
