@@ -877,6 +877,13 @@ impl PhaseGate {
         }
         self.notified.notify_waiters();
         let deadline = Instant::now() + Duration::from_secs(5);
+        if self.selected == JOINT {
+            tokio::task::block_in_place(|| self.wait_until_released(deadline));
+        } else {
+            self.wait_until_released(deadline);
+        }
+    }
+    fn wait_until_released(&self, deadline: Instant) {
         let mut released = self.release.lock().unwrap();
         while !*released {
             let remaining = deadline.saturating_duration_since(Instant::now());
