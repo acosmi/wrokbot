@@ -12,7 +12,7 @@ use std::io::{Read as _, Seek as _, Write as _};
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Stdio;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -42,7 +42,6 @@ use openbot_infra::artifact_store::DatasetBoundArtifactStore;
 use openbot_infra::db::{baseline, native, pool, pool::DatabaseConfig};
 use openbot_infra::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
 use time::OffsetDateTime;
-use tokio::io::AsyncReadExt as _;
 use tracing::instrument::WithSubscriber as _;
 use uuid::Uuid;
 
@@ -569,6 +568,77 @@ fn parse_fields(raw: &[u8]) -> Result<Vec<FileFields>, String> {
     )?;
     Ok(files)
 }
+struct OwnedFdOracleChild {
+    child: Child,
+    reaped: bool,
+}
+impl OwnedFdOracleChild {
+    fn try_status(&mut self) -> Result<Option<ExitStatus>, &'static str> {
+        let status = self
+            .child
+            .try_wait()
+            .map_err(|_| "owned_fd_oracle_wait_failed")?;
+        self.reaped = status.is_some();
+        Ok(status)
+    }
+}
+impl Drop for OwnedFdOracleChild {
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        // Cancellation drops this owner too. Kill targets only its original child;
+        // actual wait/reap, rather than JoinHandle or pipe Drop, ends child ownership.
+        let kill_ack = self.child.kill().is_ok();
+        let reap_ack = self.child.wait().is_ok();
+        self.reaped = reap_ack;
+        if !reap_ack {
+            eprintln!("OWNED_FD_ORACLE_CHILD_CLEANUP kill_ack={kill_ack} reap_ack={reap_ack}");
+            if !std::thread::panicking() {
+                panic!("owned_fd_oracle_child_reap_failed");
+            }
+        }
+    }
+}
+fn oracle_pipe_nonblocking(pipe: &impl std::os::fd::AsFd) -> Result<(), &'static str> {
+    let flags = rustix::fs::fcntl_getfl(pipe).map_err(|_| "owned_fd_oracle_nonblocking_failed")?;
+    rustix::fs::fcntl_setfl(pipe, flags | rustix::fs::OFlags::NONBLOCK)
+        .map_err(|_| "owned_fd_oracle_nonblocking_failed")
+}
+fn read_oracle_pipe(
+    pipe: &mut impl std::io::Read,
+    bytes: &mut Vec<u8>,
+    limit: usize,
+    eof: &mut bool,
+    failure: &'static str,
+) -> Result<(), &'static str> {
+    if *eof {
+        return Ok(());
+    }
+    let remaining = limit
+        .checked_sub(bytes.len())
+        .ok_or("owned_fd_oracle_capture_overflow")?;
+    let mut chunk = [0; 4096];
+    // At the limit, one bounded byte distinguishes overflow from real EOF. It is
+    // never appended, so the retained stdout/stderr captures stay within limits.
+    let take = (remaining + 1).min(chunk.len());
+    match pipe.read(&mut chunk[..take]) {
+        Ok(0) => *eof = true,
+        Ok(read) => {
+            if read > remaining {
+                return Err("owned_fd_oracle_capture_overflow");
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+            ) => {}
+        Err(_) => return Err(failure),
+    }
+    Ok(())
+}
 async fn fd_sample() -> Result<Vec<FileFields>, String> {
     let tool = Path::new("/usr/sbin/lsof");
     let metadata = fs::metadata(tool).map_err(|_| "owned_fd_oracle_tool_unavailable")?;
@@ -576,56 +646,75 @@ async fn fd_sample() -> Result<Vec<FileFields>, String> {
         metadata.is_file() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
         "owned_fd_oracle_tool_identity",
     )?;
-    let mut child = tokio::process::Command::new(tool)
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let child = Command::new(tool)
         .args(["-nP", "-a", "-p", &std::process::id().to_string(), "-FfDi"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
         .spawn()
         .map_err(|_| "owned_fd_oracle_spawn_failed")?;
-    let stdout = child
+    // Establish custody before any fallible pipe setup or await.
+    let mut owned = OwnedFdOracleChild {
+        child,
+        reaped: false,
+    };
+    let mut stdout = owned
+        .child
         .stdout
         .take()
         .ok_or("owned_fd_oracle_stdout_missing")?;
-    let stderr = child
+    let mut stderr = owned
+        .child
         .stderr
         .take()
         .ok_or("owned_fd_oracle_stderr_missing")?;
-    let stdout = async move {
-        let mut bytes = Vec::new();
-        stdout
-            .take(64 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .await
-            .map_err(|_| "owned_fd_oracle_stdout_failed")?;
-        Ok::<_, &'static str>(bytes)
-    };
-    let stderr = async move {
-        let mut bytes = Vec::new();
-        stderr
-            .take(8 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .await
-            .map_err(|_| "owned_fd_oracle_stderr_failed")?;
-        Ok::<_, &'static str>(bytes)
-    };
-    let (stdout, stderr, status) = tokio::time::timeout(Duration::from_secs(5), async {
-        tokio::join!(stdout, stderr, child.wait())
-    })
-    .await
-    .map_err(|_| "owned_fd_oracle_absolute_deadline")?;
-    let stdout = stdout?;
-    let stderr = stderr?;
+    oracle_pipe_nonblocking(&stdout)?;
+    oracle_pipe_nonblocking(&stderr)?;
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let mut stdout_eof = false;
+    let mut stderr_eof = false;
+    let mut status = None;
+    loop {
+        if Instant::now() >= deadline {
+            return Err("owned_fd_oracle_absolute_deadline".into());
+        }
+        read_oracle_pipe(
+            &mut stdout,
+            &mut stdout_bytes,
+            64 * 1024,
+            &mut stdout_eof,
+            "owned_fd_oracle_stdout_failed",
+        )?;
+        read_oracle_pipe(
+            &mut stderr,
+            &mut stderr_bytes,
+            8 * 1024,
+            &mut stderr_eof,
+            "owned_fd_oracle_stderr_failed",
+        )?;
+        if status.is_none() {
+            status = owned.try_status()?;
+        }
+        if Instant::now() >= deadline {
+            return Err("owned_fd_oracle_absolute_deadline".into());
+        }
+        if stdout_eof && stderr_eof && status.is_some() {
+            break;
+        }
+        let next_poll = (Instant::now() + Duration::from_millis(1)).min(deadline);
+        tokio::time::sleep_until(tokio::time::Instant::from_std(next_poll)).await;
+    }
     require(
-        stdout.len() <= 64 * 1024 && stderr.len() <= 8 * 1024,
+        stdout_bytes.len() <= 64 * 1024 && stderr_bytes.len() <= 8 * 1024,
         "owned_fd_oracle_capture_overflow",
     )?;
     require(
-        status.map_err(|_| "owned_fd_oracle_wait_failed")?.success() && stderr.is_empty(),
+        status.ok_or("owned_fd_oracle_wait_failed")?.success() && stderr_bytes.is_empty(),
         "owned_fd_oracle_exit_or_warning",
     )?;
-    parse_fields(&stdout)
+    parse_fields(&stdout_bytes)
 }
 fn device(metadata: &fs::Metadata) -> u64 {
     if cfg!(target_os = "macos") {
