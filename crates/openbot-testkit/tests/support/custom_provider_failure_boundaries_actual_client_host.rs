@@ -117,7 +117,7 @@ impl ProviderAdapter for CountingCustom {
             && self.dependency.mode == FaultMode::PreSendDependency
             && let Err(code) = self.dependency.arm(target.clone()).await
         {
-            self.observations.fail(code).await;
+            self.observations.fail(&code).await;
         }
         // Count only the unchanged call actually delegated to the original adapter.
         self.counters.custom.fetch_add(1, Ordering::SeqCst);
@@ -145,7 +145,7 @@ impl ProviderAdapter for CountingCustom {
             let _ = stop.send(());
             match tokio::time::timeout(CLOSE_TIMEOUT, task).await {
                 Ok(Ok(Ok(()))) => {}
-                Ok(Ok(Err(code))) => self.observations.fail(code).await,
+                Ok(Ok(Err(code))) => self.observations.fail(&code).await,
                 _ => {
                     self.observations
                         .fail("owned_dependency_observer_join")
