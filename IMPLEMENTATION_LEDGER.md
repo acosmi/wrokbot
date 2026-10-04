@@ -1198,3 +1198,38 @@ The byte/count SQL cases prove their registered semantic bounds; PostgreSQL phys
 ### V7-IMPL-006 finite publication wording clarification
 
 Unsupported applies to unimplemented or missing producers; observed ProviderUnknown and unproven configuration keep their own Unavailable state and reason. The final joint identity/source SQL statement uses one Read Committed statement snapshot; prechecks, separate collectors, postchecks and the final request witness are not one shared database snapshot. The five-second monotonic budget covers the Application query and its final decision; HTTP response transmission lifetime was not measured as that deadline. These precise qualifications supersede the broader draft wording above. Product inputs, executed tests, original source identities and the finite acceptance scope are unchanged.
+
+
+## V7-IMPL-007 — private artifact read foundation registered
+
+A separate branch starts at actual main e31319a8521c458e6e6b538646617de48288d351. The registered scope is an opaque current own-pool artifact-record snapshot consumed by the same retained dataset-bound store, then verified file-descriptor opening and bounded physical byte chunks. Shared interfaces are observe_read_record, ObservedArtifactReadRecord, open_observed_record, StoreBoundArtifactReader and ArtifactReadBridgeError, with private constructors and no public transport. Only artifact_administration.rs, artifact_store.rs and the new private artifact_read_bridge_tests.rs are claimed. No migration is allocated; existing save, metadata and source predicates retain their semantics.
+
+This foundation develops independently of the capability API while normal merge order remains after task 006. Snapshot observation does not establish current host authority, per-block authorization or a one-use read handle. The author source and tests are in progress, with no executed test, source GO, PR or delivery claim. Actual compilation, temporary PostgreSQL, precise candidate checks and independent review remain pending. All full reading, lifecycle, backup and other backend scope remains open.
+
+### V7-IMPL-007 私有记录到文件读取：本地编写检查点（尚未交付）
+
+在 main `e31319a8521c458e6e6b538646617de48288d351` 的独立分支完成实际数据库记录快照到原字节存储文件描述符的私有桥接。记录读取保留既有来源判据、最后联合查询及显式只读事务 rollback；文件读取核原存储归属、根目录、完整摘要和真实文件，分块失败清空输出缓冲。范围不含公开下载、当前宿主字节交接、清理生命周期或迁移。
+
+作者阶段第一轮新数据库用例为 20 通过、1 测试等待前提失败；原始失败保留。后续诊断实测发现模式校验先被锁阻塞，登记并加入仅测试构建使用的同步点后，精确单用例实际通过：最终查询确实等锁、撤权提交回执成功、读取拒绝。此同步点走同一真实读取流程，发布构建不含同步点。当前版本仍待冻结提交后的全部 22 新用例、相关旧回归、严格检查及非作者独立验收；尚无本任务 PR 或交付声明。
+
+
+### V7-IMPL-007 bounded private artifact read bridge verification
+
+Exact source 63110f43c4a0606ce96f58f67bf3c4f3935f6f42 passed independent source and test-oracle review for the private record-snapshot to verified-file-descriptor bridge. A current own-pool record observation preserves the existing source predicate and explicit read-only transaction rollback. The same retained dataset-bound store opens the actual file with full digest verification; bounded chunks recheck physical state, and terminal errors wipe the entire pending output buffer. Cancellation of the waiting future retains the actual blocking worker's store/root owner until the worker finishes.
+
+Fourteen directed checks and thirty-four raw steps support 136 distinct actual passed tests: 22 new bridge tests and 114 existing regressions. Ignored tests are excluded from the pass count. Five outer PostgreSQL instances and five nested Desktop sidecars have separate actual stop/PID-absence evidence; all 25 new owned byte roots are removed and absent. Production server-runtime library strict Clippy passes. Ordinary complete server-runtime/server-sso library/tests Clippy passes with one unchanged MCP warning; the two strict test failures remain preserved and complete test strict acceptance is open.
+
+All 1217 product inputs remain bound to the checked source; this later local publication candidate adds only ledger facts. Existing save/metadata, authorization predicates, migration, Contracts, Application and host interfaces keep their prior behavior. The finite review does not deliver current host byte handoff, a one-use 600-second handle, public transport, full drain, cleanup lifecycle, backup, readiness or full artifact acceptance. Physical peak memory and the new 64 MiB database-bound read bridge are unmeasured. Publication, the actual task PR and normal merge remain pending; the sustained backend goal remains incomplete.
+
+
+### V7-IMPL-006 actual normal delivery
+
+PR #127 was normally merged after independent source and actual publication review. The actual merge is 681f2470a86d5049aad14d7583dffc4bcbe782cc at 2026-10-04T02:43:17Z, with exact parents e31319a8521c458e6e6b538646617de48288d351 and fe249dc41d03fdb779878fb8983a762e62745ad1. Its tree ad4004af32c5db6704f968ed301f98c20830509e matches the reviewed publication candidate. The finite runtime capability query is delivered; all original source/test qualifications, warnings and failed executions retain their identities. Full capability producers, artifact reading/lifecycle/backup, readiness and the sustained backend goal remain open. Task 007 proceeds through current-main integration and new exact-candidate validation.
+
+### V7-IMPL-007 — current-main read bridge verification and publication candidate
+
+The task has been normally integrated with delivered PR #127 on main 681f2470a86d5049aad14d7583dffc4bcbe782cc. Exact source 63392bfd1abfc03e975fdedfe0e71cc8cbf4a030/tree a5f0c2ee022aa38f002e340a2e8101d784d29c00 has 1226 unchanged product inputs. All 14 newly executed directed checks and 34 raw steps passed; the current logs contain 136 distinct actual passed cases, comprising 22 new read-bridge cases and 114 existing regressions. Current source review f56c5e8acc5f8d6260312b2415c7a826234a2e40aaa12dad376c60a5d79e0875 and current oracle review 83826cb001a8b508ca2ee85f924d1f120419c1fd7a3a4f290a8347b0f2f5383d independently accepted this finite private snapshot-to-FD slice.
+
+Five newly owned PostgreSQL instances and five nested Desktop sidecars actually stopped with their PIDs absent; 25 newly created byte roots were removed. Production server-runtime library strict Clippy and ordinary full-configuration library/tests Clippy passed. The ordinary test configuration retains one unchanged MCP warning; full-configuration strict tests were not executed on source633, and source631 strict failures remain historical evidence. Actual Server binary and Desktop Local library compile, scoped format and diff checks passed. Existing save and metadata behavior is preserved. Current host byte authority, once-handle lifetime, public stream, lifecycle/drain, readiness and full artifact acceptance remain open. Publication and exact remote review precede normal merge.
+
+Resource maintenance after this genuinely closed batch removed 254 new single-link compiler objects totaling 816,832,104 logical bytes, separately from the earlier 19,687,729,390 logical bytes of guarded retired-cache cleanup. Links, execution artifacts, QA, source and user/database data were preserved. The existing 30-minute monitor now performs lock-aware read-only cache observation and dispatches precise cleanup after owned batches close; busy targets are skipped.

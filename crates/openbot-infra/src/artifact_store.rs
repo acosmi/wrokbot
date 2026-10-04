@@ -13,8 +13,11 @@ use serde::{Deserialize, Serialize};
 use tokio_postgres::IsolationLevel;
 use uuid::Uuid;
 
+use crate::artifact_administration::ObservedArtifactReadRecord;
 pub(crate) use crate::artifact_bytes::ArtifactByteStorageLocation;
-use crate::artifact_bytes::{ArtifactBlob, ArtifactByteProbe, ArtifactByteStore};
+use crate::artifact_bytes::{
+    ArtifactBlob, ArtifactBlobReader, ArtifactByteError, ArtifactByteProbe, ArtifactByteStore,
+};
 use crate::artifact_registry::ArtifactDatasetRegistry;
 
 const MARKER_NAME: &str = ".artifact-store-v1";
@@ -106,6 +109,71 @@ pub enum ArtifactStoreError {
     /// Another current kernel owner holds this root.
     #[error("artifact_store_busy")]
     Busy,
+}
+
+/// Closed physical errors of the internal snapshot-to-FD bridge. No host/wire mapping or
+/// current authorization decision is implied by these observations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ArtifactReadBridgeError {
+    /// Current actual store/root observation failed.
+    #[error("artifact_read_store: {0}")]
+    Store(#[from] ArtifactStoreError),
+    /// Actual bounded byte object/FD observation failed.
+    #[error("artifact_read_bytes: {0}")]
+    Bytes(#[from] ArtifactByteError),
+}
+
+/// A private-constructed FD reader retaining its original PG snapshot and exact Store Arc.
+/// This is not a download handle, a session/window grant, or per-block current authorization.
+/// Run synchronous IO on a blocking worker and move this entire reader into that worker.
+pub struct StoreBoundArtifactReader {
+    reader: ArtifactBlobReader,
+    record: ObservedArtifactReadRecord,
+    store: Arc<DatasetBoundArtifactStore>,
+    failed: bool,
+}
+
+impl core::fmt::Debug for StoreBoundArtifactReader {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StoreBoundArtifactReader")
+            .field("fd_and_snapshot", &"<redacted>")
+            .field("failed", &self.failed)
+            .finish()
+    }
+}
+
+impl StoreBoundArtifactReader {
+    /// Observe at most the frozen 4MiB physical chunk. Failure is terminal and wipes the entire
+    /// caller buffer, including bytes not handed off; success grants no later public handoff.
+    pub fn read_observed_chunk(
+        &mut self,
+        output: &mut [u8],
+    ) -> Result<usize, ArtifactReadBridgeError> {
+        let outcome = self.read_physical_chunk(output);
+        if outcome.is_err() {
+            self.failed = true;
+            output.fill(0);
+        }
+        outcome
+    }
+
+    fn read_physical_chunk(&mut self, output: &mut [u8]) -> Result<usize, ArtifactReadBridgeError> {
+        if self.failed {
+            return Err(ArtifactByteError::Io.into());
+        }
+        if !self.record.matches_store(&self.store) {
+            return Err(ArtifactStoreError::BindingMismatch.into());
+        }
+        let _guard = self
+            .store
+            .io
+            .try_lock()
+            .map_err(|_| ArtifactStoreError::Busy)?;
+        self.store.check_current()?;
+        let length = self.reader.read_chunk(output)?;
+        self.store.check_current()?;
+        Ok(length)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -331,6 +399,29 @@ impl DatasetBoundArtifactStore {
         }
         Ok(())
     }
+    /// Consume a descriptor minted by the actual owned-PG adapter for this exact Store Arc.
+    /// Recheck current private root/marker and the real object's full digest before retaining its
+    /// FD. This synchronous method belongs on the actual blocking worker; it does not recheck
+    /// PG/host authority and cannot turn a stale source snapshot into a public delivery grant.
+    pub fn open_observed_record(
+        self: &Arc<Self>,
+        record: ObservedArtifactReadRecord,
+    ) -> Result<StoreBoundArtifactReader, ArtifactReadBridgeError> {
+        if !record.matches_store(self) {
+            return Err(ArtifactStoreError::BindingMismatch.into());
+        }
+        let _guard = self.io.try_lock().map_err(|_| ArtifactStoreError::Busy)?;
+        self.check_current()?;
+        let reader = self.bytes.open_verified(record.blob())?;
+        self.check_current()?;
+        Ok(StoreBoundArtifactReader {
+            reader,
+            record,
+            store: Arc::clone(self),
+            failed: false,
+        })
+    }
+
     /// Current disk-space observation, not an allocation guarantee. Call on a blocking worker.
     pub fn available_bytes(&self) -> Result<u64, ArtifactStoreError> {
         self.check_current()?;
