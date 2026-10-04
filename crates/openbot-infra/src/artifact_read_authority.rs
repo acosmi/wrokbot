@@ -199,13 +199,12 @@ impl PostgresArtifactReadAuthority {
         administration
             .check_namespace(auth)
             .map_err(|_| host_not_current())?;
-        if let CurrentHost::Desktop(installation) = &host {
-            if !administration
+        if let CurrentHost::Desktop(installation) = &host
+            && !administration
                 .registry
                 .matches_desktop_read_installation(installation)
-            {
-                return Err(host_unavailable());
-            }
+        {
+            return Err(host_unavailable());
         }
         let limit = tokio::time::Instant::from_std(deadline);
         tokio::time::timeout_at(
@@ -456,18 +455,17 @@ impl ArtifactReadTailWitness for CurrentReadTail {
         if now < self.observed_wall || Instant::now() < self.observed_monotonic {
             return Err(host_not_current());
         }
-        if let Some((created, updated, expires, lifetime)) = self.session {
-            if now >= expires
+        if let Some((created, updated, expires, lifetime)) = self.session
+            && (now >= expires
                 || evaluate_session(
                     lifetime,
                     SessionState::rehydrate(created, updated, auth.auth_generation()),
                     auth.auth_generation(),
                     now,
                 )
-                .is_err()
-            {
-                return Err(host_not_current());
-            }
+                .is_err())
+        {
+            return Err(host_not_current());
         }
         Ok(())
     }

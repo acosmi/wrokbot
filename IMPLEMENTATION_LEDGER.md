@@ -1307,3 +1307,8 @@ The independent entry review rejected ambiguous unobserved diagnostic defaults. 
 ### V7-IMPL-008 diagnostic formatting correction 14B
 
 The two registered private Host diagnostics are authored, with all other 52 case definitions and 23 frozen production inputs preserved. The first scoped formatter failed on exactly two whitespace-only lines; that original failure is retained. Registered and removed only those two blank-line spaces, then the same scoped formatter passed. No timeout, predicate, method behavior, case identity or runtime acceptance changed. A clean new source and fresh directed execution remain pending.
+
+
+### V7-IMPL-008 equivalent short-circuit guard registration 16
+
+On the clean new source, both existing Host final-wait cases actually passed with real Lock, blocker/waiter PID, COMMIT acknowledgement and unauthenticated reader result; the owned PostgreSQL, Local sidecar and roots closed. Original failed candidates remain historical failures. Strict production Clippy removed the former Future type-complexity error and then failed on two new nested if guards. Before editing, registered only those two equivalent pattern/short-circuit expressions in the same Infra file; every operand, evaluation order, error and clock/deadline remains. No lint waiver, signature, interface, migration or test change. Independent entry and a fresh final candidate remain required.
