@@ -157,8 +157,6 @@ impl SourceJoin {
     fn observe_ack(&mut self, ack: &ThreadRunStarted) {
         if ack.thread_id != self.thread
             || ack.run_id != self.run
-            || ack.message_sequence == 0
-            || ack.event_sequence == 0
             || self.ack.as_ref().is_some_and(|old| old != ack)
         {
             self.invalid = true;
@@ -1235,6 +1233,70 @@ mod tests {
             assert!(source_read_matches(&read, &snapshot()));
             assert_eq!(read.source.sha256, text_digest(" 你好\n"));
             assert_ne!(read.source.sha256, text_digest("你好"));
+            assert!(join.take_read().is_none());
+        }
+    }
+
+    #[test]
+    fn first_turn_zero_cursors_join_both_orders_and_keep_current_user_packet() {
+        let mut first_ack = ack();
+        first_ack.message_sequence = 0;
+        first_ack.event_sequence = 0;
+        let mut first_started = started();
+        first_started.event_sequence = 0;
+        first_started.payload["messageId"] = serde_json::json!("opaque run:input");
+        let mut current = snapshot();
+        current.messages[0].id = "opaque run:input".into();
+        current.last_event_sequence = Some(0);
+
+        for started_first in [true, false] {
+            let mut join = join();
+            if started_first {
+                join.observe_started(&first_started);
+                assert!(join.take_read().is_none());
+                join.observe_ack(&first_ack);
+            } else {
+                join.observe_ack(&first_ack);
+                assert!(join.take_read().is_none());
+                join.observe_started(&first_started);
+            }
+            let read = join.take_read().unwrap();
+            assert_eq!(read.original_text.as_bytes(), " 你好\n".as_bytes());
+            assert!(source_read_matches(&read, &current));
+            for change in 0..3 {
+                let mut invalid = current.clone();
+                match change {
+                    0 => invalid.last_event_sequence = None,
+                    1 => invalid.messages.push(invalid.messages[0].clone()),
+                    _ => invalid.messages[0].content = "你好".into(),
+                }
+                assert!(!source_read_matches(&read, &invalid));
+            }
+            let mut state = ActionState::default();
+            let saved = operation(&mut state, read.source);
+            assert_eq!(
+                serde_json::to_value(&saved.packet).unwrap(),
+                serde_json::json!({
+                    "requestId": REQUEST,
+                    "sourceThreadId": "019a7778-abcd-8abc-8abc-0123456789ab",
+                    "sourceRunId": "opaque run",
+                    "sourceMessageId": "opaque run:input",
+                    "expectedSha256": "e43dbe3a548f25dabf4b87968b82735de6cfaf353d6bdd1b9690cc76de5dd209"
+                })
+            );
+            assert!(join.take_read().is_none());
+        }
+        for change in 0..3 {
+            let mut join = join();
+            let mut mismatched_ack = first_ack.clone();
+            let mut mismatched_started = first_started.clone();
+            match change {
+                0 => mismatched_started.event_sequence = 1,
+                1 => mismatched_ack.run_id = RunId::new("foreign"),
+                _ => mismatched_started.payload["botId"] = serde_json::json!("foreign"),
+            }
+            join.observe_ack(&mismatched_ack);
+            join.observe_started(&mismatched_started);
             assert!(join.take_read().is_none());
         }
     }
