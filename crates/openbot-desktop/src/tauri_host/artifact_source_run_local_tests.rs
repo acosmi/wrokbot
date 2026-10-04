@@ -850,10 +850,15 @@ async fn raw_current_and_protocol_cases(fixture: &LocalFixture) -> Result<(), St
                 let input=if source=="missing" {GetSourceRunArtifactIds {source_run_id:RunId::new("missing-genuine-Local-source"),..fixture.source()}}else{fixture.source()};
                 if source=="corrupt" {fixture.corrupt(true).await?;}
                 let response=local_request(protocol,"main",Method::GET,&route(&input),"").await?;
-                let observed=error_is(&response,StatusCode::UNAUTHORIZED,"unauthenticated");
+                let invalid_schema=name=="raw_negative";
+                let observed=if invalid_schema {error_is(&response,StatusCode::SERVICE_UNAVAILABLE,"dependency_unavailable")} else {error_is(&response,StatusCode::UNAUTHORIZED,"unauthenticated")};
                 if source=="corrupt" {fixture.corrupt(false).await?;}
                 observed?;
-                eprintln!("SOURCE_RUN_LOCAL_CURRENT mutation={name} source={source} genuine_prepared=true original_host_401=true");
+                if invalid_schema {
+                    eprintln!("SOURCE_RUN_LOCAL_INVALID_SCHEMA mutation={name} source={source} genuine_prepared=true dependency_503=true");
+                } else {
+                    eprintln!("SOURCE_RUN_LOCAL_CURRENT mutation={name} source={source} genuine_prepared=true original_host_401=true");
+                }
             }
             Ok::<_,String>(())
         }.await;
