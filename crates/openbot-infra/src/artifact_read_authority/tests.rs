@@ -1377,7 +1377,7 @@ async fn actual_owned_pg_cancelled_waiter_retains_worker_fd_and_raii_result() {
             completed.send(()).map_err(|_| "completion observer gone".to_owned())?;
             Ok::<_, String>(result)
         });
-        let waiter = tokio::spawn(async move { physical.await });
+        let waiter = tokio::spawn(physical);
         observed_io.await.map_err(|_| "real IO did not finish before barrier".to_owned())?;
         waiter.abort();
         require(waiter.await.is_err(), "waiter was not cancelled")?;

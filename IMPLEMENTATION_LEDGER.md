@@ -1312,3 +1312,8 @@ The two registered private Host diagnostics are authored, with all other 52 case
 ### V7-IMPL-008 equivalent short-circuit guard registration 16
 
 On the clean new source, both existing Host final-wait cases actually passed with real Lock, blocker/waiter PID, COMMIT acknowledgement and unauthenticated reader result; the owned PostgreSQL, Local sidecar and roots closed. Original failed candidates remain historical failures. Strict production Clippy removed the former Future type-complexity error and then failed on two new nested if guards. Before editing, registered only those two equivalent pattern/short-circuit expressions in the same Infra file; every operand, evaluation order, error and clock/deadline remains. No lint waiver, signature, interface, migration or test change. Independent entry and a fresh final candidate remain required.
+
+
+### V7-IMPL-008 test future spawn registration 17
+
+On the current frozen source all 54 new cases and 136 existing artifact regressions passed; Server and Desktop Local compilation, scoped format and diff checks passed. Ordinary Infra library/tests Clippy returned zero but reported one new redundant async wrapper in an owned test, separately from the unchanged MCP warning. Before editing, registered only replacement of that spawn argument with the same original physical future. The future still moves once into the same Tokio task and preserves its output, abort, gate and observation predicates. No production code, case identity, timeout, interface or migration changes. Independent entry and fresh exact-candidate checks are required; this is not final source acceptance.
