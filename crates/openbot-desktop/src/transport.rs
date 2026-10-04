@@ -148,6 +148,22 @@ impl InProcessTransport {
             .await
     }
 
+    /// Forward an owned Rust read through this exact application service.
+    pub async fn open_current_artifact_read(
+        &self,
+        auth: AuthContext,
+        artifact_id: String,
+    ) -> Result<openbot_application::CurrentArtifactReadOperation, AppError> {
+        if self.broker.shutdown_token().is_cancelled() {
+            return Err(AppError::DependencyUnavailable {
+                dependency: "desktop_transport",
+            });
+        }
+        self.service
+            .open_current_artifact_read(auth, artifact_id)
+            .await
+    }
+
     /// 事件 broker（多窗口 ACL 与有界队列都在它那里）。
     #[must_use]
     pub fn broker(&self) -> &Arc<EventBroker> {

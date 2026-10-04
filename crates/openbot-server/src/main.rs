@@ -350,6 +350,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?,
     );
     #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let mut artifact_read_lifecycle = None;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> =
         if let Some(root_path) = server.artifact_root.clone() {
             let root = tokio::task::spawn_blocking(move || {
@@ -380,6 +382,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .install_artifact_read_authority(&administration.read_authority())
                     .map_err(|_| startup_error("artifact_read_authority_unavailable"))?;
             }
+            artifact_read_lifecycle = Some(administration.read_authority().read_lifecycle());
             Some(administration)
         } else {
             None
@@ -579,15 +582,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .with_graceful_shutdown({
         let shutdown_auth = Arc::clone(&auth_owner);
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let shutdown_artifact_reads = artifact_read_lifecycle.clone();
         async move {
             shutdown_signal().await;
             // Revoke current observations before axum waits for in-flight requests to drain.
             shutdown_auth.close_request_bindings();
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            if let Some(reads) = shutdown_artifact_reads {
+                reads.close();
+            }
         }
     })
     .await;
     // A serving error or normal completion also closes the owner before other resources stop.
     auth_owner.close_request_bindings();
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if let Some(reads) = &artifact_read_lifecycle {
+        reads.close();
+        let _ack = reads.drain().await;
+    }
     if let Some(facts) = &runtime_capability_facts {
         facts.close();
         facts.drain().await;
