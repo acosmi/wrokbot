@@ -772,11 +772,11 @@ impl Drop for ShutdownCompletion {
         }
         self.observation
             .update(|facts| facts.outcome = Some(DesktopLocalClosingOutcome::Unknown));
-        if let Some(completion) = &self.completion {
-            if completion.state.phase() == DesktopLocalRuntimePhase::Stopping {
-                completion.state.finish_shutdown(false);
-                observe_exit("shutdown_task", "unknown");
-            }
+        if let Some(completion) = &self.completion
+            && completion.state.phase() == DesktopLocalRuntimePhase::Stopping
+        {
+            completion.state.finish_shutdown(false);
+            observe_exit("shutdown_task", "unknown");
         }
     }
 }
@@ -1497,7 +1497,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
                 );
             }
         };
-        let port = match openbot_infra::artifact_administration::PostgresArtifactAdministration::new(
+        match openbot_infra::artifact_administration::PostgresArtifactAdministration::new(
             data_plane.artifact_dataset_owner(),
             artifact_store,
             artifact_policy,
@@ -1509,8 +1509,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
                     cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
                 );
             }
-        };
-        port
+        }
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> =

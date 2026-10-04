@@ -1385,3 +1385,8 @@ Before the field edit, the existing owned desktop closing-job hunk registers a p
 ### 2026-10-04T09:47:37.408321+00:00 - V7-IMPL-009 actual closing acknowledgement test observation registered
 
 Before editing the getter, the existing private test-state hunk registers a borrowed observation of the actual drain, PostgreSQL and job-finish acknowledgement timestamps and actual outcome. Missing observations or poisoned locks remain unproven. The real desktop shutdown test must verify these original job facts; a Failed phase or absent child PID alone cannot prove clean resource acknowledgements. This adds no runtime authority, public transport, migration or budget and retains the twelve/thirty-nine denominator. Runtime and final independent source/oracle review remain pending.
+
+
+### 2026-10-04T10:49:56.475747+00:00 - V7-IMPL-009 current-main132 integration registered
+
+The observed normal main132 merge adds three inherited Testkit current-client fixtures and an append-only public ledger, with no production change or overlap with the twenty-four owned paths. The registered Local strict diagnostics received equivalent condition/expression repairs without a lint exemption. Normal integration preserves both complete ledger histories. The resulting exact candidate requires current production checks, twelve new lifecycle cases, fifty-four original read cases, related artifact and host regressions, and compilation of the inherited actual-client fixture. No new migration or public transport is introduced; source, runtime and readiness remain pending.
