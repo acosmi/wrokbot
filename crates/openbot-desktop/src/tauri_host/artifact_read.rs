@@ -20,6 +20,7 @@ pub struct DesktopArtifactReadOperation {
 }
 
 impl DesktopArtifactReadOperation {
+    /// Hand off the next block only while the original host window remains current.
     pub async fn next_block(
         &mut self,
     ) -> Result<Option<openbot_contracts::artifact_read::LeasedArtifactReadBlock>, AppError> {
@@ -72,6 +73,7 @@ impl DesktopArtifactReadOperation {
 }
 
 impl DesktopTauriProtocol {
+    /// Prepare a sequential Rust read bound to the original host window and application.
     pub async fn open_current_artifact_read(
         &self,
         window_label: &str,

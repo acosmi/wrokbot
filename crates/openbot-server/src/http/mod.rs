@@ -116,6 +116,7 @@ pub struct ServerArtifactReadOperation {
 }
 
 impl ServerArtifactReadOperation {
+    /// Read and hand off the next original-session block, or verified EOF.
     pub async fn next_block(
         &mut self,
     ) -> Result<
