@@ -34,8 +34,18 @@ impl DesktopTauriProtocol {
         if !windows.is_empty() {
             return Err(TauriHostError::AuthorityUnavailable);
         }
+        if self.local_confirmation.get().is_some()
+            || self.window_registry.local_confirmation_slot.get().is_some()
+        {
+            return Err(TauriHostError::ProtocolAlreadyReady);
+        }
+        let service = Arc::downgrade(&local.service);
         self.local_confirmation
             .set(local)
+            .map_err(|_| TauriHostError::ProtocolAlreadyReady)?;
+        self.window_registry
+            .local_confirmation_slot
+            .set(service)
             .map_err(|_| TauriHostError::ProtocolAlreadyReady)
     }
 

@@ -89,6 +89,7 @@ pub mod provider;
 pub mod remote_interrupt;
 pub mod run_cost_budget;
 pub mod run_runtime;
+pub mod runtime_capabilities;
 pub mod sandboxed_components;
 pub mod screen_sessions;
 pub mod service;

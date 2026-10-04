@@ -1228,6 +1228,19 @@ pub(crate) async fn prepare_desktop_local_runtime(
     };
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> = None;
+    #[cfg(target_os = "macos")]
+    let capability_factory =
+        match crate::tauri_host::runtime_capabilities::DesktopRuntimeCapabilityFactory::new(
+            pool.clone(),
+            data_plane.authority().clone(),
+        ) {
+            Ok(factory) => factory,
+            Err(_) => {
+                return Err(
+                    cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
+                );
+            }
+        };
     let assembly = match assemble_postgres_application(PostgresApplicationAssemblyInput {
         pool: pool.clone(),
         listener_database: listener_database.clone(),
@@ -1248,6 +1261,10 @@ pub(crate) async fn prepare_desktop_local_runtime(
         )),
         screen_sessions: Arc::new(ScreenSessionService::new(screen_hub)),
         artifacts,
+        #[cfg(target_os = "macos")]
+        runtime_capabilities: Some(capability_factory.clone()),
+        #[cfg(not(target_os = "macos"))]
+        runtime_capabilities: None,
         remote_agent_probe: remote_agent_probe.clone(),
         managed_slot_available: false,
         channel_routing_provider,
@@ -1327,6 +1344,17 @@ pub(crate) async fn prepare_desktop_local_runtime(
             .await);
         }
     };
+    #[cfg(target_os = "macos")]
+    if capability_factory.install(&protocol).is_err() {
+        protocol.close_request_bindings();
+        return Err(cleanup_agent_host(
+            data_plane,
+            assembly,
+            agent_host,
+            DesktopLocalRuntimeError::Host,
+        )
+        .await);
+    }
     let lifecycle = match DesktopWindowLifecycle::new(&scheme, Arc::clone(&protocol)) {
         Ok(lifecycle) => Arc::new(lifecycle),
         Err(_) => {

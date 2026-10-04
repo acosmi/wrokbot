@@ -418,6 +418,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?),
         screen_sessions,
         artifacts,
+        runtime_capabilities: Some(
+            auth.runtime_capability_factory(
+                oidc_login
+                    .as_ref()
+                    .map(|(_, sso, _, _, _)| sso.capability_source()),
+            )
+            .map_err(|_| startup_error("runtime_capabilities"))?,
+        ),
         remote_agent_probe,
         managed_slot_available: managed_provider_for_slot(&server).is_some(),
         channel_routing_provider: ChannelRoutingProviderInput {
@@ -433,6 +441,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     })
     .await?;
     let application = application_assembly.application.clone();
+    let runtime_capability_facts = application_assembly.runtime_capability_facts.clone();
     let run_runtime = application_assembly.run_runtime.clone();
     let mcp_catalog = application_assembly.mcp_catalog.clone();
     let components = application_assembly.components.clone();
@@ -567,6 +576,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await;
     // A serving error or normal completion also closes the owner before other resources stop.
     auth_owner.close_request_bindings();
+    if let Some(facts) = &runtime_capability_facts {
+        facts.close();
+        facts.drain().await;
+    }
     run_relay.stop().await;
     if let Some(agent) = built_in_agent {
         agent.stop().await;
