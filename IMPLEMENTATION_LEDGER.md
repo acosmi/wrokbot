@@ -1170,3 +1170,12 @@ This foundation develops independently of the capability API while normal merge 
 在 main `e31319a8521c458e6e6b538646617de48288d351` 的独立分支完成实际数据库记录快照到原字节存储文件描述符的私有桥接。记录读取保留既有来源判据、最后联合查询及显式只读事务 rollback；文件读取核原存储归属、根目录、完整摘要和真实文件，分块失败清空输出缓冲。范围不含公开下载、当前宿主字节交接、清理生命周期或迁移。
 
 作者阶段第一轮新数据库用例为 20 通过、1 测试等待前提失败；原始失败保留。后续诊断实测发现模式校验先被锁阻塞，登记并加入仅测试构建使用的同步点后，精确单用例实际通过：最终查询确实等锁、撤权提交回执成功、读取拒绝。此同步点走同一真实读取流程，发布构建不含同步点。当前版本仍待冻结提交后的全部 22 新用例、相关旧回归、严格检查及非作者独立验收；尚无本任务 PR 或交付声明。
+
+
+### V7-IMPL-007 bounded private artifact read bridge verification
+
+Exact source 63110f43c4a0606ce96f58f67bf3c4f3935f6f42 passed independent source and test-oracle review for the private record-snapshot to verified-file-descriptor bridge. A current own-pool record observation preserves the existing source predicate and explicit read-only transaction rollback. The same retained dataset-bound store opens the actual file with full digest verification; bounded chunks recheck physical state, and terminal errors wipe the entire pending output buffer. Cancellation of the waiting future retains the actual blocking worker's store/root owner until the worker finishes.
+
+Fourteen directed checks and thirty-four raw steps support 136 distinct actual passed tests: 22 new bridge tests and 114 existing regressions. Ignored tests are excluded from the pass count. Five outer PostgreSQL instances and five nested Desktop sidecars have separate actual stop/PID-absence evidence; all 25 new owned byte roots are removed and absent. Production server-runtime library strict Clippy passes. Ordinary complete server-runtime/server-sso library/tests Clippy passes with one unchanged MCP warning; the two strict test failures remain preserved and complete test strict acceptance is open.
+
+All 1217 product inputs remain bound to the checked source; this later local publication candidate adds only ledger facts. Existing save/metadata, authorization predicates, migration, Contracts, Application and host interfaces keep their prior behavior. The finite review does not deliver current host byte handoff, a one-use 600-second handle, public transport, full drain, cleanup lifecycle, backup, readiness or full artifact acceptance. Physical peak memory and the new 64 MiB database-bound read bridge are unmeasured. Publication, the actual task PR and normal merge remain pending; the sustained backend goal remains incomplete.
