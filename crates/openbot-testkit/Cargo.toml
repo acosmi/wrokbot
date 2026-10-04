@@ -99,6 +99,10 @@ openbot-server = { workspace = true, features = ["testkit"] }
 openbot-agent.workspace = true
 openbot-infra = { workspace = true, features = ["server-sso"] }
 deadpool-postgres.workspace = true
+# Owned TLS fixtures used only by the actual-client integration host.
+base64.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
 
 # 在测试里实现 `ChannelReader`（`#[async_trait]` 的 trait）。
 async-trait.workspace = true
