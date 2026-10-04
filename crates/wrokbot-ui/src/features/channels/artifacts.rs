@@ -337,7 +337,7 @@ impl ArtifactSourceObserver {
             state.join = None;
             // One outstanding source read owns the only raw buffer. Native sends stay unaffected.
             if state.qualifying {
-                state.epoch = state.epoch.checked_add(1).unwrap_or(u64::MAX);
+                state.epoch = state.epoch.saturating_add(1);
                 return;
             }
             let Some(actor) = state.actor.clone() else {
@@ -675,7 +675,7 @@ impl ActionState {
 
     fn hide_metadata(&mut self) {
         // Overflow disables subsequent reads instead of recycling a stale generation.
-        self.read_generation = self.read_generation.checked_add(1).unwrap_or(u64::MAX);
+        self.read_generation = self.read_generation.saturating_add(1);
         self.metadata = MetadataState::Idle;
         self.metadata_mount = None;
     }

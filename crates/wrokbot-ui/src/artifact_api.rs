@@ -84,6 +84,7 @@ fn has_complete_user_provenance(body: &str) -> bool {
     true
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 fn decode_save(
     status: u16,
     no_store: bool,
