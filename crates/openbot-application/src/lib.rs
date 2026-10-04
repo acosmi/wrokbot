@@ -116,6 +116,10 @@ pub use artifacts::{
     ArtifactAdministration, ArtifactAdministrationError, CurrentArtifactReadChunk,
     NoArtifactAdministration, get_artifact_metadata, save_run_message_text_artifact,
 };
+pub mod artifact_read_lifecycle;
+pub use artifact_read_lifecycle::{
+    ArtifactReadOperation, CurrentArtifactReadBlock, CurrentArtifactReadOperation,
+};
 pub use builtin_tools::{
     BUILTIN_TOOL_CATALOG_GENERATION, CommittedMemoryEffect, REMEMBER_TOOL_NAME,
     RememberToolArguments, RememberToolMemory, RememberToolMemoryRequest, RememberToolScope,

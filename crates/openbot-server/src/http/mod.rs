@@ -109,6 +109,27 @@ pub struct ServerState {
     inner: Arc<StateInner>,
 }
 
+/// A trusted Rust consumer retains the original resolved session for every block.
+pub struct ServerArtifactReadOperation {
+    auth: openbot_contracts::auth::AuthContext,
+    operation: openbot_application::CurrentArtifactReadOperation,
+}
+
+impl ServerArtifactReadOperation {
+    /// Read and hand off the next original-session block, or verified EOF.
+    pub async fn next_block(
+        &mut self,
+    ) -> Result<
+        Option<openbot_contracts::artifact_read::LeasedArtifactReadBlock>,
+        openbot_contracts::error::AppError,
+    > {
+        self.operation
+            .next_block(&self.auth)
+            .await?
+            .handoff(&self.auth)
+    }
+}
+
 struct StateInner {
     application: Arc<dyn ApplicationService>,
     auth: Arc<dyn AuthResolver>,
@@ -154,6 +175,20 @@ impl ServerState {
             .read_current_artifact_chunk(auth.clone(), artifact_id)
             .await?;
         pending.handoff(&auth)
+    }
+
+    /// Open a sequential read with the actual resolver and the same application service.
+    pub async fn open_current_artifact_read(
+        &self,
+        parts: &http::request::Parts,
+        artifact_id: String,
+    ) -> Result<ServerArtifactReadOperation, openbot_contracts::error::AppError> {
+        let auth = self.auth_resolver().resolve(parts).await?;
+        let operation = self
+            .application()
+            .open_current_artifact_read(auth.clone(), artifact_id)
+            .await?;
+        Ok(ServerArtifactReadOperation { auth, operation })
     }
 
     /// 已声明的 readiness 判据。**可以是空的，而空 = not ready**（见

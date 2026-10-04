@@ -1159,6 +1159,24 @@ where
         chunk.verify_current(&auth)?;
         Ok(chunk)
     }
+    async fn open_current_artifact_read(
+        &self,
+        auth: AuthContext,
+        artifact_id: String,
+    ) -> Result<crate::CurrentArtifactReadOperation, AppError> {
+        let artifact_id = openbot_contracts::artifacts::canonical_artifact_uuid_v7(&artifact_id)
+            .ok_or(AppError::MalformedPayload {
+                field: "artifactId",
+            })?;
+        if auth.request_binding().is_none() {
+            return Err(AppError::DependencyUnavailable {
+                dependency: "host_request_binding",
+            });
+        }
+        self.artifacts
+            .open_host_bound_read_operation(&auth, &artifact_id)
+            .await
+    }
     #[tracing::instrument(
         name = "application.execute",
         skip_all,

@@ -54,6 +54,15 @@ impl PostgresLocalConfirmationAuthority {
             .map_err(|_| HostRequestBindingError::Unavailable)
     }
 
+    pub(crate) fn artifact_read_lifecycle(
+        &self,
+    ) -> Option<std::sync::Arc<openbot_infra::artifact_read_lifecycle::ArtifactReadLifecycle>> {
+        self.artifact_read_authority
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .map(|authority| authority.read_lifecycle())
+    }
+
     // Request-binding observations have a stricter current-only contract than the established
     // OS-confirmation reader. Do not call its compatibility loader: NULL is not generation zero.
     async fn verify_binding_current(

@@ -88,6 +88,16 @@ pub trait ArtifactAdministration: Send + Sync {
     ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
         Err(openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable)
     }
+    /// 原宿主Rust-only连续读取；缺真实实现保持不可用。
+    async fn open_host_bound_read_operation(
+        &self,
+        _auth: &AuthContext,
+        _artifact_id: &str,
+    ) -> Result<crate::CurrentArtifactReadOperation, AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
     /// 实际原宿主绑定的私有首块读取；缺真实消费者时拒绝，不新增公开 wire。
     async fn read_host_bound_chunk(
         &self,

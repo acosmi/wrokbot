@@ -1,6 +1,7 @@
 //! Tauri 2.11.5 custom-protocol adapter for the shared Leptos bundle.
 
 mod artifact_read;
+pub use artifact_read::DesktopArtifactReadOperation;
 mod artifacts;
 mod assets;
 #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
@@ -670,6 +671,20 @@ pub struct DesktopTauriProtocol {
     local_confirmation: OnceLock<LocalConfirmationHost>,
 }
 
+impl Drop for DesktopTauriProtocol {
+    fn drop(&mut self) {
+        self.request_binding_lease.close();
+        #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+        if let Some(reads) = self
+            .local_capability_authority
+            .as_ref()
+            .and_then(|source| source.artifact_read_lifecycle())
+        {
+            reads.close_issuer(&self.request_binding_issuer);
+        }
+    }
+}
+
 /// Process-wide protocol hand-off used when `app_data_dir()` is available only inside setup.
 pub(crate) struct DesktopTauriProtocolSlot {
     protocol: OnceLock<Arc<DesktopTauriProtocol>>,
@@ -799,6 +814,14 @@ impl DesktopTauriProtocol {
     /// Close the actual protocol owner before resource teardown; Arc allocation is not liveness.
     pub fn close_request_bindings(&self) {
         self.request_binding_lease.close();
+        #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+        if let Some(reads) = self
+            .local_capability_authority
+            .as_ref()
+            .and_then(|source| source.artifact_read_lifecycle())
+        {
+            reads.close_issuer(&self.request_binding_issuer);
+        }
         #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
         if let Some(facts) = self
             .window_registry
@@ -933,6 +956,15 @@ impl DesktopTauriProtocol {
             removed
         };
         if let Some(authority) = removed {
+            #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+            if let (Some(reads), Some(binding)) = (
+                self.local_capability_authority
+                    .as_ref()
+                    .and_then(|source| source.artifact_read_lifecycle()),
+                authority.auth.request_binding(),
+            ) {
+                reads.close_binding(binding.identity());
+            }
             drop(authority);
             self.structured_events
                 .close_window(&WindowLabel::new(label.to_owned()));
