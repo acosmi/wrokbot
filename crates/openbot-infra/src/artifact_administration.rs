@@ -34,6 +34,9 @@ use crate::artifact_store::{
 use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 use crate::thread_directory::reconciliation_visibility::VISIBLE_RUN;
 
+#[path = "artifact_read_authority.rs"]
+pub mod artifact_read_authority;
+
 const WAIT: Duration = Duration::from_secs(5);
 const PG_PHASE: Duration = Duration::from_secs(30);
 const MEDIA: &str = "text/plain; charset=utf-8";
@@ -112,6 +115,7 @@ pub struct PostgresArtifactAdministration {
     store: Arc<DatasetBoundArtifactStore>,
     policy: ArtifactQuotaPolicy,
     audit_key: SecretBytes,
+    read_authority: OnceLock<Arc<artifact_read_authority::PostgresArtifactReadAuthority>>,
 }
 
 /// A single owned-PG record/source snapshot bound to its exact actual byte-store owner.
@@ -166,7 +170,19 @@ impl PostgresArtifactAdministration {
             store,
             policy,
             audit_key,
+            read_authority: OnceLock::new(),
         })
+    }
+
+    /// Retain one actual reader authority; its weak administration link never forms a cycle.
+    pub fn read_authority(
+        self: &Arc<Self>,
+    ) -> Arc<artifact_read_authority::PostgresArtifactReadAuthority> {
+        Arc::clone(self.read_authority.get_or_init(|| {
+            Arc::new(
+                artifact_read_authority::PostgresArtifactReadAuthority::from_administration(self),
+            )
+        }))
     }
 
     /// Observe one currently visible available record using only this adapter's actual Pool.
@@ -1035,6 +1051,19 @@ impl PostgresArtifactAdministration {
 
 #[async_trait]
 impl ArtifactAdministration for PostgresArtifactAdministration {
+    async fn read_host_bound_chunk(
+        &self,
+        auth: &AuthContext,
+        artifact_id: &str,
+    ) -> Result<openbot_application::CurrentArtifactReadChunk, openbot_contracts::error::AppError>
+    {
+        let authority = self.read_authority.get().ok_or(
+            openbot_contracts::error::AppError::DependencyUnavailable {
+                dependency: "artifacts",
+            },
+        )?;
+        authority.read_host_bound_chunk(auth, artifact_id).await
+    }
     async fn save_run_message_text(
         &self,
         auth: &AuthContext,

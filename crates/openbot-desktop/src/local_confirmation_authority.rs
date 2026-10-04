@@ -13,6 +13,9 @@ pub(crate) trait LocalConfirmationAuthority: Send + Sync {
 pub(crate) struct PostgresLocalConfirmationAuthority {
     installation: openbot_infra::auth::single_user::desktop_local::DesktopLocalAuthority,
     pool: openbot_infra::db::pool::DatabasePool,
+    artifact_read_authority: std::sync::OnceLock<
+        std::sync::Weak<openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority>,
+    >,
 }
 
 #[cfg(feature = "desktop-local-runtime")]
@@ -28,7 +31,27 @@ impl PostgresLocalConfirmationAuthority {
         installation: openbot_infra::auth::single_user::desktop_local::DesktopLocalAuthority,
         pool: openbot_infra::db::pool::DatabasePool,
     ) -> Self {
-        Self { installation, pool }
+        Self {
+            installation,
+            pool,
+            artifact_read_authority: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn install_artifact_read_authority(
+        &self,
+        authority: &std::sync::Arc<
+            openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority,
+        >,
+    ) -> Result<(), openbot_contracts::HostRequestBindingError> {
+        use openbot_contracts::HostRequestBindingError;
+        let original = self.installation.auth_context();
+        if !authority.matches_pool_scope(&self.pool, original.deployment(), original.tenant()) {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        self.artifact_read_authority
+            .set(std::sync::Arc::downgrade(authority))
+            .map_err(|_| HostRequestBindingError::Unavailable)
     }
 
     // Request-binding observations have a stricter current-only contract than the established
@@ -169,6 +192,47 @@ mod tests;
 
 #[cfg(feature = "desktop-local-runtime")]
 impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAuthority {
+    fn verify_artifact_read_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn openbot_contracts::request_binding::ArtifactReadCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        Box<dyn openbot_contracts::request_binding::ArtifactReadTailWitness>,
+                        openbot_contracts::request_binding::ArtifactReadCurrentError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            use openbot_contracts::request_binding::{
+                ArtifactReadCurrentError, HostRequestBindingError,
+            };
+            let authority = self
+                .artifact_read_authority
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ))?;
+            if deadline <= std::time::Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                authority.observe_desktop_local(auth, target, &self.installation, deadline),
+            )
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable))?
+        })
+    }
+
     fn verify_current<'a>(
         &'a self,
         expected: &'a AuthContext,

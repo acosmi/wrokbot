@@ -79,6 +79,16 @@ impl ArtifactAdministrationError {
 /// Shared authenticated port; each implementation owns its current transaction and byte proof.
 #[async_trait]
 pub trait ArtifactAdministration: Send + Sync {
+    /// 实际原宿主绑定的私有首块读取；缺真实消费者时拒绝，不新增公开 wire。
+    async fn read_host_bound_chunk(
+        &self,
+        _auth: &AuthContext,
+        _artifact_id: &str,
+    ) -> Result<CurrentArtifactReadChunk, AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
     /// Explicitly save the selected real PG user message, observing original operations on reentry.
     async fn save_run_message_text(
         &self,
@@ -93,6 +103,100 @@ pub trait ArtifactAdministration: Send + Sync {
         artifact_id: &str,
     ) -> Result<ArtifactMetadata, ArtifactAdministrationError>;
 }
+
+/// 原 FD/current witness 保留到真正同步移交的封闭首块；不是公开流或票据。
+pub struct CurrentArtifactReadChunk {
+    pending: openbot_contracts::artifact_read::PendingArtifactReadBuffer,
+    original: openbot_contracts::request_binding::VerifiedHostRequestBinding,
+    auth: AuthContext,
+    target: std::sync::Arc<dyn openbot_contracts::request_binding::ArtifactReadCurrentTarget>,
+    witness: Box<dyn openbot_contracts::request_binding::ArtifactReadTailWitness>,
+    deadline: std::time::Instant,
+}
+impl CurrentArtifactReadChunk {
+    /// 只供实际 Infra producer，消费全初始化 RAII bytes 和保留原 FD 的真实 target。
+    #[doc(hidden)]
+    pub fn from_trusted_observation(
+        pending: openbot_contracts::artifact_read::PendingArtifactReadBuffer,
+        auth: AuthContext,
+        target: std::sync::Arc<dyn openbot_contracts::request_binding::ArtifactReadCurrentTarget>,
+        witness: Box<dyn openbot_contracts::request_binding::ArtifactReadTailWitness>,
+        deadline: std::time::Instant,
+    ) -> Result<Self, AppError> {
+        if pending.actual_length().is_none() {
+            return Err(AppError::DependencyUnavailable {
+                dependency: "artifacts",
+            });
+        }
+        let original = auth
+            .request_binding()
+            .cloned()
+            .ok_or(AppError::DependencyUnavailable {
+                dependency: "host_request_binding",
+            })?;
+        let chunk = Self {
+            pending,
+            original,
+            auth,
+            target,
+            witness,
+            deadline,
+        };
+        chunk.verify_current(&chunk.auth)?;
+        Ok(chunk)
+    }
+    /// 无 await 的原六事实/binding、保留FD/root及真实宿主/window/clock 尾检。
+    pub fn verify_current(&self, auth: &AuthContext) -> Result<(), AppError> {
+        if auth != &self.auth {
+            return Err(AppError::Unauthenticated);
+        }
+        self.original
+            .verify_artifact_read_tail(
+                auth,
+                self.target.as_ref(),
+                self.witness.as_ref(),
+                self.deadline,
+            )
+            .map_err(current_read_error)
+    }
+    /// 唯一正文出口；全部同步尾检后消费RAII缓冲，无后续await。
+    pub fn handoff(self, auth: &AuthContext) -> Result<Vec<u8>, AppError> {
+        self.verify_current(auth)?;
+        self.pending
+            .handoff(
+                auth,
+                &self.original,
+                self.target.as_ref(),
+                self.witness.as_ref(),
+                self.deadline,
+            )
+            .map_err(current_read_error)
+    }
+}
+fn current_read_error(
+    error: openbot_contracts::request_binding::ArtifactReadCurrentError,
+) -> AppError {
+    use openbot_contracts::request_binding::{
+        ArtifactReadCurrentError as Error, HostRequestBindingError,
+    };
+    match error {
+        Error::Host(HostRequestBindingError::NotCurrent) => AppError::Unauthenticated,
+        Error::Host(HostRequestBindingError::Missing | HostRequestBindingError::Unavailable) => {
+            AppError::DependencyUnavailable {
+                dependency: "host_request_binding",
+            }
+        }
+        Error::NotVisible => AppError::NotVisible,
+        Error::Gone(status) => AppError::ArtifactGone { status },
+        Error::Unavailable => AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        },
+    }
+}
+
+#[cfg(test)]
+#[path = "artifact_current_read_tests.rs"]
+mod current_read_tests;
 
 /// Genuine unavailable default when no authoritative physical dependency is composed.
 #[derive(Debug, Default)]

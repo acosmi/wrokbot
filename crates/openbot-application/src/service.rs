@@ -45,6 +45,16 @@ pub type AppEventStream = Pin<Box<dyn Stream<Item = AppEvent> + Send>>;
 /// 不生成用户可见文案 —— 错误以 `AppError` 的稳定 code 穿越边界，由 GUI 本地化。
 #[async_trait]
 pub trait ApplicationService: Send + Sync {
+    /// 当前原宿主的私有首块读取；未实现的真实transport组合默认不可用。
+    async fn read_current_artifact_chunk(
+        &self,
+        _auth: AuthContext,
+        _artifact_id: String,
+    ) -> Result<crate::artifacts::CurrentArtifactReadChunk, AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
     /// 执行一条命令。
     async fn execute(&self, auth: AuthContext, command: AppCommand) -> Result<AppReply, AppError>;
 

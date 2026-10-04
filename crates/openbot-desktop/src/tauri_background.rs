@@ -1201,7 +1201,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
             }
         };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> = {
+    let artifact_administration = {
         let artifact_policy = openbot_domain::artifact::ArtifactQuotaPolicy::default();
         let artifact_store = match data_plane.open_artifact_store(artifact_policy).await {
             Ok(store) => store,
@@ -1224,8 +1224,13 @@ pub(crate) async fn prepare_desktop_local_runtime(
                 );
             }
         };
-        Some(port)
+        port
     };
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> =
+        Some(artifact_administration.clone());
+    #[cfg(target_os = "macos")]
+    let artifact_read_authority = artifact_administration.read_authority();
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let artifacts: Option<Arc<dyn openbot_application::artifacts::ArtifactAdministration>> = None;
     #[cfg(target_os = "macos")]
@@ -1324,6 +1329,19 @@ pub(crate) async fn prepare_desktop_local_runtime(
             data_plane.pool().clone(),
         ),
     );
+    #[cfg(target_os = "macos")]
+    if current_identity_source
+        .install_artifact_read_authority(&artifact_read_authority)
+        .is_err()
+    {
+        return Err(cleanup_agent_host(
+            data_plane,
+            assembly,
+            agent_host,
+            DesktopLocalRuntimeError::Host,
+        )
+        .await);
+    }
     let protocol = match opened_protocol {
         Ok(protocol) => {
             #[cfg(target_os = "macos")]

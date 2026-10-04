@@ -835,3 +835,21 @@ mod tests {
         assert_eq!(error.to_string(), "not_visible");
     }
 }
+impl From<crate::request_binding::ArtifactReadCurrentError> for AppError {
+    fn from(error: crate::request_binding::ArtifactReadCurrentError) -> Self {
+        use crate::request_binding::{ArtifactReadCurrentError as Error, HostRequestBindingError};
+        match error {
+            Error::Host(HostRequestBindingError::NotCurrent) => Self::Unauthenticated,
+            Error::Host(
+                HostRequestBindingError::Missing | HostRequestBindingError::Unavailable,
+            ) => Self::DependencyUnavailable {
+                dependency: "host_request_binding",
+            },
+            Error::NotVisible => Self::NotVisible,
+            Error::Gone(status) => Self::ArtifactGone { status },
+            Error::Unavailable => Self::DependencyUnavailable {
+                dependency: "artifacts",
+            },
+        }
+    }
+}

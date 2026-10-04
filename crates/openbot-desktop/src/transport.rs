@@ -30,7 +30,7 @@ use std::time::Instant;
 
 use core::time::Duration;
 
-use openbot_application::{AppEventStream, ApplicationService};
+use openbot_application::{AppEventStream, ApplicationService, CurrentArtifactReadChunk};
 use openbot_contracts::auth::AuthContext;
 use openbot_contracts::command::{AppCommand, AppEvent, AppReply, SubscriptionRequest};
 use openbot_contracts::error::AppError;
@@ -129,6 +129,23 @@ impl InProcessTransport {
     #[must_use]
     pub fn service(&self) -> &Arc<dyn ApplicationService> {
         &self.service
+    }
+
+    /// Rust-only sealed first-chunk forwarding through the same application service.
+    /// A transport without the actual producer keeps its default unavailable response.
+    pub async fn read_current_artifact_chunk(
+        &self,
+        auth: AuthContext,
+        artifact_id: String,
+    ) -> Result<CurrentArtifactReadChunk, AppError> {
+        if self.broker.shutdown_token().is_cancelled() {
+            return Err(AppError::DependencyUnavailable {
+                dependency: "desktop_transport",
+            });
+        }
+        self.service
+            .read_current_artifact_chunk(auth, artifact_id)
+            .await
     }
 
     /// 事件 broker（多窗口 ACL 与有界队列都在它那里）。

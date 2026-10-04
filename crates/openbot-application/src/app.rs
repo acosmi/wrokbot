@@ -1133,6 +1133,29 @@ where
     M: MemoryAdministration + 'static,
     B: AgentCallbackTokenAdministration + 'static,
 {
+    async fn read_current_artifact_chunk(
+        &self,
+        auth: AuthContext,
+        artifact_id: String,
+    ) -> Result<crate::artifacts::CurrentArtifactReadChunk, AppError> {
+        let artifact_id = openbot_contracts::artifacts::canonical_artifact_uuid_v7(&artifact_id)
+            .ok_or(AppError::MalformedPayload {
+                field: "artifactId",
+            })?;
+        if auth.request_binding().is_none() {
+            return Err(AppError::DependencyUnavailable {
+                dependency: "host_request_binding",
+            });
+        }
+        // The final own-Pool joint predicate checks the current role/source, host first.
+        // Do not add an early role response or return an older separate auth observation.
+        let chunk = self
+            .artifacts
+            .read_host_bound_chunk(&auth, &artifact_id)
+            .await?;
+        chunk.verify_current(&auth)?;
+        Ok(chunk)
+    }
     #[tracing::instrument(
         name = "application.execute",
         skip_all,
