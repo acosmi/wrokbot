@@ -3,10 +3,10 @@
 use std::sync::Weak;
 
 use super::{DesktopTauriProtocol, WindowAuthority, WindowBindingRegistry};
+use crate::CancellationToken;
 use openbot_contracts::auth::AuthContext;
 use openbot_contracts::error::AppError;
 use openbot_contracts::request_binding::RequestBindingIssuer;
-use tokio_util::sync::CancellationToken;
 
 /// Sequential Rust reads remain tied to the original host window without owning its lease.
 pub struct DesktopArtifactReadOperation {
