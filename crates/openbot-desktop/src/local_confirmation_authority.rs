@@ -192,6 +192,39 @@ mod tests;
 
 #[cfg(feature = "desktop-local-runtime")]
 impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAuthority {
+    fn verify_source_run_artifact_ids_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn openbot_contracts::request_binding::SourceRunArtifactIdsCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentCheck<'a> {
+        Box::pin(async move {
+            use openbot_contracts::request_binding::{
+                ArtifactReadCurrentError, HostRequestBindingError,
+            };
+            let authority = self
+                .artifact_read_authority
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ))?;
+            if deadline <= std::time::Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                authority.observe_source_run_ids_desktop_local(
+                    auth, target, &self.installation, deadline,
+                ),
+            )
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable))?
+        })
+    }
+
     fn verify_artifact_read_current_before<'a>(
         &'a self,
         auth: &'a AuthContext,

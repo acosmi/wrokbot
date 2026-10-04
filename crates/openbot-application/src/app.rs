@@ -615,6 +615,9 @@ where
                     save_run_message_text_artifact(self.artifacts.as_ref(), auth, input).await?,
                 ))
             }
+            AppCommand::GetSourceRunArtifactIds(input) => Ok(AppReply::SourceRunArtifactIds(
+                crate::artifacts::get_source_run_artifact_ids(self.artifacts.as_ref(), auth, input).await?,
+            )),
             AppCommand::GetArtifactMetadata(input) => Ok(AppReply::ArtifactMetadata(
                 get_artifact_metadata(self.artifacts.as_ref(), auth, input).await?,
             )),

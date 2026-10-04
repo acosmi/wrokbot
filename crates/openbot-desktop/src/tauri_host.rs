@@ -64,6 +64,7 @@ use openbot_contracts::request_binding::{
     HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingIdentity,
     HostRequestBindingKind, RequestBindingIssuer, RequestBindingOwnerLease,
     RequestBindingOwnerObservation, VerifiedHostRequestBinding,
+    SourceRunArtifactIdsCurrentCheck, SourceRunArtifactIdsCurrentTarget,
 };
 use openbot_contracts::sandboxed::{
     SandboxedComponentRevisionRequest, SaveSandboxedComponentRequest,
@@ -444,6 +445,59 @@ impl WindowRequestBindingGuard {
     }
 }
 impl HostRequestBindingGuard for WindowRequestBindingGuard {
+    fn verify_source_run_artifact_ids_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn SourceRunArtifactIdsCurrentTarget,
+        deadline: Instant,
+    ) -> SourceRunArtifactIdsCurrentCheck<'a> {
+        Box::pin(async move {
+            self.check_window(auth).map_err(ArtifactReadCurrentError::Host)?;
+            if deadline <= Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            let binding = auth.request_binding().ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Missing,
+            ))?;
+            if !self.issuer.matches_desktop_window_epoch(
+                binding.identity(), &self.label, self.id,
+            ) {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let source = self.source.as_ref().ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ))?;
+            let result = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                source.verify_source_run_artifact_ids_current_before(auth, target, deadline),
+            )
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable));
+            self.check_window(auth).map_err(ArtifactReadCurrentError::Host)?;
+            let (inner, outcome) = result??;
+            let witness = WindowReadTail {
+                window: WindowRequestBindingGuard {
+                    registry: self.registry.clone(),
+                    owner: self.owner.clone(),
+                    issuer: self.issuer.clone(),
+                    label: self.label.clone(),
+                    id: self.id,
+                    expected: self.expected.clone(),
+                    source: None,
+                    upstream: None,
+                },
+                original: binding.identity().clone(),
+                inner,
+            };
+            witness.verify_current(auth, deadline)?;
+            Ok((Box::new(witness) as Box<dyn ArtifactReadTailWitness>, outcome))
+        })
+    }
+
     fn verify_artifact_read_current_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -978,6 +1032,27 @@ impl DesktopTauriProtocol {
 
     /// Handle one custom-protocol request. Public for deterministic host-adapter tests.
     pub async fn handle(&self, label: &str, mut request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+        if request.uri().path() == "/api/artifacts/source-runs"
+            || request.uri().path().starts_with("/api/artifacts/source-runs/")
+        {
+            let authority = {
+                let windows = match self.window_registry.windows.try_read() {
+                    Ok(windows) => windows,
+                    Err(_) => {
+                        request.body_mut().fill(0);
+                        return error_response(AppError::DependencyUnavailable {
+                            dependency: "host_request_binding",
+                        });
+                    }
+                };
+                windows.get(label).cloned()
+            };
+            let Some(authority) = authority else {
+                request.body_mut().fill(0);
+                return error_response(AppError::Unauthenticated);
+            };
+            return self.artifacts(label, request, authority).await;
+        }
         let authority = match self.authority(label) {
             Ok(Some(authority)) => authority,
             Ok(None) => {
@@ -3478,6 +3553,10 @@ mod local_confirmation_tests;
 #[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
 #[path = "tauri_host/current_request_binding_local_tests.rs"]
 mod current_request_binding_local_tests;
+
+#[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
+#[path = "tauri_host/artifact_source_run_local_tests.rs"]
+mod artifact_source_run_local_tests;
 
 #[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
 #[path = "tauri_host/runtime_capabilities_local_tests.rs"]

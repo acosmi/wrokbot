@@ -112,6 +112,7 @@ pub const fn command_kind(command: &AppCommand) -> &'static str {
         AppCommand::GetRuntimeCapabilities => "get_runtime_capabilities",
         AppCommand::SaveRunMessageTextArtifact(_) => "save_run_message_text_artifact",
         AppCommand::GetArtifactMetadata(_) => "get_artifact_metadata",
+        AppCommand::GetSourceRunArtifactIds(_) => "get_source_run_artifact_ids",
         AppCommand::Health => "health",
         AppCommand::ListVisibleChannels { .. } => "list_visible_channels",
         AppCommand::GetVisibleChannel { .. } => "get_visible_channel",

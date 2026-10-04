@@ -33,6 +33,28 @@ pub struct GetArtifactMetadata {
     pub artifact_id: String,
 }
 
+/// Exact source selectors for a current IDs-only observation; neither selector grants access.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetSourceRunArtifactIds {
+    /// Original opaque source Thread, preserved without normalization.
+    pub source_thread_id: ThreadId,
+    /// Original opaque source Run, preserved without normalization.
+    pub source_run_id: RunId,
+}
+
+/// Bounded materialized identities from one current source observation, without byte claims.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceRunArtifactIds {
+    /// The exact observed source Thread.
+    pub source_thread_id: ThreadId,
+    /// The exact observed source Run.
+    pub source_run_id: RunId,
+    /// At most 32 unique canonical UUIDv7 identities, in ascending byte order.
+    pub artifact_ids: Vec<String>,
+}
+
 /// R424 positive local registration fact; no content or current byte/permission proof.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

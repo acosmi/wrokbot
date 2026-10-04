@@ -6,10 +6,12 @@ use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{Path, State};
 use http::{HeaderMap, HeaderValue, Uri, header::CACHE_CONTROL};
 use openbot_contracts::artifacts::{
-    ArtifactMetadata, ArtifactRegistrationReceipt, GetArtifactMetadata, SaveRunMessageTextArtifact,
+    ArtifactMetadata, ArtifactRegistrationReceipt, GetArtifactMetadata, GetSourceRunArtifactIds,
+    SaveRunMessageTextArtifact, SourceRunArtifactIds,
 };
 use openbot_contracts::command::{AppCommand, AppReply};
 use openbot_contracts::error::AppError;
+use openbot_contracts::ids::{RunId, ThreadId};
 
 use crate::auth::{Authenticated, FreshOriginAuthenticated};
 use crate::error::HttpError;
@@ -61,6 +63,51 @@ pub async fn metadata(
         .await?
     {
         AppReply::ArtifactMetadata(metadata) => Ok((no_store(), Json(metadata))),
+        _ => Err(AppError::DependencyUnavailable {
+            dependency: "application",
+        }
+        .into()),
+    }
+}
+
+/// Lists IDs materialized from one currently visible source Run in the current host scope.
+pub async fn source_run_ids(
+    State(state): State<ServerState>,
+    Authenticated(auth): Authenticated,
+    source: Result<Path<(String, String)>, PathRejection>,
+    uri: Uri,
+    body: Bytes,
+) -> Result<(HeaderMap, Json<SourceRunArtifactIds>), HttpError> {
+    if uri.query().is_some() {
+        return Err(AppError::MalformedPayload { field: "query" }.into());
+    }
+    if !body.is_empty() {
+        return Err(AppError::MalformedPayload { field: "body" }.into());
+    }
+    let mut raw_path = uri.path().bytes();
+    while let Some(byte) = raw_path.next() {
+        if byte == b'%'
+            && (!raw_path.next().is_some_and(|byte| byte.is_ascii_hexdigit())
+                || !raw_path.next().is_some_and(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err(AppError::MalformedPayload { field: "source_run" }.into());
+        }
+    }
+    let Path((thread_id, run_id)) = source.map_err(|_| AppError::MalformedPayload {
+        field: "source_run",
+    })?;
+    match state
+        .application()
+        .execute(
+            auth,
+            AppCommand::GetSourceRunArtifactIds(GetSourceRunArtifactIds {
+                source_thread_id: ThreadId::new(thread_id),
+                source_run_id: RunId::new(run_id),
+            }),
+        )
+        .await?
+    {
+        AppReply::SourceRunArtifactIds(ids) => Ok((no_store(), Json(ids))),
         _ => Err(AppError::DependencyUnavailable {
             dependency: "application",
         }
