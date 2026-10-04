@@ -37,9 +37,11 @@ use openbot_infra::repo::channels::ChannelRepo;
 use openbot_infra::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
 use openbot_infra::thread_listener::ThreadListenerDatabase;
 use std::fs::{self, OpenOptions};
-use std::io::Write as _;
+use std::io::{Read as _, Seek as _, Write as _};
 use std::net::TcpListener;
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -80,6 +82,111 @@ fn run(command: &mut Command, phase: &'static str) -> Result<(), String> {
     } else {
         Err(format!("{phase}: exit={:?}", output.status.code()))
     }
+}
+
+fn mutate_owned_read_only_file<M, E>(
+    path: &std::path::Path,
+    mutation: M,
+    expected: E,
+) -> Result<(), String>
+where
+    M: FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+    E: FnOnce(&[u8], &[u8]) -> bool,
+{
+    let original = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        original.is_file() && original.mode() & 0o7777 == 0o400 && original.nlink() == 1,
+        "owned mutation requires the original regular0400 single-link file",
+    )?;
+    let anchor = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let anchored = anchor.metadata().map_err(|error| error.to_string())?;
+    require(
+        anchored.is_file()
+            && anchored.dev() == original.dev()
+            && anchored.ino() == original.ino()
+            && anchored.uid() == original.uid()
+            && anchored.mode() & 0o7777 == 0o400
+            && anchored.nlink() == 1,
+        "owned mutation read FD is not the original0400 inode",
+    )?;
+    let mut before = Vec::new();
+    (&anchor)
+        .read_to_end(&mut before)
+        .map_err(|error| error.to_string())?;
+    struct RestoreReadOnly<'a> {
+        file: &'a std::fs::File,
+        armed: bool,
+    }
+    impl Drop for RestoreReadOnly<'_> {
+        fn drop(&mut self) {
+            if self.armed {
+                let _ = self
+                    .file
+                    .set_permissions(std::fs::Permissions::from_mode(0o400));
+                let _ = self.file.sync_all();
+            }
+        }
+    }
+    let mut restore = RestoreReadOnly {
+        file: &anchor,
+        armed: true,
+    };
+    anchor
+        .set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| error.to_string())?;
+    let mut writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    let writable = writer.metadata().map_err(|error| error.to_string())?;
+    require(
+        writable.is_file()
+            && writable.dev() == original.dev()
+            && writable.ino() == original.ino()
+            && writable.uid() == original.uid()
+            && writable.mode() & 0o7777 == 0o600
+            && writable.nlink() == 1,
+        "owned mutation write FD is not the original temporary0600 inode",
+    )?;
+    let mutation_result = mutation(&mut writer, &before);
+    let mutation_sync = writer.sync_all();
+    // Restore even when mutation or its sync failed; the anchored guard also covers early errors.
+    let restored = writer.set_permissions(std::fs::Permissions::from_mode(0o400));
+    let restore_sync = writer.sync_all();
+    if restored.is_ok() && restore_sync.is_ok() {
+        restore.armed = false;
+    }
+    restored.map_err(|error| error.to_string())?;
+    restore_sync.map_err(|error| error.to_string())?;
+    let actual = writer.metadata().map_err(|error| error.to_string())?;
+    let installed = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        actual.is_file()
+            && installed.is_file()
+            && actual.dev() == original.dev()
+            && actual.ino() == original.ino()
+            && actual.uid() == original.uid()
+            && installed.dev() == original.dev()
+            && installed.ino() == original.ino()
+            && actual.mode() & 0o7777 == 0o400
+            && installed.mode() & 0o7777 == 0o400
+            && actual.nlink() == 1
+            && installed.nlink() == 1,
+        "owned mutation did not restore original inode and0400 permissions",
+    )?;
+    mutation_result.map_err(|error| error.to_string())?;
+    mutation_sync.map_err(|error| error.to_string())?;
+    (&anchor)
+        .seek(std::io::SeekFrom::Start(0))
+        .map_err(|error| error.to_string())?;
+    let mut after = Vec::new();
+    (&anchor)
+        .read_to_end(&mut after)
+        .map_err(|error| error.to_string())?;
+    require(
+        before != after && expected(&before, &after),
+        "owned mutation did not cause exact real byte drift",
+    )
 }
 
 /// 只清理本测试 create_new 的路径，先停自己的 PG；不接触用户目录。
@@ -727,7 +834,7 @@ async fn actual_local_current_raw_generation_email_role_and_deny_refuse_without_
             ("ALTER TABLE public.users DROP CONSTRAINT users_auth_generation_nonnegative; UPDATE public.users SET auth_generation=-1 WHERE id='desktop-local-user'", "UPDATE public.users SET auth_generation=0 WHERE id='desktop-local-user'; ALTER TABLE public.users ADD CONSTRAINT users_auth_generation_nonnegative CHECK (auth_generation IS NULL OR auth_generation>=0)"),
             ("UPDATE public.users SET email='changed-local@example.test' WHERE id='desktop-local-user'", "UPDATE public.users SET email='desktop-local@localhost.invalid' WHERE id='desktop-local-user'"),
             ("UPDATE public.user_roles SET role='user' WHERE user_id='desktop-local-user'", "UPDATE public.user_roles SET role='admin' WHERE user_id='desktop-local-user'"),
-            ("INSERT INTO public.revoked_access(email) VALUES('desktop-local@localhost.invalid')", "DELETE FROM public.revoked_access WHERE email='desktop-local@localhost.invalid'"),
+            ("INSERT INTO public.revoked_access(email,revoked_by) VALUES('desktop-local@localhost.invalid','desktop-local-user')", "DELETE FROM public.revoked_access WHERE email='desktop-local@localhost.invalid'"),
         ];
         for (mutation, restore) in mutations {
             fixture.sql(mutation).await?;
@@ -859,18 +966,19 @@ async fn actual_local_original_fd_mutation_during_last_await_refuses_pending_bod
             tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
                 .await
                 .map_err(|_| "actual pending Local chunk not observed".to_owned())?;
-            let mut fd = fs::OpenOptions::new()
-                .write(true)
-                .open(
-                    fixture
-                        .artifact_root
-                        .join("objects")
-                        .join(&fixture.receipt.artifact_id),
-                )
-                .map_err(|error| error.to_string())?;
-            fd.write_all(b"X")
-                .and_then(|()| fd.sync_all())
-                .map_err(|error| error.to_string())?;
+            mutate_owned_read_only_file(
+                &fixture
+                    .artifact_root
+                    .join("objects")
+                    .join(&fixture.receipt.artifact_id),
+                |fd, _| fd.write_all(b"X"),
+                |before, after| {
+                    before.first() == Some(&b' ')
+                        && after.first() == Some(&b'X')
+                        && after.len() == before.len()
+                        && after[1..] == before[1..]
+                },
+            )?;
             gate.release.notify_one();
             require(
                 matches!(

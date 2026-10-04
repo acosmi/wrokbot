@@ -2,9 +2,9 @@
 //! The Session host issuer below is a test seam; real Server/Desktop acceptance is separate.
 //! Static phases and gate ACK are not substitutes for actual PG Lock/PID/COMMIT evidence.
 
-use std::fs::{self, File, OpenOptions, Permissions};
+use std::fs::{self, File, Permissions};
 use std::future::Future;
-use std::io::Write as _;
+use std::io::{Read as _, Seek as _, Write as _};
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -55,6 +55,111 @@ const EXACT: &str = "  PRIVATE_READ_SOURCE_CANARY\n成果 café 🦀\t  ";
 
 fn require(ok: bool, message: &'static str) -> Result<(), String> {
     if ok { Ok(()) } else { Err(message.to_owned()) }
+}
+
+fn mutate_owned_read_only_file<M, E>(
+    path: &std::path::Path,
+    mutation: M,
+    expected: E,
+) -> Result<(), String>
+where
+    M: FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+    E: FnOnce(&[u8], &[u8]) -> bool,
+{
+    let original = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        original.is_file() && original.mode() & 0o7777 == 0o400 && original.nlink() == 1,
+        "owned mutation requires the original regular0400 single-link file",
+    )?;
+    let anchor = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let anchored = anchor.metadata().map_err(|error| error.to_string())?;
+    require(
+        anchored.is_file()
+            && anchored.dev() == original.dev()
+            && anchored.ino() == original.ino()
+            && anchored.uid() == original.uid()
+            && anchored.mode() & 0o7777 == 0o400
+            && anchored.nlink() == 1,
+        "owned mutation read FD is not the original0400 inode",
+    )?;
+    let mut before = Vec::new();
+    (&anchor)
+        .read_to_end(&mut before)
+        .map_err(|error| error.to_string())?;
+    struct RestoreReadOnly<'a> {
+        file: &'a std::fs::File,
+        armed: bool,
+    }
+    impl Drop for RestoreReadOnly<'_> {
+        fn drop(&mut self) {
+            if self.armed {
+                let _ = self
+                    .file
+                    .set_permissions(std::fs::Permissions::from_mode(0o400));
+                let _ = self.file.sync_all();
+            }
+        }
+    }
+    let mut restore = RestoreReadOnly {
+        file: &anchor,
+        armed: true,
+    };
+    anchor
+        .set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| error.to_string())?;
+    let mut writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    let writable = writer.metadata().map_err(|error| error.to_string())?;
+    require(
+        writable.is_file()
+            && writable.dev() == original.dev()
+            && writable.ino() == original.ino()
+            && writable.uid() == original.uid()
+            && writable.mode() & 0o7777 == 0o600
+            && writable.nlink() == 1,
+        "owned mutation write FD is not the original temporary0600 inode",
+    )?;
+    let mutation_result = mutation(&mut writer, &before);
+    let mutation_sync = writer.sync_all();
+    // Restore even when mutation or its sync failed; the anchored guard also covers early errors.
+    let restored = writer.set_permissions(std::fs::Permissions::from_mode(0o400));
+    let restore_sync = writer.sync_all();
+    if restored.is_ok() && restore_sync.is_ok() {
+        restore.armed = false;
+    }
+    restored.map_err(|error| error.to_string())?;
+    restore_sync.map_err(|error| error.to_string())?;
+    let actual = writer.metadata().map_err(|error| error.to_string())?;
+    let installed = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        actual.is_file()
+            && installed.is_file()
+            && actual.dev() == original.dev()
+            && actual.ino() == original.ino()
+            && actual.uid() == original.uid()
+            && installed.dev() == original.dev()
+            && installed.ino() == original.ino()
+            && actual.mode() & 0o7777 == 0o400
+            && installed.mode() & 0o7777 == 0o400
+            && actual.nlink() == 1
+            && installed.nlink() == 1,
+        "owned mutation did not restore original inode and0400 permissions",
+    )?;
+    mutation_result.map_err(|error| error.to_string())?;
+    mutation_sync.map_err(|error| error.to_string())?;
+    (&anchor)
+        .seek(std::io::SeekFrom::Start(0))
+        .map_err(|error| error.to_string())?;
+    let mut after = Vec::new();
+    (&anchor)
+        .read_to_end(&mut after)
+        .map_err(|error| error.to_string())?;
+    require(
+        before != after && expected(&before, &after),
+        "owned mutation did not cause exact real byte drift",
+    )
 }
 
 struct OwnedRoot(PathBuf);
@@ -638,12 +743,18 @@ async fn actual_owned_pg_current_read_and_sync_fd_tail() {
             .read_host_bound_chunk(&auth, &saved.artifact_id)
             .await
             .map_err(|e| e.to_string())?;
-        let mut object = OpenOptions::new()
-            .append(true)
-            .open(f.object(&saved.artifact_id))
-            .map_err(|e| e.to_string())?;
-        object.write_all(b"changed").map_err(|e| e.to_string())?;
-        object.sync_all().map_err(|e| e.to_string())?;
+        mutate_owned_read_only_file(
+            &f.object(&saved.artifact_id),
+            |object, _| {
+                object.seek(std::io::SeekFrom::End(0))?;
+                object.write_all(b"changed")
+            },
+            |before, after| {
+                after.len() == before.len() + b"changed".len()
+                    && after.starts_with(before)
+                    && after.ends_with(b"changed")
+            },
+        )?;
         require(
             matches!(
                 chunk.handoff(&auth),
@@ -735,14 +846,22 @@ impl SourceMutation {
             Self::DatasetTuple => tx.batch_execute("ALTER TABLE openbot_internal.artifact_dataset_bindings DISABLE TRIGGER artifact_dataset_bindings_append_only; UPDATE openbot_internal.artifact_dataset_bindings SET initial_origin='desktop_canary'; ALTER TABLE openbot_internal.artifact_dataset_bindings ENABLE TRIGGER artifact_dataset_bindings_append_only").await.map_err(|e| e.to_string()),
             Self::StoreTuple => tx.batch_execute("ALTER TABLE openbot_internal.artifact_store_bindings DISABLE TRIGGER artifact_store_bindings_append_only; UPDATE openbot_internal.artifact_store_bindings SET root_inode='0'; ALTER TABLE openbot_internal.artifact_store_bindings ENABLE TRIGGER artifact_store_bindings_append_only").await.map_err(|e| e.to_string()),
             Self::OriginalFd => {
-                let object = OpenOptions::new().write(true).open(f.object(&f.saved_id().await?)).map_err(|e| e.to_string())?;
-                let inode = object.metadata().map_err(|e| e.to_string())?.ino();
-                object.set_len(1).map_err(|e| e.to_string())?;
-                object.sync_all().map_err(|e| e.to_string())?;
-                require(object.metadata().map_err(|e| e.to_string())?.ino() == inode, "FD mutation replaced inode instead of touching retained FD")
+                mutate_owned_read_only_file(
+                    &f.object(&f.saved_id().await?),
+                    |object, _| object.set_len(1),
+                    |before, after| before.len() > 1 && after.len() == 1
+                        && after == &before[..1],
+                )
             }
             Self::RootMode => fs::set_permissions(&f.root.0, Permissions::from_mode(0o755)).map_err(|e| e.to_string()),
-            Self::Marker => fs::write(f.root.0.join(".artifact-store-v1"), b"changed-owned-marker").map_err(|e| e.to_string()),
+            Self::Marker => mutate_owned_read_only_file(
+                &f.root.0.join(".artifact-store-v1"),
+                |marker, _| {
+                    marker.set_len(0)?;
+                    marker.write_all(b"changed-owned-marker")
+                },
+                |_, after| after == b"changed-owned-marker",
+            ),
         }
     }
     fn expected(self, error: &AppError) -> bool {
@@ -882,7 +1001,7 @@ impl SessionMutation {
             }
             Self::Roles => "DELETE FROM public.user_roles WHERE user_id='read-owner'",
             Self::Revoked => {
-                "INSERT INTO public.revoked_access(email) VALUES('read-owner@example.test')"
+                "INSERT INTO public.revoked_access(email,revoked_by) VALUES('read-owner@example.test','read-owner')"
             }
             Self::Expires => {
                 "UPDATE public.sessions SET expires_at=now()-interval '1 second' WHERE id='core-read-session-a'"

@@ -586,7 +586,7 @@ fn decode_host(
                 AuthGeneration::new(generation),
                 true,
             )
-            .with_role(Role::Admin)
+            .with_roles([Role::Admin, Role::User])
             .build();
             if current != *auth {
                 return Err(host_not_current());
