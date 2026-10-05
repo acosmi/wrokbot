@@ -20,14 +20,16 @@ use openbot_application::provider::{
 use openbot_application::{
     ProviderAdapter, ProviderPortError, ProviderRequest, ProviderSession, remember_provider_tool,
 };
-use openbot_contracts::ids::{ActorId, DeploymentId, ServiceId, TenantId};
+use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 use openbot_domain::audit::hash::Sha256Digest;
 use openbot_domain::identity::session::{
     SessionHashKey, SessionToken, SessionTokenHash, TrustedOrigins,
 };
 use openbot_domain::policy::{ActionPolicy, PolicyMode};
 use openbot_domain::remote_callback::RemoteRunAssertionSigner;
-use openbot_domain::vault::{KeyVersion, SecretBytes, SecretKind, SecretPrincipal, WrappingKey};
+use openbot_domain::vault::{
+    KeyVersion, SecretBytes, SecretKind, SecretPrincipal, ServiceId, WrappingKey,
+};
 use openbot_infra::agent_audit::PostgresAgentAudit;
 use openbot_infra::agent_tools::{PostgresAgentAuthorizationSource, PostgresAgentToolSequence};
 use openbot_infra::application_assembly::{
