@@ -156,6 +156,26 @@ impl ObservedArtifactReadRecord {
     }
 }
 
+/// Failure of only the new supervised snapshot, with actual rollback uncertainty separate.
+pub(super) struct PublicReadRecordFailure {
+    pub(super) error: ArtifactAdministrationError,
+    pub(super) rollback_unproven: bool,
+}
+impl PublicReadRecordFailure {
+    fn observed(error: ArtifactAdministrationError) -> Self {
+        Self {
+            error,
+            rollback_unproven: false,
+        }
+    }
+    fn unproven(error: ArtifactAdministrationError) -> Self {
+        Self {
+            error,
+            rollback_unproven: true,
+        }
+    }
+}
+
 impl PostgresArtifactAdministration {
     /// Compose actual current owners; a second Pool or caller-created transaction is not accepted.
     pub fn new(
@@ -204,6 +224,124 @@ impl PostgresArtifactAdministration {
             .await;
         #[cfg(not(test))]
         self.observe_read_record_inner(auth, artifact_id).await
+    }
+
+    /// A public operation's original collector awaits the actual query and rollback futures.
+    /// Its caller may time out, but does not cancel this collector or turn Drop into an ACK.
+    pub(super) async fn observe_read_record_before_inner(
+        &self,
+        auth: &AuthContext,
+        artifact_id: &str,
+        deadline: std::time::Instant,
+    ) -> Result<ObservedArtifactReadRecord, PublicReadRecordFailure> {
+        let check_budget = || {
+            deadline
+                .checked_duration_since(std::time::Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| PublicReadRecordFailure::observed(unavailable()))
+        };
+        check_budget()?;
+        let id = canonical_artifact_uuid_v7(artifact_id).ok_or_else(|| {
+            PublicReadRecordFailure::observed(ArtifactAdministrationError::InvalidInput {
+                field: "artifactId",
+            })
+        })?;
+        self.check_namespace(auth)
+            .map_err(PublicReadRecordFailure::observed)?;
+        if let Err(error) = verify_artifact_registration_schema(self.registry.pool()).await {
+            // This existing schema boundary may have dropped a still-running PG query.
+            return Err(
+                if matches!(
+                    &error,
+                    ArtifactAdministrationError::Unavailable
+                        | ArtifactAdministrationError::Corrupt {
+                            field: "registry_schema"
+                        }
+                ) {
+                    PublicReadRecordFailure::unproven(error)
+                } else {
+                    PublicReadRecordFailure::observed(error)
+                },
+            );
+        }
+        check_budget()?;
+        let mut client = self
+            .registry
+            .pool()
+            .get()
+            .await
+            .map_err(|_| PublicReadRecordFailure::observed(unavailable()))?;
+        check_budget()?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?;
+        let outcome =
+            async {
+                let remaining = deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .filter(|remaining| !remaining.is_zero())
+                    .ok_or_else(unavailable)?;
+                let millis = remaining.as_millis().clamp(1, 5000);
+                tx.batch_execute(&format!(
+                    "SET LOCAL statement_timeout='{millis}ms'; SET LOCAL lock_timeout='{millis}ms'"
+                ))
+                .await
+                .map_err(|_| unavailable())?;
+                if std::time::Instant::now() >= deadline {
+                    return Err(unavailable());
+                }
+                let b = self.registry.binding();
+                let seed = tx.query_opt(
+                "SELECT source_thread_id,source_run_id FROM openbot_internal.artifact_records \
+                 WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 \
+                   AND artifact_id=$4 AND owner_actor_id=$5",
+                &[&b.deployment_id(),&b.tenant_id(),&b.dataset_id(),&id,&auth.actor().as_str()],
+            ).await.map_err(|_| unavailable())?.ok_or(ArtifactAdministrationError::NotVisible)?;
+                let thread: String = value(&seed, "source_thread_id")?;
+                let run: String = value(&seed, "source_run_id")?;
+                let generation = i64::try_from(auth.auth_generation().get())
+                    .map_err(|_| ArtifactAdministrationError::NotVisible)?;
+                let physical = self.store.physical_binding();
+                if std::time::Instant::now() >= deadline {
+                    return Err(unavailable());
+                }
+                let row = tx
+                    .query_opt(
+                        observed_read_sql(),
+                        &[
+                            &thread,
+                            &run,
+                            &auth.actor().as_str(),
+                            &auth.deployment().as_str(),
+                            &auth.tenant().as_str(),
+                            &generation,
+                            &id,
+                            &b.dataset_id(),
+                            &b.binding_schema(),
+                            &b.initial_origin(),
+                            &b.created_at(),
+                            &self.store.store_id().to_string(),
+                            &physical.device(),
+                            &physical.inode(),
+                            &physical.uid(),
+                        ],
+                    )
+                    .await
+                    .map_err(|_| unavailable())?
+                    .ok_or(ArtifactAdministrationError::NotVisible)?;
+                self.decode_read_record(auth, &row)
+            }
+            .await;
+        // No timeout surrounds this original rollback future. The caller's permit remains live.
+        tx.rollback()
+            .await
+            .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?;
+        check_budget()?;
+        outcome.map_err(PublicReadRecordFailure::observed)
     }
 
     async fn observe_read_record_inner(
@@ -1053,6 +1191,27 @@ impl PostgresArtifactAdministration {
 
 #[async_trait]
 impl ArtifactAdministration for PostgresArtifactAdministration {
+    async fn prepare_host_bound_artifact_read(
+        &self,
+        auth: &AuthContext,
+        artifact_id: &str,
+        original_deadline: std::time::Instant,
+        observer: Arc<
+            dyn openbot_application::artifact_read_protocol::ArtifactReadPreparationObserver,
+        >,
+    ) -> Result<
+        openbot_application::artifact_read_protocol::PreparedArtifactRead,
+        openbot_contracts::error::AppError,
+    > {
+        let authority = self.read_authority.get().ok_or(
+            openbot_contracts::error::AppError::DependencyUnavailable {
+                dependency: "artifacts",
+            },
+        )?;
+        authority
+            .prepare_host_bound_artifact_read(auth, artifact_id, original_deadline, observer)
+            .await
+    }
     async fn observe_source_run_artifact_ids_current(
         &self,
         auth: &AuthContext,

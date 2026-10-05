@@ -372,6 +372,43 @@ impl ArtifactByteStore {
         })
     }
 
+    /// The same original descriptor and full digest, with a trusted operation's stop predicate.
+    /// This internal guard is checked around every real SHA segment; it grants no read authority.
+    #[cfg(feature = "server-runtime")]
+    pub(crate) fn open_verified_guarded(
+        &self,
+        blob: &ArtifactBlob,
+        is_current: &mut impl FnMut(bool) -> bool,
+    ) -> Result<ArtifactBlobReader, ArtifactByteError> {
+        if !is_current(false) {
+            return Err(ArtifactByteError::Io);
+        }
+        if blob.byte_length > self.max_byte_length {
+            return Err(ArtifactByteError::TooLarge);
+        }
+        self.directories.check_private()?;
+        let mut file = open_object(&self.directories.objects, &blob.id.to_string())?;
+        let original = file.metadata().map_err(|_| ArtifactByteError::Io)?;
+        check_file(&original, self.directories.owner, blob.byte_length)?;
+        verify_digest_guarded(&mut file, blob, is_current)?;
+        if FileObservation::of(&original)
+            != FileObservation::of(&file.metadata().map_err(|_| ArtifactByteError::Io)?)
+        {
+            return Err(ArtifactByteError::UnsafeObject);
+        }
+        file.seek(SeekFrom::Start(0))
+            .map_err(|_| ArtifactByteError::Io)?;
+        if !is_current(false) {
+            return Err(ArtifactByteError::Io);
+        }
+        Ok(ArtifactBlobReader {
+            file,
+            observation: FileObservation::of(&original),
+            remaining: blob.byte_length,
+            failed: false,
+        })
+    }
+
     /// Reobserve the original stable object after synchronous IO has ended. Expected bytes are
     /// deliberately absent from this interface; this is no actor or operation authorization.
     #[cfg(feature = "server-runtime")]
@@ -712,6 +749,47 @@ fn verify_digest(file: &mut File, blob: &ArtifactBlob) -> Result<(), ArtifactByt
         .map_err(|_| ArtifactByteError::Io)?
         != 0
     {
+        return Err(ArtifactByteError::LengthMismatch);
+    }
+    if <[u8; 32]>::from(hash.finalize()) != blob.sha256 {
+        return Err(ArtifactByteError::ContentMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "server-runtime")]
+fn verify_digest_guarded(
+    file: &mut File,
+    blob: &ArtifactBlob,
+    is_current: &mut impl FnMut(bool) -> bool,
+) -> Result<(), ArtifactByteError> {
+    let mut buffer = [0u8; COPY_BUFFER_BYTES];
+    let mut hash = Sha256::new();
+    let mut remaining = blob.byte_length;
+    while remaining > 0 {
+        if !is_current(false) {
+            return Err(ArtifactByteError::Io);
+        }
+        let length = remaining.min(COPY_BUFFER_BYTES as u64) as usize;
+        file.read_exact(&mut buffer[..length])
+            .map_err(|_| ArtifactByteError::LengthMismatch)?;
+        hash.update(&buffer[..length]);
+        remaining -= length as u64;
+        // Only this call follows an actually completed original SHA segment.
+        if !is_current(true) {
+            return Err(ArtifactByteError::Io);
+        }
+    }
+    if !is_current(false) {
+        return Err(ArtifactByteError::Io);
+    }
+    let extra = file
+        .read(&mut buffer[..1])
+        .map_err(|_| ArtifactByteError::Io)?;
+    if !is_current(false) {
+        return Err(ArtifactByteError::Io);
+    }
+    if extra != 0 {
         return Err(ArtifactByteError::LengthMismatch);
     }
     if <[u8; 32]>::from(hash.finalize()) != blob.sha256 {

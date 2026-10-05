@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use openbot_application::artifact_read_protocol::ArtifactReadOperationCompletion;
 use openbot_application::{ArtifactReadOperation, CurrentArtifactReadBlock};
 use openbot_contracts::artifact_read::{ArtifactReadAllocationLease, PendingArtifactReadBuffer};
 use openbot_contracts::auth::AuthContext;
@@ -117,6 +118,26 @@ impl ArtifactReadLifecycle {
         self.jobs.fetch_add(1, Ordering::SeqCst);
         Ok(JobPermit {
             lifecycle: Arc::clone(self),
+            operation: None,
+        })
+    }
+    fn admit_operation(
+        self: &Arc<Self>,
+        operation: &Arc<ReadOperationState>,
+    ) -> Result<JobPermit, ArtifactReadCurrentError> {
+        let _gate = self
+            .gate
+            .try_lock()
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        if operation.is_stopped() {
+            return Err(ArtifactReadCurrentError::Unavailable);
+        }
+        // Both inventories become visible before close can inspect the same admission gate.
+        self.jobs.fetch_add(1, Ordering::SeqCst);
+        operation.jobs.fetch_add(1, Ordering::SeqCst);
+        Ok(JobPermit {
+            lifecycle: Arc::clone(self),
+            operation: Some(Arc::clone(operation)),
         })
     }
     pub(super) fn resource(self: &Arc<Self>) -> PhysicalResourceLease {
@@ -174,9 +195,14 @@ impl ArtifactReadLifecycle {
 }
 pub(super) struct JobPermit {
     lifecycle: Arc<ArtifactReadLifecycle>,
+    // Kept outside State.data: no State -> resource -> State ownership cycle.
+    operation: Option<Arc<ReadOperationState>>,
 }
 impl Drop for JobPermit {
     fn drop(&mut self) {
+        if let Some(operation) = &self.operation {
+            operation.jobs.fetch_sub(1, Ordering::SeqCst);
+        }
         self.lifecycle.jobs.fetch_sub(1, Ordering::SeqCst);
         self.lifecycle.changed.notify_waiters();
     }
@@ -220,12 +246,26 @@ pub(super) struct ReadOperationState {
     pub(super) artifact_id: String,
     pub(super) data: Mutex<ReadOperationData>,
     pub(super) stopped: AtomicBool,
+    pub(super) original_deadline: Option<Instant>,
+    closure_unproven: AtomicBool,
+    jobs: AtomicUsize,
+    #[cfg(test)]
+    pub(super) public_prepare_probe:
+        Mutex<Option<Arc<super::artifact_read_authority::public_read_prepare::PublicPrepareProbe>>>,
 }
 impl ReadOperationState {
     pub(super) fn new(
         authority: Arc<PostgresArtifactReadAuthority>,
         auth: AuthContext,
         artifact_id: String,
+    ) -> Arc<Self> {
+        Self::with_deadline(authority, auth, artifact_id, None)
+    }
+    pub(super) fn with_deadline(
+        authority: Arc<PostgresArtifactReadAuthority>,
+        auth: AuthContext,
+        artifact_id: String,
+        original_deadline: Option<Instant>,
     ) -> Arc<Self> {
         Arc::new(Self {
             lifecycle: authority.read_lifecycle(),
@@ -240,6 +280,11 @@ impl ReadOperationState {
                 eof: false,
             }),
             stopped: AtomicBool::new(false),
+            original_deadline,
+            closure_unproven: AtomicBool::new(false),
+            jobs: AtomicUsize::new(0),
+            #[cfg(test)]
+            public_prepare_probe: Mutex::new(None),
         })
     }
     pub(super) fn begin(&self) -> Result<(), ArtifactReadCurrentError> {
@@ -257,9 +302,83 @@ impl ReadOperationState {
         self.stopped.load(Ordering::SeqCst)
             || self.lifecycle.closed.load(Ordering::SeqCst)
             || self.lifecycle.unavailable.load(Ordering::SeqCst)
+            || self
+                .original_deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+    pub(super) fn check_current(&self) -> Result<(), ArtifactReadCurrentError> {
+        if self.is_stopped() {
+            Err(ArtifactReadCurrentError::Unavailable)
+        } else {
+            Ok(())
+        }
+    }
+    pub(super) fn mark_closure_unproven(&self) {
+        if self.original_deadline.is_some() {
+            self.closure_unproven.store(true, Ordering::SeqCst);
+            self.stopped.store(true, Ordering::SeqCst);
+            self.lifecycle.changed.notify_waiters();
+        }
+    }
+    pub(super) fn joint_deadline(&self) -> Result<Instant, ArtifactReadCurrentError> {
+        self.check_current()?;
+        let five_seconds = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        Ok(self
+            .original_deadline
+            .map_or(five_seconds, |original| original.min(five_seconds)))
+    }
+    #[cfg(test)]
+    pub(super) fn actual_jobs(&self) -> usize {
+        self.jobs.load(Ordering::SeqCst)
+    }
+    fn try_close_idle(&self) {
+        match self.data.try_lock() {
+            Ok(mut data) => {
+                if matches!(data.phase, ReadPhase::Idle | ReadPhase::Terminal) {
+                    data.phase = ReadPhase::Terminal;
+                    drop(data.reader.take());
+                    drop(data.resource.take());
+                }
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {}
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                self.lifecycle.unavailable.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+    fn is_operation_drained(&self) -> Result<bool, AppError> {
+        if self.original_deadline.is_none()
+            || self.lifecycle.unavailable.load(Ordering::SeqCst)
+            || self.closure_unproven.load(Ordering::SeqCst)
+        {
+            return Err(operation_unavailable());
+        }
+        let _gate = match self.lifecycle.gate.try_lock() {
+            Ok(gate) => gate,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err(operation_unavailable()),
+        };
+        let data = match self.data.try_lock() {
+            Ok(data) => data,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err(operation_unavailable()),
+        };
+        // Pending/Leased cannot reach Terminal before their full allocation actually drops.
+        Ok(self.stopped.load(Ordering::SeqCst)
+            && self.jobs.load(Ordering::SeqCst) == 0
+            && data.phase == ReadPhase::Terminal
+            && data.reader.is_none()
+            && data.resource.is_none())
     }
     pub(super) fn close(&self) {
         self.stopped.store(true, Ordering::SeqCst);
+        if self.original_deadline.is_some() {
+            self.try_close_idle();
+            self.lifecycle.changed.notify_waiters();
+            return;
+        }
         // This private data lock never crosses body IO or await; its physical tail is bounded
         // synchronous metadata/root/marker verification. Serialize against lease Drop so
         // a last lease cannot write Idle just after a failed closing try_lock and strand its FD.
@@ -287,6 +406,42 @@ impl ReadOperationState {
             self.lifecycle.unavailable.store(true, Ordering::SeqCst);
         }
         self.lifecycle.changed.notify_waiters();
+    }
+}
+
+const fn operation_unavailable() -> AppError {
+    AppError::DependencyUnavailable {
+        dependency: "artifacts",
+    }
+}
+
+pub(super) struct OperationCompletion {
+    pub(super) state: Arc<ReadOperationState>,
+}
+#[async_trait]
+impl ArtifactReadOperationCompletion for OperationCompletion {
+    fn close(&self) {
+        self.state.close();
+    }
+    async fn drain_before(&self, deadline: Instant) -> Result<(), AppError> {
+        self.state.close();
+        loop {
+            let changed = self.state.lifecycle.changed.notified();
+            if Instant::now() >= deadline {
+                return Err(operation_unavailable());
+            }
+            self.state.try_close_idle();
+            if self.state.is_operation_drained()? {
+                return Ok(());
+            }
+            tokio::select! {
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+                    return Err(operation_unavailable());
+                },
+                _ = changed => {},
+                _ = tokio::time::sleep(Duration::from_millis(5)) => {},
+            }
+        }
     }
 }
 impl Drop for ReadOperationState {
@@ -389,7 +544,11 @@ impl ArtifactReadOperation for LifecycleReadOperation {
             self.state.close();
             return Err(AppError::Unauthenticated);
         }
-        let job = self.state.lifecycle.admit(&self.state.stopped)?;
+        let job = if self.state.original_deadline.is_some() {
+            self.state.lifecycle.admit_operation(&self.state)?
+        } else {
+            self.state.lifecycle.admit(&self.state.stopped)?
+        };
         self.state.begin()?;
         let state = Arc::clone(&self.state);
         let dispatcher = tracing::dispatcher::get_default(Clone::clone);
@@ -410,11 +569,18 @@ impl ArtifactReadOperation for LifecycleReadOperation {
             state: Arc::clone(&self.state),
             completed: false,
         };
-        let result = receiver
-            .await
-            .map_err(|_| AppError::DependencyUnavailable {
-                dependency: "artifacts",
-            })?;
+        let result = if self.state.original_deadline.is_some() {
+            let deadline = self.state.joint_deadline()?;
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), receiver)
+                .await
+                .map_err(|_| operation_unavailable())?
+                .map_err(|_| operation_unavailable())?
+        } else {
+            receiver.await.map_err(|_| operation_unavailable())?
+        };
+        if self.state.original_deadline.is_some() {
+            self.state.check_current()?;
+        }
         attempt.completed = true;
         result
     }

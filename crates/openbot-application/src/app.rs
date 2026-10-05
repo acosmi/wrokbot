@@ -125,6 +125,8 @@ pub struct OpenBotApplication<
     remote_interrupts: std::sync::Arc<dyn RemoteInterruptCoordinator>,
     screen_sessions: std::sync::Arc<dyn ScreenSessionAdministration>,
     artifacts: std::sync::Arc<dyn ArtifactAdministration>,
+    public_artifact_reads:
+        std::sync::Arc<crate::artifact_read_protocol::PublicArtifactReadRegistry>,
     runtime_capabilities:
         Option<std::sync::Arc<dyn crate::runtime_capabilities::RuntimeCapabilitiesCollector>>,
     heartbeat_period: Duration,
@@ -172,6 +174,9 @@ impl<R>
             remote_interrupts: std::sync::Arc::new(NoRemoteInterruptCoordinator),
             screen_sessions: std::sync::Arc::new(NoScreenSessionAdministration),
             artifacts: std::sync::Arc::new(NoArtifactAdministration),
+            public_artifact_reads: std::sync::Arc::new(
+                crate::artifact_read_protocol::PublicArtifactReadRegistry::new(),
+            ),
             runtime_capabilities: None,
             heartbeat_period: DEFAULT_HEARTBEAT_PERIOD,
         }
@@ -207,6 +212,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            public_artifact_reads: self.public_artifact_reads,
             runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
@@ -240,6 +246,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            public_artifact_reads: self.public_artifact_reads,
             runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
@@ -273,6 +280,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            public_artifact_reads: self.public_artifact_reads,
             runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
@@ -310,6 +318,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            public_artifact_reads: self.public_artifact_reads,
             runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
@@ -343,6 +352,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            public_artifact_reads: self.public_artifact_reads,
             runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
@@ -376,6 +386,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            public_artifact_reads: self.public_artifact_reads,
             runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
@@ -412,6 +423,7 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             remote_interrupts: self.remote_interrupts,
             screen_sessions: self.screen_sessions,
             artifacts: self.artifacts,
+            public_artifact_reads: self.public_artifact_reads,
             runtime_capabilities: self.runtime_capabilities,
             heartbeat_period: self.heartbeat_period,
         }
@@ -603,6 +615,22 @@ where
         command: AppCommand,
     ) -> Result<AppReply, AppError> {
         match command {
+            AppCommand::OpenArtifactRead(input) => Ok(AppReply::ArtifactReadOpened(
+                self.public_artifact_reads
+                    .open(self.artifacts.as_ref(), auth, input)
+                    .await?,
+            )),
+            AppCommand::ReadArtifactReadBlock(input) => Ok(AppReply::ArtifactReadChunkDescriptor(
+                self.public_artifact_reads.next(auth, input).await?,
+            )),
+            AppCommand::AcknowledgeArtifactReadBlock(input) => {
+                Ok(AppReply::ArtifactReadAcknowledged(
+                    self.public_artifact_reads.acknowledge(auth, input).await?,
+                ))
+            }
+            AppCommand::CloseArtifactRead(input) => Ok(AppReply::ArtifactReadClosed(
+                self.public_artifact_reads.close(auth, input).await?,
+            )),
             AppCommand::GetRuntimeCapabilities => Ok(AppReply::RuntimeCapabilities(
                 crate::runtime_capabilities::get_runtime_capabilities(
                     self.runtime_capabilities.as_deref(),
@@ -1137,6 +1165,35 @@ where
     M: MemoryAdministration + 'static,
     B: AgentCallbackTokenAdministration + 'static,
 {
+    fn take_artifact_read_delivery(
+        &self,
+        auth: AuthContext,
+        input: openbot_contracts::artifact_read_protocol::ReadArtifactReadBlock,
+    ) -> Result<crate::PublicArtifactReadDelivery, AppError> {
+        self.public_artifact_reads.take_delivery(&auth, input)
+    }
+    fn take_artifact_read_control_delivery(
+        &self,
+        auth: AuthContext,
+        reply: AppReply,
+    ) -> Result<crate::PublicArtifactReadControlDelivery, AppError> {
+        self.public_artifact_reads.take_control(&auth, reply)
+    }
+    fn close_public_artifact_reads(&self) -> Result<(), AppError> {
+        self.public_artifact_reads.close_all()
+    }
+    fn close_public_artifact_reads_for_issuer(
+        &self,
+        issuer: &openbot_contracts::request_binding::RequestBindingIssuer,
+    ) -> Result<(), AppError> {
+        self.public_artifact_reads.close_for_issuer(issuer)
+    }
+    fn close_public_artifact_reads_for_binding(
+        &self,
+        binding: &openbot_contracts::request_binding::HostRequestBindingIdentity,
+    ) -> Result<(), AppError> {
+        self.public_artifact_reads.close_for_binding(binding)
+    }
     async fn read_current_artifact_chunk(
         &self,
         auth: AuthContext,

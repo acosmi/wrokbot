@@ -444,6 +444,35 @@ impl DatasetBoundArtifactStore {
         })
     }
 
+    /// Public preparation keeps the exact record/root/FD and checks its original stop budget.
+    pub(crate) fn open_observed_record_guarded(
+        self: &Arc<Self>,
+        record: ObservedArtifactReadRecord,
+        is_current: &mut impl FnMut(bool) -> bool,
+    ) -> Result<StoreBoundArtifactReader, ArtifactReadBridgeError> {
+        if !is_current(false) {
+            return Err(ArtifactStoreError::Unavailable.into());
+        }
+        if !record.matches_store(self) {
+            return Err(ArtifactStoreError::BindingMismatch.into());
+        }
+        let _guard = self.io.try_lock().map_err(|_| ArtifactStoreError::Busy)?;
+        self.check_current()?;
+        let reader = self
+            .bytes
+            .open_verified_guarded(record.blob(), is_current)?;
+        self.check_current()?;
+        if !is_current(false) {
+            return Err(ArtifactStoreError::Unavailable.into());
+        }
+        Ok(StoreBoundArtifactReader {
+            reader,
+            record,
+            store: Arc::clone(self),
+            failed: false,
+        })
+    }
+
     /// Current disk-space observation, not an allocation guarantee. Call on a blocking worker.
     pub fn available_bytes(&self) -> Result<u64, ArtifactStoreError> {
         self.check_current()?;

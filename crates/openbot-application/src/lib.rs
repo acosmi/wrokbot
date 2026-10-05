@@ -117,8 +117,12 @@ pub use artifacts::{
     save_run_message_text_artifact,
 };
 pub mod artifact_read_lifecycle;
+pub mod artifact_read_protocol;
 pub use artifact_read_lifecycle::{
     ArtifactReadOperation, CurrentArtifactReadBlock, CurrentArtifactReadOperation,
+};
+pub use artifact_read_protocol::{
+    PublicArtifactReadControlDelivery, PublicArtifactReadDelivery, PublicArtifactReadTransportBlock,
 };
 pub use builtin_tools::{
     BUILTIN_TOOL_CATALOG_GENERATION, CommittedMemoryEffect, REMEMBER_TOOL_NAME,

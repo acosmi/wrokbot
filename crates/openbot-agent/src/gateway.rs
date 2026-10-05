@@ -411,6 +411,10 @@ impl AgentToolGateway {
                 | AppReply::ArtifactRegistrationReceipt(_)
                 | AppReply::ArtifactMetadata(_)
                 | AppReply::SourceRunArtifactIds(_)
+                | AppReply::ArtifactReadOpened(_)
+                | AppReply::ArtifactReadChunkDescriptor(_)
+                | AppReply::ArtifactReadAcknowledged(_)
+                | AppReply::ArtifactReadClosed(_)
                 | AppReply::RuntimeCapabilities(_)
                 | AppReply::RunCostBudget(_)
                 | AppReply::ScreenSession(_),
