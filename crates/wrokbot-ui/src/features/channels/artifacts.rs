@@ -701,7 +701,22 @@ impl ArtifactSourceObserver {
             .state
             .try_with_untracked(|state| {
                 let join = state.join.as_ref()?;
-                if state.handoff_epoch != Some(join.epoch)
+                let current_direct = state.handoff_epoch.is_none()
+                    && join.target_fresh
+                    && !state.qualifying
+                    && join.mount == self.mount
+                    && state.epoch == join.epoch
+                    && matches!(&join.anchor, ThreadRunAnchor::DirectBot)
+                    && self
+                        .owner
+                        .try_get_value()
+                        .flatten()
+                        .and_then(|owner| owner.upgrade())
+                        .is_some()
+                    && self.thread.try_get_untracked().flatten().as_ref() == Some(&join.thread)
+                    && self.bot.try_get_value().flatten().as_ref() == Some(&join.bot)
+                    && self.anchor.try_get_value().as_ref() == Some(&join.anchor);
+                if (state.handoff_epoch != Some(join.epoch) && !current_direct)
                     || join.invalid
                     || (join.target_fresh && join.started.is_some())
                     || (join.target_fresh && state.actor.as_ref() != Some(&join.actor))
@@ -2349,6 +2364,198 @@ mod tests {
         assert!(state.check(source).is_none());
         assert_eq!(state.operation.as_ref().unwrap().packet, saving.packet);
         assert_eq!(state.operation.as_ref().unwrap().phase, SavePhase::Unknown);
+    }
+
+    fn direct_replay_observer(root: &Owner) -> (ArtifactActions, Owner, ArtifactSourceObserver) {
+        let actions = root.with(|| {
+            let actions = ArtifactActions::new();
+            provide_context(actions);
+            actions
+        });
+        let route = root.with(Owner::new);
+        let observer = route.with(|| {
+            ArtifactSourceObserver::new(
+                RwSignal::new(intent().thread_id),
+                StoredValue::new(Some(intent().agent_id)),
+                StoredValue::new(intent().anchor),
+            )
+        });
+        let actor = read().source.actor;
+        actions.state.update(|state| {
+            let probe = state.start_actor_probe(observer.mount).unwrap();
+            assert!(state.finish_actor_probe(probe, observer.mount, Some(actor.clone())));
+        });
+        observer.state.update(|state| state.actor = Some(actor));
+        observer.stage_begin(&intent());
+        (actions, route, observer)
+    }
+
+    #[test]
+    fn direct_first_turn_pending_ack_replays_zero_and_keeps_source_read_gated() {
+        let root = Owner::new();
+        let (actions, _route, observer) = direct_replay_observer(&root);
+        let mut current = snapshot();
+        current.last_event_sequence = Some(0);
+        let original_snapshot = serde_json::to_vec(&current).unwrap();
+        assert_eq!(
+            observer.bootstrap_cursor(current.last_event_sequence),
+            Some(0)
+        );
+        assert!(observer.state.with_untracked(|state| {
+            state.join.as_ref().unwrap().ack.is_none() && state.eligible.is_none()
+        }));
+        let mut first_ack = ack();
+        first_ack.message_sequence = 0;
+        first_ack.event_sequence = 0;
+        observer.begin_reply(&intent().run_id, Ok(&first_ack));
+        assert_eq!(observer.bootstrap_cursor(current.last_event_sequence), None);
+        assert_eq!(serde_json::to_vec(&current).unwrap(), original_snapshot);
+        assert!(
+            observer
+                .state
+                .try_update(|state| { state.join.as_mut().unwrap().take_read().is_none() })
+                .unwrap()
+        );
+        assert!(observer.selection("exact-message").is_none());
+        assert!(!actions.may_save(observer, &read().source));
+        let mut first_started = started();
+        first_started.event_sequence = 0;
+        let raw = observer
+            .state
+            .try_update(|state| {
+                let join = state.join.as_mut().unwrap();
+                join.observe_started(&first_started);
+                join.take_read().unwrap()
+            })
+            .unwrap();
+        assert_eq!(raw.source.started_sequence, 0);
+        assert_eq!(raw.original_text.as_str(), intent().message);
+        assert_eq!(raw.source.sha256, text_digest(&intent().message));
+        assert!(source_read_matches(&raw, &current));
+        let mut duplicate = current.clone();
+        duplicate.messages.push(current.messages[0].clone());
+        assert!(!source_read_matches(&raw, &duplicate));
+        let mut altered = current.clone();
+        altered.messages[0].content.push(' ');
+        assert!(!source_read_matches(&raw, &altered));
+        assert_eq!(
+            observer.bootstrap_cursor(current.last_event_sequence),
+            Some(0)
+        );
+        assert!(observer.selection("exact-message").is_none());
+        assert!(!actions.may_save(observer, &raw.source));
+        assert!(
+            actions
+                .state
+                .with_untracked(|state| state.operation.is_none())
+        );
+    }
+
+    #[test]
+    fn direct_pending_replay_requires_current_actor_scope_epoch_and_exact_route() {
+        for invalid in [
+            "failed-ack",
+            "wrong-thread-ack",
+            "wrong-run-ack",
+            "actor",
+            "role",
+            "scope",
+            "epoch",
+            "thread",
+            "bot",
+            "anchor",
+            "mount",
+            "handoff-epoch",
+            "older-read",
+        ] {
+            let root = Owner::new();
+            let (actions, _route, observer) = direct_replay_observer(&root);
+            let mut first_ack = ack();
+            first_ack.message_sequence = 0;
+            first_ack.event_sequence = 0;
+            observer.begin_reply(&intent().run_id, Ok(&first_ack));
+            assert_eq!(observer.bootstrap_cursor(Some(0)), None, "{invalid}");
+            match invalid {
+                "failed-ack" => observer.begin_reply(&intent().run_id, Err(())),
+                "wrong-thread-ack" => {
+                    first_ack.thread_id = ThreadId::new("other-thread");
+                    observer.begin_reply(&intent().run_id, Ok(&first_ack));
+                }
+                "wrong-run-ack" => {
+                    first_ack.run_id = RunId::new("other-run");
+                    observer.begin_reply(&intent().run_id, Ok(&first_ack));
+                }
+                "actor" => observer.state.update(|state| {
+                    state.actor.as_mut().unwrap().actor = ActorId::new("other-actor");
+                }),
+                "role" => observer.state.update(|state| {
+                    state.actor.as_mut().unwrap().role = Role::Admin;
+                }),
+                "scope" => actions.state.update(|state| {
+                    let actor = state.actor.clone().unwrap();
+                    let mut admin = actor.clone();
+                    admin.role = Role::Admin;
+                    let probe = state.start_actor_probe(observer.mount).unwrap();
+                    assert!(state.finish_actor_probe(probe, observer.mount, Some(admin)));
+                    let probe = state.start_actor_probe(observer.mount).unwrap();
+                    assert!(state.finish_actor_probe(probe, observer.mount, Some(actor)));
+                }),
+                "epoch" => observer.state.update(|state| {
+                    state.epoch = state.epoch.checked_add(1).unwrap();
+                }),
+                "thread" => observer.thread.set(Some(ThreadId::new("other-thread"))),
+                "bot" => observer.bot.set_value(Some(BotId::new("other-bot"))),
+                "anchor" => observer.anchor.set_value(ThreadRunAnchor::Channel {
+                    channel_id: openbot_contracts::ids::ChannelId::new("other-channel"),
+                }),
+                "mount" => observer.state.update(|state| {
+                    let join = state.join.as_mut().unwrap();
+                    join.mount = join.mount.checked_add(1).unwrap();
+                }),
+                "handoff-epoch" => observer.state.update(|state| {
+                    state.handoff_epoch = Some(state.epoch.checked_add(1).unwrap());
+                }),
+                "older-read" => observer.state.update(|state| state.qualifying = true),
+                _ => unreachable!(),
+            }
+            assert_eq!(observer.bootstrap_cursor(Some(0)), Some(0), "{invalid}");
+            assert!(observer.selection("exact-message").is_none(), "{invalid}");
+            assert!(!actions.may_save(observer, &read().source), "{invalid}");
+            assert!(
+                actions
+                    .state
+                    .with_untracked(|state| state.operation.is_none())
+            );
+        }
+    }
+
+    #[test]
+    fn direct_seen_started_or_disposed_owner_cannot_request_replay_again() {
+        let root = Owner::new();
+        let (_, _route, observer) = direct_replay_observer(&root);
+        let mut first_ack = ack();
+        first_ack.message_sequence = 0;
+        first_ack.event_sequence = 0;
+        observer.begin_reply(&intent().run_id, Ok(&first_ack));
+        assert_eq!(observer.bootstrap_cursor(Some(0)), None);
+        let mut first_started = started();
+        first_started.event_sequence = 0;
+        observer.native_event(&first_started);
+        assert_eq!(observer.bootstrap_cursor(Some(0)), Some(0));
+
+        let root = Owner::new();
+        let (actions, route, observer) = direct_replay_observer(&root);
+        observer.begin_reply(&intent().run_id, Ok(&first_ack));
+        assert_eq!(observer.bootstrap_cursor(Some(0)), None);
+        let weak = observer.owner.get_value().unwrap();
+        drop(route);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(observer.bootstrap_cursor(Some(0)), Some(0));
+        assert!(
+            actions
+                .state
+                .with_untracked(|state| state.operation.is_none())
+        );
     }
 
     #[test]
