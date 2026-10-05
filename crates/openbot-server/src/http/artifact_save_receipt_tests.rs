@@ -871,7 +871,7 @@ impl RollbackAckProxy {
                             let kind = server_read.read_u8().await?;
                             let length = server_read.read_u32().await?;
                             if !(4..=16 * 1024 * 1024).contains(&length) {
-                                return Err(std::io::Error::other("invalid owned backend frame"));
+                                return Err::<(), std::io::Error>(std::io::Error::other("invalid owned backend frame"));
                             }
                             let mut payload = vec![0; (length - 4) as usize];
                             server_read.read_exact(&mut payload).await?;
