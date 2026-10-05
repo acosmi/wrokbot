@@ -724,6 +724,15 @@ pub fn router(state: ServerState) -> Router {
             post(artifacts::save),
         )
         .route(
+            "/api/artifacts/source-runs/{source_thread_id}/{source_run_id}",
+            get(artifacts::source_run_ids).head(|| async {
+                (
+                    axum::http::StatusCode::METHOD_NOT_ALLOWED,
+                    [(axum::http::header::CACHE_CONTROL, "no-store")],
+                )
+            }),
+        )
+        .route(
             "/api/artifacts/{artifact_id}",
             get(artifacts::metadata).head(|| async {
                 (

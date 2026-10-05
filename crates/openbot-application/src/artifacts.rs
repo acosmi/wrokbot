@@ -79,6 +79,15 @@ impl ArtifactAdministrationError {
 /// Shared authenticated port; each implementation owns its current transaction and byte proof.
 #[async_trait]
 pub trait ArtifactAdministration: Send + Sync {
+    /// One enrolled own-Pool host/source observation; unsupported adapters remain unavailable.
+    async fn observe_source_run_artifact_ids_current(
+        &self,
+        _auth: &AuthContext,
+        _input: &openbot_contracts::artifacts::GetSourceRunArtifactIds,
+        _deadline: std::time::Instant,
+    ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
+        Err(openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable)
+    }
     /// 原宿主Rust-only连续读取；缺真实实现保持不可用。
     async fn open_host_bound_read_operation(
         &self,
@@ -207,6 +216,71 @@ fn current_read_error(
 #[cfg(test)]
 #[path = "artifact_current_read_tests.rs"]
 mod current_read_tests;
+
+/// Observe IDs only, retaining the original current witness through final synchronous handoff.
+pub async fn get_source_run_artifact_ids(
+    port: &dyn ArtifactAdministration,
+    auth: &AuthContext,
+    input: openbot_contracts::artifacts::GetSourceRunArtifactIds,
+) -> Result<openbot_contracts::artifacts::SourceRunArtifactIds, AppError> {
+    for (field, id) in [
+        ("sourceThreadId", input.source_thread_id.as_str()),
+        ("sourceRunId", input.source_run_id.as_str()),
+    ] {
+        if !is_valid_artifact_identity(id) {
+            return Err(AppError::MalformedPayload { field });
+        }
+    }
+    let original = auth
+        .request_binding()
+        .cloned()
+        .ok_or(AppError::DependencyUnavailable {
+            dependency: "host_request_binding",
+        })?;
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(5))
+        .ok_or(AppError::DependencyUnavailable {
+            dependency: "host_request_binding",
+        })?;
+    original
+        .check_source_run_artifact_ids_attachment(auth, deadline)
+        .map_err(current_read_error)?;
+    let outcome = port
+        .observe_source_run_artifact_ids_current(auth, &input, deadline)
+        .await;
+    original
+        .check_source_run_artifact_ids_attachment(auth, deadline)
+        .map_err(current_read_error)?;
+    let (witness, source) = outcome.map_err(current_read_error)?;
+    // Preserve the source/shape refusal until the original current host tail has been checked.
+    let source = source
+        .map_err(|error| match error {
+            openbot_contracts::request_binding::ArtifactReadCurrentError::Gone(_) => {
+                openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable
+            }
+            other => other,
+        })
+        .and_then(|ids| {
+            if ids.source_thread_id != input.source_thread_id
+                || ids.source_run_id != input.source_run_id
+                || ids.artifact_ids.len() > 32
+                || ids.artifact_ids.iter().any(|id| !canonical_id(id))
+                || ids.artifact_ids.windows(2).any(|pair| pair[0] >= pair[1])
+            {
+                Err(openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable)
+            } else {
+                Ok(ids)
+            }
+        });
+    original
+        .verify_source_run_artifact_ids_tail(auth, witness.as_ref(), deadline)
+        .map_err(current_read_error)?;
+    source.map_err(current_read_error)
+}
+
+#[cfg(test)]
+#[path = "artifact_source_run_tests.rs"]
+mod source_run_tests;
 
 /// Genuine unavailable default when no authoritative physical dependency is composed.
 #[derive(Debug, Default)]

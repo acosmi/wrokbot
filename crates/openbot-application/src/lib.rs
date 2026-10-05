@@ -113,7 +113,8 @@ pub use approval_admin::{
 };
 pub use artifacts::{
     ArtifactAdministration, ArtifactAdministrationError, CurrentArtifactReadChunk,
-    NoArtifactAdministration, get_artifact_metadata, save_run_message_text_artifact,
+    NoArtifactAdministration, get_artifact_metadata, get_source_run_artifact_ids,
+    save_run_message_text_artifact,
 };
 pub mod artifact_read_lifecycle;
 pub use artifact_read_lifecycle::{
