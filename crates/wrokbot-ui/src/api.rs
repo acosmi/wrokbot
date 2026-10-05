@@ -24,6 +24,9 @@ pub(crate) mod skills;
 #[path = "reconciliation_api.rs"]
 pub(crate) mod reconciliation;
 
+#[path = "artifact_api.rs"]
+pub(crate) mod artifacts;
+
 #[path = "credentials_api.rs"]
 pub(crate) mod credentials;
 
