@@ -1749,6 +1749,35 @@ async fn cleanup_agent_host(
 }
 
 fn map_sidecar_error(error: PostgresSidecarError) -> DesktopLocalRuntimeError {
+    #[cfg(test)]
+    {
+        let diagnostic: Option<&'static [u8]> = match &error {
+            PostgresSidecarError::StartLockGuardInvalid => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=sidecar variant=start_lock_guard_invalid\n",
+            ),
+            PostgresSidecarError::ProcessIdentityInvalid => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=sidecar variant=process_identity_invalid\n",
+            ),
+            PostgresSidecarError::StartupJournalInvalid => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=sidecar variant=startup_journal_invalid\n",
+            ),
+            PostgresSidecarError::HelperJournalInvalid => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=sidecar variant=helper_journal_invalid\n",
+            ),
+            PostgresSidecarError::Secret(PostgresSecretStoreError::Corrupt) => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=sidecar variant=secret_corrupt\n",
+            ),
+            PostgresSidecarError::Secret(PostgresSecretStoreError::DispositionInvalid) => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=sidecar variant=secret_disposition_invalid\n",
+            ),
+            _ => None,
+        };
+        if let Some(diagnostic) = diagnostic {
+            let stderr = std::io::stderr();
+            let mut sink = stderr.lock();
+            let _ = sink.write(diagnostic);
+        }
+    }
     match error {
         PostgresSidecarError::StartLockHeld => DesktopLocalRuntimeError::StartupBusy,
         PostgresSidecarError::StartLockRecoveryRequired => {
@@ -1789,6 +1818,26 @@ fn map_sidecar_error(error: PostgresSidecarError) -> DesktopLocalRuntimeError {
 }
 
 fn map_vault_error(error: DesktopVaultKeyError) -> DesktopLocalRuntimeError {
+    #[cfg(test)]
+    {
+        let diagnostic: Option<&'static [u8]> = match &error {
+            DesktopVaultKeyError::Corrupt => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=vault variant=master_key_corrupt\n",
+            ),
+            DesktopVaultKeyError::MaterialInvalid => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=vault variant=application_material_invalid\n",
+            ),
+            DesktopVaultKeyError::DataPlaneNotRunning => Some(
+                b"ARTIFACT_LIFECYCLE_LOCAL_INITIALIZER_INVALID stage=vault variant=data_plane_not_running\n",
+            ),
+            _ => None,
+        };
+        if let Some(diagnostic) = diagnostic {
+            let stderr = std::io::stderr();
+            let mut sink = stderr.lock();
+            let _ = sink.write(diagnostic);
+        }
+    }
     match error {
         DesktopVaultKeyError::OsStore(error) => map_os_secret_store_error(error),
         DesktopVaultKeyError::OsStoreReconciliationRequired(error) => {
