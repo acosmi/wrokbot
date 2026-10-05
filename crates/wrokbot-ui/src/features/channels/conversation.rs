@@ -2066,6 +2066,17 @@ fn install_conversation_sync(
                 let cursor = snapshot.last_event_sequence;
                 state.update(|state| state.install_snapshot(snapshot));
                 loading.set(false);
+                let handoff_thread = thread.clone();
+                artifact_source.begin_channel_handoff(move || {
+                    generation.try_get_untracked() == Some(current_generation)
+                        && thread_id.try_get_untracked().flatten().as_ref() == Some(&handoff_thread)
+                });
+                if generation.get_untracked() != current_generation
+                    || thread_id.get_untracked().as_ref() != Some(&thread)
+                {
+                    return;
+                }
+                let cursor = artifact_source.bootstrap_cursor(cursor);
                 if is_tauri_host() {
                     let expected_thread = thread.clone();
                     let handlers = DesktopStructuredHandlers::new(
@@ -3280,5 +3291,85 @@ mod tests {
         assert!(should_drain_queue(
             pending, false, false, true, false, false, false,
         ));
+    }
+
+    #[test]
+    fn channel_new_pending_replay_boundary_includes_zero_without_lowering_snapshot() {
+        use super::super::artifacts::channel_handoff_replay_cursor;
+        for (snapshot, started, expected) in [
+            (Some(0), Some(0), None),
+            (Some(9), Some(0), None),
+            (Some(9), Some(7), Some(6)),
+            (Some(3), Some(7), Some(3)),
+            (None, Some(7), None),
+            (Some(9), None, Some(9)),
+        ] {
+            let mut snapshot_state = ConversationState::default();
+            let mut current = current_snapshot(Some(RunId::new("run-1")), "native output");
+            current.last_event_sequence = snapshot;
+            snapshot_state.install_snapshot(current);
+            let before = snapshot_state.clone();
+            assert_eq!(
+                channel_handoff_replay_cursor(snapshot_state.cursor, started),
+                expected
+            );
+            assert_eq!(snapshot_state, before);
+        }
+    }
+
+    #[test]
+    fn channel_new_original_started_replay_keeps_transcript_deduplicated() {
+        let mut snapshot = current_snapshot(Some(RunId::new("run-1")), "native output");
+        snapshot.last_event_sequence = Some(0);
+        let mut state = ConversationState::default();
+        state.install_snapshot(snapshot);
+        let before = state.clone();
+        let started = event(
+            0,
+            ThreadRunEventKind::Started,
+            serde_json::json!({
+                "runId": "run-1", "messageId": "run-1:input", "botId": "bot-1"
+            }),
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                apply_live_event(&mut state, &ThreadId::new("thread-1"), &started),
+                Ok(LiveEffect::None)
+            );
+            assert_eq!(state, before);
+        }
+        let mut foreign = started.clone();
+        foreign.thread_id = ThreadId::new("foreign-thread");
+        assert_eq!(
+            apply_live_event(&mut state, &ThreadId::new("thread-1"), &foreign),
+            Err(())
+        );
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn pending_never_resolving_target_proof_does_not_block_native_transcript_progress() {
+        use super::super::artifacts::channel_handoff_replay_cursor;
+        let mut snapshot = current_snapshot(Some(RunId::new("run-1")), "existing output");
+        snapshot.last_event_sequence = Some(0);
+        let mut state = ConversationState::default();
+        state.install_snapshot(snapshot);
+        // This is the synchronous native-subscription input with a real pending ACK=0.
+        // No optional target-proof future is awaited or completed to obtain it.
+        assert_eq!(channel_handoff_replay_cursor(state.cursor, Some(0)), None);
+        assert_eq!(
+            apply_live_event(
+                &mut state,
+                &ThreadId::new("thread-1"),
+                &event(
+                    1,
+                    ThreadRunEventKind::SemanticChunk,
+                    serde_json::json!({"channel":"text","delta":" new actual output"})
+                )
+            ),
+            Ok(LiveEffect::None)
+        );
+        assert_eq!(state.cursor, Some(1));
+        assert_eq!(state.streaming_text, "existing output new actual output");
     }
 }

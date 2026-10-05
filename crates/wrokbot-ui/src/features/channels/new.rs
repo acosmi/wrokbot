@@ -90,11 +90,39 @@ pub(crate) struct StartFailure {
     pub(crate) error: Option<ApiError>,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StartedChannel {
     pub(crate) attempt: StartAttempt,
     pub(crate) channel: ChannelDetail,
+    pub(crate) ack: Option<openbot_contracts::command::ThreadRunStarted>,
+    pub(crate) handoff: Option<super::artifacts::ChannelHandoffToken>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl StartedChannel {
+    fn observed(attempt: StartAttempt, channel: ChannelDetail) -> Self {
+        Self {
+            attempt,
+            channel,
+            ack: None,
+            handoff: None,
+        }
+    }
+
+    fn acknowledged(
+        attempt: StartAttempt,
+        channel: ChannelDetail,
+        ack: openbot_contracts::command::ThreadRunStarted,
+        handoff: Option<super::artifacts::ChannelHandoffToken>,
+    ) -> Self {
+        Self {
+            attempt,
+            channel,
+            ack: Some(ack),
+            handoff,
+        }
+    }
 }
 
 /// Execute the single shared create → BeginRun ordering.
@@ -104,6 +132,7 @@ pub(crate) async fn execute_start_attempt(
     retry_unknown: bool,
 ) -> Result<StartedChannel, Box<StartFailure>> {
     let submissions = expect_context::<RunSubmissionActions>();
+    let mut origin = None;
     let channel = match attempt.channel.clone() {
         Some(channel) => channel,
         None => {
@@ -122,6 +151,16 @@ pub(crate) async fn execute_start_attempt(
                     error: None,
                 }));
             };
+            if attempt.source == SubmissionSource::ChannelNew {
+                origin = expect_context::<super::artifacts::ArtifactActions>()
+                    .start_channel_origin(
+                        &attempt.run_id,
+                        &attempt.agent_id,
+                        &attempt.message,
+                        &attempt.selected_skill_slugs,
+                        &attempt.model_selection,
+                    );
+            }
             match create_channel(&attempt.agent_id).await {
                 Ok(channel) => {
                     ticket.accepted();
@@ -194,7 +233,7 @@ pub(crate) async fn execute_start_attempt(
                 &attempt.agent_id,
                 &attempt.run_id,
             ) {
-                return Ok(StartedChannel { attempt, channel });
+                return Ok(StartedChannel::observed(attempt, channel));
             }
             return Err(Box::new(StartFailure {
                 attempt,
@@ -219,7 +258,11 @@ pub(crate) async fn execute_start_attempt(
             error: None,
         }));
     };
-    match begin_thread_run_with_skills_and_model(
+    // Inspect only already-completed provenance. The original Begin never waits on /me.
+    if let Some(origin) = origin.as_mut() {
+        origin.capture(&recovery.intent);
+    }
+    let result = begin_thread_run_with_skills_and_model(
         thread_id,
         &attempt.agent_id,
         &attempt.run_id,
@@ -228,9 +271,15 @@ pub(crate) async fn execute_start_attempt(
         &attempt.selected_skill_slugs,
         attempt.model_selection.as_ref(),
     )
-    .await
-    {
-        Ok(_) => ticket.accepted(),
+    .await;
+    let handoff = origin
+        .as_mut()
+        .and_then(|origin| origin.reply(&recovery.intent, result.as_ref().map_err(|_| ())));
+    let ack = match result {
+        Ok(ack) => {
+            ticket.accepted();
+            ack
+        }
         Err(error) => {
             ticket.failed(error);
             return Err(Box::new(StartFailure {
@@ -243,8 +292,8 @@ pub(crate) async fn execute_start_attempt(
                 error: Some(error),
             }));
         }
-    }
-    Ok(StartedChannel { attempt, channel })
+    };
+    Ok(StartedChannel::acknowledged(attempt, channel, ack, handoff))
 }
 
 /// Select one visible coworker, then atomically create a channel and begin its native first run.
@@ -472,8 +521,22 @@ pub fn ChannelNewPage() -> impl IntoView {
                 Ok(started) => {
                     resumable.set(Some(started.attempt));
                     match channel_route_href(started.channel.id.as_str()) {
-                        Ok(href) => navigate_after_send(&href, Default::default()),
-                        Err(_) => notice.set(Some(SubmissionNotice::NavigationFailed)),
+                        Ok(href) => {
+                            if let (Some(token), Some(_ack)) =
+                                (started.handoff, started.ack.as_ref())
+                            {
+                                expect_context::<super::artifacts::ArtifactActions>()
+                                    .commit_channel_handoff(token, &href);
+                            }
+                            navigate_after_send(&href, Default::default());
+                        }
+                        Err(_) => {
+                            if let Some(token) = started.handoff {
+                                expect_context::<super::artifacts::ArtifactActions>()
+                                    .cancel_channel_handoff(token);
+                            }
+                            notice.set(Some(SubmissionNotice::NavigationFailed));
+                        }
                     }
                 }
                 Err(failure) => {
@@ -739,5 +802,54 @@ mod tests {
         assert_eq!(resumed.message, original.message);
         assert_eq!(resumed.run_id, original.run_id);
         assert_eq!(resumed.model_selection, original.model_selection);
+    }
+
+    #[test]
+    fn channel_new_handoff_ack_missing_and_observed_active_are_not_receipts() {
+        let channel = ChannelDetail {
+            id: ChannelId::new("channel-1"),
+            name: "Native channel".into(),
+            agent_ids: vec![BotId::new("bot")],
+            thread_id: Some(ThreadId::new("019a7778-abcd-8abc-8abc-0123456789ab")),
+            active: true,
+        };
+        let attempt = StartAttempt {
+            source: SubmissionSource::ChannelNew,
+            agent_id: BotId::new("bot"),
+            message: " 你好\n".into(),
+            run_id: RunId::new("opaque run"),
+            channel: Some(channel.clone()),
+            selected_skill_slugs: Vec::new(),
+            model_selection: None,
+        };
+        let observed = StartedChannel::observed(attempt.clone(), channel.clone());
+        assert!(observed.ack.is_none());
+        assert!(observed.handoff.is_none());
+        let packet = serde_json::json!({
+            "threadId": channel.thread_id.as_ref().unwrap().as_str(),
+            "runId": "opaque run", "messageSequence": 0,
+            "eventSequence": 0, "replayed": false
+        });
+        let ack: openbot_contracts::command::ThreadRunStarted =
+            serde_json::from_value(packet.clone()).unwrap();
+        let started = StartedChannel::acknowledged(attempt.clone(), channel, ack, None);
+        assert_eq!(started.ack.as_ref().unwrap().message_sequence, 0);
+        assert_eq!(started.ack.as_ref().unwrap().event_sequence, 0);
+        assert_eq!(started.attempt, attempt);
+        assert!(started.handoff.is_none());
+        for field in ["messageSequence", "eventSequence"] {
+            let mut missing = packet.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<openbot_contracts::command::ThreadRunStarted>(missing)
+                    .is_err()
+            );
+            let mut null = packet.clone();
+            null[field] = serde_json::Value::Null;
+            assert!(
+                serde_json::from_value::<openbot_contracts::command::ThreadRunStarted>(null)
+                    .is_err()
+            );
+        }
     }
 }

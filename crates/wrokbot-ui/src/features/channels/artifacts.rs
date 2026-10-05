@@ -97,6 +97,8 @@ struct SourceJoin {
     bot: BotId,
     anchor: ThreadRunAnchor,
     text: Option<Zeroizing<String>>,
+    target_fresh: bool,
+    pending_charge: Option<usize>,
     ack: Option<ThreadRunStarted>,
     started: Option<(u64, StartedPayload)>,
     invalid: bool,
@@ -137,6 +139,8 @@ impl SourceJoin {
             bot: intent.agent_id.clone(),
             anchor: intent.anchor.clone(),
             text: Some(Zeroizing::new(intent.message.clone())),
+            target_fresh: true,
+            pending_charge: None,
             ack: None,
             started: None,
             invalid: false,
@@ -189,12 +193,27 @@ impl SourceJoin {
             self.invalid = true;
             return;
         }
+        if let Some(base) = self.pending_charge {
+            let total = base
+                .checked_add(payload.run_id.as_str().len())
+                .and_then(|bytes| bytes.checked_add(payload.bot_id.as_str().len()))
+                .and_then(|bytes| bytes.checked_add(payload.message_id.len()));
+            if total.is_none_or(|bytes| bytes > MAX_THREAD_MESSAGE_BYTES) {
+                self.invalid = true;
+                self.text = None;
+                self.started = None;
+                return;
+            }
+        }
         self.started = Some((event.event_sequence, payload));
     }
 
     fn take_read(&mut self) -> Option<SourceRead> {
         if self.invalid {
             self.text = None;
+            return None;
+        }
+        if !self.target_fresh {
             return None;
         }
         let ack = self.ack.as_ref()?;
@@ -255,13 +274,187 @@ fn source_read_matches(read: &SourceRead, snapshot: &ThreadConversationSnapshot)
             .is_some_and(|row| row.content.as_bytes() == read.original_text.as_bytes())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ChannelHandoffToken {
+    token: u64,
+    mount: u64,
+    probe: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OriginIntent {
+    run: RunId,
+    bot: BotId,
+    text_sha256: String,
+    skills: Vec<String>,
+    model: Option<openbot_contracts::model_connections::RunModelSelection>,
+}
+
+impl OriginIntent {
+    fn new(
+        run: &RunId,
+        bot: &BotId,
+        text: &str,
+        skills: &[String],
+        model: &Option<openbot_contracts::model_connections::RunModelSelection>,
+    ) -> Option<Self> {
+        if text.is_empty()
+            || text.len() > MAX_THREAD_MESSAGE_BYTES
+            || !openbot_contracts::artifacts::is_valid_artifact_identity(run.as_str())
+            || !openbot_contracts::artifacts::is_valid_artifact_identity(bot.as_str())
+            || !openbot_contracts::command::valid_selected_skill_slugs(skills)
+            || model.as_ref().is_some_and(|model| !model.is_valid())
+        {
+            return None;
+        }
+        Some(Self {
+            run: run.clone(),
+            bot: bot.clone(),
+            text_sha256: text_digest(text),
+            skills: skills.to_vec(),
+            model: model.clone(),
+        })
+    }
+
+    fn matches(&self, intent: &RunIntent) -> bool {
+        self.run == intent.run_id
+            && self.bot == intent.agent_id
+            && self.text_sha256 == text_digest(&intent.message)
+            && self.skills == intent.selected_skill_slugs
+            && self.model == intent.model_selection
+    }
+}
+
+struct OriginProbe {
+    id: ChannelHandoffToken,
+    scope_at_start: u64,
+    intent: OriginIntent,
+    observed: Option<(ActorObservation, u64)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ReceiverClaim {
+    id: ChannelHandoffToken,
+    mount: u64,
+    epoch: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HandoffPhase {
+    Staged,
+    Ready,
+    Committed,
+    Claimed(u64, u64),
+}
+
+// The additional provenance text is never Clone or raw Debug. Its one allocation moves to SourceJoin.
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PendingTargetProbe {
+    claim: ReceiverClaim,
+    probe: u64,
+}
+
+struct NativeChannelHandoff {
+    id: ChannelHandoffToken,
+    intent: OriginIntent,
+    target_path: String,
+    join: SourceJoin,
+    phase: HandoffPhase,
+    charged_bytes: usize,
+}
+
+fn handoff_budget(
+    intent: &RunIntent,
+    actor: &ActorObservation,
+    target_path: &str,
+) -> Option<usize> {
+    if intent.message.is_empty()
+        || intent.message.len() > MAX_THREAD_MESSAGE_BYTES
+        || !openbot_contracts::command::valid_selected_skill_slugs(&intent.selected_skill_slugs)
+        || intent
+            .model_selection
+            .as_ref()
+            .is_some_and(|model| !model.is_valid())
+    {
+        return None;
+    }
+    let thread = intent.thread_id.as_ref()?;
+    let mut bytes = std::mem::size_of::<NativeChannelHandoff>()
+        .checked_add(std::mem::size_of::<PendingTargetProbe>().checked_mul(2)?)?;
+    for length in [
+        intent.message.len(),
+        actor.actor.as_str().len(),
+        thread.as_str().len(),
+        intent.run_id.as_str().len(),
+        intent.agent_id.as_str().len(),
+        target_path.len(),
+        64, // One intent digest, not a second raw-message copy.
+        intent.run_id.as_str().len(),
+        intent.agent_id.as_str().len(),
+        thread.as_str().len(), // Reserve the exact required ACK identifiers.
+        intent.run_id.as_str().len(),
+    ] {
+        bytes = bytes.checked_add(length)?;
+    }
+    if let ThreadRunAnchor::Channel { channel_id } = &intent.anchor {
+        bytes = bytes.checked_add(channel_id.as_str().len())?;
+    } else {
+        return None;
+    }
+    for skill in &intent.selected_skill_slugs {
+        bytes = bytes.checked_add(std::mem::size_of::<String>())?;
+        bytes = bytes.checked_add(skill.len())?;
+    }
+    if let Some(model) = &intent.model_selection {
+        bytes = bytes.checked_add(model.connection_id.as_str().len())?;
+    }
+    (bytes <= MAX_THREAD_MESSAGE_BYTES).then_some(bytes)
+}
+
+pub(crate) fn channel_handoff_replay_cursor(
+    snapshot_cursor: Option<u64>,
+    pending_real_started: Option<u64>,
+) -> Option<u64> {
+    let Some(started) = pending_real_started else {
+        return snapshot_cursor;
+    };
+    match (snapshot_cursor, started.checked_sub(1)) {
+        (Some(snapshot), Some(before_started)) => Some(snapshot.min(before_started)),
+        _ => None,
+    }
+}
+
 #[derive(Default)]
 struct SourceState {
     actor: Option<ActorObservation>,
     epoch: u64,
+    handoff_epoch: Option<u64>,
+    pending_target: Option<PendingTargetProbe>,
     join: Option<SourceJoin>,
     eligible: Option<UserSource>,
     qualifying: bool,
+}
+
+impl SourceState {
+    fn clear_pending_target(&mut self, pending: PendingTargetProbe) {
+        if self.pending_target == Some(pending) && self.epoch == pending.claim.epoch {
+            self.pending_target = None;
+            self.handoff_epoch = None;
+            self.join = None;
+            self.eligible = None;
+        }
+    }
+    fn begin_handoff_adoption(&mut self) -> Option<u64> {
+        if self.qualifying || self.join.is_some() {
+            return None;
+        }
+        self.epoch = self.epoch.checked_add(1)?;
+        self.eligible = None;
+        self.handoff_epoch = None;
+        self.pending_target = None;
+        Some(self.epoch)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -303,11 +496,13 @@ impl ArtifactSourceObserver {
         // A route's metadata projection never survives its owner. Its registration/Unknown does.
         on_cleanup(move || actions.close_route(mount));
         #[cfg(target_arch = "wasm32")]
-        source.with_owner(move || {
-            leptos::task::spawn_local_scoped_with_cancellation(async move {
-                let _ = source.refresh_actor().await;
+        if !source.has_channel_handoff() {
+            source.with_owner(move || {
+                leptos::task::spawn_local_scoped_with_cancellation(async move {
+                    let _ = source.refresh_actor().await;
+                });
             });
-        });
+        }
         source
     }
 
@@ -323,6 +518,203 @@ impl ArtifactSourceObserver {
         }
     }
 
+    fn has_channel_handoff(self) -> bool {
+        let (Some(thread), Some(bot), Some(anchor)) = (
+            self.thread.try_get_untracked().flatten(),
+            self.bot.try_get_value().flatten(),
+            self.anchor.try_get_value(),
+        ) else {
+            return false;
+        };
+        self.actions
+            .state
+            .try_with_untracked(|state| state.has_handoff(&thread, &bot, &anchor))
+            .unwrap_or(false)
+    }
+
+    fn prepare_channel_handoff(self) -> Option<PendingTargetProbe> {
+        if !self.has_channel_handoff() {
+            return None;
+        }
+        let (Some(thread), Some(bot), Some(anchor)) = (
+            self.thread.try_get_untracked().flatten(),
+            self.bot.try_get_value().flatten(),
+            self.anchor.try_get_value(),
+        ) else {
+            return None;
+        };
+        let epoch = self
+            .state
+            .try_update(SourceState::begin_handoff_adoption)
+            .flatten()?;
+        let claim = self
+            .actions
+            .state
+            .try_update(|state| state.claim_handoff(self.mount, epoch, &thread, &bot, &anchor))
+            .flatten()?;
+        let join = self
+            .actions
+            .state
+            .try_update(|state| state.take_pending_handoff(claim, &thread, &bot, &anchor))
+            .flatten()?;
+        let probe = self
+            .actions
+            .state
+            .try_update(|state| state.start_actor_probe(self.mount))
+            .flatten();
+        let Some(probe) = probe else {
+            return None; // The moved one raw buffer drops here; the native stream still opens.
+        };
+        let pending = PendingTargetProbe { claim, probe };
+        let installed = self
+            .state
+            .try_update(|state| {
+                if state.epoch != epoch || state.qualifying || state.join.is_some() {
+                    return false;
+                }
+                state.handoff_epoch = Some(epoch);
+                state.pending_target = Some(pending);
+                state.eligible = None;
+                state.join = Some(join);
+                true
+            })
+            .unwrap_or(false);
+        if !installed {
+            self.actions
+                .state
+                .try_update(|state| state.cancel_target_probe(pending));
+            return None;
+        }
+        Some(pending)
+    }
+
+    fn pending_target_current(self, pending: PendingTargetProbe) -> bool {
+        self.owner
+            .try_get_value()
+            .flatten()
+            .and_then(|owner| owner.upgrade())
+            .is_some()
+            && self
+                .state
+                .try_with_untracked(|state| {
+                    state.pending_target == Some(pending)
+                        && state.epoch == pending.claim.epoch
+                        && state.handoff_epoch == Some(pending.claim.epoch)
+                        && state.join.as_ref().is_some_and(|join| {
+                            !join.invalid
+                                && !join.target_fresh
+                                && join.mount == self.mount
+                                && join.epoch == pending.claim.epoch
+                                && self.thread.try_get_untracked().flatten().as_ref()
+                                    == Some(&join.thread)
+                                && self.bot.try_get_value().flatten().as_ref() == Some(&join.bot)
+                                && self.anchor.try_get_value().as_ref() == Some(&join.anchor)
+                        })
+                })
+                .unwrap_or(false)
+    }
+
+    fn cancel_pending_target(self, pending: PendingTargetProbe) {
+        self.state
+            .try_update(|state| state.clear_pending_target(pending));
+        self.actions
+            .state
+            .try_update(|state| state.cancel_target_probe(pending));
+    }
+
+    fn finish_pending_target(self, pending: PendingTargetProbe, actor: Option<ActorObservation>) {
+        // Read-only token/owner/epoch/target checks precede every actor/probe state mutation.
+        if !self.pending_target_current(pending) {
+            self.cancel_pending_target(pending);
+            return;
+        }
+        let expected = self
+            .state
+            .try_with_untracked(|state| {
+                let join = state.join.as_ref()?;
+                Some((join.actor.clone(), join.scope_generation))
+            })
+            .flatten();
+        let Some((expected_actor, scope)) = expected else {
+            self.cancel_pending_target(pending);
+            return;
+        };
+        let accepted = self
+            .actions
+            .state
+            .try_update(|state| {
+                state.finish_target_probe(pending, &expected_actor, scope, actor.clone())
+            })
+            .unwrap_or(false);
+        if !accepted {
+            self.cancel_pending_target(pending);
+            return;
+        }
+        let matched = actor.as_ref() == Some(&expected_actor)
+            && self.actions.scope_generation(&expected_actor) == Some(scope);
+        self.state.try_update(|state| {
+            if state.pending_target != Some(pending) || state.epoch != pending.claim.epoch {
+                return;
+            }
+            if !matched {
+                state.clear_pending_target(pending);
+                return;
+            }
+            if let Some(join) = state.join.as_mut()
+                && join.epoch == pending.claim.epoch
+                && !join.invalid
+            {
+                join.target_fresh = true;
+                state.actor = actor;
+                state.pending_target = None;
+            }
+        });
+        self.qualify_if_joined();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn begin_channel_handoff(self, current: impl Fn() -> bool + 'static) {
+        if !current() {
+            return;
+        }
+        let Some(pending) = self.prepare_channel_handoff() else {
+            return;
+        };
+        self.with_owner(move || {
+            // Parallel optional proof; it cannot delay the original SSE/IPC opener.
+            leptos::task::spawn_local_scoped_with_cancellation(async move {
+                let actor = crate::api::load_current_user()
+                    .await
+                    .ok()
+                    .map(ActorObservation::from);
+                if !current() {
+                    self.cancel_pending_target(pending);
+                    return;
+                }
+                self.finish_pending_target(pending, actor);
+            });
+        });
+    }
+
+    pub(crate) fn bootstrap_cursor(self, snapshot_cursor: Option<u64>) -> Option<u64> {
+        let pending = self
+            .state
+            .try_with_untracked(|state| {
+                let join = state.join.as_ref()?;
+                if state.handoff_epoch != Some(join.epoch)
+                    || join.invalid
+                    || (join.target_fresh && join.started.is_some())
+                    || (join.target_fresh && state.actor.as_ref() != Some(&join.actor))
+                    || self.actions.scope_generation(&join.actor) != Some(join.scope_generation)
+                {
+                    return None;
+                }
+                join.ack.as_ref().map(|ack| ack.event_sequence)
+            })
+            .flatten();
+        channel_handoff_replay_cursor(snapshot_cursor, pending)
+    }
+
     // Observations are side effects only in this separate source state, never in send/FIFO state.
     pub(crate) fn stage_begin(self, intent: &RunIntent) {
         self.state.try_update(|state| {
@@ -335,6 +727,8 @@ impl ArtifactSourceObserver {
             }
             state.eligible = None;
             state.join = None;
+            state.handoff_epoch = None;
+            state.pending_target = None;
             // One outstanding source read owns the only raw buffer. Native sends stay unaffected.
             if state.qualifying {
                 state.epoch = state.epoch.saturating_add(1);
@@ -377,14 +771,28 @@ impl ArtifactSourceObserver {
     }
 
     pub(crate) fn native_event(self, event: &ThreadRunEvent) {
-        self.state.try_update(|state| {
-            if let Some(join) = state.join.as_mut() {
-                join.observe_started(event);
-                if join.invalid {
+        let cancelled = self
+            .state
+            .try_update(|state| {
+                let invalid = state.join.as_mut().is_some_and(|join| {
+                    join.observe_started(event);
+                    join.invalid
+                });
+                if invalid {
                     state.eligible = None;
+                    if let Some(pending) = state.pending_target {
+                        state.clear_pending_target(pending);
+                        return Some(pending);
+                    }
                 }
-            }
-        });
+                None
+            })
+            .flatten();
+        if let Some(pending) = cancelled {
+            self.actions
+                .state
+                .try_update(|state| state.cancel_target_probe(pending));
+        }
         self.qualify_if_joined();
     }
 
@@ -440,10 +848,9 @@ impl ArtifactSourceObserver {
             .try_with_untracked(|state| {
                 state.epoch == source.epoch
                     && state.actor.as_ref() == Some(&source.actor)
-                    && state
-                        .join
-                        .as_ref()
-                        .is_some_and(|join| !join.invalid && join.run == source.run)
+                    && state.join.as_ref().is_some_and(|join| {
+                        !join.invalid && join.target_fresh && join.run == source.run
+                    })
             })
             .unwrap_or(false)
             && self.actions.scope_current(source)
@@ -456,6 +863,9 @@ impl ArtifactSourceObserver {
     fn selection(self, message: &str) -> Option<UserSource> {
         self.actions.state.with(|_| ());
         self.state.with(|state| {
+            if state.join.as_ref().is_some_and(|join| !join.target_fresh) {
+                return None;
+            }
             state
                 .eligible
                 .as_ref()
@@ -540,6 +950,9 @@ enum MetadataState {
 #[derive(Default)]
 struct ActionState {
     next_mount: u64,
+    next_handoff: u64,
+    origin_probe: Option<OriginProbe>,
+    handoff: Option<NativeChannelHandoff>,
     next_action: u64,
     checking: Option<(u64, UserSource)>,
     operation: Option<Operation>,
@@ -553,6 +966,318 @@ struct ActionState {
 }
 
 impl ActionState {
+    fn start_origin(&mut self, intent: OriginIntent) -> Option<ChannelHandoffToken> {
+        self.origin_probe = None;
+        self.handoff = None;
+        let mount = self.next_mount.checked_add(1)?;
+        let token = self.next_handoff.checked_add(1)?;
+        let probe = self.start_actor_probe(mount)?;
+        self.next_mount = mount;
+        self.next_handoff = token;
+        let id = ChannelHandoffToken {
+            token,
+            mount,
+            probe,
+        };
+        self.origin_probe = Some(OriginProbe {
+            id,
+            scope_at_start: self.scope_generation,
+            intent,
+            observed: None,
+        });
+        Some(id)
+    }
+
+    fn origin_reply(
+        &mut self,
+        id: ChannelHandoffToken,
+        intent: &OriginIntent,
+        current: Option<ActorObservation>,
+    ) {
+        // Every check precedes finish_actor_probe: a late reply cannot change target actor/scope.
+        let live = self.origin_probe.as_ref().is_some_and(|probe| {
+            probe.id == id
+                && probe.intent == *intent
+                && probe.scope_at_start == self.scope_generation
+                && probe.observed.is_none()
+        }) && self.auth_probe == Some((id.probe, id.mount));
+        if !live {
+            return;
+        }
+        if !self.finish_actor_probe(id.probe, id.mount, current.clone()) {
+            return;
+        }
+        if let Some(probe) = self.origin_probe.as_mut().filter(|probe| probe.id == id) {
+            probe.observed = current.map(|actor| (actor, self.scope_generation));
+        }
+    }
+
+    fn capture_origin(&mut self, id: ChannelHandoffToken, intent: &RunIntent) -> bool {
+        if self.auth_read_generation != id.probe
+            || !self
+                .origin_probe
+                .as_ref()
+                .is_some_and(|probe| probe.id == id)
+        {
+            return false;
+        }
+        let Some(probe) = self.origin_probe.take() else {
+            return false;
+        };
+        if self.auth_probe == Some((id.probe, id.mount)) {
+            self.auth_probe = None;
+        }
+        let Some((actor, scope)) = probe.observed else {
+            return false; // Optional GET pending/failed: original Begin does not wait.
+        };
+        if !probe.intent.matches(intent)
+            || scope == 0
+            || scope != self.scope_generation
+            || self.actor.as_ref() != Some(&actor)
+        {
+            return false;
+        }
+        let ThreadRunAnchor::Channel { channel_id } = &intent.anchor else {
+            return false;
+        };
+        let Ok(target_path) = crate::api::channel_route_href(channel_id.as_str()) else {
+            return false;
+        };
+        let Some(charged_bytes) = handoff_budget(intent, &actor, &target_path) else {
+            return false;
+        };
+        let Some(join) = SourceJoin::new(id.mount, id.token, scope, actor, intent) else {
+            return false;
+        };
+        self.handoff = Some(NativeChannelHandoff {
+            id,
+            intent: probe.intent,
+            target_path,
+            join,
+            phase: HandoffPhase::Staged,
+            charged_bytes,
+        });
+        true
+    }
+
+    fn origin_ack(
+        &mut self,
+        id: ChannelHandoffToken,
+        intent: &RunIntent,
+        ack: &ThreadRunStarted,
+    ) -> Option<ChannelHandoffToken> {
+        let handoff = self.handoff.as_mut()?;
+        if handoff.id != id
+            || handoff.phase != HandoffPhase::Staged
+            || handoff.join.scope_generation != self.scope_generation
+            || self.actor.as_ref() != Some(&handoff.join.actor)
+            || !handoff.intent.matches(intent)
+            || !handoff.join.same_intent(intent)
+        {
+            return None;
+        }
+        handoff.join.observe_ack(ack);
+        if handoff.join.invalid || handoff.join.ack.as_ref() != Some(ack) {
+            return None;
+        }
+        handoff.phase = HandoffPhase::Ready;
+        Some(id)
+    }
+
+    fn commit_handoff(&mut self, id: ChannelHandoffToken, target_path: &str) -> bool {
+        let Some(handoff) = self.handoff.as_mut() else {
+            return false;
+        };
+        if handoff.id != id
+            || handoff.phase != HandoffPhase::Ready
+            || handoff.target_path != target_path
+            || handoff.join.scope_generation != self.scope_generation
+            || self.actor.as_ref() != Some(&handoff.join.actor)
+        {
+            return false;
+        }
+        handoff.phase = HandoffPhase::Committed;
+        true
+    }
+
+    fn target_matches(
+        handoff: &NativeChannelHandoff,
+        thread: &ThreadId,
+        bot: &BotId,
+        anchor: &ThreadRunAnchor,
+    ) -> bool {
+        handoff.join.thread == *thread
+            && handoff.join.bot == *bot
+            && handoff.join.anchor == *anchor
+            && handoff.join.ack.is_some()
+            && !handoff.join.invalid
+    }
+
+    fn has_handoff(&self, thread: &ThreadId, bot: &BotId, anchor: &ThreadRunAnchor) -> bool {
+        self.handoff.as_ref().is_some_and(|handoff| {
+            handoff.phase == HandoffPhase::Committed
+                && handoff.join.scope_generation == self.scope_generation
+                && self.actor.as_ref() == Some(&handoff.join.actor)
+                && Self::target_matches(handoff, thread, bot, anchor)
+        })
+    }
+
+    fn claim_handoff(
+        &mut self,
+        mount: u64,
+        epoch: u64,
+        thread: &ThreadId,
+        bot: &BotId,
+        anchor: &ThreadRunAnchor,
+    ) -> Option<ReceiverClaim> {
+        let reclaimable = self.handoff.as_ref().is_some_and(|handoff| {
+            matches!(handoff.phase, HandoffPhase::Committed)
+                || matches!(handoff.phase, HandoffPhase::Claimed(owner, _) if owner == mount)
+        });
+        let exact = self.handoff.as_ref().is_some_and(|handoff| {
+            Self::target_matches(handoff, thread, bot, anchor)
+                && handoff.join.scope_generation == self.scope_generation
+                && self.actor.as_ref() == Some(&handoff.join.actor)
+        });
+        if mount == 0 || epoch == 0 || !reclaimable || !exact {
+            return None;
+        }
+        let handoff = self.handoff.as_mut()?;
+        handoff.phase = HandoffPhase::Claimed(mount, epoch);
+        Some(ReceiverClaim {
+            id: handoff.id,
+            mount,
+            epoch,
+        })
+    }
+
+    fn adopt_handoff(
+        &mut self,
+        claim: ReceiverClaim,
+        actor: &ActorObservation,
+        thread: &ThreadId,
+        bot: &BotId,
+        anchor: &ThreadRunAnchor,
+    ) -> Option<SourceJoin> {
+        let valid = claim.mount != 0
+            && claim.epoch != 0
+            && self.handoff.as_ref().is_some_and(|handoff| {
+                handoff.id == claim.id
+                    && handoff.phase == HandoffPhase::Claimed(claim.mount, claim.epoch)
+                    && handoff.join.scope_generation == self.scope_generation
+                    && &handoff.join.actor == actor
+                    && self.actor.as_ref() == Some(actor)
+                    && Self::target_matches(handoff, thread, bot, anchor)
+            });
+        if !valid {
+            self.cancel_claim(claim);
+            return None;
+        }
+        let mut join = self.handoff.take()?.join;
+        join.mount = claim.mount;
+        join.epoch = claim.epoch;
+        Some(join)
+    }
+
+    fn take_pending_handoff(
+        &mut self,
+        claim: ReceiverClaim,
+        thread: &ThreadId,
+        bot: &BotId,
+        anchor: &ThreadRunAnchor,
+    ) -> Option<SourceJoin> {
+        let actor = self.actor.clone()?;
+        let charge = self.handoff.as_ref()?.charged_bytes;
+        let mut join = self.adopt_handoff(claim, &actor, thread, bot, anchor)?;
+        join.target_fresh = false;
+        join.pending_charge = Some(charge);
+        Some(join)
+    }
+
+    fn cancel_target_probe(&mut self, pending: PendingTargetProbe) {
+        if self.auth_probe == Some((pending.probe, pending.claim.mount)) {
+            self.auth_probe = None;
+        }
+    }
+
+    fn finish_target_probe(
+        &mut self,
+        pending: PendingTargetProbe,
+        expected_actor: &ActorObservation,
+        scope: u64,
+        actor: Option<ActorObservation>,
+    ) -> bool {
+        if self.auth_probe != Some((pending.probe, pending.claim.mount))
+            || self.scope_generation != scope
+            || self.actor.as_ref() != Some(expected_actor)
+        {
+            return false;
+        }
+        self.finish_actor_probe(pending.probe, pending.claim.mount, actor)
+    }
+
+    fn cancel_claim(&mut self, claim: ReceiverClaim) {
+        if self.handoff.as_ref().is_some_and(|handoff| {
+            handoff.id == claim.id
+                && handoff.phase == HandoffPhase::Claimed(claim.mount, claim.epoch)
+        }) {
+            self.handoff = None;
+        }
+    }
+
+    fn cancel_handoff(&mut self, id: ChannelHandoffToken) {
+        if self
+            .origin_probe
+            .as_ref()
+            .is_some_and(|probe| probe.id == id)
+        {
+            self.origin_probe = None;
+        }
+        if self.auth_probe == Some((id.probe, id.mount)) {
+            self.auth_probe = None;
+        }
+        if self
+            .handoff
+            .as_ref()
+            .is_some_and(|handoff| handoff.id == id)
+        {
+            self.handoff = None;
+        }
+    }
+
+    fn close_origin(&mut self, id: ChannelHandoffToken) {
+        let transferred = self.handoff.as_ref().is_some_and(|handoff| {
+            handoff.id == id
+                && matches!(
+                    handoff.phase,
+                    HandoffPhase::Committed | HandoffPhase::Claimed(_, _)
+                )
+        });
+        if !transferred {
+            self.cancel_handoff(id);
+        }
+    }
+
+    fn handoff_path_changed(&mut self, pathname: &str) {
+        if pathname != "/channel/new"
+            && let Some(id) = self.origin_probe.as_ref().map(|probe| probe.id)
+        {
+            self.cancel_handoff(id);
+        }
+        let invalid = self
+            .handoff
+            .as_ref()
+            .is_some_and(|handoff| match handoff.phase {
+                HandoffPhase::Staged | HandoffPhase::Ready => pathname != "/channel/new",
+                HandoffPhase::Committed => {
+                    pathname != "/channel/new" && pathname != handoff.target_path
+                }
+                HandoffPhase::Claimed(_, _) => pathname != handoff.target_path,
+            });
+        if invalid {
+            self.handoff = None;
+        }
+    }
     // This is a local observation epoch, not a fabricated server/session authorization token.
     fn start_actor_probe(&mut self, mount: u64) -> Option<u64> {
         if mount == 0 {
@@ -577,6 +1302,7 @@ impl ActionState {
             let next = self.scope_generation.checked_add(1);
             self.scope_generation = next.unwrap_or(u64::MAX);
             self.actor = next.and(actor);
+            self.handoff = None;
             self.checking = None;
             self.hide_metadata();
             if let Some(operation) = self.operation.as_mut()
@@ -596,6 +1322,25 @@ impl ActionState {
     fn close_route(&mut self, mount: u64) {
         if self.auth_probe.is_some_and(|(_, owner)| owner == mount) {
             self.auth_probe = None;
+        }
+        if let Some(id) = self
+            .origin_probe
+            .as_ref()
+            .filter(|probe| probe.id.mount == mount)
+            .map(|probe| probe.id)
+        {
+            self.cancel_handoff(id);
+        }
+        let close_handoff = self.handoff.as_ref().is_some_and(|handoff| {
+            matches!(handoff.phase, HandoffPhase::Claimed(owner, _) if owner == mount)
+                || (handoff.id.mount == mount
+                    && !matches!(
+                        handoff.phase,
+                        HandoffPhase::Committed | HandoffPhase::Claimed(_, _)
+                    ))
+        });
+        if close_handoff {
+            self.handoff = None;
         }
         if self.metadata_mount == Some(mount) {
             self.hide_metadata();
@@ -719,6 +1464,59 @@ impl ActionState {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) struct ChannelOriginLease {
+    actions: ArtifactActions,
+    id: ChannelHandoffToken,
+    owner: WeakOwner,
+    captured: bool,
+    ready: bool,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl ChannelOriginLease {
+    pub(crate) fn capture(&mut self, intent: &RunIntent) {
+        self.captured = self.owner.upgrade().is_some()
+            && self
+                .actions
+                .state
+                .try_update(|state| state.capture_origin(self.id, intent))
+                .unwrap_or(false);
+        if !self.captured {
+            self.actions.cancel_channel_handoff(self.id);
+        }
+    }
+
+    pub(crate) fn reply(
+        &mut self,
+        intent: &RunIntent,
+        result: Result<&ThreadRunStarted, ()>,
+    ) -> Option<ChannelHandoffToken> {
+        if !self.captured || self.owner.upgrade().is_none() {
+            return None;
+        }
+        let Ok(ack) = result else {
+            return None;
+        };
+        let accepted = self
+            .actions
+            .state
+            .try_update(|state| state.origin_ack(self.id, intent, ack))
+            .flatten();
+        self.ready = accepted.is_some();
+        accepted
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl Drop for ChannelOriginLease {
+    fn drop(&mut self) {
+        if !self.ready {
+            self.actions.cancel_channel_handoff(self.id);
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ArtifactActions {
     state: RwSignal<ActionState>,
@@ -726,9 +1524,74 @@ pub(crate) struct ArtifactActions {
 
 impl ArtifactActions {
     pub(crate) fn new() -> Self {
-        Self {
+        let actions = Self {
             state: RwSignal::new(ActionState::default()),
+        };
+        #[cfg(target_arch = "wasm32")]
+        {
+            let location = leptos_router::hooks::use_location();
+            Effect::new(move |_| {
+                let pathname = location.pathname.get();
+                actions
+                    .state
+                    .try_update(|state| state.handoff_path_changed(&pathname));
+            });
         }
+        actions
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn start_channel_origin(
+        self,
+        run: &RunId,
+        bot: &BotId,
+        text: &str,
+        skills: &[String],
+        model: &Option<openbot_contracts::model_connections::RunModelSelection>,
+    ) -> Option<ChannelOriginLease> {
+        let owner = Owner::current()?.downgrade();
+        let intent = OriginIntent::new(run, bot, text, skills, model)?;
+        let id = self
+            .state
+            .try_update(|state| state.start_origin(intent.clone()))
+            .flatten()?;
+        on_cleanup(move || {
+            self.state.try_update(|state| state.close_origin(id));
+        });
+        let probe_owner = owner.clone();
+        // One optional read, parallel with the original Create. Begin never awaits this task.
+        leptos::task::spawn_local_scoped_with_cancellation(async move {
+            let current = crate::api::load_current_user()
+                .await
+                .ok()
+                .map(ActorObservation::from);
+            if probe_owner.upgrade().is_none() {
+                return;
+            }
+            self.state
+                .try_update(|state| state.origin_reply(id, &intent, current));
+        });
+        Some(ChannelOriginLease {
+            actions: self,
+            id,
+            owner,
+            captured: false,
+            ready: false,
+        })
+    }
+
+    pub(crate) fn commit_channel_handoff(self, id: ChannelHandoffToken, target_path: &str) {
+        let accepted = self
+            .state
+            .try_update(|state| state.commit_handoff(id, target_path))
+            .unwrap_or(false);
+        if !accepted {
+            self.cancel_channel_handoff(id);
+        }
+    }
+
+    pub(crate) fn cancel_channel_handoff(self, id: ChannelHandoffToken) {
+        self.state.try_update(|state| state.cancel_handoff(id));
     }
 
     fn hide_metadata(self) {
@@ -763,8 +1626,8 @@ impl ArtifactActions {
         })
     }
 
-    fn may_save(self, source: &UserSource) -> bool {
-        self.state.with(|state| state.may_check(source))
+    fn may_save(self, observer: ArtifactSourceObserver, source: &UserSource) -> bool {
+        observer.selection_current(source) && self.state.with(|state| state.may_check(source))
     }
 
     fn read_disabled(self, mount: u64) -> bool {
@@ -1017,7 +1880,7 @@ pub(crate) fn ArtifactMessageActions(
     let disabled = Signal::derive(move || {
         eligible
             .get()
-            .is_none_or(|source| !actions.may_save(&source))
+            .is_none_or(|selection| !actions.may_save(source, &selection))
     });
     let save = move |_| {
         if let Some(source_selection) = eligible.get_untracked() {
@@ -1546,6 +2409,546 @@ mod tests {
         let weak = observer.owner.get_value().unwrap();
         drop(route);
         assert!(weak.upgrade().is_none());
+        assert!(
+            actions
+                .state
+                .with_untracked(|state| state.operation.is_none())
+        );
+    }
+
+    fn channel_intent() -> RunIntent {
+        let mut intent = intent();
+        intent.anchor = ThreadRunAnchor::Channel {
+            channel_id: openbot_contracts::ids::ChannelId::new("channel-1"),
+        };
+        intent.selected_skill_slugs = vec!["review".into(), "summarize".into()];
+        intent.model_selection = Some(openbot_contracts::model_connections::RunModelSelection {
+            connection_id: "01991389-7380-7000-8000-000000000001".into(),
+            expected_revision: 1,
+        });
+        intent
+    }
+
+    fn origin_intent(intent: &RunIntent) -> OriginIntent {
+        OriginIntent::new(
+            &intent.run_id,
+            &intent.agent_id,
+            &intent.message,
+            &intent.selected_skill_slugs,
+            &intent.model_selection,
+        )
+        .unwrap()
+    }
+
+    fn channel_ack(intent: &RunIntent) -> ThreadRunStarted {
+        ThreadRunStarted {
+            thread_id: intent.thread_id.clone().unwrap(),
+            run_id: intent.run_id.clone(),
+            message_sequence: 0,
+            event_sequence: 0,
+            replayed: false,
+        }
+    }
+
+    fn channel_started(intent: &RunIntent) -> ThreadRunEvent {
+        ThreadRunEvent {
+            thread_id: intent.thread_id.clone().unwrap(),
+            run_id: intent.run_id.clone(),
+            event_sequence: 0,
+            event_type: ThreadRunEventKind::Started,
+            payload: serde_json::json!({
+                "runId": intent.run_id.as_str(),
+                "messageId": "opaque run:input",
+                "botId": intent.agent_id.as_str()
+            }),
+            terminal: false,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn prepared_channel_handoff(intent: &RunIntent) -> (ActionState, ChannelHandoffToken) {
+        let mut state = ActionState::default();
+        let observation = origin_intent(intent);
+        let id = state.start_origin(observation.clone()).unwrap();
+        state.origin_reply(id, &observation, Some(read().source.actor));
+        assert!(state.capture_origin(id, intent));
+        assert_eq!(state.origin_ack(id, intent, &channel_ack(intent)), Some(id));
+        let ThreadRunAnchor::Channel { channel_id } = &intent.anchor else {
+            panic!("channel fixture");
+        };
+        assert!(state.commit_handoff(
+            id,
+            &crate::api::channel_route_href(channel_id.as_str()).unwrap()
+        ));
+        (state, id)
+    }
+
+    fn adopted_channel_read(intent: &RunIntent) -> (ActionState, SourceRead) {
+        let (mut state, _) = prepared_channel_handoff(intent);
+        let actor = state.actor.clone().unwrap();
+        let thread = intent.thread_id.as_ref().unwrap();
+        let claim = state
+            .claim_handoff(2, 1, thread, &intent.agent_id, &intent.anchor)
+            .unwrap();
+        let mut join = state
+            .adopt_handoff(claim, &actor, thread, &intent.agent_id, &intent.anchor)
+            .unwrap();
+        assert!(join.take_read().is_none());
+        join.observe_started(&channel_started(intent));
+        let read = join.take_read().unwrap();
+        assert!(join.take_read().is_none());
+        (state, read)
+    }
+
+    fn channel_snapshot(intent: &RunIntent) -> ThreadConversationSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.messages[0].id = "opaque run:input".into();
+        snapshot.messages[0].content.clone_from(&intent.message);
+        snapshot.messages[0].agent_id = Some(intent.agent_id.clone());
+        snapshot.last_event_sequence = Some(0);
+        snapshot
+    }
+
+    #[test]
+    fn channel_new_first_zero_handoff_preserves_actual_ack_and_five_selectors() {
+        let mut intent = channel_intent();
+        intent.message = " First  首轮\nsecond  行 \n".into();
+        let (mut state, read) = adopted_channel_read(&intent);
+        assert_eq!(read.original_text.as_bytes(), intent.message.as_bytes());
+        assert_eq!(read.source.started_sequence, 0);
+        assert!(source_read_matches(&read, &channel_snapshot(&intent)));
+        let operation = operation(&mut state, read.source);
+        let packet = serde_json::to_value(&operation.packet).unwrap();
+        assert_eq!(packet.as_object().unwrap().len(), 5);
+        assert_eq!(
+            packet,
+            serde_json::json!({
+                "requestId": REQUEST,
+                "sourceThreadId": intent.thread_id.as_ref().unwrap().as_str(),
+                "sourceRunId": intent.run_id.as_str(),
+                "sourceMessageId": "opaque run:input",
+                "expectedSha256": text_digest(&intent.message)
+            })
+        );
+        assert_ne!(
+            operation.packet.expected_sha256,
+            text_digest(intent.message.trim())
+        );
+    }
+
+    #[test]
+    fn channel_new_handoff_exact_actor_role_scope_target_and_intent() {
+        let intent = channel_intent();
+        for change in 0..5 {
+            let mut state = ActionState::default();
+            let observation = origin_intent(&intent);
+            let id = state.start_origin(observation.clone()).unwrap();
+            state.origin_reply(id, &observation, Some(read().source.actor));
+            let mut changed = intent.clone();
+            match change {
+                0 => changed.run_id = RunId::new("other-run"),
+                1 => changed.agent_id = BotId::new("other-bot"),
+                2 => changed.message.push(' '),
+                3 => changed.selected_skill_slugs.reverse(),
+                _ => changed.model_selection.as_mut().unwrap().expected_revision += 1,
+            }
+            assert!(!state.capture_origin(id, &changed));
+            assert!(state.handoff.is_none());
+        }
+        for change in 0..3 {
+            let (mut state, _) = prepared_channel_handoff(&intent);
+            let mut thread = intent.thread_id.clone().unwrap();
+            let mut bot = intent.agent_id.clone();
+            let mut anchor = intent.anchor.clone();
+            match change {
+                0 => thread = ThreadId::new("019a7778-abcd-8abc-8abc-0123456789ac"),
+                1 => bot = BotId::new("other-bot"),
+                _ => {
+                    anchor = ThreadRunAnchor::Channel {
+                        channel_id: openbot_contracts::ids::ChannelId::new("other-channel"),
+                    }
+                }
+            }
+            assert!(state.claim_handoff(2, 1, &thread, &bot, &anchor).is_none());
+        }
+        for change_role in [false, true] {
+            let (mut state, _) = prepared_channel_handoff(&intent);
+            let probe = state.start_actor_probe(99).unwrap();
+            let mut changed = read().source.actor;
+            if change_role {
+                changed.role = Role::Admin;
+            } else {
+                changed.actor = ActorId::new("other-actor");
+            }
+            assert!(state.finish_actor_probe(probe, 99, Some(changed)));
+            assert!(state.handoff.is_none());
+        }
+
+        // Create wins the legitimate optional-read race. No provenance, and no late mutation.
+        let mut state = ActionState::default();
+        let observation = origin_intent(&intent);
+        let old = state.start_origin(observation.clone()).unwrap();
+        assert!(!state.capture_origin(old, &intent));
+        let scope = state.scope_generation;
+        state.origin_reply(old, &observation, Some(read().source.actor));
+        assert!(state.actor.is_none());
+        assert_eq!(state.scope_generation, scope);
+        let latest = state.start_origin(observation.clone()).unwrap();
+        let latest_probe = state.auth_probe;
+        state.origin_reply(old, &observation, Some(read().source.actor));
+        assert_eq!(state.auth_probe, latest_probe);
+        assert_eq!(state.origin_probe.as_ref().unwrap().id, latest);
+        assert!(!state.capture_origin(old, &intent));
+        assert_eq!(state.origin_probe.as_ref().unwrap().id, latest);
+        state.origin_reply(latest, &observation, Some(read().source.actor));
+        let replacement = state.start_actor_probe(99).unwrap();
+        assert!(!state.capture_origin(latest, &intent));
+        assert_eq!(state.auth_probe, Some((replacement, 99)));
+    }
+
+    #[test]
+    fn channel_new_handoff_owner_drop_transfer_and_once_adoption() {
+        let root = Owner::new();
+        let actions = root.with(|| {
+            let actions = ArtifactActions::new();
+            provide_context(actions);
+            actions
+        });
+        let intent = channel_intent();
+        let origin = root.with(Owner::new);
+        let weak = origin.downgrade();
+        let observation = origin_intent(&intent);
+        let id = actions
+            .state
+            .try_update(|state| state.start_origin(observation))
+            .flatten()
+            .unwrap();
+        let lease = ChannelOriginLease {
+            actions,
+            id,
+            owner: weak.clone(),
+            captured: false,
+            ready: false,
+        };
+        drop(lease);
+        assert!(
+            actions
+                .state
+                .with_untracked(|state| state.origin_probe.is_none())
+        );
+
+        let (prepared, id) = prepared_channel_handoff(&intent);
+        actions.state.update(|state| *state = prepared);
+        origin.with(|| {
+            on_cleanup(move || {
+                actions.state.try_update(|state| state.close_origin(id));
+            })
+        });
+        drop(ChannelOriginLease {
+            actions,
+            id,
+            owner: weak.clone(),
+            captured: true,
+            ready: true,
+        });
+        drop(origin);
+        assert!(weak.upgrade().is_none());
+        assert!(
+            actions
+                .state
+                .with_untracked(|state| state.handoff.is_some())
+        );
+        let receiver = root.with(Owner::new);
+        let observer = receiver.with(|| {
+            ArtifactSourceObserver::new(
+                RwSignal::new(intent.thread_id.clone()),
+                StoredValue::new(Some(intent.agent_id.clone())),
+                StoredValue::new(intent.anchor.clone()),
+            )
+        });
+        let thread = intent.thread_id.as_ref().unwrap();
+        let old = actions
+            .state
+            .try_update(|state| {
+                state.claim_handoff(observer.mount, 1, thread, &intent.agent_id, &intent.anchor)
+            })
+            .flatten()
+            .unwrap();
+        let latest = actions
+            .state
+            .try_update(|state| {
+                state.claim_handoff(observer.mount, 2, thread, &intent.agent_id, &intent.anchor)
+            })
+            .flatten()
+            .unwrap();
+        actions.state.update(|state| state.cancel_claim(old));
+        let actor = actions
+            .state
+            .with_untracked(|state| state.actor.clone().unwrap());
+        let joined = actions
+            .state
+            .try_update(|state| {
+                state.adopt_handoff(latest, &actor, thread, &intent.agent_id, &intent.anchor)
+            })
+            .flatten()
+            .unwrap();
+        assert_eq!(joined.mount, observer.mount);
+        assert_eq!(joined.epoch, 2);
+        assert!(
+            actions
+                .state
+                .try_update(|state| {
+                    state.adopt_handoff(latest, &actor, thread, &intent.agent_id, &intent.anchor)
+                })
+                .flatten()
+                .is_none()
+        );
+        drop(joined);
+        drop(receiver);
+        assert!(
+            actions
+                .state
+                .with_untracked(|state| state.handoff.is_none())
+        );
+
+        let (mut abandoned, _) = prepared_channel_handoff(&intent);
+        abandoned.handoff_path_changed("/settings");
+        assert!(abandoned.handoff.is_none());
+        let (mut abandoned, _) = prepared_channel_handoff(&intent);
+        let _ = abandoned
+            .claim_handoff(2, 1, thread, &intent.agent_id, &intent.anchor)
+            .unwrap();
+        abandoned.close_route(2);
+        assert!(abandoned.handoff.is_none());
+    }
+
+    #[test]
+    fn channel_new_handoff_one_mebibyte_budget_and_checked_epochs() {
+        let mut intent = channel_intent();
+        let actor = read().source.actor;
+        let target = "/channel/channel-1";
+        intent.message = "x".into();
+        let overhead = handoff_budget(&intent, &actor, target).unwrap() - 1;
+        intent.message = "x".repeat(MAX_THREAD_MESSAGE_BYTES - overhead);
+        assert_eq!(
+            handoff_budget(&intent, &actor, target),
+            Some(MAX_THREAD_MESSAGE_BYTES)
+        );
+        let (mut state, _) = prepared_channel_handoff(&intent);
+        let pointer = state
+            .handoff
+            .as_ref()
+            .unwrap()
+            .join
+            .text
+            .as_ref()
+            .unwrap()
+            .as_ptr();
+        let thread = intent.thread_id.as_ref().unwrap();
+        let claim = state
+            .claim_handoff(2, 1, thread, &intent.agent_id, &intent.anchor)
+            .unwrap();
+        let join = state
+            .adopt_handoff(claim, &actor, thread, &intent.agent_id, &intent.anchor)
+            .unwrap();
+        assert_eq!(join.text.as_ref().unwrap().as_ptr(), pointer);
+        drop(join);
+        intent.message.push('x');
+        assert!(handoff_budget(&intent, &actor, target).is_none());
+        intent.message = "x".repeat(MAX_THREAD_MESSAGE_BYTES);
+        let original = intent.message.clone();
+        assert!(handoff_budget(&intent, &actor, target).is_none());
+        assert_eq!(intent.message, original);
+        intent.message.clear();
+        assert!(handoff_budget(&intent, &actor, target).is_none());
+        assert!(
+            OriginIntent::new(
+                &intent.run_id,
+                &intent.agent_id,
+                &intent.message,
+                &intent.selected_skill_slugs,
+                &intent.model_selection
+            )
+            .is_none()
+        );
+        let original = channel_intent();
+        for field in 0..3 {
+            let mut state = ActionState::default();
+            match field {
+                0 => state.next_mount = u64::MAX,
+                1 => state.next_handoff = u64::MAX,
+                _ => state.auth_read_generation = u64::MAX,
+            }
+            assert!(state.start_origin(origin_intent(&original)).is_none());
+        }
+        let mut source = SourceState {
+            epoch: u64::MAX,
+            ..Default::default()
+        };
+        assert!(source.begin_handoff_adoption().is_none());
+        let mut source = SourceState {
+            qualifying: true,
+            ..Default::default()
+        };
+        assert!(source.begin_handoff_adoption().is_none());
+    }
+
+    #[test]
+    fn channel_new_adopted_source_still_requires_unique_current_utf8_and_unknown_packet() {
+        let intent = channel_intent();
+        let (mut state, read) = adopted_channel_read(&intent);
+        let current = channel_snapshot(&intent);
+        for change in 0..5 {
+            let mut invalid = current.clone();
+            match change {
+                0 => invalid.messages.push(invalid.messages[0].clone()),
+                1 => invalid.messages[0].role = ThreadHistoryRole::Assistant,
+                2 => invalid.messages[0].content = intent.message.trim().into(),
+                3 => invalid.messages[0].agent_id = Some(BotId::new("other-bot")),
+                _ => invalid.last_event_sequence = None,
+            }
+            assert!(!source_read_matches(&read, &invalid));
+        }
+        assert!(source_read_matches(&read, &current));
+        let source = read.source.clone();
+        let operation = operation(&mut state, source.clone());
+        state.settle(&operation, SavePhase::Unknown);
+        state.close_route(2);
+        assert!(state.check(source.clone()).is_none());
+        assert!(
+            state
+                .start(operation.token, &source, || panic!("no second packet"))
+                .is_none()
+        );
+        assert_eq!(state.operation.as_ref().unwrap().packet, operation.packet);
+        assert_eq!(state.operation.as_ref().unwrap().phase, SavePhase::Unknown);
+        for changed in 0..3 {
+            let (mut state, _) = prepared_channel_handoff(&intent);
+            let actor = state.actor.clone().unwrap();
+            let thread = intent.thread_id.as_ref().unwrap();
+            let claim = state
+                .claim_handoff(2, 1, thread, &intent.agent_id, &intent.anchor)
+                .unwrap();
+            let mut join = state
+                .adopt_handoff(claim, &actor, thread, &intent.agent_id, &intent.anchor)
+                .unwrap();
+            let mut started = channel_started(&intent);
+            match changed {
+                0 => started.event_sequence = 1,
+                1 => started.payload["runId"] = serde_json::json!("other-run"),
+                _ => started.payload["botId"] = serde_json::json!("other-bot"),
+            }
+            join.observe_started(&started);
+            assert!(join.take_read().is_none());
+        }
+    }
+
+    fn pending_channel_observer(
+        root: &Owner,
+        intent: &RunIntent,
+    ) -> (ArtifactActions, ArtifactSourceObserver, PendingTargetProbe) {
+        root.with(|| {
+            let actions = ArtifactActions::new();
+            provide_context(actions);
+            let (prepared, _) = prepared_channel_handoff(intent);
+            actions.state.update(|state| *state = prepared);
+            let observer = ArtifactSourceObserver::new(
+                RwSignal::new(intent.thread_id.clone()),
+                StoredValue::new(Some(intent.agent_id.clone())),
+                StoredValue::new(intent.anchor.clone()),
+            );
+            let pending = observer.prepare_channel_handoff().unwrap();
+            (actions, observer, pending)
+        })
+    }
+
+    #[test]
+    fn pending_target_never_completing_probe_keeps_replay_hint_but_cannot_read_select_or_save() {
+        let root = Owner::new();
+        let intent = channel_intent();
+        let (actions, observer, _) = pending_channel_observer(&root, &intent);
+        assert_eq!(observer.bootstrap_cursor(Some(0)), None);
+        observer.native_event(&channel_started(&intent));
+        observer.state.update(|state| {
+            let join = state.join.as_mut().unwrap();
+            assert!(!join.target_fresh);
+            assert!(join.started.is_some());
+            assert!(join.take_read().is_none());
+            // Even an old eligible value cannot cross the explicit pending gate.
+            state.eligible = Some(read().source);
+        });
+        assert!(observer.selection("exact-message").is_none());
+        assert!(!actions.may_save(observer, &read().source));
+        assert_eq!(observer.bootstrap_cursor(Some(0)), None);
+        assert!(
+            actions
+                .state
+                .with_untracked(|state| state.operation.is_none())
+        );
+        // No completion was supplied. The synchronous prepare/hint paths already returned.
+    }
+
+    #[test]
+    fn pending_target_fresh_match_and_late_reply_require_exact_original_probe_and_epoch() {
+        let root = Owner::new();
+        let intent = channel_intent();
+        let (actions, observer, pending) = pending_channel_observer(&root, &intent);
+        let later = actions
+            .state
+            .try_update(|state| state.start_actor_probe(99))
+            .flatten()
+            .unwrap();
+        let actor_before = actions.state.with_untracked(|state| state.actor.clone());
+        observer.finish_pending_target(pending, None);
+        assert_eq!(
+            actions.state.with_untracked(|state| state.auth_probe),
+            Some((later, 99))
+        );
+        assert_eq!(
+            actions.state.with_untracked(|state| state.actor.clone()),
+            actor_before
+        );
+        assert!(observer.state.with_untracked(|state| state.join.is_none()));
+
+        let root = Owner::new();
+        let (_, observer, pending) = pending_channel_observer(&root, &intent);
+        observer.finish_pending_target(pending, Some(read().source.actor));
+        observer.state.update(|state| {
+            let join = state.join.as_mut().unwrap();
+            assert!(join.target_fresh);
+            join.observe_started(&channel_started(&intent));
+            let source = join.take_read().unwrap();
+            assert!(source_read_matches(&source, &channel_snapshot(&intent)));
+        });
+        assert_eq!(observer.bootstrap_cursor(Some(0)), Some(0));
+        let original_actor = observer.state.with_untracked(|state| state.actor.clone());
+        observer.finish_pending_target(pending, None);
+        assert_eq!(
+            observer.state.with_untracked(|state| state.actor.clone()),
+            original_actor
+        );
+    }
+
+    #[test]
+    fn pending_started_metadata_overflow_releases_provenance_and_not_the_native_event() {
+        let root = Owner::new();
+        let intent = channel_intent();
+        let (actions, observer, _) = pending_channel_observer(&root, &intent);
+        observer.state.update(|state| {
+            state.join.as_mut().unwrap().pending_charge = Some(MAX_THREAD_MESSAGE_BYTES);
+        });
+        let event = channel_started(&intent);
+        let original = serde_json::to_value(&event).unwrap();
+        observer.native_event(&event);
+        assert_eq!(serde_json::to_value(&event).unwrap(), original);
+        assert!(observer.state.with_untracked(|state| {
+            state.join.is_none() && state.eligible.is_none() && state.pending_target.is_none()
+        }));
+        assert!(
+            actions
+                .state
+                .with_untracked(|state| state.auth_probe.is_none())
+        );
         assert!(
             actions
                 .state
