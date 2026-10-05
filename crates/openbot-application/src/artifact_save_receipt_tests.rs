@@ -114,10 +114,10 @@ impl ArtifactAdministration for Port {
     async fn observe_artifact_save_receipt_current(
         &self,
         _: &AuthContext,
-        input: &GetArtifactSaveReceipt,
+        request: &GetArtifactSaveReceipt,
         deadline: Instant,
     ) -> ArtifactSaveReceiptCurrentOutcome {
-        assert_eq!(input, &self::input());
+        assert_eq!(request, &input());
         assert!(deadline > Instant::now() && deadline <= Instant::now() + Duration::from_secs(5));
         self.calls.fetch_add(1, Ordering::SeqCst);
         *self.observed_deadline.lock().unwrap() = Some(deadline);
