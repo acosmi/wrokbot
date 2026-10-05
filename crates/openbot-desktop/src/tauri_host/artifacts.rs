@@ -236,6 +236,15 @@ impl DesktopTauriProtocol {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn source_run_artifact_ids_binding_current_for_test(
+        &self,
+        label: &str,
+        original: &WindowAuthority,
+    ) -> Result<(), AppError> {
+        self.source_run_artifact_ids_binding_current(label, original)
+    }
+
     fn artifact_binding_current(
         &self,
         label: &str,

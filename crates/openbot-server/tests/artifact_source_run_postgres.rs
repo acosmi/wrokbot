@@ -478,7 +478,6 @@ async fn actual_session_router_lists_only_its_visible_source_ids_with_no_store()
         fixture.corrupt(true).await?;
         static_error(&request(fixture.router.clone(),COOKIE_A,Method::GET,&uri,"").await?,StatusCode::SERVICE_UNAVAILABLE,"dependency_unavailable")?;
         fixture.corrupt(false).await?;
-        fixture.sql("ALTER TABLE public.users DROP CONSTRAINT users_auth_generation_nonnegative; ALTER TABLE public.sessions DROP CONSTRAINT sessions_auth_generation_nonnegative").await?;
         let session=fixture.pool.get().await.map_err(|e|e.to_string())?.query_one("SELECT created_at,expires_at FROM public.sessions WHERE id=$1",&[&A_ID]).await.map_err(|e|e.to_string())?;
         let created:OffsetDateTime=session.try_get(0).map_err(|e|e.to_string())?;
         let expires:OffsetDateTime=session.try_get(1).map_err(|e|e.to_string())?;
@@ -486,7 +485,7 @@ async fn actual_session_router_lists_only_its_visible_source_ids_with_no_store()
             ("current_null","UPDATE public.users SET auth_generation=NULL WHERE id='current-read-owner'",false),
             ("current_negative","UPDATE public.users SET auth_generation=-1 WHERE id='current-read-owner'",false),
             ("issued_null","UPDATE public.sessions SET auth_generation=NULL WHERE id='actual-read-session-a'",true),
-            ("issued_negative","UPDATE public.sessions SET auth_generation=-1 WHERE id='actual-read-session-a'",true),
+            ("issued_negative","UPDATE public.sessions SET auth_generation=-1 WHERE id='actual-read-session-a'",false),
             ("role","UPDATE public.user_roles SET role='admin' WHERE user_id='current-read-owner'",false),
             ("deny","INSERT INTO public.revoked_access(email,revoked_by) VALUES('current-read-owner@example.test','current-read-owner')",false),
             ("expiry","UPDATE public.sessions SET expires_at=now()-interval '1 second' WHERE id='actual-read-session-a'",true),
@@ -503,17 +502,30 @@ async fn actual_session_router_lists_only_its_visible_source_ids_with_no_store()
                     _=>original.clone(),
                 };
                 if source=="corrupt" { fixture.corrupt(true).await?; }
+                let invalid_schema=name=="current_negative" || name=="issued_negative";
+                if name=="current_negative" {fixture.sql("ALTER TABLE public.users DROP CONSTRAINT users_auth_generation_nonnegative").await?;}
+                if name=="issued_negative" {fixture.sql("ALTER TABLE public.sessions DROP CONSTRAINT sessions_auth_generation_nonnegative").await?;}
                 fixture.sql(mutation).await?;
                 let observed=fixture.execute(&original_a,input).await;
-                require(matches!(observed,Err(AppError::Unauthenticated)),"raw current/issued/role/deny/tuple failure lost host-first401 for held source outcome")?;
+                if invalid_schema {
+                    require(matches!(observed,Err(AppError::DependencyUnavailable {dependency}) if dependency=="host_request_binding"),"negative fixture with altered trusted schema did not refuse dependency503")?;
+                } else {
+                    require(matches!(observed,Err(AppError::Unauthenticated)),"raw current/issued/role/deny/tuple failure lost host-first401 for held source outcome")?;
+                }
                 if peer_live {
                     let peer=fixture.execute(&original_b,fixture.empty.clone()).await.map_err(|e|e.to_string())?;
                     require(peer.artifact_ids.is_empty(),"unaffected sameactor original B was rebound or refused")?;
                 }
                 fixture.sql("DELETE FROM public.revoked_access WHERE email='current-read-owner@example.test'; UPDATE public.user_roles SET role='user' WHERE user_id='current-read-owner'; UPDATE public.users SET auth_generation=0 WHERE id='current-read-owner'; UPDATE public.sessions SET auth_generation=0 WHERE id='actual-read-session-a'").await?;
+                if name=="current_negative" {fixture.sql("ALTER TABLE ONLY public.users ADD CONSTRAINT users_auth_generation_nonnegative CHECK (auth_generation IS NULL OR auth_generation >= 0)").await?;}
+                if name=="issued_negative" {fixture.sql("ALTER TABLE ONLY public.sessions ADD CONSTRAINT sessions_auth_generation_nonnegative CHECK (auth_generation IS NULL OR auth_generation >= 0)").await?;}
                 fixture.pool.get().await.map_err(|e|e.to_string())?.execute("UPDATE public.sessions SET token=$1,created_at=$2,expires_at=$3 WHERE id=$4",&[&token_column(COOKIE_A),&created,&expires,&A_ID]).await.map_err(|e|e.to_string())?;
                 if source=="corrupt" { fixture.corrupt(false).await?; }
-                eprintln!("SOURCE_RUN_SERVER_ORIGINAL_EPOCH mutation={name} source={source} original_host_401=true peer_enforced={peer_live}");
+                if invalid_schema {
+                    eprintln!("SOURCE_RUN_SERVER_INVALID_SCHEMA mutation={name} source={source} dependency_503=true restored_schema=true");
+                } else {
+                    eprintln!("SOURCE_RUN_SERVER_ORIGINAL_EPOCH mutation={name} source={source} original_host_401=true peer_enforced={peer_live}");
+                }
             }
         }
         let returned=request(fixture.router.clone(),COOKIE_A,Method::GET,&uri,"").await?;
