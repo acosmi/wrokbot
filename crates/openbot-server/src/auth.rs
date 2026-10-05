@@ -51,6 +51,7 @@ use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use openbot_contracts::request_binding::{
     ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadTailWitness,
+    SourceRunArtifactIdsCurrentCheck, SourceRunArtifactIdsCurrentTarget,
 };
 use openbot_contracts::request_binding::{
     HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind, RequestBindingIssuer,
@@ -526,6 +527,76 @@ const CURRENT_SESSION_SQL: &str = "SELECT s.id,s.user_id,s.token,s.expires_at,s.
     WHERE s.id=$1 AND s.user_id=$2 AND s.token=$3 AND s.created_at=$4 AND s.auth_generation=$5";
 
 impl HostRequestBindingGuard for ServerSessionCurrentGuard {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn verify_source_run_artifact_ids_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn SourceRunArtifactIdsCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> SourceRunArtifactIdsCurrentCheck<'a> {
+        Box::pin(async move {
+            if auth != &self.original || !self.owner.is_current() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let probe = self.probe.upgrade().ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ))?;
+            let authority = probe
+                .artifact_read_authority
+                .get()
+                .and_then(Weak::upgrade)
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ))?;
+            let binding = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?;
+            let epoch = self
+                .issuer
+                .borrow_server_session_epoch(binding.identity())
+                .map_err(ArtifactReadCurrentError::Host)?;
+            if deadline <= std::time::Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            let result = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                authority.observe_source_run_ids_server_session(
+                    auth,
+                    target,
+                    epoch,
+                    probe.lifetime,
+                    deadline,
+                ),
+            )
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable));
+            if !self.owner.is_current() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let (inner, source) = result??;
+            let witness = ServerArtifactReadTail {
+                probe: self.probe.clone(),
+                owner: self.owner.clone(),
+                issuer: self.issuer.clone(),
+                original: auth.clone(),
+                inner,
+            };
+            witness.verify_current(auth, deadline)?;
+            Ok((
+                Box::new(witness) as Box<dyn ArtifactReadTailWitness>,
+                source,
+            ))
+        })
+    }
+
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn verify_artifact_read_current_before<'a>(
         &'a self,

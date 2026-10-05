@@ -39,8 +39,44 @@ pub type ArtifactReadCurrentCheck<'a> = Pin<
     >,
 >;
 
+/// Dedicated source selectors and adapter attachment; implementing this port grants no authority.
+pub trait SourceRunArtifactIdsCurrentTarget: Send + Sync {
+    /// Exact original source Thread selector.
+    fn source_thread_id(&self) -> &str;
+    /// Exact original source Run selector.
+    fn source_run_id(&self) -> &str;
+    /// Compare the original enrolled adapter identity, independently of its namespace.
+    fn matches_authority(&self, authority: &Arc<()>) -> bool;
+    /// Compare all six Auth facts and the original attached request binding.
+    fn matches_auth(&self, auth: &AuthContext) -> bool;
+}
+/// A current host witness retained even when the same statement refuses the source result.
+pub type SourceRunArtifactIdsCurrentOutcome = Result<
+    (
+        Box<dyn ArtifactReadTailWitness>,
+        Result<crate::artifacts::SourceRunArtifactIds, ArtifactReadCurrentError>,
+    ),
+    ArtifactReadCurrentError,
+>;
+/// Non-Serde dedicated current observation future under the original absolute deadline.
+pub type SourceRunArtifactIdsCurrentCheck<'a> =
+    Pin<Box<dyn Future<Output = SourceRunArtifactIdsCurrentOutcome> + Send + 'a>>;
+
 /// 受信 Rust host 的当前验证 port；任意 Rust 实现不自动取得可信身份。
 pub trait HostRequestBindingGuard: Send + Sync {
+    /// Observe the original current host and source together, or refuse unsupported composition.
+    fn verify_source_run_artifact_ids_current_before<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+        _target: &'a dyn SourceRunArtifactIdsCurrentTarget,
+        _deadline: std::time::Instant,
+    ) -> SourceRunArtifactIdsCurrentCheck<'a> {
+        Box::pin(async {
+            Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ))
+        })
+    }
     /// 真实原宿主与成果来源的最后联合观察；未安装该真实消费者时封闭拒绝。
     fn verify_artifact_read_current_before<'a>(
         &'a self,
@@ -561,6 +597,53 @@ impl VerifiedHostRequestBinding {
             ));
         }
         Ok(())
+    }
+    /// Reject missing, stale or expired attachments without treating attachment as PG authority.
+    pub fn check_source_run_artifact_ids_attachment(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.check_artifact_read_attachment(auth, deadline)
+    }
+    /// Retain the original binding and current host witness on both source success and refusal.
+    pub async fn verify_source_run_artifact_ids_current_before(
+        &self,
+        auth: &AuthContext,
+        target: &dyn SourceRunArtifactIdsCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> SourceRunArtifactIdsCurrentOutcome {
+        self.check_source_run_artifact_ids_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        let outcome = self
+            .guard
+            .verify_source_run_artifact_ids_current_before(auth, target, deadline)
+            .await;
+        self.check_source_run_artifact_ids_attachment(auth, deadline)?;
+        let (witness, source) = outcome?;
+        self.verify_source_run_artifact_ids_tail(auth, witness.as_ref(), deadline)?;
+        Ok((
+            Box::new(OriginalArtifactReadTail {
+                original: self.clone(),
+                witness,
+            }),
+            source,
+        ))
+    }
+    /// Synchronous final original binding/host/window/clock check, without FD or body access.
+    pub fn verify_source_run_artifact_ids_tail(
+        &self,
+        auth: &AuthContext,
+        witness: &dyn ArtifactReadTailWitness,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.check_source_run_artifact_ids_attachment(auth, deadline)?;
+        witness.verify_current(auth, deadline)?;
+        self.check_source_run_artifact_ids_attachment(auth, deadline)
     }
     /// 执行实际原宿主与成果来源的最后联合观察；返回封闭同步见证而不是正文。
     pub async fn verify_artifact_read_current_before(

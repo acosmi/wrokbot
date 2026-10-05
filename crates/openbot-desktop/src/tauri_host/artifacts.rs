@@ -1,9 +1,12 @@
 //! Current host-bound explicit save and metadata framing; no filesystem path ingress.
 
 use http::{Method, Request, Response, StatusCode};
-use openbot_contracts::artifacts::{GetArtifactMetadata, SaveRunMessageTextArtifact};
+use openbot_contracts::artifacts::{
+    GetArtifactMetadata, GetSourceRunArtifactIds, SaveRunMessageTextArtifact,
+};
 use openbot_contracts::command::{AppCommand, AppReply};
 use openbot_contracts::error::{AppError, SensitiveWriteReason};
+use openbot_contracts::ids::{RunId, ThreadId};
 
 use super::{
     CHANNEL_THREAD_BODY_MAX_BYTES, DesktopTauriProtocol, WindowAuthority, dependency_response,
@@ -18,6 +21,16 @@ impl DesktopTauriProtocol {
         mut request: Request<Vec<u8>>,
         authority: WindowAuthority,
     ) -> Response<Vec<u8>> {
+        if request.uri().path() == "/api/artifacts/source-runs"
+            || request
+                .uri()
+                .path()
+                .starts_with("/api/artifacts/source-runs/")
+        {
+            return self
+                .source_run_artifact_ids(label, request, authority)
+                .await;
+        }
         if let Err(error) = self.artifact_binding_current(label, &authority) {
             request.body_mut().fill(0);
             return error_response(error);
@@ -101,6 +114,127 @@ impl DesktopTauriProtocol {
             (_, Err(error)) => error_response(error),
             (_, Ok(_)) => dependency_response(),
         }
+    }
+
+    async fn source_run_artifact_ids(
+        &self,
+        label: &str,
+        mut request: Request<Vec<u8>>,
+        authority: WindowAuthority,
+    ) -> Response<Vec<u8>> {
+        if let Err(error) = self.source_run_artifact_ids_binding_current(label, &authority) {
+            request.body_mut().fill(0);
+            return error_response(error);
+        }
+        if request.method() != Method::GET {
+            request.body_mut().fill(0);
+            return empty_response(StatusCode::METHOD_NOT_ALLOWED);
+        }
+        if request.uri().query().is_some() {
+            request.body_mut().fill(0);
+            return error_response(AppError::MalformedPayload { field: "query" });
+        }
+        if !request.body().is_empty() {
+            request.body_mut().fill(0);
+            return error_response(AppError::MalformedPayload { field: "body" });
+        }
+        let Some(source) = request
+            .uri()
+            .path()
+            .strip_prefix("/api/artifacts/source-runs/")
+        else {
+            return error_response(AppError::MalformedPayload {
+                field: "source_run",
+            });
+        };
+        let mut segments = source.split('/');
+        let (Some(thread), Some(run), None) = (segments.next(), segments.next(), segments.next())
+        else {
+            return error_response(AppError::MalformedPayload {
+                field: "source_run",
+            });
+        };
+        let (Some(thread), Some(run)) =
+            (percent_decode_segment(thread), percent_decode_segment(run))
+        else {
+            return error_response(AppError::MalformedPayload {
+                field: "source_run",
+            });
+        };
+        let command = AppCommand::GetSourceRunArtifactIds(GetSourceRunArtifactIds {
+            source_thread_id: ThreadId::new(thread),
+            source_run_id: RunId::new(run),
+        });
+        if let Err(error) = self.source_run_artifact_ids_binding_current(label, &authority) {
+            return error_response(error);
+        }
+        let result = self
+            .transport
+            .execute(authority.auth.clone(), command)
+            .await;
+        // Keep the original window's bounded synchronous tail after Application handoff.
+        if let Err(error) = self.source_run_artifact_ids_binding_current(label, &authority) {
+            return error_response(error);
+        }
+        match result {
+            Ok(AppReply::SourceRunArtifactIds(ids)) => json_response(&ids),
+            Err(error) => error_response(error),
+            Ok(_) => dependency_response(),
+        }
+    }
+
+    fn source_run_artifact_ids_binding_current(
+        &self,
+        label: &str,
+        original: &WindowAuthority,
+    ) -> Result<(), AppError> {
+        if !self.request_binding_issuer.observation().is_current() || original.closed.is_cancelled()
+        {
+            return Err(AppError::Unauthenticated);
+        }
+        let binding = original
+            .auth
+            .request_binding()
+            .ok_or(AppError::DependencyUnavailable {
+                dependency: "host_request_binding",
+            })?;
+        if !self.request_binding_issuer.matches_desktop_window_epoch(
+            binding.identity(),
+            label,
+            original.binding_id,
+        ) {
+            return Err(AppError::Unauthenticated);
+        }
+        let windows = self.window_registry.windows.try_read().map_err(|_| {
+            AppError::DependencyUnavailable {
+                dependency: "host_request_binding",
+            }
+        })?;
+        match windows.get(label) {
+            Some(current)
+                if current.binding_id == original.binding_id
+                    && !current.closed.is_cancelled()
+                    && current.auth == original.auth
+                    && current
+                        .auth
+                        .request_binding()
+                        .is_some_and(|current_binding| {
+                            binding.identity().same_binding(current_binding.identity())
+                        }) =>
+            {
+                Ok(())
+            }
+            _ => Err(AppError::Unauthenticated),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn source_run_artifact_ids_binding_current_for_test(
+        &self,
+        label: &str,
+        original: &WindowAuthority,
+    ) -> Result<(), AppError> {
+        self.source_run_artifact_ids_binding_current(label, original)
     }
 
     fn artifact_binding_current(

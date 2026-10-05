@@ -130,6 +130,8 @@ pub enum AppCommand {
     SaveRunMessageTextArtifact(crate::artifacts::SaveRunMessageTextArtifact),
     /// Current-source-authorized metadata selector, never byte access.
     GetArtifactMetadata(crate::artifacts::GetArtifactMetadata),
+    /// Observe current materialized identities for the exact source Run.
+    GetSourceRunArtifactIds(crate::artifacts::GetSourceRunArtifactIds),
     /// 最小只读用例：探活。不读任何租户数据，也不产生 audit 事件。
     Health,
 
@@ -632,6 +634,8 @@ pub enum AppReply {
     ArtifactRegistrationReceipt(crate::artifacts::ArtifactRegistrationReceipt),
     /// Current-authorized artifact metadata with distinct live/tombstone shapes.
     ArtifactMetadata(crate::artifacts::ArtifactMetadata),
+    /// Current IDs-only source observation; no body or read handle.
+    SourceRunArtifactIds(crate::artifacts::SourceRunArtifactIds),
     /// [`AppCommand::Health`] 的应答。
     Health(HealthReport),
     /// [`AppCommand::ListVisibleChannels`] 的应答。

@@ -34,12 +34,17 @@ use crate::auth::single_user::desktop_local::{
     DESKTOP_LOCAL_ACTOR_ID, DESKTOP_LOCAL_EMAIL, DesktopLocalAuthority,
 };
 
+#[path = "artifact_read_authority/source_run_ids.rs"]
+mod source_run_ids;
+
 /// One actual administration identity, with weak ownership back to that real adapter.
 /// It neither accepts a caller Pool/transaction nor prolongs any real host-owner lease.
 pub struct PostgresArtifactReadAuthority {
     administration: Weak<PostgresArtifactAdministration>,
     identity: Arc<()>,
     lifecycle: Arc<ArtifactReadLifecycle>,
+    #[cfg(test)]
+    source_run_ids_rollback_gate: Mutex<Option<source_run_ids::SourceRunIdsRollbackGate>>,
     #[cfg(test)]
     final_query_gate: Mutex<
         Option<(
@@ -57,6 +62,8 @@ impl PostgresArtifactReadAuthority {
             administration: Arc::downgrade(administration),
             identity: Arc::new(()),
             lifecycle: ArtifactReadLifecycle::new(),
+            #[cfg(test)]
+            source_run_ids_rollback_gate: Mutex::new(None),
             #[cfg(test)]
             final_query_gate: Mutex::new(None),
         }
@@ -93,6 +100,52 @@ impl PostgresArtifactReadAuthority {
                 .registry
                 .matches_pool_scope(pool, deployment, tenant)
         })
+    }
+
+    /// Observe IDs and the original real Session epoch in one own-Pool current statement.
+    pub async fn observe_source_run_ids_server_session(
+        &self,
+        auth: &AuthContext,
+        target: &dyn openbot_contracts::request_binding::SourceRunArtifactIdsCurrentTarget,
+        epoch: BorrowedServerSessionEpoch<'_>,
+        lifetime: SessionLifetimePolicy,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
+        source_run_ids::observe(
+            self,
+            auth,
+            target,
+            CurrentHost::Session { epoch, lifetime },
+            deadline,
+        )
+        .await
+    }
+
+    /// Observe IDs only with the original real Local installation and its current sealed canary.
+    pub async fn observe_source_run_ids_desktop_local(
+        &self,
+        auth: &AuthContext,
+        target: &dyn openbot_contracts::request_binding::SourceRunArtifactIdsCurrentTarget,
+        installation: &DesktopLocalAuthority,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
+        source_run_ids::observe(
+            self,
+            auth,
+            target,
+            CurrentHost::Desktop(installation),
+            deadline,
+        )
+        .await
+    }
+
+    pub(super) async fn source_run_artifact_ids_current(
+        self: &Arc<Self>,
+        auth: &AuthContext,
+        input: &openbot_contracts::artifacts::GetSourceRunArtifactIds,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
+        source_run_ids::current(self, auth, input, deadline).await
     }
 
     /// Observe the original real Session epoch and unchanged source predicate in one statement.
