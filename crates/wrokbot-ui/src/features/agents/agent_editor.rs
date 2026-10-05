@@ -81,6 +81,10 @@ pub fn AgentEditor(
     let connection_generation = RwSignal::new(0_u64);
 
     Effect::new(move |_| {
+        name.track();
+        title.track();
+        role.track();
+        visibility.track();
         endpoint.track();
         auth.revision().track();
         connection.set(None);
