@@ -1053,6 +1053,20 @@ impl PostgresArtifactAdministration {
 
 #[async_trait]
 impl ArtifactAdministration for PostgresArtifactAdministration {
+    async fn observe_artifact_save_receipt_current(
+        &self,
+        auth: &AuthContext,
+        input: &openbot_contracts::artifacts::GetArtifactSaveReceipt,
+        deadline: std::time::Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentOutcome {
+        let authority = self
+            .read_authority
+            .get()
+            .ok_or(openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable)?;
+        authority
+            .artifact_save_receipt_current(auth, input, deadline)
+            .await
+    }
     async fn observe_source_run_artifact_ids_current(
         &self,
         auth: &AuthContext,

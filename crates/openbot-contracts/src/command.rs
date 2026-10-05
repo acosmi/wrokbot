@@ -132,6 +132,8 @@ pub enum AppCommand {
     GetArtifactMetadata(crate::artifacts::GetArtifactMetadata),
     /// Observe current materialized identities for the exact source Run.
     GetSourceRunArtifactIds(crate::artifacts::GetSourceRunArtifactIds),
+    /// Observe the original positive save receipt without retrying the save operation.
+    GetArtifactSaveReceipt(crate::artifacts::GetArtifactSaveReceipt),
     /// 最小只读用例：探活。不读任何租户数据，也不产生 audit 事件。
     Health,
 

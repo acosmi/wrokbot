@@ -47,6 +47,7 @@ pub mod admin;
 pub mod agent_tools;
 pub mod agents;
 pub mod approvals;
+pub mod artifact_save_receipts;
 pub mod artifacts;
 pub mod auth_oidc;
 pub mod auth_sso;
@@ -724,6 +725,18 @@ pub fn router(state: ServerState) -> Router {
             post(artifacts::save),
         )
         .route(
+            artifact_save_receipts::SAVE_REQUESTS_PATH,
+            get(artifact_save_receipts::get).head(artifact_save_receipts::reject_head),
+        )
+        .route(
+            "/api/artifacts/save-requests/",
+            get(artifact_save_receipts::get).head(artifact_save_receipts::reject_head),
+        )
+        .route(
+            "/api/artifacts/save-requests/{*request_path}",
+            get(artifact_save_receipts::get).head(artifact_save_receipts::reject_head),
+        )
+        .route(
             "/api/artifacts/source-runs/{source_thread_id}/{source_run_id}",
             get(artifacts::source_run_ids).head(|| async {
                 (
@@ -856,6 +869,9 @@ pub fn router(state: ServerState) -> Router {
         ))
         .layer(axum::middleware::from_fn(
             runtime_capabilities::response_policy,
+        ))
+        .layer(axum::middleware::from_fn(
+            artifact_save_receipts::response_policy,
         ))
         .layer(axum::middleware::from_fn(record_http_metrics))
         .layer(axum::middleware::from_fn(trace_request))

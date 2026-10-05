@@ -21,6 +21,14 @@ impl DesktopTauriProtocol {
         mut request: Request<Vec<u8>>,
         authority: WindowAuthority,
     ) -> Response<Vec<u8>> {
+        if request.uri().path() == "/api/artifacts/save-requests"
+            || request
+                .uri()
+                .path()
+                .starts_with("/api/artifacts/save-requests/")
+        {
+            return self.artifact_save_receipt(label, request, authority).await;
+        }
         if request.uri().path() == "/api/artifacts/source-runs"
             || request
                 .uri()
