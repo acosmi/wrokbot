@@ -1,0 +1,292 @@
+{
+  "guard": {
+    "name": "prevent_approval_preference_mutation",
+    "schema": "openbot_internal",
+    "language": "plpgsql",
+    "arguments": "",
+    "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_approval_preference_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n    IF TG_OP IN ('DELETE', 'TRUNCATE') THEN\n        RAISE EXCEPTION 'approval preference records cannot be removed'\n            USING ERRCODE = '55000';\n    END IF;\n    IF ROW(NEW.preference_id, NEW.deployment_id, NEW.tenant_id, NEW.actor_id,\n           NEW.bot_id, NEW.target_kind, NEW.target_id, NEW.created_at)\n       IS DISTINCT FROM\n       ROW(OLD.preference_id, OLD.deployment_id, OLD.tenant_id, OLD.actor_id,\n           OLD.bot_id, OLD.target_kind, OLD.target_id, OLD.created_at) THEN\n        RAISE EXCEPTION 'approval preference identity is immutable'\n            USING ERRCODE = '55000';\n    END IF;\n    IF OLD.revision = 9223372036854775807 THEN\n        RAISE EXCEPTION 'approval preference revision is exhausted'\n            USING ERRCODE = '55000';\n    END IF;\n    IF NEW.revision IS DISTINCT FROM OLD.revision + 1 THEN\n        RAISE EXCEPTION 'approval preference revision must advance exactly once'\n            USING ERRCODE = '55000';\n    END IF;\n    RETURN NEW;\nEND;\n$function$\n",
+    "returnType": "trigger",
+    "configuration": null,
+    "securityDefiner": false
+  },
+  "rules": [],
+  "columns": [
+    {
+      "name": "preference_id",
+      "type": "uuid",
+      "default": null,
+      "notNull": true,
+      "ordinal": 1,
+      "identity": "",
+      "collation": null,
+      "generated": "",
+      "collationSchema": null
+    },
+    {
+      "name": "deployment_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 2,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "tenant_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 3,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "actor_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 4,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "bot_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 5,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "target_kind",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 6,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "target_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 7,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "tool_name",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 8,
+      "identity": "",
+      "collation": "default",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "effect",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 9,
+      "identity": "",
+      "collation": "default",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "preference",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 10,
+      "identity": "",
+      "collation": "default",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "revision",
+      "type": "bigint",
+      "default": null,
+      "notNull": true,
+      "ordinal": 11,
+      "identity": "",
+      "collation": null,
+      "generated": "",
+      "collationSchema": null
+    },
+    {
+      "name": "created_at",
+      "type": "timestamp with time zone",
+      "default": null,
+      "notNull": true,
+      "ordinal": 12,
+      "identity": "",
+      "collation": null,
+      "generated": "",
+      "collationSchema": null
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamp with time zone",
+      "default": null,
+      "notNull": true,
+      "ordinal": 13,
+      "identity": "",
+      "collation": null,
+      "generated": "",
+      "collationSchema": null
+    }
+  ],
+  "indexes": [
+    {
+      "keys": "2 3 4 5 6 7",
+      "name": "approval_preferences_complete_key",
+      "ready": true,
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "predicate": null,
+      "definition": "CREATE UNIQUE INDEX approval_preferences_complete_key ON openbot_internal.approval_preferences USING btree (deployment_id, tenant_id, actor_id, bot_id, target_kind, target_id)",
+      "expressions": null
+    },
+    {
+      "keys": "1",
+      "name": "approval_preferences_pkey",
+      "ready": true,
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "predicate": null,
+      "definition": "CREATE UNIQUE INDEX approval_preferences_pkey ON openbot_internal.approval_preferences USING btree (preference_id)",
+      "expressions": null
+    }
+  ],
+  "relation": {
+    "kind": "r",
+    "partition": false,
+    "persistence": "p",
+    "rowSecurity": false,
+    "accessMethod": "heap",
+    "forceRowSecurity": false
+  },
+  "triggers": [
+    {
+      "name": "approval_preferences_mutation_guard",
+      "type": 27,
+      "enabled": "O",
+      "definition": "CREATE TRIGGER approval_preferences_mutation_guard BEFORE DELETE OR UPDATE ON openbot_internal.approval_preferences FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_approval_preference_mutation()",
+      "functionName": "prevent_approval_preference_mutation",
+      "functionSchema": "openbot_internal",
+      "functionArguments": ""
+    },
+    {
+      "name": "approval_preferences_no_truncate",
+      "type": 34,
+      "enabled": "O",
+      "definition": "CREATE TRIGGER approval_preferences_no_truncate BEFORE TRUNCATE ON openbot_internal.approval_preferences FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_approval_preference_mutation()",
+      "functionName": "prevent_approval_preference_mutation",
+      "functionSchema": "openbot_internal",
+      "functionArguments": ""
+    }
+  ],
+  "constraints": [
+    {
+      "kind": "u",
+      "name": "approval_preferences_complete_key",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (deployment_id, tenant_id, actor_id, bot_id, target_kind, target_id)"
+    },
+    {
+      "kind": "c",
+      "name": "approval_preferences_effect",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((effect = 'write'::text))"
+    },
+    {
+      "kind": "c",
+      "name": "approval_preferences_identity_shape",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND ((deployment_id COLLATE \"C\") !~ '[\u0001-\u001f\u007f-\u009f]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND ((tenant_id COLLATE \"C\") !~ '[\u0001-\u001f\u007f-\u009f]'::text) AND ((octet_length(actor_id) >= 1) AND (octet_length(actor_id) <= 512)) AND ((actor_id COLLATE \"C\") !~ '[\u0001-\u001f\u007f-\u009f]'::text) AND ((octet_length(bot_id) >= 1) AND (octet_length(bot_id) <= 512)) AND ((bot_id COLLATE \"C\") !~ '[\u0001-\u001f\u007f-\u009f]'::text) AND ((octet_length(target_id) >= 1) AND (octet_length(target_id) <= 512)) AND ((target_id COLLATE \"C\") !~ '[\u0001-\u001f\u007f-\u009f]'::text)))"
+    },
+    {
+      "kind": "p",
+      "name": "approval_preferences_pkey",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (preference_id)"
+    },
+    {
+      "kind": "c",
+      "name": "approval_preferences_positive_revision",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((revision > 0))"
+    },
+    {
+      "kind": "c",
+      "name": "approval_preferences_preference",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((preference = ANY (ARRAY['never'::text, 'ask'::text, 'allow_if_policy'::text])))"
+    },
+    {
+      "kind": "c",
+      "name": "approval_preferences_target_identity",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((((target_kind = 'memory_user'::text) AND (target_id = actor_id)) OR ((target_kind = 'memory_bot'::text) AND (target_id = bot_id)) OR (target_kind = 'memory_thread'::text)))"
+    },
+    {
+      "kind": "c",
+      "name": "approval_preferences_target_kind",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((target_kind = ANY (ARRAY['memory_user'::text, 'memory_bot'::text, 'memory_thread'::text])))"
+    },
+    {
+      "kind": "c",
+      "name": "approval_preferences_tool",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((tool_name = 'remember'::text))"
+    },
+    {
+      "kind": "c",
+      "name": "approval_preferences_uuid_v7",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((preference_id)::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text))"
+    }
+  ]
+}

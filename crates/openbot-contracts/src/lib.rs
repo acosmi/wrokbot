@@ -73,6 +73,7 @@
 #![deny(missing_docs)]
 
 pub mod agent;
+pub mod approval_preferences;
 pub mod artifact_read;
 pub mod artifact_read_protocol;
 pub mod artifacts;
