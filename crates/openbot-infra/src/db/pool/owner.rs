@@ -527,10 +527,8 @@ impl DriverOwner {
             state.destruction = Some(destruction);
             first = true;
         });
-        if first {
-            if let Some(supervisor) = self.supervisor.upgrade() {
-                supervisor.finish(self.sequence, self.snapshot());
-            }
+        if first && let Some(supervisor) = self.supervisor.upgrade() {
+            supervisor.finish(self.sequence, self.snapshot());
         }
     }
 }

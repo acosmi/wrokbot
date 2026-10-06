@@ -285,23 +285,12 @@ impl fmt::Debug for GuardedClient {
 }
 
 impl GuardedClient {
-    pub(crate) fn observation(&self) -> ConnectionObservation {
-        self.lease
-            .as_ref()
-            .expect("unconsumed guarded client")
-            .observation()
-    }
-
     /// 只借这个原 client 的 immutable PG 查询面；不暴露 stock Object 或 mutable loan。
     pub(crate) fn as_client(&self) -> &tokio_postgres::Client {
         self.lease
             .as_ref()
             .expect("unconsumed guarded client")
             .stock()
-    }
-
-    pub(crate) fn deadline(&self) -> Instant {
-        self.deadline
     }
 
     /// BEGIN 也计入原预算；只有一个事务，真实 Read Committed，不接受 foreign Transaction。
@@ -315,7 +304,6 @@ impl GuardedClient {
             return Err(TransactionOwnerError::DeadlineExceeded);
         }
         self.disposition = TransactionDisposition::BeginStarted;
-        let observation = self.observation();
         let deadline = self.deadline;
         let lease = self.lease.as_mut().expect("unconsumed guarded client");
         let transaction = tokio::time::timeout_at(
@@ -341,17 +329,7 @@ impl GuardedClient {
             transaction: Some(transaction),
             disposition: &mut self.disposition,
             deadline,
-            observation,
         })
-    }
-
-    /// 同步永久脱池并请求原 task 退役；返回的观察由真实析构信号完成，不是 abort ACK。
-    pub(crate) fn retire(mut self) -> ConnectionObservation {
-        let observation = self.observation();
-        if let Some(lease) = self.lease.take() {
-            lease.release(false);
-        }
-        observation
     }
 }
 
@@ -373,7 +351,6 @@ pub(crate) struct GuardedTransaction<'a> {
     transaction: Option<deadpool_postgres::Transaction<'a>>,
     disposition: &'a mut TransactionDisposition,
     deadline: Instant,
-    observation: ConnectionObservation,
 }
 
 impl fmt::Debug for GuardedTransaction<'_> {
@@ -383,19 +360,12 @@ impl fmt::Debug for GuardedTransaction<'_> {
 }
 
 impl<'a> GuardedTransaction<'a> {
-    /// 不可变借用同一个原 PG 事务；所有外部 SQL await 必须继续使用 deadline()。
+    /// 不可变借用同一个原 PG 事务；所有外部 SQL await 必须继续使用原入口 deadline。
     pub(crate) fn as_transaction(&self) -> &tokio_postgres::Transaction<'a> {
         self.transaction
             .as_ref()
             .expect("unconsumed original transaction")
     }
-    pub(crate) fn deadline(&self) -> Instant {
-        self.deadline
-    }
-    pub(crate) fn observation(&self) -> ConnectionObservation {
-        self.observation.clone()
-    }
-
     pub(crate) async fn commit(mut self) -> Result<(), TransactionOwnerError> {
         if Instant::now() >= self.deadline {
             return Err(TransactionOwnerError::DeadlineExceeded);
