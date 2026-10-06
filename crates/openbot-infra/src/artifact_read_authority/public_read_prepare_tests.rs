@@ -349,6 +349,158 @@ struct SessionGuard {
     authority: Weak<PostgresArtifactReadAuthority>,
     issuer: RequestBindingIssuer,
 }
+
+struct CleanupOriginalObserver {
+    downstream: Arc<dyn ArtifactReadPreparationObserver>,
+    original: Arc<Observer>,
+}
+impl ArtifactReadPreparationObserver for CleanupOriginalObserver {
+    fn enrolled(&self, completion: Arc<dyn ArtifactReadOperationCompletion>) -> Result<(), AppError> {
+        self.downstream.enrolled(Arc::clone(&completion))?;
+        self.original.enrolled(completion)
+    }
+}
+struct CleanupObservedAdministration {
+    actual: Arc<PostgresArtifactAdministration>,
+    original: Arc<Observer>,
+}
+#[async_trait::async_trait]
+impl ArtifactAdministration for CleanupObservedAdministration {
+    async fn prepare_host_bound_artifact_read(
+        &self, auth: &AuthContext, id: &str, deadline: Instant,
+        observer: Arc<dyn ArtifactReadPreparationObserver>,
+    ) -> Result<openbot_application::artifact_read_protocol::PreparedArtifactRead, AppError> {
+        self.actual.prepare_host_bound_artifact_read(auth, id, deadline,
+            Arc::new(CleanupOriginalObserver { downstream: observer, original: Arc::clone(&self.original) }),
+        ).await
+    }
+    async fn save_run_message_text(
+        &self, auth: &AuthContext, input: SaveRunMessageTextArtifact,
+    ) -> Result<ArtifactRegistrationReceipt, openbot_application::ArtifactAdministrationError> {
+        self.actual.save_run_message_text(auth, input).await
+    }
+    async fn get_metadata(
+        &self, auth: &AuthContext, id: &str,
+    ) -> Result<openbot_contracts::artifacts::ArtifactMetadata, openbot_application::ArtifactAdministrationError> {
+        self.actual.get_metadata(auth, id).await
+    }
+}
+
+async fn cleanup_prepare_facts(f: &Fixture) -> Result<serde_json::Value, String> {
+    let client = f.pool.get().await.map_err(|error| error.to_string())?;
+    client.query_one(
+        "SELECT jsonb_build_object( \
+         'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
+         'records',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_records r), \
+         'receipts',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_saved_receipts r), \
+         'workspace',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_workspace_quotas q), \
+         'runquota',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_run_quotas q), \
+         'fences',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_cleanup_fences q), \
+         'audit',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY id),'[]') FROM public.audit_events e))", &[],
+    ).await.map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())
+}
+
+async fn arm_cleanup_prepare_fixture(f: &Fixture, id: &str) -> Result<(), String> {
+    let changed = f.pool.get().await.map_err(|error| error.to_string())?.execute(
+        "INSERT INTO openbot_internal.artifact_cleanup_fences \
+         (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
+         SELECT deployment_id,tenant_id,dataset_id,operation_id,artifact_id,'deleted','armed' \
+         FROM openbot_internal.artifact_records WHERE deployment_id=$1 AND tenant_id=$2 AND artifact_id=$3",
+        &[&DEPLOYMENT, &TENANT, &id],
+    ).await.map_err(|error| error.to_string())?;
+    require(changed == 1, "controlled fence was not on exactly the original actual Save row")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL, real prepared/cache first and original IO/completion evidence"]
+async fn public_prepare_cleanup_fence_refusal_keeps_original_io_accounting() {
+    use openbot_application::ApplicationService as _;
+    use openbot_contracts::artifact_read_protocol::{OpenArtifactRead, ReadArtifactReadBlock};
+    use openbot_contracts::command::{AppCommand, AppReply};
+
+    for initially_armed in [true, false] {
+        let tag = if initially_armed { "cleanup_prepare_initial" } else { "cleanup_prepare_cached_first" };
+        harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+            let mut f = Fixture::new(config).await?;
+            let saved = f.save().await?;
+            let probe = PublicPrepareProbe::new();
+            f.install_probe(Arc::clone(&probe))?;
+            let original = Arc::new(Observer::default());
+            let application = openbot_application::OpenBotApplication::new(
+                crate::repo::channels::ChannelRepo::new(f.pool.clone()),
+            ).with_artifacts(Arc::new(CleanupObservedAdministration {
+                actual: Arc::clone(&f.administration), original: Arc::clone(&original),
+            }));
+            if initially_armed { arm_cleanup_prepare_fixture(&f, &saved.artifact_id).await?; }
+            let before_open = cleanup_prepare_facts(&f).await?;
+            let opened = application.execute(f.auth.clone(), AppCommand::OpenArtifactRead(OpenArtifactRead { artifact_id: saved.artifact_id.clone() })).await;
+            let state = Fixture::state(&probe)?;
+            let completion = original.actual()?;
+            let outcome = async {
+                if initially_armed {
+                    require(matches!(opened, Err(AppError::DependencyUnavailable { dependency: "artifacts" })), "initial armed fence produced a public reader/control")?;
+                    require(probe.sha_segments.load(Ordering::SeqCst) == 0 && probe.prefix.lock().map_err(|_| "prefix probe poisoned")?.is_none(), "initial armed fence ran actual SHA/prefix IO")?;
+                    require(before_open == cleanup_prepare_facts(&f).await?, "initial armed refusal changed business/fence facts")?;
+                } else {
+                    let reply = opened.map_err(|error| error.to_string())?;
+                    let opened = match &reply {
+                        AppReply::ArtifactReadOpened(opened) => opened.clone(),
+                        _ => return Err("actual public Open did not return its closed control reply".to_owned()),
+                    };
+                    let control = application.take_artifact_read_control_delivery(f.auth.clone(), reply).map_err(|error| error.to_string())?;
+                    control.verify_current_tail(&f.auth).map_err(|error| error.to_string())?;
+                    drop(control);
+                    Fixture::wait_collector_tail(&state).await?;
+                    let sha_segments = probe.sha_segments.load(Ordering::SeqCst);
+                    let prefix = probe.prefix.lock().map_err(|_| "prefix probe poisoned")?.clone();
+                    require(sha_segments == f.source.len().div_ceil(64 * 1024)
+                        && prefix == Some((4 * 1024 * 1024, 4 * 1024 * 1024, Sha256Digest::of(&f.source.as_bytes()[..4 * 1024 * 1024]).to_hex())),
+                        "actual prepare did not retain its one original full SHA/first prefix")?;
+                    {
+                        let data = state.data.lock().map_err(|_| "original state poisoned")?;
+                        require(data.reader.is_some() && data.resource.is_some() && data.position == 4 * 1024 * 1024 && data.phase == ReadPhase::Pending, "actual cached first lost its original FD/allocation before client delay")?;
+                        data.reader.as_ref().unwrap().verify_physical_current().map_err(|error| error.to_string())?;
+                    }
+                    require(opened.artifact_id == saved.artifact_id && opened.byte_length == f.source.len() as u64
+                        && opened.sha256 == Sha256Digest::of(f.source.as_bytes()).to_hex(), "Open changed original real prepared facts")?;
+                    // Delay is causal, not a timer: Open actually finished before this COMMIT.
+                    arm_cleanup_prepare_fixture(&f, &saved.artifact_id).await?;
+                    let before_next = cleanup_prepare_facts(&f).await?;
+                    let input = ReadArtifactReadBlock { handle_id: opened.handle_id, sequence: 0 };
+                    let next = application.execute(f.auth.clone(), AppCommand::ReadArtifactReadBlock(input.clone())).await;
+                    require(matches!(next, Err(AppError::DependencyUnavailable { dependency: "artifacts" })), "actual cached-first next ignored the new armed fence")?;
+                    require(application.take_artifact_read_delivery(f.auth.clone(), input).is_err(), "refused cached first could still be selected as payload")?;
+                    require(probe.sha_segments.load(Ordering::SeqCst) == sha_segments
+                        && *probe.prefix.lock().map_err(|_| "prefix probe poisoned")? == prefix, "cached-first refresh reopened/rehashed/reread original bytes")?;
+                    require(before_next == cleanup_prepare_facts(&f).await?, "cached-first refusal changed business/charge/receipt/fence/audit facts")?;
+                }
+                Ok::<(), String>(())
+            }.await;
+            let closed = application.close_public_artifact_reads();
+            completion.close();
+            let completed = completion.drain_before(Instant::now() + Duration::from_secs(3)).await;
+            let lifecycle = f.authority.read_lifecycle();
+            lifecycle.close();
+            let drained = lifecycle.drain_before(Instant::now() + Duration::from_secs(3)).await;
+            {
+                let data = state.data.lock().map_err(|_| "original final state poisoned")?;
+                require(data.reader.is_none() && data.resource.is_none() && state.actual_jobs() == 0, "original cached first/worker/FD/full allocation did not actually finish")?;
+            }
+            let observations = f.pool.connection_observations();
+            f.pool.close();
+            let cleanup_deadline = Instant::now() + Duration::from_secs(3);
+            for observation in observations { observation.wait_for_destruction_before(cleanup_deadline).await.map_err(|error| error.to_string())?; }
+            outcome?;
+            closed.map_err(|error| error.to_string())?;
+            completed.map_err(|error| error.to_string())?;
+            drained.map_err(|error| format!("{error:?}"))?;
+            require(f.root.path.join("objects").join(&saved.artifact_id).is_file(), "reader refusal was counted as physical cleanup")?;
+            f.root.allow_cleanup_after_actual_completions();
+            Ok(())
+        }).await;
+    }
+}
+
 fn lifetime() -> SessionLifetimePolicy {
     SessionLifetimePolicy::new(
         time::Duration::minutes(30),

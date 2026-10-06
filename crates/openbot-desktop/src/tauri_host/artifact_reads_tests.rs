@@ -431,7 +431,12 @@ impl LocalFixture {
                         .application()
                         .execute(auth.clone(), AppCommand::BeginThreadRun(begin.clone()))
                         .await
-                        .map_err(|error| error.to_string())?,
+                        .map_err(|error| {
+                            if label == "public-read-cached-cleanup" {
+                                eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=BeginThreadRun original_app_error={error}");
+                            }
+                            error.to_string()
+                        })?,
                     AppReply::ThreadRunStarted(_)
                 ),
                 "actual Local Begin did not return its durable receipt",
@@ -449,8 +454,29 @@ impl LocalFixture {
                         expected_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
                     }),
                 )
-                .await
-                .map_err(|error| error.to_string())?;
+                .await;
+            if label == "public-read-cached-cleanup" {
+                if let Err(error) = &receipt {
+                    eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=SaveRunMessageTextArtifact original_app_error={error}");
+                    let schema = openbot_infra::artifact_administration::verify_artifact_registration_schema(prepared.pool()).await;
+                    eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=post_original_Save_error legacy41_42={schema:?}");
+                    if matches!(&schema, Err(openbot_application::ArtifactAdministrationError::Corrupt { field: "registration_schema" })) {
+                        let expected = serde_json::from_str::<serde_json::Value>(include_str!("../../../../fixtures/db/artifact-registration-0042.json"));
+                        let actual = openbot_infra::artifact_administration::capture_artifact_registration_schema(prepared.pool()).await;
+                        match (expected, actual) {
+                            (Ok(expected), Ok(actual)) => {
+                                let mut paths = Vec::new();
+                                cleanup_cached_schema_difference_paths(&expected, &actual, "", &mut paths);
+                                eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC legacy42_difference_paths={paths:?} path_limit=16 values_omitted=true");
+                            }
+                            (Err(_), _) => eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC fixed_original_oracle_decode_failed=true"),
+                            (_, Err(error)) => eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC legacy42_capture_error={error:?}"),
+                        }
+                    }
+                }
+            }
+            // Preserve the original Save outcome; diagnostics never retry or replace it.
+            let receipt = receipt.map_err(|error| error.to_string())?;
             let artifact = match receipt {
                 AppReply::ArtifactRegistrationReceipt(receipt) => receipt,
                 _ => return Err("actual Local Save returned another reply".to_owned()),
@@ -1034,4 +1060,358 @@ async fn actual_prepared_local_public_reader_close_isolated_original_resources()
     outcome
         .and(cleaned)
         .expect("actual Local isolated original resource closure");
+}
+
+
+// Controlled 0044 rows are consumer inputs only. These observations never assert deletion,
+// directory sync, refund, cleanup authorization or a producer receipt.
+const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
+ 'bindings',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY to_jsonb(b)::text),'[]') FROM openbot_internal.artifact_dataset_bindings b), \
+ 'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
+ 'records',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_records r), \
+ 'receipts',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_saved_receipts r), \
+ 'stores',(SELECT coalesce(jsonb_agg(to_jsonb(s) ORDER BY to_jsonb(s)::text),'[]') FROM openbot_internal.artifact_store_bindings s), \
+ 'workspace',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_workspace_quotas q), \
+ 'runquota',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_run_quotas q), \
+ 'fences',(SELECT coalesce(jsonb_agg(to_jsonb(f) ORDER BY to_jsonb(f)::text),'[]') FROM openbot_internal.artifact_cleanup_fences f), \
+ 'audit',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY to_jsonb(e)::text),'[]') FROM public.audit_events e), \
+ 'users',(SELECT coalesce(jsonb_agg(to_jsonb(u) ORDER BY to_jsonb(u)::text),'[]') FROM public.users u), \
+ 'roles',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM public.user_roles r), \
+ 'sessions',(SELECT coalesce(jsonb_agg(to_jsonb(s) ORDER BY id),'[]') FROM public.sessions s), \
+ 'messages',(SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text),'[]') FROM public.messages m))";
+
+async fn cleanup_public_read_facts_on(
+    client: &tokio_postgres::Client,
+) -> Result<serde_json::Value, String> {
+    client.query_one(CLEANUP_PUBLIC_READ_FACTS, &[]).await
+        .map_err(|error| error.to_string())?
+        .try_get(0).map_err(|error| error.to_string())
+}
+
+
+#[derive(Default)]
+struct CleanupCachedIoPhases {
+    io: std::sync::atomic::AtomicUsize,
+    joint: std::sync::atomic::AtomicUsize,
+    segments: std::sync::atomic::AtomicUsize,
+}
+impl CleanupCachedIoPhases {
+    fn actual_counts(&self) -> (usize, usize, usize) {
+        use std::sync::atomic::Ordering;
+        (
+            self.io.load(Ordering::SeqCst),
+            self.joint.load(Ordering::SeqCst),
+            self.segments.load(Ordering::SeqCst),
+        )
+    }
+}
+struct CleanupCachedPhaseVisitor {
+    io: bool,
+    joint: bool,
+    segment: bool,
+}
+impl tracing::field::Visit for CleanupCachedPhaseVisitor {
+    fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        match (field.name(), value) {
+            ("artifact_read_phase", "actual_io_completed_before_joint") => self.io = true,
+            ("artifact_read_phase", "joint_statement_ready") => self.joint = true,
+            ("artifact_read_lifecycle_phase", "physical_segment_completed_before_more_io") => self.segment = true,
+            _ => {}
+        }
+    }
+}
+struct CleanupCachedPhaseSubscriber(Arc<CleanupCachedIoPhases>);
+impl tracing::Subscriber for CleanupCachedPhaseSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool { true }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        use std::sync::atomic::Ordering;
+        let mut visitor = CleanupCachedPhaseVisitor { io: false, joint: false, segment: false };
+        event.record(&mut visitor);
+        if visitor.io { self.0.io.fetch_add(1, Ordering::SeqCst); }
+        if visitor.joint { self.0.joint.fetch_add(1, Ordering::SeqCst); }
+        if visitor.segment { self.0.segments.fetch_add(1, Ordering::SeqCst); }
+    }
+}
+
+async fn arm_cached_first_cleanup_fence(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    deployment: &str,
+    tenant: &str,
+    owner: &str,
+    receipt: &ArtifactRegistrationReceipt,
+) -> Result<serde_json::Value, String> {
+    let mut controller = pool.get().await.map_err(|error| error.to_string())?;
+    let transaction = controller.transaction().await.map_err(|error| error.to_string())?;
+    let inserted: serde_json::Value = transaction.query_one(
+        "INSERT INTO openbot_internal.artifact_cleanup_fences \
+         (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
+         SELECT deployment_id,tenant_id,dataset_id,operation_id,artifact_id,'deleted','armed' \
+         FROM openbot_internal.artifact_records \
+         WHERE deployment_id=$1 AND tenant_id=$2 AND operation_id=$3 AND artifact_id=$4 AND owner_actor_id=$5 \
+         RETURNING to_jsonb(artifact_cleanup_fences)",
+        &[&deployment, &tenant, &receipt.operation_id, &receipt.artifact_id, &owner],
+    ).await.map_err(|error| error.to_string())?
+        .try_get(0).map_err(|error| error.to_string())?;
+    require(inserted["operation_id"] == receipt.operation_id
+        && inserted["artifact_id"] == receipt.artifact_id
+        && inserted["terminal_status"] == "deleted" && inserted["phase"] == "armed",
+        "controlled consumer fence did not retain the original pair and intent")?;
+    transaction.commit().await.map_err(|error| error.to_string())?;
+    Ok(inserted)
+}
+
+// Read only this Rust process's bounded f/device/inode inventory. No path fields or peer PIDs.
+fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+    use std::io::Read as _;
+    use std::os::unix::fs::MetadataExt as _;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        metadata.is_file() && metadata.nlink() == 1,
+        "owned FD oracle requires original regular inode",
+    )?;
+    let device = metadata.dev() & u64::from(u32::MAX);
+    let inode = metadata.ino();
+    let sample = || -> Result<std::collections::BTreeSet<u32>, String> {
+        let pid = std::process::id();
+        let mut child = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "own-PID lsof is unavailable (Unproven)".to_owned())?;
+        let stdout = child.stdout.take().ok_or("lsof stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("lsof stderr unavailable")?;
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let errors = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output.join();
+                let _ = errors.join();
+                return Err("own-PID lsof exceeded original five seconds (Unproven)".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let output = output
+            .join()
+            .map_err(|_| "lsof output worker panicked")?
+            .map_err(|error| error.to_string())?;
+        let errors = errors
+            .join()
+            .map_err(|_| "lsof error worker panicked")?
+            .map_err(|error| error.to_string())?;
+        require(
+            status.success()
+                && output.len() <= 65_536
+                && errors.len() <= 8_192
+                && output.ends_with(b"\n"),
+            "lsof incomplete/failed/truncated (Unproven)",
+        )?;
+        let text = std::str::from_utf8(&output).map_err(|_| "lsof output invalid (Unproven)")?;
+        let mut self_pid = false;
+        let mut fd = None;
+        let mut dev = None;
+        let mut ino = None;
+        let mut found = std::collections::BTreeSet::new();
+        for line in text.lines().chain(std::iter::once("f")) {
+            let (kind, value) = line
+                .split_at_checked(1)
+                .ok_or("lsof empty field (Unproven)")?;
+            match kind {
+                "p" => {
+                    require(
+                        value.parse::<u32>().ok() == Some(pid),
+                        "lsof observed another PID",
+                    )?;
+                    self_pid = true;
+                }
+                "f" => {
+                    if dev == Some(device) && ino == Some(inode) {
+                        found.insert(
+                            fd.ok_or("original inode has an ambiguous nonnumeric FD (Unproven)")?,
+                        );
+                    }
+                    fd = value.parse::<u32>().ok();
+                    dev = None;
+                    ino = None;
+                }
+                "D" => {
+                    dev = Some(
+                        if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16)
+                        } else {
+                            value.parse::<u64>()
+                        }
+                        .map_err(|_| "lsof device invalid (Unproven)")?,
+                    );
+                }
+                "i" => {
+                    ino = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "lsof inode invalid (Unproven)")?,
+                    );
+                }
+                _ => return Err("lsof unexpected field (Unproven)".to_owned()),
+            }
+        }
+        require(self_pid, "lsof self-PID field missing (Unproven)")?;
+        Ok(found)
+    };
+    let first = sample()?;
+    let second = sample()?;
+    require(
+        first == second,
+        "own original FD inventory was unstable (Unproven)",
+    )?;
+    Ok(first)
+}
+
+fn cleanup_cached_schema_difference_paths(
+    expected: &serde_json::Value,
+    actual: &serde_json::Value,
+    path: &str,
+    out: &mut Vec<String>,
+) {
+    use serde_json::Value;
+    if expected == actual || out.len() >= 16 {
+        return;
+    }
+    match (expected, actual) {
+        (Value::Object(left), Value::Object(right)) => {
+            for (key, value) in left {
+                if out.len() >= 16 {
+                    return;
+                }
+                let next = format!("{path}/{key}");
+                match right.get(key) {
+                    Some(other) => cleanup_cached_schema_difference_paths(value, other, &next, out),
+                    None => out.push(next),
+                }
+            }
+            if out.len() < 16 && right.keys().any(|key| !left.contains_key(key)) {
+                out.push(format!("{path}/<unexpected-object-key>"));
+            }
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            if left.len() != right.len() {
+                out.push(format!("{path}/<array-length>"));
+            }
+            for (index, (value, other)) in left.iter().zip(right).enumerate() {
+                if out.len() >= 16 {
+                    return;
+                }
+                cleanup_cached_schema_difference_paths(value, other, &format!("{path}/{index}"), out);
+            }
+        }
+        _ => out.push(path.to_owned()),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned genuine Prepared Local, committed 0044 consumer fence and original retained reader"]
+async fn actual_prepared_local_public_reader_cached_first_cleanup_fence_recheck_refuses_body() {
+    use tracing::instrument::WithSubscriber as _;
+    let mut bundle = OwnedBundle::materialize().expect("Root-owned exact PG bundle");
+    let fixture = LocalFixture::new(&bundle, "public-read-cached-cleanup")
+        .await.expect("genuine owned Prepared Local setup");
+    let outcome = async {
+        let prepared = fixture.prepared();
+        let protocol = prepared.protocol();
+        let path = fixture.root.0.join("artifacts/objects").join(&fixture.artifact.artifact_id);
+        require(cleanup_owned_inode_fds(&path)?.is_empty(),
+            "owned saved Local artifact unexpectedly began with a live read FD")?;
+        let tracker = protocol.local_capability_authority.as_ref()
+            .and_then(|source| source.artifact_read_lifecycle())
+            .ok_or("same genuine Local artifact lifecycle unavailable")?;
+        let phases = Arc::new(CleanupCachedIoPhases::default());
+        let dispatch = tracing::Dispatch::new(CleanupCachedPhaseSubscriber(phases.clone()));
+        let opened: ArtifactReadOpened = control(
+            bridge(protocol, "main", open_request(&fixture.artifact.artifact_id)?)
+                .with_subscriber(dispatch.clone()).await,
+        )?;
+        require(opened.artifact_id == fixture.artifact.artifact_id
+            && opened.byte_length == PAYLOAD.len() as u64
+            && opened.sha256 == format!("{:x}", Sha256::digest(PAYLOAD.as_bytes())),
+            "genuine Prepared Local Open did not retain original Save facts")?;
+        let after_open = phases.actual_counts();
+        require(after_open.0 == 1 && after_open.1 >= 2,
+            "successful genuine Local Open did not complete original physical prefix and current queries")?;
+        require(!cleanup_owned_inode_fds(&path)?.is_empty(),
+            "successful Local Open did not retain its actual original object FD")?;
+        let client = prepared.pool().get().await.map_err(|error| error.to_string())?;
+        let mut expected = cleanup_public_read_facts_on(&client).await?;
+        require(expected["fences"] == serde_json::json!([]),
+            "owned cached-first Local fixture unexpectedly began fenced")?;
+        drop(client);
+        let original_auth = prepared.auth_context();
+        let inserted = arm_cached_first_cleanup_fence(
+            prepared.pool(), original_auth.deployment().as_str(), original_auth.tenant().as_str(),
+            original_auth.actor().as_str(), &fixture.artifact,
+        ).await?;
+        expected["fences"] = serde_json::json!([inserted]);
+        // The actual transaction's COMMIT ACK precedes this same handle's delayed seq0 request.
+        let response = bridge(protocol, "main", next_request(&opened.handle_id, 0)?)
+            .with_subscriber(dispatch).await;
+        no_store(&response)?;
+        require(response.status() == StatusCode::SERVICE_UNAVAILABLE,
+            "delayed genuine Local cached first did not refuse its committed armed fence")?;
+        require(["x-artifact-read-handle", "x-artifact-read-sequence",
+            "x-artifact-read-length", "x-artifact-read-eof"].iter()
+            .all(|name| response.headers().get(*name).is_none()),
+            "Local cleanup-fence refusal retained data descriptor headers")?;
+        let error: serde_json::Value = serde_json::from_slice(response.body())
+            .map_err(|error| error.to_string())?;
+        require(error == serde_json::json!({"code":"dependency_unavailable"})
+            && !response.body().windows(PAYLOAD.len()).any(|part| part == PAYLOAD.as_bytes()),
+            "Local cleanup refusal exposed cached payload or changed original static error")?;
+        drop(response);
+        let after_refusal = phases.actual_counts();
+        require(after_refusal.0 == after_open.0
+            && after_refusal.2 == after_open.2 && after_refusal.1 == after_open.1 + 1,
+            "genuine cached first refusal repeated physical prefix work or omitted the real final query")?;
+        // Prepared Local keeps per-operation Completion inside the real application's registry.
+        // This existing protocol closes and awaits only this actual authority's fixture inventory;
+        // its ACK requires jobs and physical resource owners to end. No replacement Completion is used.
+        prepared.application().close_public_artifact_reads().map_err(|error| error.to_string())?;
+        tracker.close();
+        tracker.drain_before(std::time::Instant::now() + Duration::from_secs(5)).await
+            .map_err(|_| "same Prepared Local read inventory did not actually drain".to_owned())?;
+        require(cleanup_owned_inode_fds(&path)?.is_empty(),
+            "original Local object inode retained a live FD after actual inventory drain ACK")?;
+        let client = prepared.pool().get().await.map_err(|error| error.to_string())?;
+        require(cleanup_public_read_facts_on(&client).await? == expected,
+            "Local cached first consumer changed original source, receipt, record, charge, quota, store, fence, audit or host facts")?;
+        require(std::fs::read(&path).map_err(|error| error.to_string())? == PAYLOAD.as_bytes(),
+            "consumer fence changed the original owned Local artifact bytes")?;
+        eprintln!("PUBLIC_ARTIFACT_LOCAL_CACHED_CLEANUP original_prepared_open=true controller_commit_ack=true seq0_refused=true no_store=true no_payload=true original_io_ack_count={} final_query_increment=1 same_authority_fixture_inventory_drain_ack=true own_inode_fd_absent=true business_facts_unchanged=true",
+            after_open.0);
+        Ok(())
+    }.await;
+    let cleaned = fixture.finish().await;
+    if cleaned.is_ok() { bundle.root.1 = true; }
+    drop(bundle);
+    outcome.and(cleaned).expect("genuine Prepared Local cached first cleanup-fence refusal and physical closure");
 }
