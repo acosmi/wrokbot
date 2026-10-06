@@ -4808,6 +4808,7 @@ dependencies = [
  "base64 0.22.1",
  "deadpool-postgres",
  "flate2",
+ "futures-core",
  "image",
  "openbot-agent",
  "openbot-application",

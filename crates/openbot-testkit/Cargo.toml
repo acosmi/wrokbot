@@ -99,6 +99,8 @@ openbot-server = { workspace = true, features = ["testkit"] }
 openbot-agent.workspace = true
 openbot-infra = { workspace = true, features = ["server-sso"] }
 deadpool-postgres.workspace = true
+# Transparent original SSE stream wrapper in the actual-client test carrier.
+futures-core.workspace = true
 # Owned TLS fixtures used only by the actual-client integration host.
 base64.workspace = true
 rustls.workspace = true
