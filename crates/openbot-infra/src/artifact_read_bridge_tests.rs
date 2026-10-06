@@ -9,6 +9,185 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+fn shared_bridge_owned_fds(path: &Path) -> Result<std::collections::BTreeSet<u32>, String> {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        metadata.is_file() && metadata.nlink() == 1,
+        "owned FD oracle requires original regular inode",
+    )?;
+    let device = metadata.dev() & u64::from(u32::MAX);
+    let inode = metadata.ino();
+    let sample = || -> Result<std::collections::BTreeSet<u32>, String> {
+        let pid = std::process::id();
+        let mut child = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "own-PID lsof is unavailable (Unproven)".to_owned())?;
+        let stdout = child.stdout.take().ok_or("lsof stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("lsof stderr unavailable")?;
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let errors = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output.join();
+                let _ = errors.join();
+                return Err("own-PID lsof exceeded original five seconds (Unproven)".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let output = output
+            .join()
+            .map_err(|_| "lsof output worker panicked")?
+            .map_err(|error| error.to_string())?;
+        let errors = errors
+            .join()
+            .map_err(|_| "lsof error worker panicked")?
+            .map_err(|error| error.to_string())?;
+        require(
+            status.success()
+                && output.len() <= 65_536
+                && errors.len() <= 8_192
+                && output.ends_with(b"\n"),
+            "lsof incomplete/failed/truncated (Unproven)",
+        )?;
+        let text = std::str::from_utf8(&output).map_err(|_| "lsof output invalid (Unproven)")?;
+        let mut self_pid = false;
+        let mut fd = None;
+        let mut dev = None;
+        let mut ino = None;
+        let mut found = std::collections::BTreeSet::new();
+        for line in text.lines().chain(std::iter::once("f")) {
+            let (kind, value) = line
+                .split_at_checked(1)
+                .ok_or("lsof empty field (Unproven)")?;
+            match kind {
+                "p" => {
+                    require(
+                        value.parse::<u32>().ok() == Some(pid),
+                        "lsof observed another PID",
+                    )?;
+                    self_pid = true;
+                }
+                "f" => {
+                    if dev == Some(device) && ino == Some(inode) {
+                        found.insert(
+                            fd.ok_or("original inode has an ambiguous nonnumeric FD (Unproven)")?,
+                        );
+                    }
+                    fd = value.parse::<u32>().ok();
+                    dev = None;
+                    ino = None;
+                }
+                "D" => {
+                    dev = Some(
+                        if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16)
+                        } else {
+                            value.parse::<u64>()
+                        }
+                        .map_err(|_| "lsof device invalid (Unproven)")?,
+                    );
+                }
+                "i" => {
+                    ino = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "lsof inode invalid (Unproven)")?,
+                    );
+                }
+                _ => return Err("lsof unexpected field (Unproven)".to_owned()),
+            }
+        }
+        require(self_pid, "lsof self-PID field missing (Unproven)")?;
+        Ok(found)
+    };
+    let first = sample()?;
+    let second = sample()?;
+    require(
+        first == second,
+        "own original FD inventory was unstable (Unproven)",
+    )?;
+    Ok(first)
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL; actual original Store reader FD and external caller buffer"]
+async fn shared_read_barrier_tracks_direct_store_reader_until_actual_drop() {
+    with_fixture("shared-direct-reader", false, |f| async move {
+        use std::time::Instant;
+        let saved = f.save().await?;
+        let record = f.observe(&saved.artifact_id).await.map_err(|error| error.to_string())?;
+        let before = f.facts().await?;
+        let path = f.root.0.join("objects").join(&saved.artifact_id);
+        let mut reader = f.store.open_observed_record(
+            f.observe(&saved.artifact_id).await.map_err(|error| error.to_string())?,
+        ).map_err(|error| error.to_string())?;
+        let original_fds = shared_bridge_owned_fds(&path)?;
+        require(original_fds.len() == 1, "direct original reader did not retain its actual object FD")?;
+        let mut output = [0_u8; 80];
+        let count = reader.read_observed_chunk(&mut output).map_err(|error| error.to_string())?;
+        let caller_owned_copy = output[..count].to_vec();
+        require(caller_owned_copy == EXACT.as_bytes(), "direct original reader produced different saved bytes")?;
+
+        // This is a controlled malformed private snapshot after actual original-key binding.
+        // It is not a legal mismatched PG row, another Save, or a cleanup producer.
+        let mut malformed = f.observe(&saved.artifact_id).await.map_err(|error| error.to_string())?;
+        malformed.source_snapshot.operation_id = Uuid::now_v7().to_string();
+        require(f.administration.close_observed_artifact_reads(&malformed).is_err(),
+            "different operation in a malformed private snapshot closed an already-bound original key")?;
+        reader.verify_physical_current().map_err(|error| error.to_string())?;
+        drop(malformed);
+        let barrier = f.administration.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+        require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err()
+            && shared_bridge_owned_fds(&path)? == original_fds,
+            "direct FD lease released before the actual original File")?;
+        require(f.store.open_observed_record(f.observe(&saved.artifact_id).await.map_err(|error| error.to_string())?).is_err(),
+            "permanently closed direct path opened another original FD/full SHA")?;
+        output.fill(0xA5);
+        require(reader.read_observed_chunk(&mut output).is_err() && output.iter().all(|byte| *byte == 0),
+            "closed direct reader delivered another chunk or did not wipe rejected caller output")?;
+        drop(reader);
+        let ack = barrier.drain_before(Instant::now() + Duration::from_secs(3)).await.map_err(|error| format!("{error:?}"))?;
+        require(shared_bridge_owned_fds(&path)?.is_empty(), "direct original File survived controlled ACK")?;
+        require(caller_owned_copy == EXACT.as_bytes() && path.is_file(),
+            "controlled ACK falsely claimed caller-output destruction or actual deletion")?;
+        require(before == f.facts().await?, "direct shared close changed original business/charge/receipt/audit facts")?;
+        let fence_count: i64 = f.pool.get().await.map_err(|error| error.to_string())?
+            .query_one("SELECT COUNT(*) FROM openbot_internal.artifact_cleanup_fences", &[])
+            .await.map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())?;
+        require(fence_count == 0, "direct shared barrier created a durable cleanup producer")?;
+        drop(caller_owned_copy); drop(ack); drop(barrier); drop(record);
+        let observations = f.pool.connection_observations(); f.pool.close();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        for original in observations {
+            require(original.wait_for_destruction_before(deadline).await.map_err(|error| error.to_string())?
+                == pool::ConnectionDestruction::ConnectionDestroyed, "direct fixture original connection survived actual closure")?;
+        }
+        eprintln!("ARTIFACT_SHARED_DIRECT original_fd_held_no_ack=true malformed_private_operation_refused=true actual_file_drop_before_lease=true caller_output_lifetime=UNTRACKED copied_bytes_still_valid_at_ack=true object_retained=true");
+        Ok(())
+    }).await;
+}
+
 use openbot_application::{BeginThreadRunRequest, RunRuntime, RunTerminal, ThreadDirectory};
 use openbot_contracts::auth::{AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::command::{BeginThreadRun, ThreadRunAnchor};
@@ -66,7 +245,7 @@ struct Fixture {
     pool: Pool,
     registry: Arc<ArtifactDatasetRegistry>,
     store: Arc<DatasetBoundArtifactStore>,
-    administration: PostgresArtifactAdministration,
+    administration: Arc<PostgresArtifactAdministration>,
     begin: BeginThreadRunRequest,
     root: OwnedRoot,
 }
@@ -146,13 +325,15 @@ impl Fixture {
             .await
             .map_err(|e| e.to_string())?,
         );
-        let administration = PostgresArtifactAdministration::new(
-            Arc::clone(&registry),
-            Arc::clone(&store),
-            policy,
-            SecretBytes::new(vec![0x83; 32]),
-        )
-        .map_err(|e| e.to_string())?;
+        let administration = Arc::new(
+            PostgresArtifactAdministration::new(
+                Arc::clone(&registry),
+                Arc::clone(&store),
+                policy,
+                SecretBytes::new(vec![0x83; 32]),
+            )
+            .map_err(|e| e.to_string())?,
+        );
         Ok(Self {
             pool,
             registry,

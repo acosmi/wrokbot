@@ -38,7 +38,7 @@ use std::sync::{
     Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PAYLOAD: &str = "genuine Local public artifact text";
 
@@ -1062,9 +1062,125 @@ async fn actual_prepared_local_public_reader_close_isolated_original_resources()
         .expect("actual Local isolated original resource closure");
 }
 
-
 // Controlled 0044 rows are consumer inputs only. These observations never assert deletion,
 // directory sync, refund, cleanup authorization or a producer receipt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires genuine owned Prepared Local and actual shared copy/responder owners"]
+async fn shared_read_barrier_waits_for_desktop_copy_and_responder_tail() {
+    use tracing::instrument::WithSubscriber as _;
+    let mut bundle = OwnedBundle::materialize().expect("Root-owned exact PG bundle");
+    let fixture = LocalFixture::new(&bundle, "shared-local-copy-responder")
+        .await
+        .expect("genuine owned Prepared Local setup");
+    let actual = fixture.prepared().artifact_administration.clone();
+    let protocol = fixture.prepared().protocol().clone();
+    let outcome = async {
+        let auth = {
+            protocol.windows.try_read().map_err(|_| "actual original window registry unavailable")?
+                .get("main").ok_or("actual original main Window missing")?.auth.clone()
+        };
+        // Both keys are materialized by the real already-assembled Local Application/Save.
+        let saved_b = fixture.prepared().application().execute(auth.clone(),
+            AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
+                request_id: uuid::Uuid::now_v7().to_string(),
+                source_thread_id: fixture.artifact.source_thread_id.clone(),
+                source_run_id: fixture.artifact.source_run_id.clone(),
+                source_message_id: fixture.artifact.source_message_id.clone(),
+                expected_sha256: format!("{:x}", Sha256::digest(PAYLOAD.as_bytes())),
+            }),
+        ).await.map_err(|error| error.to_string())?;
+        let saved_b = match saved_b {
+            AppReply::ArtifactRegistrationReceipt(saved) => saved,
+            _ => return Err("second actual Local Save returned another receipt".to_owned()),
+        };
+        require(saved_b.artifact_id != fixture.artifact.artifact_id && saved_b.operation_id != fixture.artifact.operation_id,
+            "Local responder leg did not use a different actual saved key")?;
+        for (saved, copy_tail) in [(&fixture.artifact, true), (&saved_b, false)] {
+            let record = actual.observe_read_record(&auth, &saved.artifact_id).await.map_err(|error| error.to_string())?;
+            let path = fixture.root.0.join("artifacts/objects").join(&saved.artifact_id);
+            require(cleanup_owned_inode_fds(&path)?.is_empty(), "Local key began with an unexpected reader FD")?;
+            let phases = Arc::new(CleanupCachedIoPhases::default());
+            let dispatch = tracing::Dispatch::new(CleanupCachedPhaseSubscriber(phases.clone()));
+            let opened: ArtifactReadOpened = control(bridge(&protocol, "main", open_request(&saved.artifact_id)?)
+                .with_subscriber(dispatch.clone()).await)?;
+            let prepared = protocol.prepare_public_artifact_read_response("main", next_request(&opened.handle_id, 0)?)
+                .with_subscriber(dispatch).await;
+            let io_before = phases.io.load(Ordering::SeqCst);
+            let joint_before = phases.joint.load(Ordering::SeqCst);
+            let segments_before = phases.segments.load(Ordering::SeqCst);
+            require(io_before == 1 && joint_before >= 2,
+                "real Local preparation/cached refresh did not complete its original IO and final joint query")?;
+            let client = fixture.prepared().pool().get().await.map_err(|error| error.to_string())?;
+            let before = cleanup_public_read_facts_on(&client).await?;
+            drop(client);
+            let gate = CarrierGate::new();
+            let release = ReleaseCarrierGate(gate.clone());
+            let worker_protocol = protocol.clone();
+            let worker_gate = gate.clone();
+            let worker = tokio::task::spawn_blocking(move || {
+                if copy_tail {
+                    tracing::subscriber::with_default(CopyTailSubscriber(worker_gate), || {
+                        worker_protocol.finish_public_artifact_read_response("main", prepared, |response| response)
+                    })
+                } else {
+                    worker_protocol.finish_public_artifact_read_response("main", prepared, |response| {
+                        // Keep the actual original transport allocation until the real callback returns.
+                        worker_gate.hold_actual_thread();
+                        response
+                    })
+                }
+            });
+            let observed = async {
+                gate.await_entered().await?;
+                require(cleanup_owned_inode_fds(&path)?.len() == 1, "held actual Local copy/responder did not retain its original FD")?;
+                let barrier = actual.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+                require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err(),
+                    "shared Local close ACKed before the original actual copy/responder owner ended")?;
+                require(cleanup_owned_inode_fds(&path)?.len() == 1, "shared close dropped a still-used Local FD")?;
+                Ok::<_, String>(barrier)
+            }.await;
+            gate.release();
+            let response = worker.await.map_err(|error| error.to_string())?;
+            drop(release);
+            let barrier = observed?;
+            require(!gate.timed_out.load(Ordering::SeqCst), "actual Local owner ended only because its gate timed out")?;
+            let ack = barrier.drain_before(Instant::now() + Duration::from_secs(4)).await.map_err(|error| format!("{error:?}"))?;
+            require(cleanup_owned_inode_fds(&path)?.is_empty() && path.is_file(),
+                "actual Local original block ended without FD closure or deleted the object")?;
+            if copy_tail {
+                status(response, StatusCode::SERVICE_UNAVAILABLE)?;
+            } else {
+                data(&response, &opened.handle_id, 0, false)?;
+                require(response.body().as_slice() == PAYLOAD.as_bytes(),
+                    "controlled Local ACK falsely claimed returned response Vec destruction")?;
+                drop(response);
+            }
+            require(phases.io.load(Ordering::SeqCst) == io_before
+                && phases.joint.load(Ordering::SeqCst) == joint_before
+                && phases.segments.load(Ordering::SeqCst) == segments_before,
+                "shared synchronous Local copy/responder was mistaken for another IO or PG wait")?;
+            let client = fixture.prepared().pool().get().await.map_err(|error| error.to_string())?;
+            let after = cleanup_public_read_facts_on(&client).await?;
+            drop(client);
+            require(before == after, "shared Local close mutated original business/charge/receipt/fence/audit/identity facts")?;
+            drop(ack); drop(barrier); drop(record);
+            eprintln!("ARTIFACT_SHARED_LOCAL copy_tail={copy_tail} actual_owner_held_no_ack=true real_callback_joined=true original_fd_absent=true controlled_ack=true io_joint_unchanged=true pg_wait=false returned_response_lifetime=UNTRACKED");
+        }
+        Ok::<_, String>(())
+    }.await;
+    // Retire every extra test owner before the actual runtime shutdown/PID proof.
+    drop(protocol);
+    drop(actual);
+    let cleaned = fixture.finish().await;
+    if cleaned.is_ok() {
+        bundle.root.1 = true;
+    }
+    drop(bundle);
+    outcome
+        .and(cleaned)
+        .expect("actual shared Local copy/responder owners and original physical closure");
+}
+
 const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
  'bindings',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY to_jsonb(b)::text),'[]') FROM openbot_internal.artifact_dataset_bindings b), \
  'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
@@ -1083,11 +1199,13 @@ const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
 async fn cleanup_public_read_facts_on(
     client: &tokio_postgres::Client,
 ) -> Result<serde_json::Value, String> {
-    client.query_one(CLEANUP_PUBLIC_READ_FACTS, &[]).await
+    client
+        .query_one(CLEANUP_PUBLIC_READ_FACTS, &[])
+        .await
         .map_err(|error| error.to_string())?
-        .try_get(0).map_err(|error| error.to_string())
+        .try_get(0)
+        .map_err(|error| error.to_string())
 }
-
 
 #[derive(Default)]
 struct CleanupCachedIoPhases {
@@ -1116,14 +1234,18 @@ impl tracing::field::Visit for CleanupCachedPhaseVisitor {
         match (field.name(), value) {
             ("artifact_read_phase", "actual_io_completed_before_joint") => self.io = true,
             ("artifact_read_phase", "joint_statement_ready") => self.joint = true,
-            ("artifact_read_lifecycle_phase", "physical_segment_completed_before_more_io") => self.segment = true,
+            ("artifact_read_lifecycle_phase", "physical_segment_completed_before_more_io") => {
+                self.segment = true
+            }
             _ => {}
         }
     }
 }
 struct CleanupCachedPhaseSubscriber(Arc<CleanupCachedIoPhases>);
 impl tracing::Subscriber for CleanupCachedPhaseSubscriber {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool { true }
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
     }
@@ -1133,11 +1255,21 @@ impl tracing::Subscriber for CleanupCachedPhaseSubscriber {
     fn exit(&self, _: &tracing::span::Id) {}
     fn event(&self, event: &tracing::Event<'_>) {
         use std::sync::atomic::Ordering;
-        let mut visitor = CleanupCachedPhaseVisitor { io: false, joint: false, segment: false };
+        let mut visitor = CleanupCachedPhaseVisitor {
+            io: false,
+            joint: false,
+            segment: false,
+        };
         event.record(&mut visitor);
-        if visitor.io { self.0.io.fetch_add(1, Ordering::SeqCst); }
-        if visitor.joint { self.0.joint.fetch_add(1, Ordering::SeqCst); }
-        if visitor.segment { self.0.segments.fetch_add(1, Ordering::SeqCst); }
+        if visitor.io {
+            self.0.io.fetch_add(1, Ordering::SeqCst);
+        }
+        if visitor.joint {
+            self.0.joint.fetch_add(1, Ordering::SeqCst);
+        }
+        if visitor.segment {
+            self.0.segments.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -1149,7 +1281,10 @@ async fn arm_cached_first_cleanup_fence(
     receipt: &ArtifactRegistrationReceipt,
 ) -> Result<serde_json::Value, String> {
     let mut controller = pool.get().await.map_err(|error| error.to_string())?;
-    let transaction = controller.transaction().await.map_err(|error| error.to_string())?;
+    let transaction = controller
+        .transaction()
+        .await
+        .map_err(|error| error.to_string())?;
     let inserted: serde_json::Value = transaction.query_one(
         "INSERT INTO openbot_internal.artifact_cleanup_fences \
          (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
@@ -1160,16 +1295,24 @@ async fn arm_cached_first_cleanup_fence(
         &[&deployment, &tenant, &receipt.operation_id, &receipt.artifact_id, &owner],
     ).await.map_err(|error| error.to_string())?
         .try_get(0).map_err(|error| error.to_string())?;
-    require(inserted["operation_id"] == receipt.operation_id
-        && inserted["artifact_id"] == receipt.artifact_id
-        && inserted["terminal_status"] == "deleted" && inserted["phase"] == "armed",
-        "controlled consumer fence did not retain the original pair and intent")?;
-    transaction.commit().await.map_err(|error| error.to_string())?;
+    require(
+        inserted["operation_id"] == receipt.operation_id
+            && inserted["artifact_id"] == receipt.artifact_id
+            && inserted["terminal_status"] == "deleted"
+            && inserted["phase"] == "armed",
+        "controlled consumer fence did not retain the original pair and intent",
+    )?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(inserted)
 }
 
 // Read only this Rust process's bounded f/device/inode inventory. No path fields or peer PIDs.
-fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+fn cleanup_owned_inode_fds(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<u32>, String> {
     use std::io::Read as _;
     use std::os::unix::fs::MetadataExt as _;
     use std::process::{Command, Stdio};
@@ -1323,7 +1466,12 @@ fn cleanup_cached_schema_difference_paths(
                 if out.len() >= 16 {
                     return;
                 }
-                cleanup_cached_schema_difference_paths(value, other, &format!("{path}/{index}"), out);
+                cleanup_cached_schema_difference_paths(
+                    value,
+                    other,
+                    &format!("{path}/{index}"),
+                    out,
+                );
             }
         }
         _ => out.push(path.to_owned()),
@@ -1336,7 +1484,8 @@ async fn actual_prepared_local_public_reader_cached_first_cleanup_fence_recheck_
     use tracing::instrument::WithSubscriber as _;
     let mut bundle = OwnedBundle::materialize().expect("Root-owned exact PG bundle");
     let fixture = LocalFixture::new(&bundle, "public-read-cached-cleanup")
-        .await.expect("genuine owned Prepared Local setup");
+        .await
+        .expect("genuine owned Prepared Local setup");
     let outcome = async {
         let prepared = fixture.prepared();
         let protocol = prepared.protocol();
@@ -1411,7 +1560,11 @@ async fn actual_prepared_local_public_reader_cached_first_cleanup_fence_recheck_
         Ok(())
     }.await;
     let cleaned = fixture.finish().await;
-    if cleaned.is_ok() { bundle.root.1 = true; }
+    if cleaned.is_ok() {
+        bundle.root.1 = true;
+    }
     drop(bundle);
-    outcome.and(cleaned).expect("genuine Prepared Local cached first cleanup-fence refusal and physical closure");
+    outcome
+        .and(cleaned)
+        .expect("genuine Prepared Local cached first cleanup-fence refusal and physical closure");
 }

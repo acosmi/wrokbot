@@ -7,7 +7,9 @@ use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc, Mutex};
 
+use openbot_application::artifact_read_protocol::ArtifactReadEntryStop;
 use openbot_domain::artifact::ArtifactQuotaPolicy;
+use openbot_domain::artifact_cleanup::ArtifactCleanupFenceKey;
 use rustix::fs::{Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::IsolationLevel;
@@ -18,7 +20,15 @@ pub(crate) use crate::artifact_bytes::ArtifactByteStorageLocation;
 use crate::artifact_bytes::{
     ArtifactBlob, ArtifactBlobReader, ArtifactByteError, ArtifactByteProbe, ArtifactByteStore,
 };
+use crate::artifact_read_lifecycle::ReadOperationState;
 use crate::artifact_registry::ArtifactDatasetRegistry;
+
+mod read_barrier;
+pub use read_barrier::{ArtifactReadControlledBarrier, ArtifactReadControlledDrainAck};
+pub(crate) use read_barrier::{
+    StoreReadEnrollment, StoreReadJobLease, StoreReadQueryLease, StoreReadQueryReservation,
+};
+use read_barrier::{StoreReadFdLease, StoreReadGate};
 
 const MARKER_NAME: &str = ".artifact-store-v1";
 const MAX_MARKER_BYTES: u64 = 4096;
@@ -127,10 +137,12 @@ pub enum ArtifactReadBridgeError {
 /// This is not a download handle, a session/window grant, or per-block current authorization.
 /// Run synchronous IO on a blocking worker and move this entire reader into that worker.
 pub struct StoreBoundArtifactReader {
+    // Automatic field Drop ends the original File before releasing shared admission below.
     reader: ArtifactBlobReader,
     record: ObservedArtifactReadRecord,
     store: Arc<DatasetBoundArtifactStore>,
     failed: bool,
+    read_lease: StoreReadFdLease,
 }
 
 impl core::fmt::Debug for StoreBoundArtifactReader {
@@ -155,6 +167,7 @@ impl StoreBoundArtifactReader {
         if !self.record.matches_store(&self.store) {
             return Err(ArtifactStoreError::BindingMismatch.into());
         }
+        self.read_lease.verify_admission()?;
         let _guard = self
             .store
             .io
@@ -163,6 +176,7 @@ impl StoreBoundArtifactReader {
         self.store.check_current()?;
         self.reader.verify_current_descriptor()?;
         self.store.check_current()?;
+        self.read_lease.verify_admission()?;
         Ok(())
     }
     /// Observe at most the frozen 4MiB physical chunk. Failure is terminal and wipes the entire
@@ -186,6 +200,7 @@ impl StoreBoundArtifactReader {
         if !self.record.matches_store(&self.store) {
             return Err(ArtifactStoreError::BindingMismatch.into());
         }
+        self.read_lease.verify_admission()?;
         let _guard = self
             .store
             .io
@@ -194,6 +209,7 @@ impl StoreBoundArtifactReader {
         self.store.check_current()?;
         let length = self.reader.read_chunk(output)?;
         self.store.check_current()?;
+        self.read_lease.verify_admission()?;
         Ok(length)
     }
 }
@@ -261,6 +277,7 @@ pub struct DatasetBoundArtifactStore {
     bytes: ArtifactByteStore,
     owner: Arc<()>,
     io: Mutex<()>,
+    reads: Arc<StoreReadGate>,
 }
 
 impl core::fmt::Debug for DatasetBoundArtifactStore {
@@ -386,6 +403,12 @@ impl DatasetBoundArtifactStore {
                 policy.max_artifact_bytes(),
             )
             .map_err(|_| ArtifactStoreError::Unavailable)?;
+            let binding = registry.binding();
+            let reads = StoreReadGate::new(
+                binding.deployment_id(),
+                binding.tenant_id(),
+                binding.dataset_id(),
+            );
             Ok(Self {
                 registry,
                 root: prepared.root,
@@ -395,6 +418,7 @@ impl DatasetBoundArtifactStore {
                 bytes,
                 owner: Arc::new(()),
                 io: Mutex::new(()),
+                reads,
             })
         })
         .await
@@ -409,6 +433,9 @@ impl DatasetBoundArtifactStore {
     pub(crate) const fn physical_binding(&self) -> &ArtifactRootPhysicalBinding {
         &self.physical
     }
+    pub(crate) fn read_dataset_id(&self) -> &str {
+        self.registry.binding().dataset_id()
+    }
     pub(crate) fn matches_registry_owner(&self, registry: &ArtifactDatasetRegistry) -> bool {
         Arc::ptr_eq(&self.registry.owner(), &registry.owner())
             && std::ptr::eq(self.registry.pool().manager(), registry.pool().manager())
@@ -421,6 +448,32 @@ impl DatasetBoundArtifactStore {
         }
         Ok(())
     }
+
+    pub(crate) fn enroll_read(
+        self: &Arc<Self>,
+        state: &Arc<ReadOperationState>,
+        artifact_id: &str,
+        entry_stop: Option<Arc<dyn ArtifactReadEntryStop>>,
+    ) -> Result<StoreReadEnrollment, ArtifactStoreError> {
+        self.reads
+            .enroll(Arc::clone(self), state, artifact_id, entry_stop)
+    }
+
+    pub(crate) fn begin_read_query(
+        self: &Arc<Self>,
+        artifact_id: &str,
+    ) -> Result<StoreReadQueryReservation, ArtifactStoreError> {
+        self.reads.begin_read_query(Arc::clone(self), artifact_id)
+    }
+
+    /// Called only after the original administration checked its actual snapshot Store identity.
+    pub(crate) fn close_artifact_reads(
+        self: &Arc<Self>,
+        key: ArtifactCleanupFenceKey,
+    ) -> Result<ArtifactReadControlledBarrier, ArtifactStoreError> {
+        self.reads.close(&key)?;
+        Ok(ArtifactReadControlledBarrier::new(Arc::clone(self), key))
+    }
     /// Consume a descriptor minted by the actual owned-PG adapter for this exact Store Arc.
     /// Recheck current private root/marker and the real object's full digest before retaining its
     /// FD. This synchronous method belongs on the actual blocking worker; it does not recheck
@@ -432,15 +485,18 @@ impl DatasetBoundArtifactStore {
         if !record.matches_store(self) {
             return Err(ArtifactStoreError::BindingMismatch.into());
         }
+        let read_lease = self.reads.admit_fd(record.read_cleanup_key()?)?;
         let _guard = self.io.try_lock().map_err(|_| ArtifactStoreError::Busy)?;
         self.check_current()?;
         let reader = self.bytes.open_verified(record.blob())?;
         self.check_current()?;
+        read_lease.verify_admission()?;
         Ok(StoreBoundArtifactReader {
             reader,
             record,
             store: Arc::clone(self),
             failed: false,
+            read_lease,
         })
     }
 
@@ -456,6 +512,7 @@ impl DatasetBoundArtifactStore {
         if !record.matches_store(self) {
             return Err(ArtifactStoreError::BindingMismatch.into());
         }
+        let read_lease = self.reads.admit_fd(record.read_cleanup_key()?)?;
         let _guard = self.io.try_lock().map_err(|_| ArtifactStoreError::Busy)?;
         self.check_current()?;
         let reader = self
@@ -465,11 +522,13 @@ impl DatasetBoundArtifactStore {
         if !is_current(false) {
             return Err(ArtifactStoreError::Unavailable.into());
         }
+        read_lease.verify_admission()?;
         Ok(StoreBoundArtifactReader {
             reader,
             record,
             store: Arc::clone(self),
             failed: false,
+            read_lease,
         })
     }
 

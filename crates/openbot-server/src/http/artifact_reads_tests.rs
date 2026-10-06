@@ -146,6 +146,11 @@ struct OriginalObserver {
 impl openbot_application::artifact_read_protocol::ArtifactReadPreparationObserver
     for OriginalObserver
 {
+    fn original_entry_stop(
+        &self,
+    ) -> Option<Arc<dyn openbot_application::artifact_read_protocol::ArtifactReadEntryStop>> {
+        self.downstream.original_entry_stop()
+    }
     fn enrolled(
         &self,
         completion: OriginalCompletion,
@@ -248,6 +253,9 @@ struct Fixture {
     application: Arc<dyn ApplicationService>,
     router: axum::Router,
     actual: Arc<PostgresArtifactAdministration>,
+    registry: Arc<ArtifactDatasetRegistry>,
+    store: Arc<DatasetBoundArtifactStore>,
+    begin: BeginThreadRunRequest,
     original_completions: Arc<OriginalCompletions>,
     payload: String,
     receipt: ArtifactRegistrationReceipt,
@@ -343,8 +351,8 @@ impl Fixture {
         );
         let actual = Arc::new(
             PostgresArtifactAdministration::new(
-                registry,
-                store,
+                registry.clone(),
+                store.clone(),
                 ArtifactQuotaPolicy::default(),
                 SecretBytes::new(vec![0x88; 32]),
             )
@@ -400,6 +408,9 @@ impl Fixture {
             application,
             router,
             actual,
+            registry,
+            store,
+            begin,
             original_completions,
             payload,
             receipt,
@@ -533,6 +544,200 @@ impl Fixture {
         eprintln!("PUBLIC_ARTIFACT_SERVER_PHYSICAL_CLEANUP actual_inventory_drained=true");
         Ok(())
     }
+}
+
+async fn shared_public_business_facts(fixture: &Fixture) -> Result<serde_json::Value, String> {
+    fixture.pool.get().await.map_err(|error| error.to_string())?.query_one(
+        "SELECT jsonb_build_object( \
+         'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
+         'records',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_records r), \
+         'receipts',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_saved_receipts r), \
+         'workspace',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_workspace_quotas q), \
+         'runquota',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_run_quotas q), \
+         'fences',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY to_jsonb(c)::text),'[]') FROM openbot_internal.artifact_cleanup_fences c), \
+         'stores',(SELECT coalesce(jsonb_agg(to_jsonb(s) ORDER BY to_jsonb(s)::text),'[]') FROM openbot_internal.artifact_store_bindings s), \
+         'registry',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY to_jsonb(b)::text),'[]') FROM openbot_internal.artifact_dataset_bindings b), \
+         'audit',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY id),'[]') FROM public.audit_events a))", &[],
+    ).await.map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())
+}
+
+fn shared_public_peer(
+    fixture: &Fixture,
+) -> Result<
+    (
+        Arc<PostgresArtifactAdministration>,
+        Arc<PostgresSessionAuthResolver>,
+        crate::ServerState,
+    ),
+    String,
+> {
+    let actual = Arc::new(
+        PostgresArtifactAdministration::new(
+            fixture.registry.clone(),
+            fixture.store.clone(),
+            ArtifactQuotaPolicy::default(),
+            SecretBytes::new(vec![0x88; 32]),
+        )
+        .map_err(|error| error.to_string())?,
+    );
+    let resolver = Arc::new(
+        PostgresSessionAuthResolver::new(
+            fixture.pool.clone(),
+            SESSION_KEY,
+            default_session_lifetime(),
+            DeploymentId::new(DEPLOYMENT),
+            TenantId::new(TENANT),
+        )
+        .map_err(|error| error.to_string())?,
+    );
+    resolver
+        .install_artifact_read_authority(&actual.read_authority())
+        .map_err(|_| "independent actual resolver enrollment refused".to_owned())?;
+    let application: Arc<dyn ApplicationService> = Arc::new(
+        openbot_application::OpenBotApplication::new(
+            openbot_infra::repo::channels::ChannelRepo::new(fixture.pool.clone()),
+        )
+        .with_artifacts(actual.clone()),
+    );
+    let policy = ServerConfig::from_env_map(&EnvMap::new())
+        .map_err(|error| format!("shared peer policy: {error:?}"))?
+        .transport_policy(true);
+    let state = ServerBuilder::new(application, resolver.clone())
+        .with_transport_policy(policy)
+        .build();
+    Ok((actual, resolver, state))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL, actual shared Store and independent Server Session guards"]
+async fn shared_read_barrier_closes_all_administrations_and_keeps_other_artifact() {
+    let tag = "shared-administration-key";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config, 31).await?;
+        let outcome = async {
+            let auth_a = fixture.resolver.resolve(&parts(COOKIE_A)?).await.map_err(|error| error.to_string())?;
+            let record = fixture.actual.observe_read_record(&auth_a, &fixture.receipt.artifact_id).await.map_err(|error| error.to_string())?;
+            let (admin_b, resolver_b, state_b) = shared_public_peer(&fixture)?;
+            let auth_b = resolver_b.resolve(&parts(COOKIE_B)?).await.map_err(|error| error.to_string())?;
+            require(!auth_a.request_binding().ok_or("original A binding missing")?.identity().same_binding(
+                auth_b.request_binding().ok_or("independent B binding missing")?.identity()),
+                "cross-administration test reused the original host guard")?;
+            require(admin_b.read_host_bound_chunk(&auth_a, &fixture.receipt.artifact_id).await.is_err(),
+                "B authority accepted A's real Session guard")?;
+            let saved_b = admin_b.save_run_message_text(&auth_b, SaveRunMessageTextArtifact {
+                request_id: Uuid::now_v7().to_string(),
+                source_thread_id: fixture.begin.command.thread_id.clone(), source_run_id: fixture.begin.command.run_id.clone(),
+                source_message_id: format!("{}:input", fixture.begin.command.run_id.as_str()),
+                expected_sha256: format!("{:x}", Sha256::digest(fixture.payload.as_bytes())),
+            }).await.map_err(|error| error.to_string())?;
+            require(saved_b.artifact_id != fixture.receipt.artifact_id && saved_b.operation_id != fixture.receipt.operation_id,
+                "other artifact did not come from a distinct actual Save")?;
+
+            // A different actual namespace/root owner cannot close the original Store snapshot.
+            let mut foreign_root = OwnedRoot::new()?;
+            let foreign_registry = Arc::new(ArtifactDatasetRegistry::from_server(fixture.pool.clone(),
+                &DeploymentId::new("shared-foreign-deployment"), &TenantId::new("shared-foreign-tenant"))
+                .await.map_err(|error| error.to_string())?);
+            let foreign_store = Arc::new(DatasetBoundArtifactStore::bind_host_root(
+                std::fs::File::open(&foreign_root.0).map_err(|error| error.to_string())?, foreign_registry.clone(), ArtifactQuotaPolicy::default(),
+            ).await.map_err(|error| error.to_string())?);
+            let foreign_weak = Arc::downgrade(&foreign_store);
+            let foreign = Arc::new(PostgresArtifactAdministration::new(foreign_registry.clone(), foreign_store.clone(),
+                ArtifactQuotaPolicy::default(), SecretBytes::new(vec![0x88; 32])).map_err(|error| error.to_string())?);
+            require(foreign.close_observed_artifact_reads(&record).is_err(), "actual foreign Store closed an original snapshot by string identity")?;
+            drop(foreign); drop(foreign_store); drop(foreign_registry);
+            require(foreign_weak.upgrade().is_none(), "extra foreign test Store Arc remained live")?;
+            let original_root = std::fs::File::open(&foreign_root.0).map_err(|error| error.to_string())?;
+            require(original_root.try_lock().is_ok(), "actual foreign Store kernel owner survived last Arc Drop")?;
+            drop(original_root); foreign_root.1 = true; drop(foreign_root);
+
+            let before = shared_public_business_facts(&fixture).await?;
+            let mut a = fixture.actual.open_host_bound_read_operation(&auth_a, &fixture.receipt.artifact_id).await.map_err(|error| error.to_string())?;
+            let mut b = state_b.open_current_artifact_read(&parts(COOKIE_B)?, fixture.receipt.artifact_id.clone()).await.map_err(|error| error.to_string())?;
+            let a_block = a.next_block(&auth_a).await.map_err(|error| error.to_string())?.handoff_frame(&auth_a).map_err(|error| error.to_string())?;
+            let b_block = b.next_block().await.map_err(|error| error.to_string())?.ok_or("B original block missing")?;
+            require(a_block.as_bytes() == fixture.payload.as_bytes() && b_block.as_bytes() == fixture.payload.as_bytes(),
+                "two real original guards did not read the same original Store bytes")?;
+            let barrier = Arc::new(fixture.actual.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?);
+            require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err(), "shared close ignored held A/B original allocations")?;
+            let waiter_barrier = barrier.clone();
+            let (entered, reached) = tokio::sync::oneshot::channel();
+            let waiter = tokio::spawn(async move {
+                let mut original_wait = Box::pin(waiter_barrier.drain_before(Instant::now() + Duration::from_secs(5)));
+                let pending = tokio::time::timeout(Duration::from_millis(25), original_wait.as_mut()).await.is_err();
+                let _ = entered.send(pending);
+                original_wait.await
+            });
+            require(reached.await.map_err(|error| error.to_string())?, "shared drain cancellation did not poll a truly pending original waiter")?;
+            waiter.abort();
+            require(waiter.await.is_err_and(|error| error.is_cancelled()), "shared drain waiter was not actually reaped")?;
+            drop(barrier);
+            let (admin_c, resolver_c, state_c) = shared_public_peer(&fixture)?;
+            require(state_b.read_current_artifact_chunk(&parts(COOKIE_B)?, fixture.receipt.artifact_id.clone()).await.is_err()
+                && state_c.read_current_artifact_chunk(&parts(COOKIE_A)?, fixture.receipt.artifact_id.clone()).await.is_err(),
+                "timeout/cancel/barrier Drop or new administration reopened the shared body gate")?;
+            let other = state_c.read_current_artifact_chunk(&parts(COOKIE_A)?, saved_b.artifact_id.clone()).await.map_err(|error| error.to_string())?;
+            require(other == fixture.payload.as_bytes(), "closing the original key blocked the other actual Save")?;
+            drop(other); // successful legacy raw bytes remain an external ownership boundary.
+            let barrier = admin_c.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+            require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err(), "recreating a waiter discarded held A/B inventory")?;
+            drop(a_block); drop(b_block); drop(a); drop(b);
+            let ack = barrier.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|error| format!("{error:?}"))?;
+            require(before == shared_public_business_facts(&fixture).await?, "shared close mutated original business/charge/receipt/fence/store/audit facts")?;
+            require(fixture.root.0.join("objects").join(&fixture.receipt.artifact_id).is_file(), "shared gate performed unregistered deletion")?;
+            drop(ack); drop(barrier); drop(record);
+            resolver_b.close_request_bindings(); resolver_c.close_request_bindings();
+            for authority in [admin_b.read_authority(), admin_c.read_authority()] {
+                let lifecycle = authority.read_lifecycle(); lifecycle.close();
+                lifecycle.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|error| format!("{error:?}"))?;
+            }
+            drop(state_b); drop(state_c); drop(admin_b); drop(admin_c); drop(resolver_b); drop(resolver_c);
+            eprintln!("ARTIFACT_SHARED_ADMINS real_a_b_c_guards=true foreign_store_refused=true other_actual_save_readable=true timeout_cancel_drop_permanent=true controlled_ack=true auth_idle_touch=allowed deletion=false");
+            Ok(())
+        }.await;
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    }).await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL and actual last Server Bytes clone ownership"]
+async fn shared_read_barrier_waits_for_original_server_bytes_last_owner() {
+    let tag = "shared-server-bytes-owner";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config, 37).await?;
+        let outcome = async {
+            let auth = fixture.resolver.resolve(&parts(COOKIE_A)?).await.map_err(|error| error.to_string())?;
+            let record = fixture.actual.observe_read_record(&auth, &fixture.receipt.artifact_id).await.map_err(|error| error.to_string())?;
+            let before = shared_public_business_facts(&fixture).await?;
+            let opened = fixture.open(COOKIE_A).await?;
+            let response = fixture.next(COOKIE_A, &opened.handle_id, 0).await?;
+            data_headers(&response, &opened.handle_id, 0)?;
+            let mut body = response.into_body().into_data_stream();
+            let bytes = body.next().await.ok_or("real body never yielded its original carrier")?.map_err(|error| error.to_string())?;
+            let held = bytes.clone();
+            let sliced = bytes.slice(1..bytes.len());
+            require(body.next().await.is_none(), "real body did not perform its terminal poll")?;
+            drop(body); drop(bytes);
+            let path = fixture.root.0.join("objects").join(&fixture.receipt.artifact_id);
+            require(cleanup_owned_inode_fds(&path)?.len() == 1, "held real Bytes carriers did not retain the original FD")?;
+            let barrier = fixture.actual.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+            require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err(), "shared close ACKed with original clone and slice held")?;
+            require(held.as_ref() == fixture.payload.as_bytes(), "shared stop was falsely represented as revoking already-selected bytes")?;
+            drop(held);
+            require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err(), "clone Drop ignored the surviving actual Bytes slice owner")?;
+            drop(sliced);
+            let ack = barrier.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|error| format!("{error:?}"))?;
+            require(cleanup_owned_inode_fds(&path)?.is_empty() && path.is_file(), "last real Bytes owner did not end its actual FD or performed deletion")?;
+            require(before == shared_public_business_facts(&fixture).await?, "shared Server close changed original business facts")?;
+            drop(ack); drop(barrier); drop(record);
+            eprintln!("ARTIFACT_SHARED_SERVER body_terminal=true clone_held_no_ack=true slice_held_no_ack=true last_owner_drop=true original_fd_absent=true controlled_ack=true");
+            Ok(())
+        }.await;
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    }).await;
 }
 
 fn no_store(response: &axum::response::Response) -> Result<(), String> {
@@ -1006,7 +1211,6 @@ async fn actual_server_session_public_reader_closed_framing_and_owner_shutdown()
     .await;
 }
 
-
 // Controlled 0044 rows are consumer inputs only. These observations never assert deletion,
 // directory sync, refund, cleanup authorization or a producer receipt.
 const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
@@ -1027,11 +1231,13 @@ const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
 async fn cleanup_public_read_facts_on(
     client: &tokio_postgres::Client,
 ) -> Result<serde_json::Value, String> {
-    client.query_one(CLEANUP_PUBLIC_READ_FACTS, &[]).await
+    client
+        .query_one(CLEANUP_PUBLIC_READ_FACTS, &[])
+        .await
         .map_err(|error| error.to_string())?
-        .try_get(0).map_err(|error| error.to_string())
+        .try_get(0)
+        .map_err(|error| error.to_string())
 }
-
 
 #[derive(Default)]
 struct CleanupCachedIoPhases {
@@ -1060,14 +1266,18 @@ impl tracing::field::Visit for CleanupCachedPhaseVisitor {
         match (field.name(), value) {
             ("artifact_read_phase", "actual_io_completed_before_joint") => self.io = true,
             ("artifact_read_phase", "joint_statement_ready") => self.joint = true,
-            ("artifact_read_lifecycle_phase", "physical_segment_completed_before_more_io") => self.segment = true,
+            ("artifact_read_lifecycle_phase", "physical_segment_completed_before_more_io") => {
+                self.segment = true
+            }
             _ => {}
         }
     }
 }
 struct CleanupCachedPhaseSubscriber(Arc<CleanupCachedIoPhases>);
 impl tracing::Subscriber for CleanupCachedPhaseSubscriber {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool { true }
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
     }
@@ -1077,11 +1287,21 @@ impl tracing::Subscriber for CleanupCachedPhaseSubscriber {
     fn exit(&self, _: &tracing::span::Id) {}
     fn event(&self, event: &tracing::Event<'_>) {
         use std::sync::atomic::Ordering;
-        let mut visitor = CleanupCachedPhaseVisitor { io: false, joint: false, segment: false };
+        let mut visitor = CleanupCachedPhaseVisitor {
+            io: false,
+            joint: false,
+            segment: false,
+        };
         event.record(&mut visitor);
-        if visitor.io { self.0.io.fetch_add(1, Ordering::SeqCst); }
-        if visitor.joint { self.0.joint.fetch_add(1, Ordering::SeqCst); }
-        if visitor.segment { self.0.segments.fetch_add(1, Ordering::SeqCst); }
+        if visitor.io {
+            self.0.io.fetch_add(1, Ordering::SeqCst);
+        }
+        if visitor.joint {
+            self.0.joint.fetch_add(1, Ordering::SeqCst);
+        }
+        if visitor.segment {
+            self.0.segments.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -1093,7 +1313,10 @@ async fn arm_cached_first_cleanup_fence(
     receipt: &ArtifactRegistrationReceipt,
 ) -> Result<serde_json::Value, String> {
     let mut controller = pool.get().await.map_err(|error| error.to_string())?;
-    let transaction = controller.transaction().await.map_err(|error| error.to_string())?;
+    let transaction = controller
+        .transaction()
+        .await
+        .map_err(|error| error.to_string())?;
     let inserted: serde_json::Value = transaction.query_one(
         "INSERT INTO openbot_internal.artifact_cleanup_fences \
          (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
@@ -1104,17 +1327,25 @@ async fn arm_cached_first_cleanup_fence(
         &[&deployment, &tenant, &receipt.operation_id, &receipt.artifact_id, &owner],
     ).await.map_err(|error| error.to_string())?
         .try_get(0).map_err(|error| error.to_string())?;
-    require(inserted["operation_id"] == receipt.operation_id
-        && inserted["artifact_id"] == receipt.artifact_id
-        && inserted["terminal_status"] == "deleted" && inserted["phase"] == "armed",
-        "controlled consumer fence did not retain the original pair and intent")?;
-    transaction.commit().await.map_err(|error| error.to_string())?;
+    require(
+        inserted["operation_id"] == receipt.operation_id
+            && inserted["artifact_id"] == receipt.artifact_id
+            && inserted["terminal_status"] == "deleted"
+            && inserted["phase"] == "armed",
+        "controlled consumer fence did not retain the original pair and intent",
+    )?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(inserted)
 }
 
 #[cfg(target_os = "macos")]
 // Read only this Rust process's bounded f/device/inode inventory. No path fields or peer PIDs.
-fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+fn cleanup_owned_inode_fds(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<u32>, String> {
     use std::io::Read as _;
     use std::os::unix::fs::MetadataExt as _;
     use std::process::{Command, Stdio};
@@ -1235,19 +1466,28 @@ fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::B
 }
 
 #[cfg(target_os = "linux")]
-fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+fn cleanup_owned_inode_fds(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<u32>, String> {
     use std::os::unix::fs::MetadataExt as _;
     let original = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-    require(original.is_file() && original.nlink() == 1,
-        "owned FD oracle requires the original regular inode")?;
+    require(
+        original.is_file() && original.nlink() == 1,
+        "owned FD oracle requires the original regular inode",
+    )?;
     let sample = || -> Result<std::collections::BTreeSet<u32>, String> {
         let mut found = std::collections::BTreeSet::new();
         for entry in std::fs::read_dir("/proc/self/fd").map_err(|error| error.to_string())? {
             let entry = entry.map_err(|error| error.to_string())?;
-            let fd = entry.file_name().to_str().and_then(|value| value.parse::<u32>().ok())
+            let fd = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| value.parse::<u32>().ok())
                 .ok_or("own-PID fd inventory contained a nonnumeric descriptor")?;
             match std::fs::metadata(entry.path()) {
-                Ok(metadata) if metadata.dev() == original.dev() && metadata.ino() == original.ino() => {
+                Ok(metadata)
+                    if metadata.dev() == original.dev() && metadata.ino() == original.ino() =>
+                {
                     found.insert(fd);
                 }
                 Ok(_) => {}
@@ -1259,7 +1499,10 @@ fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::B
     };
     let first = sample()?;
     let second = sample()?;
-    require(first == second, "own original inode FD inventory was unstable (Unproven)")?;
+    require(
+        first == second,
+        "own original inode FD inventory was unstable (Unproven)",
+    )?;
     Ok(first)
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
