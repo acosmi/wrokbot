@@ -104,6 +104,8 @@ tracing.workspace = true
 # Desktop-local preference storage implements the shared async application port. No JSON codec is
 # introduced: the file format is a closed three-line host format and in-process commands stay typed.
 async-trait.workspace = true
+# Controlled public-read prefix copy before native responder handoff.
+zeroize.workspace = true
 
 # Both optional host features need closed manifest/wire decoding. Keeping them optional preserves
 # the default codec-free typed in-process graph; PostgreSQL bundle verification itself is portable

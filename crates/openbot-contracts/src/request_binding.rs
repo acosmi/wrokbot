@@ -156,6 +156,9 @@ pub struct ArtifactReadRecordFacts<'a> {
 }
 /// 受信真实 reader 的私有目标 port；任意 Rust 实现不自动成为生产 authority。
 pub trait ArtifactReadCurrentTarget: Send + Sync {
+    /// Notify only a loss of actual rollback completion proof; this never grants authority.
+    /// Existing targets have no new lifecycle effect.
+    fn mark_rollback_unproven(&self) {}
     /// 有界 ID 仅供真实 own-Pool 查询；不是票据。
     fn lookup_id(&self) -> &str;
     /// 精确适配器身份；必须另经真实 same-Pool enrollment。
@@ -768,6 +771,18 @@ impl VerifiedHostRequestBinding {
             ));
         }
         target.verify_physical_current()?;
+        witness.verify_current(auth, deadline)?;
+        self.check_artifact_read_attachment(auth, deadline)
+    }
+    /// Check an actual retained host witness for a no-byte ACK/closed control handoff.
+    /// This does not establish physical readability or grant another byte delivery.
+    pub fn verify_artifact_read_control_tail(
+        &self,
+        auth: &AuthContext,
+        witness: &dyn ArtifactReadTailWitness,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.check_artifact_read_attachment(auth, deadline)?;
         witness.verify_current(auth, deadline)?;
         self.check_artifact_read_attachment(auth, deadline)
     }

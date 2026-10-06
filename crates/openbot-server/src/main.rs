@@ -538,6 +538,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     // Retain the actual resolver owner for lifecycle closure, not in a request guard.
     let auth_owner = Arc::clone(&auth);
+    let artifact_read_application = Arc::clone(&application);
     let mut builder = ServerBuilder::new(application, auth)
         .with_transport_policy(server.transport_policy(single_user))
         .with_sensitive_write_security(sensitive)
@@ -582,12 +583,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .with_graceful_shutdown({
         let shutdown_auth = Arc::clone(&auth_owner);
+        let shutdown_application = Arc::clone(&artifact_read_application);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let shutdown_artifact_reads = artifact_read_lifecycle.clone();
         async move {
             shutdown_signal().await;
             // Revoke current observations before axum waits for in-flight requests to drain.
             shutdown_auth.close_request_bindings();
+            if let Err(error) = shutdown_application.close_public_artifact_reads() {
+                tracing::warn!(
+                    error.code = error.code().as_str(),
+                    "public artifact read closure unavailable"
+                );
+            }
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             if let Some(reads) = shutdown_artifact_reads {
                 reads.close();
@@ -597,6 +605,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await;
     // A serving error or normal completion also closes the owner before other resources stop.
     auth_owner.close_request_bindings();
+    if let Err(error) = artifact_read_application.close_public_artifact_reads() {
+        tracing::warn!(
+            error.code = error.code().as_str(),
+            "public artifact read closure unavailable"
+        );
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     if let Some(reads) = &artifact_read_lifecycle {
         reads.close();

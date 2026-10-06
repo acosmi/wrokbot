@@ -1,0 +1,1007 @@
+//! New finite public-reader tests use owned PostgreSQL, real sessions, Application and body polls.
+//! These fixtures never connect to a user database or claim OS/client copy closure.
+
+mod harness {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-support/postgres_harness.rs"
+    ));
+}
+
+use crate::auth::SensitiveWriteSecurity;
+use crate::config::{EnvMap, ServerConfig};
+use crate::{AuthResolver, PostgresSessionAuthResolver, ServerBuilder};
+use axum::body::{Body, to_bytes};
+use futures_util::StreamExt as _;
+use http::{Method, Request, StatusCode};
+use openbot_application::{
+    ApplicationService, ArtifactAdministration, BeginThreadRunRequest, ThreadDirectory,
+};
+use openbot_contracts::artifact_read_protocol::{
+    ArtifactReadAcknowledged, ArtifactReadClosed, ArtifactReadOpened,
+};
+use openbot_contracts::artifacts::{ArtifactRegistrationReceipt, SaveRunMessageTextArtifact};
+use openbot_contracts::auth::AuthGeneration;
+use openbot_contracts::command::{BeginThreadRun, ThreadRunAnchor};
+use openbot_contracts::ids::{
+    ActorId, BotId, DeploymentId, RunId, TenantId, thread::ThreadIdentity,
+};
+use openbot_domain::artifact::ArtifactQuotaPolicy;
+use openbot_domain::identity::session::{
+    SessionHashKey, SessionToken, SessionTokenHash, TrustedOrigins,
+};
+use openbot_domain::vault::SecretBytes;
+use openbot_infra::artifact_administration::PostgresArtifactAdministration;
+use openbot_infra::artifact_registry::ArtifactDatasetRegistry;
+use openbot_infra::artifact_store::DatasetBoundArtifactStore;
+use openbot_infra::auth::config::default_session_lifetime;
+use openbot_infra::db::{baseline, native, pool, pool::DatabaseConfig};
+use openbot_infra::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
+use sha2::{Digest as _, Sha256};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use time::OffsetDateTime;
+use tower::ServiceExt as _;
+use uuid::Uuid;
+
+const DEPLOYMENT: &str = "artifact-current-host-deployment";
+const TENANT: &str = "artifact-current-host-tenant";
+const OWNER: &str = "current-read-owner";
+const A_ID: &str = "actual-read-session-a";
+const B_ID: &str = "actual-read-session-b";
+const COOKIE_A: &str = "owned-current-artifact-read-session-token-a-001";
+const COOKIE_B: &str = "owned-current-artifact-read-session-token-b-002";
+const SESSION_KEY: &[u8] = b"owned-current-artifact-read-session-hash-key";
+const TEXT: &str = "small actual Begin; controlled source update precedes actual Save";
+const FIRST_BLOCK: usize = 4 * 1024 * 1024;
+const ORIGIN: &str = "https://public-reader.example.test";
+
+fn require(value: bool, message: &'static str) -> Result<(), String> {
+    if value {
+        Ok(())
+    } else {
+        Err(message.to_owned())
+    }
+}
+fn token_column(token: &str) -> String {
+    SessionTokenHash::compute(
+        SessionToken::new(token.as_bytes()),
+        SessionHashKey::new(SESSION_KEY),
+    )
+    .to_column_value()
+}
+fn parts(cookie: &str) -> Result<http::request::Parts, String> {
+    Request::builder()
+        .uri("/trusted-rust-artifact-consumer")
+        .header("cookie", format!("openbot_session={cookie}"))
+        .body(())
+        .map(|request| request.into_parts().0)
+        .map_err(|error| error.to_string())
+}
+
+struct OwnedRoot(PathBuf, bool);
+impl OwnedRoot {
+    fn new() -> Result<Self, String> {
+        use std::os::unix::fs::DirBuilderExt as _;
+        let path =
+            std::env::temp_dir().join(format!("openbot-public-artifact-read-{}", Uuid::now_v7()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .map_err(|error| error.to_string())?;
+        Ok(Self(path, true))
+    }
+}
+impl Drop for OwnedRoot {
+    fn drop(&mut self) {
+        if !self.1 {
+            eprintln!("PUBLIC_ARTIFACT_SERVER_ROOT_CLEANUP retained_unproven_cleanup=true");
+            return;
+        }
+        let removed = std::fs::remove_dir_all(&self.0);
+        let absent = !self.0.exists();
+        eprintln!(
+            "PUBLIC_ARTIFACT_SERVER_ROOT_CLEANUP removed={} absent={absent}",
+            removed.is_ok()
+        );
+        if !std::thread::panicking() {
+            assert!(removed.is_ok() && absent, "owned read root did not close");
+        }
+    }
+}
+
+type OriginalCompletion =
+    Arc<dyn openbot_application::artifact_read_protocol::ArtifactReadOperationCompletion>;
+
+#[derive(Default)]
+struct OriginalCompletions(Mutex<Vec<OriginalCompletion>>);
+impl OriginalCompletions {
+    fn count(&self) -> Result<usize, String> {
+        self.0
+            .lock()
+            .map(|entries| entries.len())
+            .map_err(|_| "original completion capture poisoned".to_owned())
+    }
+    fn original_after(&self, before: usize) -> Result<OriginalCompletion, String> {
+        let entries = self
+            .0
+            .lock()
+            .map_err(|_| "original completion capture poisoned".to_owned())?;
+        require(
+            entries.len() == before + 1,
+            "actual Open did not enroll exactly one original operation",
+        )?;
+        entries
+            .get(before)
+            .cloned()
+            .ok_or_else(|| "original operation enrollment missing".to_owned())
+    }
+}
+struct OriginalObserver {
+    downstream:
+        Arc<dyn openbot_application::artifact_read_protocol::ArtifactReadPreparationObserver>,
+    captured: Arc<OriginalCompletions>,
+}
+impl openbot_application::artifact_read_protocol::ArtifactReadPreparationObserver
+    for OriginalObserver
+{
+    fn enrolled(
+        &self,
+        completion: OriginalCompletion,
+    ) -> Result<(), openbot_contracts::error::AppError> {
+        // The Application receives exactly the same actual Arc as PreparedArtifactRead.
+        // Capturing an additional owner does not create or replace its physical completion.
+        self.downstream.enrolled(Arc::clone(&completion))?;
+        self.captured
+            .0
+            .lock()
+            .map_err(
+                |_| openbot_contracts::error::AppError::DependencyUnavailable {
+                    dependency: "artifacts",
+                },
+            )?
+            .push(completion);
+        Ok(())
+    }
+}
+struct ObservedAdministration {
+    actual: Arc<PostgresArtifactAdministration>,
+    captured: Arc<OriginalCompletions>,
+}
+#[async_trait::async_trait]
+impl ArtifactAdministration for ObservedAdministration {
+    async fn prepare_host_bound_artifact_read(
+        &self,
+        auth: &openbot_contracts::auth::AuthContext,
+        artifact_id: &str,
+        original_deadline: Instant,
+        observer: Arc<
+            dyn openbot_application::artifact_read_protocol::ArtifactReadPreparationObserver,
+        >,
+    ) -> Result<
+        openbot_application::artifact_read_protocol::PreparedArtifactRead,
+        openbot_contracts::error::AppError,
+    > {
+        self.actual
+            .prepare_host_bound_artifact_read(
+                auth,
+                artifact_id,
+                original_deadline,
+                Arc::new(OriginalObserver {
+                    downstream: observer,
+                    captured: Arc::clone(&self.captured),
+                }),
+            )
+            .await
+    }
+    async fn observe_source_run_artifact_ids_current(
+        &self,
+        auth: &openbot_contracts::auth::AuthContext,
+        input: &openbot_contracts::artifacts::GetSourceRunArtifactIds,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::SourceRunArtifactIdsCurrentOutcome {
+        self.actual
+            .observe_source_run_artifact_ids_current(auth, input, deadline)
+            .await
+    }
+    async fn open_host_bound_read_operation(
+        &self,
+        auth: &openbot_contracts::auth::AuthContext,
+        artifact_id: &str,
+    ) -> Result<openbot_application::CurrentArtifactReadOperation, openbot_contracts::error::AppError>
+    {
+        self.actual
+            .open_host_bound_read_operation(auth, artifact_id)
+            .await
+    }
+    async fn read_host_bound_chunk(
+        &self,
+        auth: &openbot_contracts::auth::AuthContext,
+        artifact_id: &str,
+    ) -> Result<openbot_application::CurrentArtifactReadChunk, openbot_contracts::error::AppError>
+    {
+        self.actual.read_host_bound_chunk(auth, artifact_id).await
+    }
+    async fn save_run_message_text(
+        &self,
+        auth: &openbot_contracts::auth::AuthContext,
+        input: SaveRunMessageTextArtifact,
+    ) -> Result<ArtifactRegistrationReceipt, openbot_application::ArtifactAdministrationError> {
+        self.actual.save_run_message_text(auth, input).await
+    }
+    async fn get_metadata(
+        &self,
+        auth: &openbot_contracts::auth::AuthContext,
+        artifact_id: &str,
+    ) -> Result<
+        openbot_contracts::artifacts::ArtifactMetadata,
+        openbot_application::ArtifactAdministrationError,
+    > {
+        self.actual.get_metadata(auth, artifact_id).await
+    }
+}
+
+struct Fixture {
+    pool: deadpool_postgres::Pool,
+    resolver: Arc<PostgresSessionAuthResolver>,
+    application: Arc<dyn ApplicationService>,
+    router: axum::Router,
+    actual: Arc<PostgresArtifactAdministration>,
+    original_completions: Arc<OriginalCompletions>,
+    payload: String,
+    receipt: ArtifactRegistrationReceipt,
+    root: OwnedRoot,
+}
+impl Fixture {
+    async fn new(config: DatabaseConfig, length: usize) -> Result<Self, String> {
+        let payload = "L".repeat(length);
+        let pool = pool::connect(&config.clone().with_max_pool_size(8))
+            .await
+            .map_err(|error| error.to_string())?;
+        {
+            let mut client = pool.get().await.map_err(|error| error.to_string())?;
+            baseline::apply(&client)
+                .await
+                .map_err(|error| error.to_string())?;
+            native::apply(&mut client)
+                .await
+                .map_err(|error| error.to_string())?;
+            client.batch_execute("INSERT INTO public.users(id,email,auth_generation) VALUES('current-read-owner','current-read-owner@example.test',0);
+                INSERT INTO public.user_roles(user_id,role) VALUES('current-read-owner','user');
+                INSERT INTO public.agents(id,name,type,configuration) VALUES('current-read-bot','Current read fixture','built_in','{}');
+                INSERT INTO public.deployment_packages(id,tenant_id,source_path,checksum) VALUES('00000000-0000-4000-8000-000000000008','artifact-current-host-tenant','fixture','fixture');
+                INSERT INTO public.agent_profiles(agent_id,owner_user_id,title,role_description,avatar_seed,visibility) VALUES('current-read-bot','current-read-owner','Read fixture','fixture','fixture','public');")
+                .await.map_err(|error| error.to_string())?;
+            let now = OffsetDateTime::now_utc();
+            for (id, cookie) in [(A_ID, COOKIE_A), (B_ID, COOKIE_B)] {
+                client.execute("INSERT INTO public.sessions(id,user_id,token,expires_at,created_at,updated_at,auth_generation) VALUES($1,$2,$3,$4,$5,$5,0)",
+                    &[&id, &OWNER, &token_column(cookie), &(now + time::Duration::hours(1)), &(now - time::Duration::minutes(1))]).await.map_err(|error| error.to_string())?;
+            }
+        }
+        let deployment = DeploymentId::new(DEPLOYMENT);
+        let tenant = TenantId::new(TENANT);
+        let resolver = Arc::new(
+            PostgresSessionAuthResolver::new(
+                pool.clone(),
+                SESSION_KEY,
+                default_session_lifetime(),
+                deployment.clone(),
+                tenant.clone(),
+            )
+            .map_err(|error| error.to_string())?,
+        );
+        let begin = BeginThreadRunRequest {
+            deployment: deployment.clone(),
+            tenant: tenant.clone(),
+            actor: ActorId::new(OWNER),
+            auth_generation: AuthGeneration::new(0),
+            command: BeginThreadRun {
+                thread_id: ThreadIdentity::new(&deployment).mint_from_entropy([8; 16]),
+                run_id: RunId::new("actual/current-read-run%成果"),
+                bot_id: BotId::new("current-read-bot"),
+                anchor: ThreadRunAnchor::DirectBot,
+                message: TEXT.to_owned(),
+                selected_skill_slugs: Vec::new(),
+                model_selection: None,
+            },
+        };
+        PostgresThreadDirectory::with_runtime(
+            pool.clone(),
+            config.clone(),
+            "artifact-current-read-fixture".to_owned(),
+            DEFAULT_THREAD_LEASE_DURATION,
+        )
+        .map_err(|error| error.to_string())?
+        .begin_thread_run(begin.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+        // The public Begin remains small. Only this owned database fixture is then updated;
+        // this does not claim the public Begin surface accepts a multi-megabyte message.
+        let changed = pool.get().await.map_err(|error| error.to_string())?.execute(
+            "UPDATE public.messages SET content=jsonb_set(content,'{text}',to_jsonb($2::text)), search_text=$2 WHERE message_id=$1",
+            &[&format!("{}:input", begin.command.run_id.as_str()), &payload],
+        ).await.map_err(|error| error.to_string())?;
+        require(
+            changed == 1,
+            "owned fixture did not change exactly its original source",
+        )?;
+        let mut root = OwnedRoot::new()?;
+        let registry = Arc::new(
+            ArtifactDatasetRegistry::from_server(pool.clone(), &deployment, &tenant)
+                .await
+                .map_err(|error| error.to_string())?,
+        );
+        let store = Arc::new(
+            DatasetBoundArtifactStore::bind_host_root(
+                std::fs::File::open(&root.0).map_err(|error| error.to_string())?,
+                registry.clone(),
+                ArtifactQuotaPolicy::default(),
+            )
+            .await
+            .map_err(|error| error.to_string())?,
+        );
+        let actual = Arc::new(
+            PostgresArtifactAdministration::new(
+                registry,
+                store,
+                ArtifactQuotaPolicy::default(),
+                SecretBytes::new(vec![0x88; 32]),
+            )
+            .map_err(|error| error.to_string())?,
+        );
+        resolver
+            .install_artifact_read_authority(&actual.read_authority())
+            .map_err(|_| "actual resolver enrollment refused".to_owned())?;
+        let auth = resolver
+            .resolve(&parts(COOKIE_A)?)
+            .await
+            .map_err(|error| error.to_string())?;
+        let receipt = actual
+            .save_run_message_text(
+                &auth,
+                SaveRunMessageTextArtifact {
+                    request_id: Uuid::now_v7().to_string(),
+                    source_thread_id: begin.command.thread_id.clone(),
+                    source_run_id: begin.command.run_id.clone(),
+                    source_message_id: format!("{}:input", begin.command.run_id.as_str()),
+                    expected_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let original_completions = Arc::new(OriginalCompletions::default());
+        let application: Arc<dyn ApplicationService> = Arc::new(
+            openbot_application::OpenBotApplication::new(
+                openbot_infra::repo::channels::ChannelRepo::new(pool.clone()),
+            )
+            .with_artifacts(Arc::new(ObservedAdministration {
+                actual: Arc::clone(&actual),
+                captured: Arc::clone(&original_completions),
+            })),
+        );
+        let policy = ServerConfig::from_env_map(&EnvMap::new())
+            .map_err(|error| format!("fixture transport config: {error:?}"))?
+            .transport_policy(true);
+        let router = ServerBuilder::new(application.clone(), resolver.clone())
+            .with_transport_policy(policy)
+            .with_sensitive_write_security(SensitiveWriteSecurity::new(
+                default_session_lifetime(),
+                TrustedOrigins::from_configured([ORIGIN]).map_err(|error| error.to_string())?,
+            ))
+            .into_router()
+            .layer(axum::Extension(axum::extract::ConnectInfo(
+                std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 40_012)),
+            )));
+        root.1 = false;
+        Ok(Self {
+            pool,
+            resolver,
+            application,
+            router,
+            actual,
+            original_completions,
+            payload,
+            receipt,
+            root,
+        })
+    }
+
+    async fn request_raw(
+        &self,
+        method: Method,
+        path: &str,
+        cookie: &str,
+        body: Vec<u8>,
+    ) -> Result<axum::response::Response, String> {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("cookie", format!("openbot_session={cookie}"))
+            .header("origin", ORIGIN)
+            .header("content-type", "application/json")
+            .header("content-length", body.len().to_string())
+            .body(Body::from(body))
+            .map_err(|error| error.to_string())?;
+        self.router
+            .clone()
+            .oneshot(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        cookie: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<axum::response::Response, String> {
+        let body = body
+            .map(|value| serde_json::to_vec(&value))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        self.request_raw(method, path, cookie, body).await
+    }
+
+    async fn open(&self, cookie: &str) -> Result<ArtifactReadOpened, String> {
+        control(
+            self.request(
+                Method::POST,
+                super::PREFIX,
+                cookie,
+                Some(serde_json::json!({"artifactId": self.receipt.artifact_id})),
+            )
+            .await?,
+        )
+        .await
+    }
+
+    async fn next(
+        &self,
+        cookie: &str,
+        handle: &str,
+        sequence: u32,
+    ) -> Result<axum::response::Response, String> {
+        self.request(
+            Method::POST,
+            &format!("{}/{handle}/next", super::PREFIX),
+            cookie,
+            Some(serde_json::json!({"sequence": sequence})),
+        )
+        .await
+    }
+
+    async fn open_with_original_completion(
+        &self,
+        cookie: &str,
+    ) -> Result<(ArtifactReadOpened, OriginalCompletion), String> {
+        let before = self.original_completions.count()?;
+        let opened = self.open(cookie).await?;
+        let completion = self.original_completions.original_after(before)?;
+        Ok((opened, completion))
+    }
+
+    async fn ack(
+        &self,
+        cookie: &str,
+        handle: &str,
+        sequence: u32,
+    ) -> Result<axum::response::Response, String> {
+        self.request(
+            Method::POST,
+            &format!("{}/{handle}/ack", super::PREFIX),
+            cookie,
+            Some(serde_json::json!({"sequence": sequence})),
+        )
+        .await
+    }
+
+    async fn close(&self, cookie: &str, handle: &str) -> Result<axum::response::Response, String> {
+        self.request(
+            Method::DELETE,
+            &format!("{}/{handle}", super::PREFIX),
+            cookie,
+            None,
+        )
+        .await
+    }
+
+    async fn finish(mut self) -> Result<(), String> {
+        self.resolver.close_request_bindings();
+        let closed = self.application.close_public_artifact_reads();
+        let lifecycle = self.actual.read_authority().read_lifecycle();
+        lifecycle.close();
+        let drained = lifecycle
+            .drain_before(Instant::now() + Duration::from_secs(5))
+            .await;
+        self.pool.close();
+        require(
+            closed.is_ok(),
+            "actual Application reader owner closure refused",
+        )?;
+        require(
+            drained.is_ok(),
+            "actual Server original read inventory did not drain",
+        )?;
+        require(
+            self.root.0.is_dir(),
+            "owned original artifact root changed before closure",
+        )?;
+        self.root.1 = true;
+        eprintln!("PUBLIC_ARTIFACT_SERVER_PHYSICAL_CLEANUP actual_inventory_drained=true");
+        Ok(())
+    }
+}
+
+fn no_store(response: &axum::response::Response) -> Result<(), String> {
+    require(
+        response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok())
+            == Some("no-store"),
+        "public-reader response omitted no-store",
+    )
+}
+
+async fn control<T: serde::de::DeserializeOwned>(
+    response: axum::response::Response,
+) -> Result<T, String> {
+    no_store(&response)?;
+    require(
+        response.status() == StatusCode::OK,
+        "actual public control was not successful",
+    )?;
+    let body = to_bytes(response.into_body(), 8192)
+        .await
+        .map_err(|error| error.to_string())?;
+    serde_json::from_slice(&body).map_err(|error| error.to_string())
+}
+
+async fn status(response: axum::response::Response, expected: StatusCode) -> Result<(), String> {
+    no_store(&response)?;
+    require(
+        response.status() == expected,
+        "public-reader refusal had an unexpected status",
+    )?;
+    let body = to_bytes(response.into_body(), 8192)
+        .await
+        .map_err(|error| error.to_string())?;
+    require(
+        !body.windows(TEXT.len()).any(|part| part == TEXT.as_bytes()),
+        "public-reader refusal exposed source text",
+    )
+}
+
+fn data_headers(
+    response: &axum::response::Response,
+    handle: &str,
+    sequence: u32,
+) -> Result<(usize, bool), String> {
+    no_store(response)?;
+    require(
+        response.status() == StatusCode::OK,
+        "actual public block was not successful",
+    )
+    .map_err(|message| {
+        format!(
+            "{message}: status={} input_sequence={sequence}",
+            response.status().as_u16()
+        )
+    })?;
+    require(
+        response.headers().get("content-length").is_none(),
+        "zero-length framing could bypass the actual EOF body poll",
+    )?;
+    let header = |name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .ok_or("actual public block header missing".to_owned())
+    };
+    require(
+        header("x-artifact-read-handle")? == handle,
+        "block handle changed",
+    )?;
+    require(
+        header("x-artifact-read-sequence")?
+            .parse::<u32>()
+            .map_err(|error| error.to_string())?
+            == sequence,
+        "block sequence changed",
+    )?;
+    let length = header("x-artifact-read-length")?
+        .parse::<usize>()
+        .map_err(|error| error.to_string())?;
+    let eof = match header("x-artifact-read-eof")? {
+        "true" => true,
+        "false" => false,
+        _ => return Err("actual EOF header was not closed boolean framing".to_owned()),
+    };
+    require(
+        length <= FIRST_BLOCK && eof == (length == 0),
+        "actual block shape was invalid",
+    )?;
+    Ok((length, eof))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned PostgreSQL; real sessions and original public byte carriers"]
+async fn actual_server_session_public_reader_stream_ack_eof_and_foreign_scope() {
+    let tag = "public-reader-stream";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config, FIRST_BLOCK + 913).await?;
+        let outcome = async {
+            let opened = fixture.open(COOKIE_A).await?;
+            require(
+                opened.artifact_id == fixture.receipt.artifact_id
+                    && opened.byte_length == fixture.payload.len() as u64
+                    && opened.sha256 == format!("{:x}", Sha256::digest(fixture.payload.as_bytes()))
+                    && opened.remaining_millis > 0
+                    && opened.remaining_millis <= 600_000,
+                "Open did not return actual same-record bounded facts",
+            )?;
+            status(
+                fixture.next(COOKIE_B, &opened.handle_id, 0).await?,
+                StatusCode::NOT_FOUND,
+            )
+            .await?;
+            status(
+                fixture.ack(COOKIE_B, &opened.handle_id, 0).await?,
+                StatusCode::NOT_FOUND,
+            )
+            .await?;
+            let mut sequence = 0_u32;
+            let mut received = Vec::new();
+            loop {
+                let response = fixture.next(COOKIE_A, &opened.handle_id, sequence).await?;
+                let (length, eof) = data_headers(&response, &opened.handle_id, sequence)?;
+                let bytes = to_bytes(response.into_body(), FIRST_BLOCK)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                require(
+                    bytes.len() == length,
+                    "actual carrier length differed from descriptor",
+                )?;
+                if eof {
+                    require(bytes.is_empty(), "actual zero EOF delivered bytes")?;
+                    break;
+                }
+                require(!bytes.is_empty(), "non-EOF omitted its actual prefix")?;
+                received.extend_from_slice(&bytes);
+                status(
+                    fixture.next(COOKIE_A, &opened.handle_id, sequence).await?,
+                    StatusCode::CONFLICT,
+                )
+                .await?;
+                status(
+                    fixture
+                        .ack(COOKIE_A, &opened.handle_id, sequence + 1)
+                        .await?,
+                    StatusCode::CONFLICT,
+                )
+                .await?;
+                // The original body owner, not this test's copied transcript, must end before ACK.
+                drop(bytes);
+                let ack: ArtifactReadAcknowledged =
+                    control(fixture.ack(COOKIE_A, &opened.handle_id, sequence).await?).await?;
+                let duplicate: ArtifactReadAcknowledged =
+                    control(fixture.ack(COOKIE_A, &opened.handle_id, sequence).await?).await?;
+                require(
+                    ack == duplicate
+                        && ack.handle_id == opened.handle_id
+                        && ack.sequence == sequence,
+                    "matching ACK retry changed or replayed the original block",
+                )?;
+                sequence = sequence.checked_add(1).ok_or("test sequence overflow")?;
+                require(
+                    received.len() <= fixture.payload.len(),
+                    "reader replayed a prior prefix",
+                )?;
+            }
+            require(
+                received.as_slice() == fixture.payload.as_bytes(),
+                "actual sequential bytes did not reconstruct original source",
+            )?;
+            require(
+                format!("{:x}", Sha256::digest(&received)) == opened.sha256,
+                "actual reconstructed bytes failed the prepared original digest",
+            )?;
+            // A genuine zero EOF already requires true original per-reader completion.
+            // No additional post-EOF Close idempotency contract is assumed here.
+            Ok(())
+        }
+        .await;
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned PostgreSQL; true Bytes last-owner drop and per-reader close"]
+async fn actual_server_session_public_reader_delayed_body_and_close_wait_for_original_carrier() {
+    let tag = "public-reader-carrier";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config, 29).await?;
+        let outcome = async {
+            let original = fixture.open(COOKIE_A).await?;
+            let peer = fixture.open(COOKIE_B).await?;
+            let response = fixture.next(COOKIE_A, &original.handle_id, 0).await?;
+            data_headers(&response, &original.handle_id, 0)?;
+            let mut stream = response.into_body().into_data_stream();
+            let bytes = stream.next().await.ok_or("actual first body frame missing")?
+                .map_err(|error| error.to_string())?;
+            let held_original = bytes.clone();
+            require(stream.next().await.is_none(),
+                "normal response did not actually observe its stream terminal poll")?;
+            drop(bytes);
+            drop(stream);
+            let mut closing = Box::pin(fixture.close(COOKIE_A, &original.handle_id));
+            let while_held = async {
+                require(tokio::time::timeout(Duration::from_millis(30), &mut closing).await.is_err(),
+                    "Close falsely acknowledged while a real original Bytes clone remained")?;
+                let response = fixture.next(COOKIE_B, &peer.handle_id, 0).await?;
+                let (length, eof) = data_headers(&response, &peer.handle_id, 0)?;
+                let peer_bytes = to_bytes(response.into_body(), FIRST_BLOCK).await.map_err(|error| error.to_string())?;
+                require(!eof && length == fixture.payload.len() && peer_bytes.as_ref() == fixture.payload.as_bytes(),
+                    "closing original handle blocked or destroyed another real session's reader")?;
+                drop(peer_bytes);
+                let peer_closed: ArtifactReadClosed = control(fixture.close(COOKIE_B, &peer.handle_id).await?).await?;
+                require(peer_closed.handle_id == peer.handle_id, "peer close borrowed original handle resources")?;
+                require(tokio::time::timeout(Duration::from_millis(30), &mut closing).await.is_err(),
+                    "peer close falsely released another original carrier")
+            }.await;
+            drop(held_original);
+            let closed = tokio::time::timeout(Duration::from_secs(4), &mut closing).await
+                .map_err(|_| "original carrier drop did not unblock true own Close")?;
+            while_held?;
+            let closed: ArtifactReadClosed = control(closed?).await?;
+            require(closed.handle_id == original.handle_id, "original true Close returned another locator")?;
+            let (unpolled, unpolled_completion) = fixture.open_with_original_completion(COOKIE_A).await?;
+            let response = fixture.next(COOKIE_A, &unpolled.handle_id, 0).await?;
+            data_headers(&response, &unpolled.handle_id, 0)?;
+            // Dropping the real unpolled body consumes its original prepared owner.
+            drop(response);
+            // This existing port requests own stop as well as waiting for actual drain.
+            // The proof is same-operation closure after Drop, not a passive Drop-only oracle.
+            require(unpolled_completion.drain_before(Instant::now() + Duration::from_secs(4)).await.is_ok(),
+                "actual unpolled body's original operation did not close and drain")?;
+            let (canceled, canceled_completion) = fixture.open_with_original_completion(COOKIE_A).await?;
+            let surviving = fixture.open(COOKIE_B).await?;
+            let response = fixture.next(COOKIE_A, &canceled.handle_id, 0).await?;
+            data_headers(&response, &canceled.handle_id, 0)?;
+            let mut canceled_stream = response.into_body().into_data_stream();
+            let canceled_carrier = canceled_stream.next().await.ok_or("canceled stream never yielded its real carrier")?
+                .map_err(|error| error.to_string())?;
+            require(canceled_carrier.as_ref() == fixture.payload.as_bytes(),
+                "canceled stream did not hold its original genuine prefix")?;
+            // No terminal poll is made: this actual Body Drop is the observable cancellation.
+            drop(canceled_stream);
+            let while_canceled_carrier_held = async {
+                let response = fixture.next(COOKIE_B, &surviving.handle_id, 0).await?;
+                let (length, eof) = data_headers(&response, &surviving.handle_id, 0)?;
+                let bytes = to_bytes(response.into_body(), FIRST_BLOCK).await.map_err(|error| error.to_string())?;
+                require(!eof && length == fixture.payload.len() && bytes.as_ref() == fixture.payload.as_bytes(),
+                    "observable stream cancellation destroyed a peer Session's original reader")?;
+                drop(bytes);
+                let peer_closed: ArtifactReadClosed = control(fixture.close(COOKIE_B, &surviving.handle_id).await?).await?;
+                require(peer_closed.handle_id == surviving.handle_id,
+                    "canceled reader borrowed another Session's completion")?;
+                require(canceled_completion.drain_before(Instant::now() + Duration::from_millis(30)).await.is_err(),
+                    "cancellation falsely acknowledged disposal of a still-held actual Bytes carrier")
+            }.await;
+            drop(canceled_carrier);
+            let canceled_drained = canceled_completion.drain_before(Instant::now() + Duration::from_secs(4)).await;
+            while_canceled_carrier_held?;
+            require(canceled_drained.is_ok(),
+                "observable cancellation did not supervise true own closure after actual last carrier Drop")?;
+            Ok(())
+        }.await;
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned PostgreSQL; actual closed HTTP framing and issuer shutdown"]
+async fn actual_server_session_public_reader_closed_framing_and_owner_shutdown() {
+    let tag = "public-reader-framing";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config, 17).await?;
+        let outcome = async {
+            let artifact = &fixture.receipt.artifact_id;
+            status(
+                fixture
+                    .request(
+                        Method::POST,
+                        super::PREFIX,
+                        "invalid-owned-session",
+                        Some(serde_json::json!({"artifactId": artifact})),
+                    )
+                    .await?,
+                StatusCode::UNAUTHORIZED,
+            )
+            .await?;
+            status(
+                fixture
+                    .request(
+                        Method::POST,
+                        super::PREFIX,
+                        COOKIE_A,
+                        Some(serde_json::json!({"artifactId": artifact, "path": "/forbidden"})),
+                    )
+                    .await?,
+                StatusCode::BAD_REQUEST,
+            )
+            .await?;
+            status(
+                fixture
+                    .request(
+                        Method::POST,
+                        "/api/artifact-reads?",
+                        COOKIE_A,
+                        Some(serde_json::json!({"artifactId": artifact})),
+                    )
+                    .await?,
+                StatusCode::BAD_REQUEST,
+            )
+            .await?;
+            status(
+                fixture
+                    .request(Method::HEAD, super::PREFIX, COOKIE_A, None)
+                    .await?,
+                StatusCode::METHOD_NOT_ALLOWED,
+            )
+            .await?;
+            status(
+                fixture
+                    .request(
+                        Method::POST,
+                        "/api/artifact-reads/not-a-handle/next",
+                        COOKIE_A,
+                        Some(serde_json::json!({"sequence": 0})),
+                    )
+                    .await?,
+                StatusCode::BAD_REQUEST,
+            )
+            .await?;
+            status(
+                fixture
+                    .request(
+                        Method::GET,
+                        "/api/artifact-reads/unknown/suffix",
+                        COOKIE_A,
+                        None,
+                    )
+                    .await?,
+                StatusCode::NOT_FOUND,
+            )
+            .await?;
+            status(
+                fixture
+                    .request_raw(
+                        Method::POST,
+                        super::PREFIX,
+                        COOKIE_A,
+                        vec![b'x'; crate::http::REQUEST_BODY_LIMIT_BYTES + 1],
+                    )
+                    .await?,
+                StatusCode::PAYLOAD_TOO_LARGE,
+            )
+            .await?;
+            let opened = fixture.open(COOKIE_A).await?;
+            status(
+                fixture
+                    .request(
+                        Method::DELETE,
+                        &format!("{}/{}/", super::PREFIX, opened.handle_id),
+                        COOKIE_A,
+                        None,
+                    )
+                    .await?,
+                StatusCode::NOT_FOUND,
+            )
+            .await?;
+            let alias = opened.handle_id.replacen('-', "%2D", 1);
+            status(
+                fixture
+                    .request(
+                        Method::POST,
+                        &format!("{}/{alias}/next", super::PREFIX),
+                        COOKIE_A,
+                        Some(serde_json::json!({"sequence": 0})),
+                    )
+                    .await?,
+                StatusCode::BAD_REQUEST,
+            )
+            .await?;
+            status(
+                fixture
+                    .request(
+                        Method::POST,
+                        &format!("{}/{}/next", super::PREFIX, opened.handle_id),
+                        COOKIE_A,
+                        Some(serde_json::json!({"sequence": 0.5})),
+                    )
+                    .await?,
+                StatusCode::BAD_REQUEST,
+            )
+            .await?;
+            status(
+                fixture
+                    .request(
+                        Method::POST,
+                        &format!("{}/{}/next", super::PREFIX, opened.handle_id),
+                        COOKIE_A,
+                        Some(serde_json::json!({"sequence": 0, "range": "0-4"})),
+                    )
+                    .await?,
+                StatusCode::BAD_REQUEST,
+            )
+            .await?;
+            status(
+                fixture
+                    .request_raw(
+                        Method::DELETE,
+                        &format!("{}/{}", super::PREFIX, opened.handle_id),
+                        COOKIE_A,
+                        b"{}".to_vec(),
+                    )
+                    .await?,
+                StatusCode::BAD_REQUEST,
+            )
+            .await?;
+            let pending_data = fixture.next(COOKIE_A, &opened.handle_id, 0).await?;
+            let pending_control = fixture
+                .request(
+                    Method::POST,
+                    super::PREFIX,
+                    COOKIE_A,
+                    Some(serde_json::json!({"artifactId": artifact})),
+                )
+                .await?;
+            no_store(&pending_data)?;
+            no_store(&pending_control)?;
+            require(
+                pending_data.status() == StatusCode::OK
+                    && pending_control.status() == StatusCode::OK,
+                "actual shutdown test did not prepare both genuine response kinds",
+            )?;
+            fixture.resolver.close_request_bindings();
+            fixture
+                .application
+                .close_public_artifact_reads()
+                .map_err(|error| error.to_string())?;
+            require(
+                to_bytes(pending_data.into_body(), FIRST_BLOCK)
+                    .await
+                    .is_err(),
+                "unpolled data response yielded bytes after actual original issuer closure",
+            )?;
+            require(
+                to_bytes(pending_control.into_body(), 8192).await.is_err(),
+                "unpolled control response skipped its actual current original tail",
+            )?;
+            status(
+                fixture
+                    .request(
+                        Method::POST,
+                        super::PREFIX,
+                        COOKIE_A,
+                        Some(serde_json::json!({"artifactId": artifact})),
+                    )
+                    .await?,
+                StatusCode::UNAUTHORIZED,
+            )
+            .await
+        }
+        .await;
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    })
+    .await;
+}

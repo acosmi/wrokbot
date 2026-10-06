@@ -172,6 +172,63 @@ impl CurrentArtifactReadBlock {
             )
             .map_err(AppError::from)
     }
+    /// Actual already-read prefix length; it grants no access to the pending bytes.
+    pub fn prefix_length(&self) -> Result<usize, AppError> {
+        self.pending
+            .as_ref()
+            .and_then(PendingArtifactReadBuffer::actual_length)
+            .ok_or_else(artifacts_unavailable)
+    }
+    pub(crate) fn current_target(&self) -> Arc<dyn ArtifactReadCurrentTarget> {
+        Arc::clone(&self.target)
+    }
+    /// Refresh the original current joint while retaining this exact pending allocation.
+    /// A delayed client never renews the immutable reader lifetime.
+    pub async fn refresh_current_before(
+        &mut self,
+        auth: &AuthContext,
+        original_handle_deadline: Instant,
+    ) -> Result<(), AppError> {
+        if auth != &self.auth {
+            return Err(AppError::Unauthenticated);
+        }
+        let deadline = Instant::now()
+            .checked_add(std::time::Duration::from_secs(5))
+            .ok_or_else(artifacts_unavailable)?
+            .min(original_handle_deadline);
+        let witness = self
+            .original
+            .as_ref()
+            .ok_or_else(host_unavailable)?
+            .verify_artifact_read_current_before(auth, self.target.as_ref(), deadline)
+            .await?;
+        self.witness = witness;
+        self.deadline = deadline;
+        self.verify_current(auth)
+    }
+    /// Transfer the same full allocation while keeping its actual current-tail context.
+    /// Empty actual EOF retains the context until its real operation has closed.
+    pub fn handoff_frame(
+        mut self,
+        auth: &AuthContext,
+    ) -> Result<CurrentArtifactReadFrame, AppError> {
+        self.verify_current(auth)?;
+        let original = self.original.as_ref().ok_or_else(host_unavailable)?;
+        let pending = self.pending.take().ok_or_else(artifacts_unavailable)?;
+        let lease = self.lease.take().ok_or_else(artifacts_unavailable)?;
+        let bytes = pending.handoff_leased(
+            auth,
+            original,
+            self.target.as_ref(),
+            self.witness.as_ref(),
+            self.deadline,
+            lease,
+        )?;
+        Ok(CurrentArtifactReadFrame {
+            bytes,
+            current: self,
+        })
+    }
     /// Recheck the current tail and transfer the original leased prefix; verified empty EOF returns None.
     pub fn handoff(
         mut self,
@@ -204,6 +261,96 @@ impl Drop for CurrentArtifactReadBlock {
         }
         drop(self.pending.take());
         drop(self.lease.take());
+    }
+}
+
+/// Non-Clone original allocation plus the real retained FD/host/clock tail.
+/// Transport ownership never turns the serialized block descriptor into a grant.
+pub struct CurrentArtifactReadFrame {
+    bytes: LeasedArtifactReadBlock,
+    current: CurrentArtifactReadBlock,
+}
+impl CurrentArtifactReadFrame {
+    /// Borrow only the already-observed prefix; the full initialized allocation stays owned.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_bytes()
+    }
+    /// Report the actual prefix length without changing ownership.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.bytes.len()
+    }
+    /// Report a real zero prefix; a short nonzero block is not EOF.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+    /// Last synchronous original binding, physical FD, window and clock check.
+    pub fn verify_current_tail(&self, auth: &AuthContext) -> Result<(), AppError> {
+        self.current.verify_current(auth)
+    }
+    /// Actually release/wipe the original allocation before retaining a no-byte control tail.
+    pub fn into_control_tail(self) -> CurrentArtifactReadControlTail {
+        let Self { bytes, current } = self;
+        drop(bytes);
+        CurrentArtifactReadControlTail { current }
+    }
+}
+
+/// Actual retained host witness for control after resources close; no physical byte authority.
+pub struct CurrentArtifactReadControlTail {
+    current: CurrentArtifactReadBlock,
+}
+impl CurrentArtifactReadControlTail {
+    /// Observe the actual original joint before releasing the physical reader.
+    /// The caller's immutable control budget is never extended by this observation.
+    pub async fn observe_current_before(
+        auth: &AuthContext,
+        target: Arc<dyn ArtifactReadCurrentTarget>,
+        original_deadline: Instant,
+    ) -> Result<Self, AppError> {
+        let original = auth
+            .request_binding()
+            .cloned()
+            .ok_or_else(host_unavailable)?;
+        let deadline = Instant::now()
+            .checked_add(std::time::Duration::from_secs(5))
+            .ok_or_else(artifacts_unavailable)?
+            .min(original_deadline);
+        let witness = original
+            .verify_artifact_read_current_before(auth, target.as_ref(), deadline)
+            .await?;
+        let control = Self {
+            current: CurrentArtifactReadBlock {
+                pending: None,
+                lease: None,
+                original: Some(original),
+                auth: auth.clone(),
+                target,
+                witness,
+                deadline,
+            },
+        };
+        control.verify_current_tail(auth)?;
+        Ok(control)
+    }
+    /// Recheck the same genuine host/window/clock after a true per-reader close await.
+    /// The original FD can already be closed; this method grants no bytes.
+    pub fn verify_current_tail(&self, auth: &AuthContext) -> Result<(), AppError> {
+        if auth != &self.current.auth {
+            return Err(AppError::Unauthenticated);
+        }
+        self.current
+            .original
+            .as_ref()
+            .ok_or_else(host_unavailable)?
+            .verify_artifact_read_control_tail(
+                auth,
+                self.current.witness.as_ref(),
+                self.current.deadline,
+            )
+            .map_err(AppError::from)
     }
 }
 const fn host_unavailable() -> AppError {

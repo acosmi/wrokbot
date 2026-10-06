@@ -45,6 +45,50 @@ pub type AppEventStream = Pin<Box<dyn Stream<Item = AppEvent> + Send>>;
 /// 不生成用户可见文案 —— 错误以 `AppError` 的稳定 code 穿越边界，由 GUI 本地化。
 #[async_trait]
 pub trait ApplicationService: Send + Sync {
+    /// Consume one real pending body selected by the original closed read command.
+    fn take_artifact_read_delivery(
+        &self,
+        _auth: AuthContext,
+        _input: openbot_contracts::artifact_read_protocol::ReadArtifactReadBlock,
+    ) -> Result<crate::PublicArtifactReadDelivery, AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
+    /// Consume the actual current witness retained for this original scalar control reply.
+    fn take_artifact_read_control_delivery(
+        &self,
+        _auth: AuthContext,
+        _reply: AppReply,
+    ) -> Result<crate::PublicArtifactReadControlDelivery, AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
+    /// Permanently stop this application instance's public reader admission and owners.
+    fn close_public_artifact_reads(&self) -> Result<(), AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
+    /// Stop only original readers belonging to this genuine host issuer.
+    fn close_public_artifact_reads_for_issuer(
+        &self,
+        _issuer: &openbot_contracts::request_binding::RequestBindingIssuer,
+    ) -> Result<(), AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
+    /// Stop only original readers with this exact opaque host binding identity.
+    fn close_public_artifact_reads_for_binding(
+        &self,
+        _binding: &openbot_contracts::request_binding::HostRequestBindingIdentity,
+    ) -> Result<(), AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
     /// 原宿主Rust-only连续读取，不新增公开command或wire。
     async fn open_current_artifact_read(
         &self,
@@ -124,6 +168,10 @@ pub const fn command_kind(command: &AppCommand) -> &'static str {
         AppCommand::GetArtifactSaveReceipt(_) => "get_artifact_save_receipt",
         AppCommand::GetArtifactMetadata(_) => "get_artifact_metadata",
         AppCommand::GetSourceRunArtifactIds(_) => "get_source_run_artifact_ids",
+        AppCommand::OpenArtifactRead(_) => "open_artifact_read",
+        AppCommand::ReadArtifactReadBlock(_) => "read_artifact_read_block",
+        AppCommand::AcknowledgeArtifactReadBlock(_) => "acknowledge_artifact_read_block",
+        AppCommand::CloseArtifactRead(_) => "close_artifact_read",
         AppCommand::Health => "health",
         AppCommand::ListVisibleChannels { .. } => "list_visible_channels",
         AppCommand::GetVisibleChannel { .. } => "get_visible_channel",
