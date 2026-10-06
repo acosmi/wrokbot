@@ -566,6 +566,10 @@ fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraErr
         native::NATIVE_0041_VERSION => PUBLIC_0040,
         //0042 registers real artifacts only in the internal schema.
         native::NATIVE_0042_VERSION => PUBLIC_0040,
+        //0043 adds only internal approval preference objects.
+        native::NATIVE_0043_VERSION => PUBLIC_0040,
+        //0044 adds only internal cleanup fence objects.
+        native::NATIVE_0044_VERSION => PUBLIC_0040,
         _ => {
             return Err(InfraError::repository_invariant(
                 "desktop_vault_native_schema_unregistered",

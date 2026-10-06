@@ -707,6 +707,85 @@ async fn second_block_final_source_wait_delete_commit_ack_returns_404() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL and actual second-block cleanup-fence Lock/COMMIT ACK"]
+async fn second_block_final_cleanup_fence_wait_commit_ack_denies_body() {
+    with_fixture("lifecycle-second-cleanup", FIRST_BLOCK + 128 * 1024, |fixture| async move {
+        let mut operation = fixture.state.open_current_artifact_read(&parts(COOKIE_A)?, fixture.receipt.artifact_id.clone())
+            .await.map_err(|error| error.to_string())?;
+        let first = operation.next_block().await.map_err(|error| error.to_string())?.ok_or("actual first block missing")?;
+        require(first.as_bytes() == &fixture.payload.as_bytes()[..FIRST_BLOCK], "first real block changed before cleanup input")?;
+        drop(first);
+        let mut controller = fixture.pool.get().await.map_err(|error| error.to_string())?;
+        let observer = fixture.pool.get().await.map_err(|error| error.to_string())?;
+        let controller_pid: i32 = controller.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|error| error.to_string())?.get(0);
+        let observer_pid: i32 = observer.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|error| error.to_string())?.get(0);
+        require(controller_pid != observer_pid, "original cleanup controller and observer share a PID")?;
+        const FACTS: &str = "SELECT jsonb_build_object( \
+          'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
+          'records',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_records r), \
+          'receipts',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_saved_receipts r), \
+          'workspace',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_workspace_quotas q), \
+          'runquota',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_run_quotas q), \
+          'audit',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY id),'[]') FROM public.audit_events e))";
+        let before: serde_json::Value = observer.query_one(FACTS, &[]).await.map_err(|error| error.to_string())?.get(0);
+        let gate = ReadGate::new(GatePhase::FinalJoint);
+        let _release = ReleaseReadGate(Arc::clone(&gate));
+        let dispatch = tracing::Dispatch::new(ReadSubscriber(Arc::clone(&gate)));
+        let task = tokio::spawn(async move { operation.next_block().await }.with_subscriber(dispatch));
+        let mut transaction = None;
+        let attempted = async {
+            await_gate(&gate).await?;
+            require(gate.io_seen.load(Ordering::SeqCst), "actual second-block worker ACK was not observed before final-ready")?;
+            transaction = Some(controller.transaction().await.map_err(|error| error.to_string())?);
+            transaction.as_ref().unwrap().batch_execute(
+                "SET LOCAL lock_timeout='1s'; LOCK TABLE openbot_internal.artifact_cleanup_fences IN ACCESS EXCLUSIVE MODE",
+            ).await.map_err(|error| error.to_string())?;
+            require(!gate.timed_out.load(Ordering::SeqCst) && !task.is_finished(), "second-block final-ready gate expired or original reader ended")?;
+            gate.release();
+            let waiter = actual_final_wait(&observer, controller_pid).await?;
+            require(waiter != observer_pid && waiter != controller_pid && !gate.timed_out.load(Ordering::SeqCst), "second-block exact final waiter/gate was invalid")?;
+            let changed = transaction.as_ref().unwrap().execute(
+                "INSERT INTO openbot_internal.artifact_cleanup_fences \
+                 (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
+                 SELECT deployment_id,tenant_id,dataset_id,operation_id,artifact_id,'deleted','armed' \
+                 FROM openbot_internal.artifact_records WHERE deployment_id=$1 AND tenant_id=$2 AND artifact_id=$3",
+                &[&DEPLOYMENT, &TENANT, &fixture.receipt.artifact_id],
+            ).await.map_err(|error| error.to_string())?;
+            require(changed == 1, "controlled fence was not on exactly the original actual Save row")?;
+            transaction.take().unwrap().commit().await.map_err(|error| error.to_string())?;
+            Ok::<_, String>(waiter)
+        }.await;
+        gate.release();
+        let rollback = match transaction.take() {
+            Some(transaction) => transaction.rollback().await.map_err(|error| error.to_string()),
+            None => Ok(()),
+        };
+        drop(transaction);
+        let result = task.await.map_err(|error| error.to_string());
+        let after = observer.query_one(FACTS, &[]).await.map_err(|error| error.to_string()).map(|row| row.get::<_, serde_json::Value>(0));
+        let lifecycle = fixture.actual.read_authority().read_lifecycle();
+        lifecycle.close();
+        let drained = lifecycle.drain_before(Instant::now() + Duration::from_secs(3)).await;
+        let fd_closed = owned_file_fds(&fixture.root.0.join("objects").join(&fixture.receipt.artifact_id))?.is_empty();
+        fixture.resolver.close_request_bindings();
+        drop(observer);
+        drop(controller);
+        let observations = fixture.pool.connection_observations();
+        fixture.pool.close();
+        let cleanup_deadline = Instant::now() + Duration::from_secs(3);
+        for observation in observations { observation.wait_for_destruction_before(cleanup_deadline).await.map_err(|error| error.to_string())?; }
+        let waiter = attempted?;
+        rollback?;
+        require(matches!(result?, Err(AppError::DependencyUnavailable { dependency: "artifacts" })), "actual second block ignored the committed armed fence or yielded bytes")?;
+        require(before == after?, "second-block consumer changed original business/charge/receipt/audit rows")?;
+        require(drained.is_ok() && fd_closed, "failed second block retained actual FD/worker/allocation resources")?;
+        require(fixture.root.0.join("objects").join(&fixture.receipt.artifact_id).is_file(), "armed reader refusal was confused with actual deletion")?;
+        eprintln!("ARTIFACT_LIFECYCLE_SERVER_SECOND_CLEANUP io_ack=true final_ready=true actual_lock=true controller_pid={controller_pid} observer_pid={observer_pid} waiter_pid={waiter} commit_ack=true body_released=false original_fd_absent=true");
+        Ok(())
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Root-owned PostgreSQL; three finite-inventory facts, legacy Vec lifetime UNTRACKED"]
 async fn legacy_first_chunk_workers_are_in_same_root_drain_inventory() {
     with_fixture(

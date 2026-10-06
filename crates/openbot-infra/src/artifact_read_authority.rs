@@ -21,7 +21,7 @@ use openbot_domain::audit::hash::Sha256Digest;
 use openbot_domain::identity::roles::resolve_effective_role;
 use openbot_domain::identity::session::{SessionLifetimePolicy, SessionState, evaluate_session};
 use time::OffsetDateTime;
-use tokio_postgres::{IsolationLevel, Row};
+use tokio_postgres::Row;
 use tracing::instrument::WithSubscriber;
 
 use super::artifact_read_lifecycle::{
@@ -666,29 +666,30 @@ impl PostgresArtifactReadAuthority {
         rollback_guard: &JointRollbackGuard<'_>,
     ) -> Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError> {
         rollback_guard.schema_started();
-        if let Err(error) =
-            super::verify_artifact_registration_schema(administration.registry.pool()).await
-        {
-            rollback_guard.schema_failed(&error);
-            return Err(host_unavailable());
-        }
-        rollback_guard.no_pending_transaction();
-        remaining(deadline)?;
-        let mut client = administration
-            .registry
-            .pool()
-            .get()
-            .await
-            .map_err(|_| host_unavailable())?;
+        let mut client = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline.min(Instant::now() + super::WAIT)),
+            administration.registry.pool().get_guarded(deadline),
+        )
+        .await
+        .map_err(|_| host_unavailable())?
+        .map_err(|_| host_unavailable())?;
+        // All native/public/registration/fence schema queries run before BEGIN on this same
+        // original guarded owner. Any cancellation or unacknowledged exit retires that owner.
+        tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline.min(Instant::now() + super::PG_PHASE)),
+            super::verify_artifact_read_schema_on(client.as_client()),
+        )
+        .await
+        .map_err(|_| host_unavailable())?
+        .map_err(|_| host_unavailable())?;
         rollback_guard.transaction_started();
-        let tx = client
-            .build_transaction()
-            .isolation_level(IsolationLevel::ReadCommitted)
-            .read_only(true)
-            .start()
+        remaining(deadline)?;
+        let original_transaction = client
+            .begin_read_committed_read_only()
             .await
             .map_err(|_| host_unavailable())?;
         let outcome = async {
+            let tx = original_transaction.as_transaction();
             let millis = remaining(deadline)?.as_millis().clamp(1, 5000);
             tx.batch_execute(&format!("SET LOCAL statement_timeout='{millis}ms'; SET LOCAL lock_timeout='{millis}ms'"))
                 .await.map_err(|_| host_unavailable())?;
@@ -739,7 +740,10 @@ impl PostgresArtifactReadAuthority {
         }.await;
         // Every real statement result, including host/source errors, awaits explicit rollback.
         // A dropped/timeout future is not reported as acknowledged rollback or worker completion.
-        let rollback = tx.rollback().await.map_err(|_| host_unavailable());
+        let rollback = original_transaction
+            .rollback()
+            .await
+            .map_err(|_| host_unavailable());
         if rollback.is_ok() {
             // Record the real ACK before a pure clock/owner tail can refuse the result.
             rollback_guard.acknowledged();
@@ -769,20 +773,6 @@ impl<'a> JointRollbackGuard<'a> {
     }
     fn schema_started(&self) {
         self.phase.store(1, Ordering::SeqCst);
-    }
-    fn schema_failed(&self, error: &ArtifactAdministrationError) {
-        if !matches!(
-            error,
-            ArtifactAdministrationError::Unavailable
-                | ArtifactAdministrationError::Corrupt {
-                    field: "registry_schema"
-                }
-        ) {
-            self.no_pending_transaction();
-        }
-    }
-    fn no_pending_transaction(&self) {
-        self.phase.store(0, Ordering::SeqCst);
     }
     fn transaction_started(&self) {
         self.phase.store(2, Ordering::SeqCst);
