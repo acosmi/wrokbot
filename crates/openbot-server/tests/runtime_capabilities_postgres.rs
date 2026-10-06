@@ -8,6 +8,9 @@ mod harness {
     include!("../../../test-support/postgres_harness.rs");
 }
 
+#[path = "support/delivered_capability_http_joint.rs"]
+mod delivered_capability_http_joint;
+
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
