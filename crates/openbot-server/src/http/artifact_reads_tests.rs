@@ -1006,7 +1006,6 @@ async fn actual_server_session_public_reader_closed_framing_and_owner_shutdown()
     .await;
 }
 
-
 // Controlled 0044 rows are consumer inputs only. These observations never assert deletion,
 // directory sync, refund, cleanup authorization or a producer receipt.
 const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
@@ -1027,11 +1026,13 @@ const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
 async fn cleanup_public_read_facts_on(
     client: &tokio_postgres::Client,
 ) -> Result<serde_json::Value, String> {
-    client.query_one(CLEANUP_PUBLIC_READ_FACTS, &[]).await
+    client
+        .query_one(CLEANUP_PUBLIC_READ_FACTS, &[])
+        .await
         .map_err(|error| error.to_string())?
-        .try_get(0).map_err(|error| error.to_string())
+        .try_get(0)
+        .map_err(|error| error.to_string())
 }
-
 
 #[derive(Default)]
 struct CleanupCachedIoPhases {
@@ -1060,14 +1061,18 @@ impl tracing::field::Visit for CleanupCachedPhaseVisitor {
         match (field.name(), value) {
             ("artifact_read_phase", "actual_io_completed_before_joint") => self.io = true,
             ("artifact_read_phase", "joint_statement_ready") => self.joint = true,
-            ("artifact_read_lifecycle_phase", "physical_segment_completed_before_more_io") => self.segment = true,
+            ("artifact_read_lifecycle_phase", "physical_segment_completed_before_more_io") => {
+                self.segment = true
+            }
             _ => {}
         }
     }
 }
 struct CleanupCachedPhaseSubscriber(Arc<CleanupCachedIoPhases>);
 impl tracing::Subscriber for CleanupCachedPhaseSubscriber {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool { true }
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
     }
@@ -1077,11 +1082,21 @@ impl tracing::Subscriber for CleanupCachedPhaseSubscriber {
     fn exit(&self, _: &tracing::span::Id) {}
     fn event(&self, event: &tracing::Event<'_>) {
         use std::sync::atomic::Ordering;
-        let mut visitor = CleanupCachedPhaseVisitor { io: false, joint: false, segment: false };
+        let mut visitor = CleanupCachedPhaseVisitor {
+            io: false,
+            joint: false,
+            segment: false,
+        };
         event.record(&mut visitor);
-        if visitor.io { self.0.io.fetch_add(1, Ordering::SeqCst); }
-        if visitor.joint { self.0.joint.fetch_add(1, Ordering::SeqCst); }
-        if visitor.segment { self.0.segments.fetch_add(1, Ordering::SeqCst); }
+        if visitor.io {
+            self.0.io.fetch_add(1, Ordering::SeqCst);
+        }
+        if visitor.joint {
+            self.0.joint.fetch_add(1, Ordering::SeqCst);
+        }
+        if visitor.segment {
+            self.0.segments.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -1093,7 +1108,10 @@ async fn arm_cached_first_cleanup_fence(
     receipt: &ArtifactRegistrationReceipt,
 ) -> Result<serde_json::Value, String> {
     let mut controller = pool.get().await.map_err(|error| error.to_string())?;
-    let transaction = controller.transaction().await.map_err(|error| error.to_string())?;
+    let transaction = controller
+        .transaction()
+        .await
+        .map_err(|error| error.to_string())?;
     let inserted: serde_json::Value = transaction.query_one(
         "INSERT INTO openbot_internal.artifact_cleanup_fences \
          (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
@@ -1104,17 +1122,25 @@ async fn arm_cached_first_cleanup_fence(
         &[&deployment, &tenant, &receipt.operation_id, &receipt.artifact_id, &owner],
     ).await.map_err(|error| error.to_string())?
         .try_get(0).map_err(|error| error.to_string())?;
-    require(inserted["operation_id"] == receipt.operation_id
-        && inserted["artifact_id"] == receipt.artifact_id
-        && inserted["terminal_status"] == "deleted" && inserted["phase"] == "armed",
-        "controlled consumer fence did not retain the original pair and intent")?;
-    transaction.commit().await.map_err(|error| error.to_string())?;
+    require(
+        inserted["operation_id"] == receipt.operation_id
+            && inserted["artifact_id"] == receipt.artifact_id
+            && inserted["terminal_status"] == "deleted"
+            && inserted["phase"] == "armed",
+        "controlled consumer fence did not retain the original pair and intent",
+    )?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(inserted)
 }
 
 #[cfg(target_os = "macos")]
 // Read only this Rust process's bounded f/device/inode inventory. No path fields or peer PIDs.
-fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+fn cleanup_owned_inode_fds(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<u32>, String> {
     use std::io::Read as _;
     use std::os::unix::fs::MetadataExt as _;
     use std::process::{Command, Stdio};
@@ -1235,19 +1261,28 @@ fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::B
 }
 
 #[cfg(target_os = "linux")]
-fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+fn cleanup_owned_inode_fds(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<u32>, String> {
     use std::os::unix::fs::MetadataExt as _;
     let original = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-    require(original.is_file() && original.nlink() == 1,
-        "owned FD oracle requires the original regular inode")?;
+    require(
+        original.is_file() && original.nlink() == 1,
+        "owned FD oracle requires the original regular inode",
+    )?;
     let sample = || -> Result<std::collections::BTreeSet<u32>, String> {
         let mut found = std::collections::BTreeSet::new();
         for entry in std::fs::read_dir("/proc/self/fd").map_err(|error| error.to_string())? {
             let entry = entry.map_err(|error| error.to_string())?;
-            let fd = entry.file_name().to_str().and_then(|value| value.parse::<u32>().ok())
+            let fd = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| value.parse::<u32>().ok())
                 .ok_or("own-PID fd inventory contained a nonnumeric descriptor")?;
             match std::fs::metadata(entry.path()) {
-                Ok(metadata) if metadata.dev() == original.dev() && metadata.ino() == original.ino() => {
+                Ok(metadata)
+                    if metadata.dev() == original.dev() && metadata.ino() == original.ino() =>
+                {
                     found.insert(fd);
                 }
                 Ok(_) => {}
@@ -1259,7 +1294,10 @@ fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::B
     };
     let first = sample()?;
     let second = sample()?;
-    require(first == second, "own original inode FD inventory was unstable (Unproven)")?;
+    require(
+        first == second,
+        "own original inode FD inventory was unstable (Unproven)",
+    )?;
     Ok(first)
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]

@@ -66,8 +66,12 @@ const CLEANUP_CONSUMER_FACTS: &str = "SELECT jsonb_build_object( \
  'audit',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY id),'[]') FROM public.audit_events e))";
 
 async fn cleanup_consumer_facts_on(client: &tokio_postgres::Client) -> Result<Value, String> {
-    client.query_one(CLEANUP_CONSUMER_FACTS, &[]).await
-        .map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())
+    client
+        .query_one(CLEANUP_CONSUMER_FACTS, &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .try_get(0)
+        .map_err(|error| error.to_string())
 }
 
 async fn cleanup_consumer_facts(f: &Fixture) -> Result<Value, String> {
@@ -77,22 +81,45 @@ async fn cleanup_consumer_facts(f: &Fixture) -> Result<Value, String> {
 
 async fn arm_original_cleanup(f: &Fixture, id: &str, terminal: &str) -> Result<(), String> {
     let client = f.pool.get().await.map_err(|error| error.to_string())?;
-    let changed = client.execute(
-        "INSERT INTO openbot_internal.artifact_cleanup_fences \
+    let changed = client
+        .execute(
+            "INSERT INTO openbot_internal.artifact_cleanup_fences \
          (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
          SELECT deployment_id,tenant_id,dataset_id,operation_id,artifact_id,$4,'armed' \
          FROM openbot_internal.artifact_records \
          WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND artifact_id=$5",
-        &[&DEPLOYMENT, &TENANT, &f.registry.binding().dataset_id(), &terminal, &id],
-    ).await.map_err(|error| error.to_string())?;
-    require(changed == 1, "controlled fence did not bind exactly the original saved row")
+            &[
+                &DEPLOYMENT,
+                &TENANT,
+                &f.registry.binding().dataset_id(),
+                &terminal,
+                &id,
+            ],
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    require(
+        changed == 1,
+        "controlled fence did not bind exactly the original saved row",
+    )
 }
 
-async fn complete_original_cleanup_fixture(f: &Fixture, id: &str, terminal: &str) -> Result<(), String> {
+async fn complete_original_cleanup_fixture(
+    f: &Fixture,
+    id: &str,
+    terminal: &str,
+) -> Result<(), String> {
     let mut client = f.pool.get().await.map_err(|error| error.to_string())?;
-    let transaction = client.transaction().await.map_err(|error| error.to_string())?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|error| error.to_string())?;
     let parameters: [&(dyn tokio_postgres::types::ToSql + Sync); 5] = [
-        &DEPLOYMENT, &TENANT, &f.registry.binding().dataset_id(), &id, &terminal,
+        &DEPLOYMENT,
+        &TENANT,
+        &f.registry.binding().dataset_id(),
+        &id,
+        &terminal,
     ];
     let records = transaction.execute(
         "UPDATE openbot_internal.artifact_records SET status=$5,workspace_kind=NULL,workspace_id=NULL, \
@@ -105,25 +132,40 @@ async fn complete_original_cleanup_fixture(f: &Fixture, id: &str, terminal: &str
          actual_sha256=NULL,actual_location=NULL,observation_phase=NULL,created_at=NULL \
          WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND artifact_id=$4", &parameters,
     ).await.map_err(|error| error.to_string())?;
-    require(records == 1 && operations == 1, "controlled terminal pair was not the original pair")?;
+    require(
+        records == 1 && operations == 1,
+        "controlled terminal pair was not the original pair",
+    )?;
     let completed = transaction.execute(
         "UPDATE openbot_internal.artifact_cleanup_fences SET phase='completed' \
          WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND artifact_id=$4 AND terminal_status=$5", &parameters,
     ).await.map_err(|error| error.to_string())?;
-    require(completed == 1, "real fence guard did not complete exactly the controlled terminal pair")?;
-    transaction.commit().await.map_err(|error| error.to_string())
+    require(
+        completed == 1,
+        "real fence guard did not complete exactly the controlled terminal pair",
+    )?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn close_cleanup_fixture(f: &Fixture) -> Result<(), String> {
     let lifecycle = f.administration.read_authority().read_lifecycle();
     lifecycle.close();
-    lifecycle.drain_before(Instant::now() + Duration::from_secs(3)).await.map_err(|error| format!("{error:?}"))?;
+    lifecycle
+        .drain_before(Instant::now() + Duration::from_secs(3))
+        .await
+        .map_err(|error| format!("{error:?}"))?;
     let observations = f.pool.connection_observations();
     f.pool.close();
     let cleanup_deadline = Instant::now() + Duration::from_secs(3);
     for observation in observations {
         require(
-            observation.wait_for_destruction_before(cleanup_deadline).await.map_err(|error| error.to_string())?
+            observation
+                .wait_for_destruction_before(cleanup_deadline)
+                .await
+                .map_err(|error| error.to_string())?
                 == pool::ConnectionDestruction::ConnectionDestroyed,
             "original reader fixture connection did not actually destruct",
         )?;
@@ -133,16 +175,31 @@ async fn close_cleanup_fixture(f: &Fixture) -> Result<(), String> {
 
 #[derive(Default)]
 struct CleanupPreparationObserver {
-    completion: std::sync::Mutex<Option<Arc<dyn openbot_application::artifact_read_protocol::ArtifactReadOperationCompletion>>>,
+    completion: std::sync::Mutex<
+        Option<
+            Arc<dyn openbot_application::artifact_read_protocol::ArtifactReadOperationCompletion>,
+        >,
+    >,
 }
-impl openbot_application::artifact_read_protocol::ArtifactReadPreparationObserver for CleanupPreparationObserver {
+impl openbot_application::artifact_read_protocol::ArtifactReadPreparationObserver
+    for CleanupPreparationObserver
+{
     fn enrolled(
         &self,
-        completion: Arc<dyn openbot_application::artifact_read_protocol::ArtifactReadOperationCompletion>,
+        completion: Arc<
+            dyn openbot_application::artifact_read_protocol::ArtifactReadOperationCompletion,
+        >,
     ) -> Result<(), AppError> {
-        let mut slot = self.completion.lock().map_err(|_| AppError::DependencyUnavailable { dependency: "artifacts" })?;
+        let mut slot = self
+            .completion
+            .lock()
+            .map_err(|_| AppError::DependencyUnavailable {
+                dependency: "artifacts",
+            })?;
         if slot.is_some() {
-            return Err(AppError::DependencyUnavailable { dependency: "artifacts" });
+            return Err(AppError::DependencyUnavailable {
+                dependency: "artifacts",
+            });
         }
         *slot = Some(completion);
         Ok(())
@@ -165,38 +222,102 @@ async fn cleanup_fence_initial_and_final_classification_are_read_only() {
     ] {
         with_fixture("cleanup_reader_classes", false, |f| async move {
             let saved = f.save().await?;
-            if armed { arm_original_cleanup(&f, &saved.artifact_id, if status == "expired" { "expired" } else { "deleted" }).await?; }
-            if status != "available" { complete_original_cleanup_fixture(&f, &saved.artifact_id, status).await?; }
+            if armed {
+                arm_original_cleanup(
+                    &f,
+                    &saved.artifact_id,
+                    if status == "expired" {
+                        "expired"
+                    } else {
+                        "deleted"
+                    },
+                )
+                .await?;
+            }
+            if status != "available" {
+                complete_original_cleanup_fixture(&f, &saved.artifact_id, status).await?;
+            }
             let initial = f.observe(&saved.artifact_id).await;
-            require(match status {
-                "deleted" => matches!(initial, Err(ArtifactAdministrationError::Gone { status: ArtifactGoneStatus::Deleted })),
-                "expired" => matches!(initial, Err(ArtifactAdministrationError::Gone { status: ArtifactGoneStatus::Expired })),
-                _ if armed => matches!(initial, Err(ArtifactAdministrationError::Unavailable)),
-                _ => initial.is_ok(),
-            }, "initial actual fence observation classified the original row incorrectly")?;
-            if !host_current { f.sql("DELETE FROM public.sessions WHERE id='core-read-session-a'").await?; }
-            if !source_visible { f.sql("DELETE FROM public.thread_memberships WHERE user_id='read-owner'").await?; }
+            require(
+                match status {
+                    "deleted" => matches!(
+                        initial,
+                        Err(ArtifactAdministrationError::Gone {
+                            status: ArtifactGoneStatus::Deleted
+                        })
+                    ),
+                    "expired" => matches!(
+                        initial,
+                        Err(ArtifactAdministrationError::Gone {
+                            status: ArtifactGoneStatus::Expired
+                        })
+                    ),
+                    _ if armed => matches!(initial, Err(ArtifactAdministrationError::Unavailable)),
+                    _ => initial.is_ok(),
+                },
+                "initial actual fence observation classified the original row incorrectly",
+            )?;
+            if !host_current {
+                f.sql("DELETE FROM public.sessions WHERE id='core-read-session-a'")
+                    .await?;
+            }
+            if !source_visible {
+                f.sql("DELETE FROM public.thread_memberships WHERE user_id='read-owner'")
+                    .await?;
+            }
             let before = cleanup_consumer_facts(&f).await?;
             let auth = f.auth();
-            let result = f.administration.read_host_bound_chunk(&auth, &saved.artifact_id).await;
-            require(if !host_current {
-                matches!(result, Err(AppError::Unauthenticated))
-            } else if !source_visible {
-                matches!(result, Err(AppError::NotVisible))
-            } else if status == "deleted" {
-                matches!(result, Err(AppError::ArtifactGone { status: ArtifactGoneStatus::Deleted }))
-            } else if status == "expired" {
-                matches!(result, Err(AppError::ArtifactGone { status: ArtifactGoneStatus::Expired }))
-            } else if armed {
-                matches!(result, Err(AppError::DependencyUnavailable { dependency: "artifacts" }))
-            } else {
-                result.map_err(|error| error.to_string())?.handoff(&auth).map_err(|error| error.to_string())? == EXACT.as_bytes()
-            }, "actual final host/source/terminal/armed classification changed or released bytes")?;
+            let result = f
+                .administration
+                .read_host_bound_chunk(&auth, &saved.artifact_id)
+                .await;
+            require(
+                if !host_current {
+                    matches!(result, Err(AppError::Unauthenticated))
+                } else if !source_visible {
+                    matches!(result, Err(AppError::NotVisible))
+                } else if status == "deleted" {
+                    matches!(
+                        result,
+                        Err(AppError::ArtifactGone {
+                            status: ArtifactGoneStatus::Deleted
+                        })
+                    )
+                } else if status == "expired" {
+                    matches!(
+                        result,
+                        Err(AppError::ArtifactGone {
+                            status: ArtifactGoneStatus::Expired
+                        })
+                    )
+                } else if armed {
+                    matches!(
+                        result,
+                        Err(AppError::DependencyUnavailable {
+                            dependency: "artifacts"
+                        })
+                    )
+                } else {
+                    result
+                        .map_err(|error| error.to_string())?
+                        .handoff(&auth)
+                        .map_err(|error| error.to_string())?
+                        == EXACT.as_bytes()
+                },
+                "actual final host/source/terminal/armed classification changed or released bytes",
+            )?;
             let after = cleanup_consumer_facts(&f).await?;
-            require(before == after, "actual initial/final consumer changed business or fence rows")?;
-            require(f.object(&saved.artifact_id).is_file(), "controlled tombstone was mistaken for actual deletion")?;
+            require(
+                before == after,
+                "actual initial/final consumer changed business or fence rows",
+            )?;
+            require(
+                f.object(&saved.artifact_id).is_file(),
+                "controlled tombstone was mistaken for actual deletion",
+            )?;
             close_cleanup_fixture(&f).await
-        }).await;
+        })
+        .await;
     }
     for drift in ["ledger_checksum", "guard_disabled", "extra_catalog_column"] {
         with_fixture("cleanup_reader_schema_drift", false, |f| async move {
@@ -350,7 +471,10 @@ async fn cleanup_fence_exact_five_key_scope_ignores_other_original_record() {
 }
 
 async fn wait_original_cleanup_schema_lock(
-    observer: &tokio_postgres::Client, controller_pid: i32, original_pid: i32, deadline: Instant,
+    observer: &tokio_postgres::Client,
+    controller_pid: i32,
+    original_pid: i32,
+    deadline: Instant,
 ) -> Result<(), String> {
     tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
         loop {
@@ -370,7 +494,9 @@ async fn wait_original_cleanup_schema_lock(
 }
 
 async fn wait_original_cleanup_backend_gone(
-    observer: &tokio_postgres::Client, original_pid: i32, cleanup_deadline: Instant,
+    observer: &tokio_postgres::Client,
+    original_pid: i32,
+    cleanup_deadline: Instant,
 ) -> Result<(), String> {
     tokio::time::timeout_at(tokio::time::Instant::from_std(cleanup_deadline), async {
         loop {
@@ -383,40 +509,89 @@ async fn wait_original_cleanup_backend_gone(
     }).await.map_err(|_| "same original reader backend remained after actual local destruction".to_owned())?
 }
 
-async fn cleanup_schema_original_owner_control(config: DatabaseConfig, cancel: bool) -> Result<(), String> {
-    let external = pool::connect(&config.clone().with_max_pool_size(2)).await.map_err(|error| error.to_string())?;
+async fn cleanup_schema_original_owner_control(
+    config: DatabaseConfig,
+    cancel: bool,
+) -> Result<(), String> {
+    let external = pool::connect(&config.clone().with_max_pool_size(2))
+        .await
+        .map_err(|error| error.to_string())?;
     let f = Fixture::new(config, false).await?;
     let saved = f.save().await?;
     let mut controller = external.get().await.map_err(|error| error.to_string())?;
     let observer = external.get().await.map_err(|error| error.to_string())?;
-    let controller_pid: i32 = controller.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|error| error.to_string())?.get(0);
-    let observer_pid: i32 = observer.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|error| error.to_string())?.get(0);
-    require(controller_pid != observer_pid, "original controller and observer did not have distinct actual PIDs")?;
+    let controller_pid: i32 = controller
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    let observer_pid: i32 = observer
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    require(
+        controller_pid != observer_pid,
+        "original controller and observer did not have distinct actual PIDs",
+    )?;
     let before = cleanup_consumer_facts_on(&observer).await?;
     let setup_deadline = Instant::now() + Duration::from_secs(5);
     let mut held = tokio::time::timeout_at(tokio::time::Instant::from_std(setup_deadline), async {
         let mut clients = Vec::new();
         for _ in 0..8 {
             let client = f.pool.get().await.map_err(|error| error.to_string())?;
-            let pid: i32 = client.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|error| error.to_string())?.get(0);
+            let pid: i32 = client
+                .query_one("SELECT pg_backend_pid()", &[])
+                .await
+                .map_err(|error| error.to_string())?
+                .get(0);
             let observation = client.observation();
-            require(observation.snapshot().connection_started && !observation.snapshot().retirement_requested, "original probe was not a live actually started Connection")?;
+            require(
+                observation.snapshot().connection_started
+                    && !observation.snapshot().retirement_requested,
+                "original probe was not a live actually started Connection",
+            )?;
             clients.push((client, pid, observation));
         }
         Ok::<_, String>(clients)
-    }).await.map_err(|_| "actual max8 original Pool checkout setup did not complete".to_owned())??;
+    })
+    .await
+    .map_err(|_| "actual max8 original Pool checkout setup did not complete".to_owned())??;
     let pids: std::collections::BTreeSet<_> = held.iter().map(|(_, pid, _)| *pid).collect();
-    require(pids.len() == 8 && !pids.contains(&controller_pid) && !pids.contains(&observer_pid), "reader Pool or independent controllers did not have distinct actual PIDs")?;
-    require(f.pool.status().available == 0 && f.pool.connection_observations().len() == 8, "original Pool did not have exactly eight exclusively held connections")?;
-    let (probe, original_pid, original_observation) = held.pop().ok_or("original eighth probe missing")?;
+    require(
+        pids.len() == 8 && !pids.contains(&controller_pid) && !pids.contains(&observer_pid),
+        "reader Pool or independent controllers did not have distinct actual PIDs",
+    )?;
+    require(
+        f.pool.status().available == 0 && f.pool.connection_observations().len() == 8,
+        "original Pool did not have exactly eight exclusively held connections",
+    )?;
+    let (probe, original_pid, original_observation) =
+        held.pop().ok_or("original eighth probe missing")?;
     // Registered test-only setting on this exact probe while all eight leases are held. It
     // makes the backend's disconnected-client observation finite during its lock wait.
-    probe.batch_execute("SET client_connection_check_interval='10ms'").await.map_err(|error| error.to_string())?;
-    let connection_check: String = probe.query_one(
-        "SELECT current_setting('client_connection_check_interval')", &[],
-    ).await.map_err(|error| error.to_string())?.get(0);
-    require(connection_check == "10ms", "original probe did not actually use its registered 10ms client-disconnect check")?;
-    let mut transaction = Some(controller.transaction().await.map_err(|error| error.to_string())?);
+    probe
+        .batch_execute("SET client_connection_check_interval='10ms'")
+        .await
+        .map_err(|error| error.to_string())?;
+    let connection_check: String = probe
+        .query_one(
+            "SELECT current_setting('client_connection_check_interval')",
+            &[],
+        )
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    require(
+        connection_check == "10ms",
+        "original probe did not actually use its registered 10ms client-disconnect check",
+    )?;
+    let mut transaction = Some(
+        controller
+            .transaction()
+            .await
+            .map_err(|error| error.to_string())?,
+    );
     transaction.as_ref().unwrap().batch_execute(
         "SET LOCAL lock_timeout='1s'; LOCK TABLE openbot_internal.schema_migrations IN ACCESS EXCLUSIVE MODE",
     ).await.map_err(|error| error.to_string())?;
@@ -426,7 +601,9 @@ async fn cleanup_schema_original_owner_control(config: DatabaseConfig, cancel: b
     let auth = f.auth();
     let id = saved.artifact_id.clone();
     let mut original_task = Some(tokio::spawn(async move {
-        administration.observe_read_record_before_inner(&auth, &id, original_deadline).await
+        administration
+            .observe_read_record_before_inner(&auth, &id, original_deadline)
+            .await
     }));
     let attempted = async {
         wait_original_cleanup_schema_lock(&observer, controller_pid, original_pid,
@@ -470,12 +647,18 @@ async fn cleanup_schema_original_owner_control(config: DatabaseConfig, cancel: b
                 // Keep the exact handle until it really reaps; a timeout cannot detach it.
                 task.abort();
                 let _ = task.await;
-                Err("original failed-control task cancellation exceeded its cleanup bound".to_owned())
+                Err(
+                    "original failed-control task cancellation exceeded its cleanup bound"
+                        .to_owned(),
+                )
             }
         }
-    } else { Ok(()) };
+    } else {
+        Ok(())
+    };
     let rollback = match transaction.take() {
-        Some(transaction) => tokio::time::timeout(Duration::from_secs(2), transaction.rollback()).await
+        Some(transaction) => tokio::time::timeout(Duration::from_secs(2), transaction.rollback())
+            .await
             .map_err(|_| "original controller rollback did not finish".to_owned())?
             .map_err(|error| error.to_string()),
         None => Err("original controller transaction was lost before rollback ACK".to_owned()),
@@ -491,12 +674,20 @@ async fn cleanup_schema_original_owner_control(config: DatabaseConfig, cancel: b
     let cleanup_deadline = Instant::now() + Duration::from_secs(3);
     let mut external_closed = Ok(());
     for observation in external_observations {
-        if let Err(error) = observation.wait_for_destruction_before(cleanup_deadline).await { external_closed = Err(error.to_string()); }
+        if let Err(error) = observation
+            .wait_for_destruction_before(cleanup_deadline)
+            .await
+        {
+            external_closed = Err(error.to_string());
+        }
     }
     attempted?;
     rescue?;
     rollback?;
-    require(before == after?, "schema wait refusal changed original business/charge/receipt/fence/audit rows")?;
+    require(
+        before == after?,
+        "schema wait refusal changed original business/charge/receipt/fence/audit rows",
+    )?;
     closed?;
     external_closed
 }
@@ -507,7 +698,8 @@ async fn reader_cleanup_schema_wait_cancellation_retires_original_connection() {
     let tag = "cleanup_schema_cancel";
     harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
         cleanup_schema_original_owner_control(config, true).await
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -516,7 +708,8 @@ async fn reader_cleanup_schema_original_deadline_wait_does_not_become_reusable()
     let tag = "cleanup_schema_deadline";
     harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
         cleanup_schema_original_owner_control(config, false).await
-    }).await;
+    })
+    .await;
 }
 
 fn require(ok: bool, message: &'static str) -> Result<(), String> {

@@ -2943,7 +2943,10 @@ mod tests {
             actions.state.with_untracked(|state| {
                 assert!(state.handoff.is_none(), "{case}");
                 if let Some(replacement) = replacement {
-                    assert_eq!(state.auth_probe, Some((replacement.probe, replacement.mount)));
+                    assert_eq!(
+                        state.auth_probe,
+                        Some((replacement.probe, replacement.mount))
+                    );
                     assert_eq!(state.origin_probe.as_ref().unwrap().id, replacement);
                 }
                 if case == "revoked" {

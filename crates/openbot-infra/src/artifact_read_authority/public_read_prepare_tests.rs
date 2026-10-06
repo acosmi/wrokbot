@@ -355,7 +355,10 @@ struct CleanupOriginalObserver {
     original: Arc<Observer>,
 }
 impl ArtifactReadPreparationObserver for CleanupOriginalObserver {
-    fn enrolled(&self, completion: Arc<dyn ArtifactReadOperationCompletion>) -> Result<(), AppError> {
+    fn enrolled(
+        &self,
+        completion: Arc<dyn ArtifactReadOperationCompletion>,
+    ) -> Result<(), AppError> {
         self.downstream.enrolled(Arc::clone(&completion))?;
         self.original.enrolled(completion)
     }
@@ -367,21 +370,39 @@ struct CleanupObservedAdministration {
 #[async_trait::async_trait]
 impl ArtifactAdministration for CleanupObservedAdministration {
     async fn prepare_host_bound_artifact_read(
-        &self, auth: &AuthContext, id: &str, deadline: Instant,
+        &self,
+        auth: &AuthContext,
+        id: &str,
+        deadline: Instant,
         observer: Arc<dyn ArtifactReadPreparationObserver>,
     ) -> Result<openbot_application::artifact_read_protocol::PreparedArtifactRead, AppError> {
-        self.actual.prepare_host_bound_artifact_read(auth, id, deadline,
-            Arc::new(CleanupOriginalObserver { downstream: observer, original: Arc::clone(&self.original) }),
-        ).await
+        self.actual
+            .prepare_host_bound_artifact_read(
+                auth,
+                id,
+                deadline,
+                Arc::new(CleanupOriginalObserver {
+                    downstream: observer,
+                    original: Arc::clone(&self.original),
+                }),
+            )
+            .await
     }
     async fn save_run_message_text(
-        &self, auth: &AuthContext, input: SaveRunMessageTextArtifact,
+        &self,
+        auth: &AuthContext,
+        input: SaveRunMessageTextArtifact,
     ) -> Result<ArtifactRegistrationReceipt, openbot_application::ArtifactAdministrationError> {
         self.actual.save_run_message_text(auth, input).await
     }
     async fn get_metadata(
-        &self, auth: &AuthContext, id: &str,
-    ) -> Result<openbot_contracts::artifacts::ArtifactMetadata, openbot_application::ArtifactAdministrationError> {
+        &self,
+        auth: &AuthContext,
+        id: &str,
+    ) -> Result<
+        openbot_contracts::artifacts::ArtifactMetadata,
+        openbot_application::ArtifactAdministrationError,
+    > {
         self.actual.get_metadata(auth, id).await
     }
 }
@@ -408,7 +429,10 @@ async fn arm_cleanup_prepare_fixture(f: &Fixture, id: &str) -> Result<(), String
          FROM openbot_internal.artifact_records WHERE deployment_id=$1 AND tenant_id=$2 AND artifact_id=$3",
         &[&DEPLOYMENT, &TENANT, &id],
     ).await.map_err(|error| error.to_string())?;
-    require(changed == 1, "controlled fence was not on exactly the original actual Save row")
+    require(
+        changed == 1,
+        "controlled fence was not on exactly the original actual Save row",
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -419,7 +443,11 @@ async fn public_prepare_cleanup_fence_refusal_keeps_original_io_accounting() {
     use openbot_contracts::command::{AppCommand, AppReply};
 
     for initially_armed in [true, false] {
-        let tag = if initially_armed { "cleanup_prepare_initial" } else { "cleanup_prepare_cached_first" };
+        let tag = if initially_armed {
+            "cleanup_prepare_initial"
+        } else {
+            "cleanup_prepare_cached_first"
+        };
         harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
             let mut f = Fixture::new(config).await?;
             let saved = f.save().await?;
