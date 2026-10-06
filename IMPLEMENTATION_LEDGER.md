@@ -1571,3 +1571,28 @@ Native05 is a genuine current build (4.55s), receipt 8d0c36979d3e1e4a5590885e3c3
 Final independent finite-seven SOURCE: a7a61422bdf0100383a2c232f7f0a5ec6d275a220a7016574dd7cb7d94ebc020. All seven accepted original wrappers actually exit 0, stop their owned clusters with exit 0 and remove their successful scratch; original resource closures remain separately verified. The failed cancelled verifier execution, extra-subscription fixture execution, earlier provider-failure fixture mismatch, earlier compile/lint outcomes and reader mistakes remain in their original records. Sensitive values, raw PG logs and private QA/specification contents are not published. Full wire/EOF, hidden joins and physical Vault call counts remain unobserved.
 
 This appendix preserves the incoming public ledger in full, including the separately delivered PR #141. Its incoming prefix is 366531 bytes, SHA256 787ae22aac09a5094ef54111b446f16bfc2a83da2816508cc0e00f1b09694d68. Matched-head SOURCE carry, a separate independent LEDGER review and normal admin PR #139 delivery remain required for the final publication head; runtime evidence keeps its original source identity. C7, the two existing carrier compositions and final affected-delivery closure remain open, and the whole completion goal remains active.
+
+
+### V7-COMP-022 — delivered capability and current-run client composition (PR #142)
+
+This completion covers the already delivered Models directory, Workspace/Computer status presentation and the separately delivered capability endpoint. It adds a real PostgreSQL/Application test host for the ordinary compiled client and three directed capability HTTP tests. The public change is confined to test code and this ledger. The source candidate is 5a80008dc5a9aac595d8e461107fb9850693dea7 (tree 6bf00403be758767847b0cfd09dd69f21c0dc59f); runtime evidence keeps that identity when this ledger is appended.
+
+| Directed case | Accepted original receipt SHA256 |
+| --- | --- |
+| C7.models-directory-current-storage | d84307682e383889fd8b72cf2f79f7f1f351052cd724436279598fc654255760 |
+| C7.workspace-computer-current-run | c58d3aee07aad7ee68035d571a29b9a36002e2196ca72ca51c82bb96414b9415 |
+| C7.http-final-session-policy-joint | a9b620f878ea6f106118193ffb4ea6ebaa8ade905746686c1fdb9120c3118712 |
+| C7.http-final-config-key-joint | 65763cd4db2b863ecb091c1a176f13b8556819d59fcec850c90025cfda4938b7 |
+| C7.http-original-whole-deadline | 6f7e492506fb7be0bd413a947916a6e641c40bba1e2ebee4462e07e2b20a8620 |
+
+The Models case executes an ordinary Create201 and directory refresh against the same current Application and PostgreSQL storage. StoredNotTested and PendingGateways remain explicit; saving produces no provider wire or Run. The Workspace case executes one real selected Custom provider Run and checks the current Run identity, completed phase and provider text, plus the ordinary Computer round trip and its unavailable control/artifact states. The capability API probe is a separate same-session request. These GUI cases do not claim a GUI capability consumer.
+
+The three HTTP cases use the actual Router and current PostgreSQL/Vault state. They cover final session/policy changes, final model configuration/key changes and the original whole-request five-second deadline. The deadline response and the worker's later quiescence are distinct observations. Full session activity and relevant business rows are compared before and after the read-only probes; A401/B200 and the joint 503 outcomes are genuinely executed assertions. Router execution is not a TCP/browser-wire proof.
+
+Native and WASM builds were executed once at this source candidate. Their accepted receipt hashes are f3e26d118c46ccd7471425e0e2a29fe561a22b889c9b1fb29127c7bcb0eaa29e and 4321f7a281487b82b0b01bf117935f2b7a5d1d3aa61e40875650d3a181d47d0c. The saved native host, all 24 live/immutable web outputs and the other named build outputs remain bound. Later private-driver corrections reuse those artifacts and preserve the actual source, assertions and original build identity. The self-owned regenerable WASM compilation cache was removed after its build while the required outputs were preserved.
+
+Four earlier Workspace executions remain failed in their original records: an incorrect translated-label expectation, an overlapping ordinary GUI session activity update, an unsuitable global network-idle wait, and a report-persistence failure after an internal case-pass event. No failed execution or internal event is relabeled as an accepted wrapper. The corrected driver observes ordinary authenticated GET response headers within the original bound, retains activity/business/whole-probe checks, and avoids duplicate persisted detail without relaxing the report limit or functional assertions. The other four accepted cases and both accepted builds were not rerun. The accepted Workspace execution and all five accepted originals close their owned fixture resources; each original wrapper and cluster stop exits 0.
+
+Independent final SOURCE and a separate independent LEDGER review must bind the final publication head before normal exact-head admin delivery. Existing PRs and historical acceptance records remain unchanged. Full capability GUI/native OS/SDK/account/Artifact support is outside this completion; the two remaining existing carrier compositions and final affected-delivery closure remain open. The whole completion goal stays active.
+
+The incoming public ledger is preserved byte for byte: 371496 bytes, SHA256 fc9a8ea508f7e2f19c2573228a2644d74dfc11d0d15094729aa8929d13ade180. Final publication review verifies that this appendix is the sole change after the accepted runtime source.
