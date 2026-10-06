@@ -431,7 +431,12 @@ impl LocalFixture {
                         .application()
                         .execute(auth.clone(), AppCommand::BeginThreadRun(begin.clone()))
                         .await
-                        .map_err(|error| error.to_string())?,
+                        .map_err(|error| {
+                            if label == "public-read-cached-cleanup" {
+                                eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=BeginThreadRun original_app_error={error}");
+                            }
+                            error.to_string()
+                        })?,
                     AppReply::ThreadRunStarted(_)
                 ),
                 "actual Local Begin did not return its durable receipt",
@@ -449,8 +454,29 @@ impl LocalFixture {
                         expected_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
                     }),
                 )
-                .await
-                .map_err(|error| error.to_string())?;
+                .await;
+            if label == "public-read-cached-cleanup" {
+                if let Err(error) = &receipt {
+                    eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=SaveRunMessageTextArtifact original_app_error={error}");
+                    let schema = openbot_infra::artifact_administration::verify_artifact_registration_schema(prepared.pool()).await;
+                    eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=post_original_Save_error legacy41_42={schema:?}");
+                    if matches!(&schema, Err(openbot_application::ArtifactAdministrationError::Corrupt { field: "registration_schema" })) {
+                        let expected = serde_json::from_str::<serde_json::Value>(include_str!("../../../../fixtures/db/artifact-registration-0042.json"));
+                        let actual = openbot_infra::artifact_administration::capture_artifact_registration_schema(prepared.pool()).await;
+                        match (expected, actual) {
+                            (Ok(expected), Ok(actual)) => {
+                                let mut paths = Vec::new();
+                                cleanup_cached_schema_difference_paths(&expected, &actual, "", &mut paths);
+                                eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC legacy42_difference_paths={paths:?} path_limit=16 values_omitted=true");
+                            }
+                            (Err(_), _) => eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC fixed_original_oracle_decode_failed=true"),
+                            (_, Err(error)) => eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC legacy42_capture_error={error:?}"),
+                        }
+                    }
+                }
+            }
+            // Preserve the original Save outcome; diagnostics never retry or replace it.
+            let receipt = receipt.map_err(|error| error.to_string())?;
             let artifact = match receipt {
                 AppReply::ArtifactRegistrationReceipt(receipt) => receipt,
                 _ => return Err("actual Local Save returned another reply".to_owned()),
@@ -1261,6 +1287,47 @@ fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::B
         "own original FD inventory was unstable (Unproven)",
     )?;
     Ok(first)
+}
+
+fn cleanup_cached_schema_difference_paths(
+    expected: &serde_json::Value,
+    actual: &serde_json::Value,
+    path: &str,
+    out: &mut Vec<String>,
+) {
+    use serde_json::Value;
+    if expected == actual || out.len() >= 16 {
+        return;
+    }
+    match (expected, actual) {
+        (Value::Object(left), Value::Object(right)) => {
+            for (key, value) in left {
+                if out.len() >= 16 {
+                    return;
+                }
+                let next = format!("{path}/{key}");
+                match right.get(key) {
+                    Some(other) => cleanup_cached_schema_difference_paths(value, other, &next, out),
+                    None => out.push(next),
+                }
+            }
+            if out.len() < 16 && right.keys().any(|key| !left.contains_key(key)) {
+                out.push(format!("{path}/<unexpected-object-key>"));
+            }
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            if left.len() != right.len() {
+                out.push(format!("{path}/<array-length>"));
+            }
+            for (index, (value, other)) in left.iter().zip(right).enumerate() {
+                if out.len() >= 16 {
+                    return;
+                }
+                cleanup_cached_schema_difference_paths(value, other, &format!("{path}/{index}"), out);
+            }
+        }
+        _ => out.push(path.to_owned()),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
