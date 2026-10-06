@@ -32,6 +32,7 @@ use crate::http::ServerState;
 
 const PREFIX: &str = "/api/artifact-reads";
 
+/// Closed sequence selector for one original reader block; it grants no byte authority.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SequenceBody {
@@ -51,6 +52,7 @@ pub async fn response_policy(request: Request, next: Next) -> Response {
     response
 }
 
+/// Open a reader under current host and source authority, returning only control JSON.
 pub async fn open(
     State(state): State<ServerState>,
     OriginAuthenticated(auth): OriginAuthenticated,
@@ -69,6 +71,7 @@ pub async fn open(
     }
 }
 
+/// Deliver one original block through a body that rechecks authority at its first poll.
 pub async fn next(
     State(state): State<ServerState>,
     OriginAuthenticated(auth): OriginAuthenticated,
@@ -113,6 +116,7 @@ pub async fn next(
     Ok((headers, body).into_response())
 }
 
+/// Acknowledge the matching original sequence under its current control proof.
 pub async fn acknowledge(
     State(state): State<ServerState>,
     OriginAuthenticated(auth): OriginAuthenticated,
@@ -143,6 +147,7 @@ pub async fn acknowledge(
     }
 }
 
+/// Close the original reader without granting a new byte operation.
 pub async fn close(
     State(state): State<ServerState>,
     OriginAuthenticated(auth): OriginAuthenticated,
