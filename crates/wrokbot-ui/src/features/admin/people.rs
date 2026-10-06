@@ -123,6 +123,18 @@ pub fn AdminPeoplePage() -> impl IntoView {
             false,
         );
     };
+    let retry = move |_| {
+        retry_people_page(
+            people,
+            current_actor,
+            next_cursor,
+            request_epoch,
+            page_owner,
+            loading,
+            load_error,
+            query,
+        );
+    };
 
     view! {
         <PageShell width=PageWidth::Content>
@@ -155,7 +167,9 @@ pub fn AdminPeoplePage() -> impl IntoView {
                         <Button
                             variant=ButtonVariant::Ghost
                             size=ButtonSize::Small
-                            on_activate=move |_| refresh.run(())
+                            disabled=mutation_pending
+                            loading=loading
+                            on_activate=retry
                         >
                             {move || t!(i18n, common.retry)}
                         </Button>
@@ -383,6 +397,38 @@ fn schedule_people_timeout(callback: impl FnOnce() + 'static) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     let _ = (callback, PEOPLE_SEARCH_DEBOUNCE_MS);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retry_people_page(
+    people: RwSignal<Vec<RwSignal<Person>>>,
+    current_actor: RwSignal<Option<ActorId>>,
+    next_cursor: RwSignal<Option<String>>,
+    request_epoch: RwSignal<u64>,
+    page_owner: StoredValue<Option<Owner>>,
+    loading: RwSignal<bool>,
+    load_error: RwSignal<bool>,
+    query: RwSignal<String>,
+) {
+    if loading.get_untracked() {
+        return;
+    }
+    // Only a successful page advances this cursor; a query reset clears it before its read.
+    let cursor = next_cursor.get_untracked();
+    let reset = cursor.is_none();
+    request_people_page(
+        people,
+        current_actor,
+        next_cursor,
+        request_epoch,
+        page_owner,
+        loading,
+        load_error,
+        query.get_untracked(),
+        cursor,
+        reset,
+        current_actor.get_untracked().is_none(),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -715,6 +761,47 @@ mod tests {
             assert_eq!(advance_counter(counter), Some(u64::MAX));
             assert_eq!(advance_counter(counter), None);
             assert_eq!(counter.get_untracked(), u64::MAX);
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn paged_read_retry_failure_preserves_loaded_people_and_opaque_cursor() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let first = RwSignal::new(person("person-1"));
+            let people = RwSignal::new(vec![first]);
+            let current_actor = RwSignal::new(None::<ActorId>);
+            let cursor = "opaque+/=?".to_owned();
+            let next_cursor = RwSignal::new(Some(cursor.clone()));
+            let request_epoch = RwSignal::new(3_u64);
+            let page_owner = StoredValue::new(Owner::current());
+            let loading = RwSignal::new(false);
+            let load_error = RwSignal::new(true);
+            let query = RwSignal::new("member + one".to_owned());
+
+            // Exercise the request's native unavailable branch without HTTP.
+            retry_people_page(
+                people,
+                current_actor,
+                next_cursor,
+                request_epoch,
+                page_owner,
+                loading,
+                load_error,
+                query,
+            );
+
+            assert_eq!(people.with_untracked(Vec::len), 1);
+            assert_eq!(
+                people.get_untracked()[0].get_untracked(),
+                person("person-1")
+            );
+            assert_eq!(next_cursor.get_untracked(), Some(cursor));
+            assert_eq!(query.get_untracked(), "member + one");
+            assert_eq!(request_epoch.get_untracked(), 4);
+            assert!(!loading.get_untracked());
+            assert!(load_error.get_untracked());
         });
     }
 
