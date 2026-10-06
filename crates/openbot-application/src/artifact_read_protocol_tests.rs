@@ -578,7 +578,8 @@ async fn completed_ack_retry_keeps_original_tail_and_performs_zero_io() {
     {
         let data = entry.data.lock().await;
         let completed = data.last_ack.as_ref().unwrap();
-        let control = data.control.as_ref().unwrap();
+        let record = entry.control.lock().unwrap();
+        let control = record.as_ref().unwrap();
         assert!(Arc::ptr_eq(&original_tail, &completed.tail));
         assert!(Arc::ptr_eq(&original_tail, &control.tail));
         assert_eq!(completed.valid_before, original_valid_before);
@@ -1017,7 +1018,7 @@ async fn foreign_original_bindings_cannot_select_or_close_peer() {
     }
     assert_eq!(scenario.counts.observation_counts(), observations_before);
     assert!(!entry.stopped.load(Ordering::SeqCst));
-    assert!(entry.data.lock().await.control.is_some());
+    assert!(entry.control.lock().unwrap().is_some());
     consume_control(
         &registry,
         &scenario.auth,

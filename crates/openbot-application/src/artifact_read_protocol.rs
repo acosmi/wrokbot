@@ -152,6 +152,7 @@ struct Entry {
     cleanup_started: AtomicBool,
     changed: Notify,
     completion: Mutex<Option<Arc<dyn ArtifactReadOperationCompletion>>>,
+    control: Mutex<Option<ControlRecord>>,
     data: AsyncMutex<EntryData>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -178,7 +179,6 @@ struct EntryData {
     released: Option<Arc<ActualRelease>>,
     eof_tail: Option<Arc<CurrentArtifactReadControlTail>>,
     terminal_ready_before: Option<Instant>,
-    control: Option<ControlRecord>,
 }
 struct ControlRecord {
     reply: AppReply,
@@ -204,7 +204,6 @@ impl EntryData {
             released: None,
             eof_tail: None,
             terminal_ready_before: None,
-            control: None,
         }
     }
     fn close_owned(&mut self) {
@@ -217,22 +216,6 @@ impl EntryData {
             prepared.operation.close();
             drop(prepared.first.take());
         }
-    }
-    fn record_control(
-        &mut self,
-        reply: AppReply,
-        tail: Arc<CurrentArtifactReadControlTail>,
-        valid_before: Instant,
-    ) -> Result<(), AppError> {
-        if self.control.is_some() {
-            return Err(busy());
-        }
-        self.control = Some(ControlRecord {
-            reply,
-            tail,
-            valid_before,
-        });
-        Ok(())
     }
 }
 impl PublicArtifactReadRegistry {
@@ -302,6 +285,7 @@ impl PublicArtifactReadRegistry {
             cleanup_started: AtomicBool::new(false),
             changed: Notify::new(),
             completion: Mutex::new(None),
+            control: Mutex::new(None),
             data: AsyncMutex::new(EntryData::opening()),
         });
         entries.insert(id, Arc::clone(&entry));
@@ -389,7 +373,7 @@ impl PublicArtifactReadRegistry {
         data.prepared = Some(prepared);
         data.target = Some(target);
         data.phase = Phase::Ready;
-        data.record_control(AppReply::ArtifactReadOpened(reply.clone()), tail, deadline)?;
+        entry.record_control(AppReply::ArtifactReadOpened(reply.clone()), tail, deadline)?;
         attempt.completed = true;
         Ok(reply)
     }
@@ -400,7 +384,14 @@ impl PublicArtifactReadRegistry {
     ) -> Result<ArtifactReadChunkDescriptor, AppError> {
         let entry = self.original_entry(auth, &input.handle_id)?;
         let mut data = entry.data.try_lock().map_err(|_| busy())?;
-        if data.sequence != input.sequence || data.phase != Phase::Ready || data.control.is_some() {
+        if data.sequence != input.sequence
+            || data.phase != Phase::Ready
+            || entry
+                .control
+                .lock()
+                .map_err(|_| artifacts_unavailable())?
+                .is_some()
+        {
             return Err(busy());
         }
         let deadline = entry.budget()?;
@@ -487,7 +478,12 @@ impl PublicArtifactReadRegistry {
     ) -> Result<ArtifactReadAcknowledged, AppError> {
         let entry = self.original_entry(auth, &input.handle_id)?;
         let mut data = entry.data.try_lock().map_err(|_| busy())?;
-        if data.control.is_some() {
+        if entry
+            .control
+            .lock()
+            .map_err(|_| artifacts_unavailable())?
+            .is_some()
+        {
             return Err(busy());
         }
         if let Some(previous) = data
@@ -511,7 +507,7 @@ impl PublicArtifactReadRegistry {
                 handle_id: entry.id.clone(),
                 sequence: input.sequence,
             };
-            data.record_control(
+            entry.record_control(
                 AppReply::ArtifactReadAcknowledged(reply.clone()),
                 tail,
                 valid_before,
@@ -567,7 +563,7 @@ impl PublicArtifactReadRegistry {
             handle_id: entry.id.clone(),
             sequence: input.sequence,
         };
-        data.record_control(
+        entry.record_control(
             AppReply::ArtifactReadAcknowledged(reply.clone()),
             tail,
             deadline,
@@ -582,7 +578,12 @@ impl PublicArtifactReadRegistry {
     ) -> Result<ArtifactReadClosed, AppError> {
         let entry = self.original_entry(auth, &input.handle_id)?;
         let mut data = entry.data.try_lock().map_err(|_| busy())?;
-        if data.control.is_some() {
+        if entry
+            .control
+            .lock()
+            .map_err(|_| artifacts_unavailable())?
+            .is_some()
+        {
             return Err(busy());
         }
         let deadline = entry.budget()?;
@@ -603,7 +604,7 @@ impl PublicArtifactReadRegistry {
             handle_id: entry.id.clone(),
         };
         data.phase = Phase::Closed;
-        data.record_control(AppReply::ArtifactReadClosed(reply.clone()), tail, deadline)?;
+        entry.record_control(AppReply::ArtifactReadClosed(reply.clone()), tail, deadline)?;
         attempt.completed = true;
         drop(data);
         entry.start_cleanup();
@@ -621,13 +622,15 @@ impl PublicArtifactReadRegistry {
             _ => return Err(artifacts_unavailable()),
         };
         let entry = self.original_entry(auth, id)?;
-        let mut data = entry.data.try_lock().map_err(|_| busy())?;
-        let record = data.control.as_ref().ok_or_else(busy)?;
+        // Cleanup can own the async reader state after a true Close. Selecting its already
+        // completed original control must not turn that internal lock into a client conflict.
+        let mut control = entry.control.lock().map_err(|_| artifacts_unavailable())?;
+        let record = control.as_ref().ok_or_else(busy)?;
         if record.reply != reply {
             return Err(busy());
         }
-        let record = data.control.take().ok_or_else(busy)?;
-        drop(data);
+        let record = control.take().ok_or_else(busy)?;
+        drop(control);
         entry.changed.notify_one();
         Ok(PublicArtifactReadControlDelivery {
             entry,
@@ -695,6 +698,23 @@ async fn expire_original_reader(entry: Arc<Entry>) {
     }
 }
 impl Entry {
+    fn record_control(
+        &self,
+        reply: AppReply,
+        tail: Arc<CurrentArtifactReadControlTail>,
+        valid_before: Instant,
+    ) -> Result<(), AppError> {
+        let mut control = self.control.lock().map_err(|_| artifacts_unavailable())?;
+        if control.is_some() {
+            return Err(busy());
+        }
+        *control = Some(ControlRecord {
+            reply,
+            tail,
+            valid_before,
+        });
+        Ok(())
+    }
     fn matches(&self, auth: &AuthContext) -> bool {
         self.auth == *auth
             && self
@@ -769,12 +789,15 @@ impl Entry {
                 }
                 // A genuine already-closed control may still be waiting for its actual first
                 // transport poll. Keep its finite original proof, never renew its budget.
-                let keep = data.control.as_ref().is_some_and(|record| {
+                let Ok(mut control) = self.control.lock() else {
+                    return;
+                };
+                let keep = control.as_ref().is_some_and(|record| {
                     matches!(record.reply, AppReply::ArtifactReadClosed(_))
                         && Instant::now() < record.valid_before
                 });
                 if !keep {
-                    data.control = None;
+                    *control = None;
                 }
                 keep || keep_eof
             };
