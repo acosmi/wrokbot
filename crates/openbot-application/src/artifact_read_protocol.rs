@@ -462,7 +462,9 @@ impl PublicArtifactReadRegistry {
             .ok_or_else(busy)?;
         let payload = match data.phase {
             Phase::DescriptorReady if !entry.stopped.load(Ordering::SeqCst) => {
-                DeliveryPayload::Data(data.pending.take().ok_or_else(artifacts_unavailable)?)
+                DeliveryPayload::Data(Box::new(
+                    data.pending.take().ok_or_else(artifacts_unavailable)?,
+                ))
             }
             Phase::EofReady if descriptor.eof => {
                 DeliveryPayload::Eof(data.eof_tail.take().ok_or_else(artifacts_unavailable)?)
@@ -916,7 +918,7 @@ struct SharedBlock {
     _release_after_frame: ReleaseAfterFrame,
 }
 enum DeliveryPayload {
-    Data(CurrentArtifactReadBlock),
+    Data(Box<CurrentArtifactReadBlock>),
     Eof(Arc<CurrentArtifactReadControlTail>),
 }
 
