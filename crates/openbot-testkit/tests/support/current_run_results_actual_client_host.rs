@@ -1240,6 +1240,12 @@ struct StreamControl {
     nominated: AtomicBool,
     waker: StdMutex<Option<std::task::Waker>>,
 }
+struct SseRequestMetadata {
+    generation: u64,
+    last_id: Option<u64>,
+    cursor: Option<u64>,
+    cookie_matches: bool,
+}
 struct SseController {
     facts: StdMutex<Value>,
     controls: StdMutex<std::collections::BTreeMap<u64, Arc<StreamControl>>>,
@@ -1280,11 +1286,14 @@ impl SseController {
         sequence: u64,
         thread: &str,
         current: &Case,
-        generation: u64,
-        last_id: Option<u64>,
-        cursor: Option<u64>,
-        cookie_matches: bool,
+        metadata: SseRequestMetadata,
     ) -> Result<axum::body::Body, (String, axum::body::Body)> {
+        let SseRequestMetadata {
+            generation,
+            last_id,
+            cursor,
+            cookie_matches,
+        } = metadata;
         let control = Arc::new(StreamControl {
             close: AtomicBool::new(false),
             nominated: AtomicBool::new(false),
@@ -1366,25 +1375,24 @@ impl SseController {
         Ok(())
     }
     fn dropped(&self, index: usize, sequence: u64, controlled: bool) {
-        if let Ok(mut facts) = self.facts.lock() {
-            if let Some(row) = facts["streams"]
+        if let Ok(mut facts) = self.facts.lock()
+            && let Some(row) = facts["streams"]
                 .as_array_mut()
                 .and_then(|r| r.get_mut(index))
-                && row["bodyDropObserved"] != true
-            {
-                row["bodyDropObserved"] = json!(true);
-                row["controllerClosed"] = json!(controlled);
-                facts["remainingWrappers"] = json!(
-                    facts["remainingWrappers"]
-                        .as_u64()
-                        .unwrap_or(1)
-                        .saturating_sub(1)
-                );
-                if controlled {
-                    facts["originalBodyDropObserved"] = json!(true);
-                    facts["closeCount"] = json!(facts["closeCount"].as_u64().unwrap_or(0) + 1);
-                    facts["phase"] = json!("disconnected");
-                }
+            && row["bodyDropObserved"] != true
+        {
+            row["bodyDropObserved"] = json!(true);
+            row["controllerClosed"] = json!(controlled);
+            facts["remainingWrappers"] = json!(
+                facts["remainingWrappers"]
+                    .as_u64()
+                    .unwrap_or(1)
+                    .saturating_sub(1)
+            );
+            if controlled {
+                facts["originalBodyDropObserved"] = json!(true);
+                facts["closeCount"] = json!(facts["closeCount"].as_u64().unwrap_or(0) + 1);
+                facts["phase"] = json!("disconnected");
             }
         }
         if let Ok(mut controls) = self.controls.lock() {
@@ -1454,11 +1462,14 @@ impl SseController {
         sequence: u64,
         thread: &str,
         current: &Case,
-        generation: u64,
-        last_id: Option<u64>,
-        cursor: Option<u64>,
-        cookie: bool,
+        metadata: SseRequestMetadata,
     ) -> Result<(), String> {
+        let SseRequestMetadata {
+            generation,
+            last_id,
+            cursor,
+            cookie_matches: cookie,
+        } = metadata;
         let receiver = {
             let mut facts = self.facts.lock().map_err(|_| "sse_observation_poisoned")?;
             if facts["closeRequested"] != true || facts["threadId"] != thread {
@@ -1745,7 +1756,17 @@ async fn observe_http(
         && let (Some(thread), Some(c), Some(generation)) = (&thread, &current, generation)
         && let Err(code) = state
             .sse
-            .maybe_hold(sequence, thread, c, generation, last_id, cursor, cookie)
+            .maybe_hold(
+                sequence,
+                thread,
+                c,
+                SseRequestMetadata {
+                    generation,
+                    last_id,
+                    cursor,
+                    cookie_matches: cookie,
+                },
+            )
             .await
     {
         state
@@ -1792,10 +1813,12 @@ async fn observe_http(
                 sequence,
                 thread,
                 &c,
-                generation,
-                last_id,
-                cursor,
-                cookie,
+                SseRequestMetadata {
+                    generation,
+                    last_id,
+                    cursor,
+                    cookie_matches: cookie,
+                },
             ) {
                 Ok(body) => *response.body_mut() = body,
                 Err((code, body)) => {
@@ -1918,6 +1941,7 @@ async fn prefix_observed(state: &State, run: &str, witness: &Value) -> Result<Va
         .filter(|v| *v > 0)
         .ok_or("prefix_sequence_invalid")?;
     let digest = text(witness, "sseBodySha256")?;
+    let sse_event_id = sequence.to_string();
     let committed = observed["events"]
         .as_array()
         .ok_or("prefix_events_shape")?
@@ -1932,7 +1956,7 @@ async fn prefix_observed(state: &State, run: &str, witness: &Value) -> Result<Va
         .count();
     if committed != 1
         || witness["sseEventSequence"] != sequence
-        || witness["sseEventId"] != sequence.to_string()
+        || witness["sseEventId"].as_str() != Some(sse_event_id.as_str())
         || witness["domRunId"] != run
         || witness["domTextMatches"] != true
         || text(witness, "context")?.is_empty()
