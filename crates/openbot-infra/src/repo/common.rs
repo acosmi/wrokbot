@@ -6,7 +6,7 @@
 
 use core::marker::PhantomData;
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use tokio_postgres::types::ToSql;
 
 use crate::db::InfraError;
@@ -118,7 +118,7 @@ where
         Ok(affected == 1)
     }
 
-    async fn client(&self) -> Result<deadpool_postgres::Object, InfraError> {
+    async fn client(&self) -> Result<crate::db::pool::PooledClient, InfraError> {
         self.pool
             .get()
             .await
@@ -184,7 +184,7 @@ macro_rules! define_table_repo {
         impl $name {
             /// 用调用方提供的连接池构造；repository 自己不读环境变量。
             #[must_use]
-            pub fn new(pool: deadpool_postgres::Pool) -> Self {
+            pub fn new(pool: crate::db::pool::DatabasePool) -> Self {
                 Self {
                     core: $crate::repo::common::RepoCore::new(pool),
                 }

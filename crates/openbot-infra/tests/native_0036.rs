@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 
 async fn fixture<F, Fut>(name: &str, body: F)
 where
-    F: FnOnce(deadpool_postgres::Pool) -> Fut,
+    F: FnOnce(openbot_infra::db::pool::DatabasePool) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
     harness::with_temp_database(&harness::admin_config(name), name, |config| async move {
@@ -25,7 +25,7 @@ where
     .await;
 }
 
-async fn through35(p: &deadpool_postgres::Pool) {
+async fn through35(p: &openbot_infra::db::pool::DatabasePool) {
     let mut c = p.get().await.unwrap();
     baseline::apply(&c).await.unwrap();
     native::apply_through(&mut c, native::NATIVE_0035_VERSION)

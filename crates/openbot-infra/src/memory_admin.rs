@@ -34,14 +34,14 @@ use crate::repo::common::columns_sql;
 /// Explicit memory 的 production adapter；不包含 background extraction job。
 #[derive(Clone)]
 pub struct PostgresMemoryAdministration {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     effect_audit_key: Option<std::sync::Arc<[u8]>>,
 }
 
 impl PostgresMemoryAdministration {
     /// 用共享池构造。
     #[must_use]
-    pub fn new(pool: deadpool_postgres::Pool) -> Self {
+    pub fn new(pool: crate::db::pool::DatabasePool) -> Self {
         Self {
             pool,
             effect_audit_key: None,

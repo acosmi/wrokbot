@@ -36,7 +36,7 @@ const ADMIN_METADATA: &str = "_openbot_credential_admin";
 
 /// One deployment-owned credential administration boundary; callers cannot choose its scope.
 pub struct PostgresCredentialAdministration {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     vault: CredentialRecordVault,
     deployment: DeploymentId,
     tenant: TenantId,
@@ -48,7 +48,7 @@ pub struct PostgresCredentialAdministration {
 impl PostgresCredentialAdministration {
     /// Use the same pool, Vault and MCP retirement coordinator as the application assembly.
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         vault: CredentialRecordVault,
         deployment: DeploymentId,
         tenant: TenantId,

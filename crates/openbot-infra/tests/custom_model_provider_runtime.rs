@@ -69,7 +69,7 @@ fn auth() -> AuthContext {
     .build()
 }
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     config: DatabaseConfig,
     directory: PostgresThreadDirectory,
     models: Arc<PostgresModelConnections>,
@@ -1014,7 +1014,10 @@ impl RunningAgent {
         assert_eq!(self.legacy.0.load(Ordering::SeqCst), 0);
     }
 }
-async fn terminal(pool: &deadpool_postgres::Pool, run: &RunId) -> (String, Option<String>) {
+async fn terminal(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    run: &RunId,
+) -> (String, Option<String>) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let c = pool.get().await.unwrap();

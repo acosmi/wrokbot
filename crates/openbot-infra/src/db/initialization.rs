@@ -4,7 +4,7 @@
 //! and migration path. Keeping this in a transport binary would let the Desktop setup silently
 //! diverge from Server at the most security-sensitive bootstrap boundary.
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 
 use super::compat::{DataMigrationVerdict, check_migration_boundary_on};
 use super::{InfraError, fresh, native};

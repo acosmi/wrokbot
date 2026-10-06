@@ -1,7 +1,6 @@
 //! Owned-PG metadata tests with a trusted-test issuer. Genuine host proof is tested separately.
 #![cfg(all(unix, feature = "server-runtime"))]
 
-use deadpool_postgres::Pool;
 use openbot_application::{ArtifactAdministration, BeginThreadRunRequest, ThreadDirectory};
 use openbot_contracts::artifacts::{
     ArtifactRegistrationReceipt, GetSourceRunArtifactIds, SaveRunMessageTextArtifact,
@@ -22,6 +21,7 @@ use openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority;
 use openbot_infra::artifact_registry::ArtifactDatasetRegistry;
 use openbot_infra::artifact_store::DatasetBoundArtifactStore;
 use openbot_infra::db::pool::DatabaseConfig;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
 use std::fs::{self, File};

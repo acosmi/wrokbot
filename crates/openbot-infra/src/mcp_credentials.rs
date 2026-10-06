@@ -46,7 +46,7 @@ pub enum McpCredentialError {
 /// Per-operation broker. It never caches cleartext or access tokens.
 #[derive(Clone)]
 pub struct PostgresMcpCredentialBroker {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     vault: CredentialRecordVault,
     user_oauth: Option<UserOAuthRuntime>,
     drive_oauth: Option<GoogleDriveOAuthClient>,
@@ -61,7 +61,7 @@ struct UserOAuthRuntime {
 impl PostgresMcpCredentialBroker {
     /// Bind the same tenant vault and PostgreSQL pool used by production credentials.
     #[must_use]
-    pub fn new(pool: deadpool_postgres::Pool, vault: CredentialRecordVault) -> Self {
+    pub fn new(pool: crate::db::pool::DatabasePool, vault: CredentialRecordVault) -> Self {
         Self {
             pool,
             vault,

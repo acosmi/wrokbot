@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_application::tenant::package::{
     LoadedTenantPackage, TenantPackageApplyError, TenantPackageAudienceContext, TenantPackageError,
     TenantPackageSyncReport, synchronize_tenant_package,

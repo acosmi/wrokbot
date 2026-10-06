@@ -6,7 +6,6 @@ mod harness;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deadpool_postgres::Pool;
 use openbot_application::{UiPreferenceAdministration, UiPreferenceAdministrationError as Error};
 use openbot_contracts::{
     auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role},
@@ -14,6 +13,7 @@ use openbot_contracts::{
     ui::{UiLocale, UiPreferences, UiTheme, UpdateUiPreferences},
 };
 use openbot_domain::vault::SecretBytes;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::{
     db::{fresh, pool},
     ui_preferences::PostgresUiPreferenceAdministration,

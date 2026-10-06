@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_contracts::ids::TenantId;
 use openbot_domain::vault::{
     ColumnShape, DATA_KEY_BYTES, DataKey, EnvelopeV1, EnvelopeV2, KeyVersion, NONCE_BYTES, Nonce,

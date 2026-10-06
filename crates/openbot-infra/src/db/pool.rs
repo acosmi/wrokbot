@@ -9,17 +9,469 @@
 //! 不在这里留一个"传 None 就明文"的开关。
 
 use std::fmt;
+use std::ops::Deref;
 use std::str::FromStr;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
-use tokio_postgres::NoTls;
+use deadpool_postgres::{ClientWrapper, Manager, ManagerConfig, RecyclingMethod, Runtime};
 
 use crate::db::InfraError;
 
-/// Shared PostgreSQL pool type. Startup composition owns this value; transports only receive the
-/// typed application service built from its adapters.
-pub type DatabasePool = Pool;
+mod owner;
+
+use owner::{ClientLease, OwnerSupervisor, SupervisedConnect};
+pub use owner::{
+    ConnectionDestruction, ConnectionObservation, ConnectionSnapshot, OwnershipSnapshot,
+};
+
+/// 封闭连接层错误。底层 PG 错误、SQL、连接配置和秘密不进入这个诊断接口。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PoolError {
+    /// 底层建池、建连或 checkout 失败。
+    #[error("database_pool_unavailable")]
+    Unavailable,
+    /// 实际底层 Pool 已关闭。
+    #[error("database_pool_closed")]
+    Closed,
+    /// 原始 checkout / driver 的拥有关系不能核同。
+    #[error("database_pool_ownership_unavailable")]
+    OwnershipUnavailable,
+    /// 本 Pool 的 Object ID 发生不允许的碰撞。
+    #[error("database_pool_identity_collision")]
+    IdentityCollision,
+    /// 已检查的创造计数耗尽，禁止底层 usize ID 回绕。
+    #[error("database_pool_creation_limit")]
+    CreationLimit,
+    /// 调用方原绝对期限耗尽。
+    #[error("database_pool_deadline_exceeded")]
+    DeadlineExceeded,
+    /// 没有收到原资源析构观察；这不是已关闭。
+    #[error("database_connection_observation_unavailable")]
+    ObservationUnavailable,
+}
+
+/// 同一个实际 stock Manager/Pool 的封闭外壳。
+///
+/// 所有 clone 共享底层 Pool 和原连接监督者；没有裸 Pool、任意 Manager、hooks 或 builder
+/// 出口。Fast 仅保持既有 checkout 行为，不是事务 ACK 或物理关闭证明。
+#[derive(Clone)]
+pub struct DatabasePool {
+    stock: deadpool_postgres::Pool,
+    supervisor: Arc<OwnerSupervisor>,
+}
+
+impl fmt::Debug for DatabasePool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DatabasePool(<supervised>)")
+    }
+}
+
+impl DatabasePool {
+    /// 仅按显式 typed 配置建封闭 Pool，不取连接、不 probe，也不证明当前权限或可用性。
+    ///
+    /// # Errors
+    /// 不能建立该封闭 Pool 时返回固定 [`PoolError`]。
+    pub fn build_unprobed(config: &DatabaseConfig) -> Result<Self, PoolError> {
+        Self::build_config(
+            config.to_pg_config(),
+            config.max_pool_size,
+            config.connect_timeout,
+        )
+    }
+
+    fn build_config(
+        config: tokio_postgres::Config,
+        max_pool_size: usize,
+        connect_timeout: Duration,
+    ) -> Result<Self, PoolError> {
+        let supervisor = OwnerSupervisor::new();
+        let manager = Manager::from_connect(
+            config,
+            SupervisedConnect::new(&supervisor),
+            ManagerConfig {
+                recycling_method: RecyclingMethod::Fast,
+            },
+        );
+        let stock = deadpool_postgres::Pool::builder(manager)
+            .max_size(max_pool_size)
+            .runtime(Runtime::Tokio1)
+            .create_timeout(Some(connect_timeout))
+            .build()
+            .map_err(|_| PoolError::Unavailable)?;
+        Ok(Self { stock, supervisor })
+    }
+
+    /// 兼容既有调用的 checkout；真实 Object ID 的登记在 stock get 后连续完成，无 await。
+    ///
+    /// # Errors
+    /// 底层失败或拥有关系不闭合时封闭拒绝，不伪造 stock timeout。
+    pub async fn get(&self) -> Result<PooledClient, PoolError> {
+        let lease = self.supervisor.checkout(&self.stock).await?;
+        Ok(PooledClient { lease: Some(lease) })
+    }
+
+    /// 使用入口传来的原绝对期限；取消期间的 trace 由 scope 外 guard 移交监督者。
+    pub(crate) async fn get_guarded(&self, deadline: Instant) -> Result<GuardedClient, PoolError> {
+        if Instant::now() >= deadline {
+            return Err(PoolError::DeadlineExceeded);
+        }
+        let lease = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            self.supervisor.checkout(&self.stock),
+        )
+        .await
+        .map_err(|_| PoolError::DeadlineExceeded)??;
+        let client = GuardedClient {
+            lease: Some(lease),
+            deadline,
+            disposition: TransactionDisposition::Unstarted,
+        };
+        if Instant::now() >= deadline {
+            return Err(PoolError::DeadlineExceeded);
+        }
+        Ok(client)
+    }
+
+    /// 不可变借用原实际 Manager，仅用于既有组合根的精确身份比较。
+    pub fn manager(&self) -> &Manager {
+        self.stock.manager()
+    }
+
+    /// 转发实际 Pool 状态；size 或 available 不是原连接关闭证明。
+    pub fn status(&self) -> deadpool_postgres::Status {
+        self.stock.status()
+    }
+
+    /// 转发实际 Pool 关闭；返回只表示停止准入，不表示所有 driver 已析构。
+    pub fn close(&self) {
+        self.stock.close();
+    }
+
+    /// 实际 stock Pool 的准入关闭状态，不是 socket / driver 析构证明。
+    pub fn is_closed(&self) -> bool {
+        self.stock.is_closed()
+    }
+
+    /// 捕获当前仍由监督者持有的原资源观察；应在取消前保留所需观察句柄。
+    pub fn connection_observations(&self) -> Vec<ConnectionObservation> {
+        self.supervisor.observations()
+    }
+
+    /// 不含配置、地址、用户或 SQL 的监督计数。
+    pub fn ownership_snapshot(&self) -> OwnershipSnapshot {
+        self.supervisor.snapshot()
+    }
+}
+
+/// 既有 repository 的 legacy client。公开只借 Wrapper，不借可恢复裸 Pool 的 stock Object。
+pub struct PooledClient {
+    lease: Option<ClientLease>,
+}
+
+impl fmt::Debug for PooledClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PooledClient(<owned>)")
+    }
+}
+
+impl Deref for PooledClient {
+    type Target = ClientWrapper;
+    fn deref(&self) -> &Self::Target {
+        self.lease().stock()
+    }
+}
+
+impl PooledClient {
+    fn lease(&self) -> &ClientLease {
+        self.lease.as_ref().expect("unconsumed pooled client")
+    }
+    fn lease_mut(&mut self) -> &mut ClientLease {
+        self.lease.as_mut().expect("unconsumed pooled client")
+    }
+
+    /// 只向已经登记的两个 infra 私有 GenericClient helper 借原 stock Object。
+    pub(crate) fn as_generic(&self) -> &deadpool_postgres::Client {
+        self.lease().stock()
+    }
+
+    /// 在这个原 client 上开始 legacy 事务；不提供原 mutable client loan。
+    ///
+    /// # Errors
+    /// 返回该实际 driver 的原事务错误；此 legacy API 不授予 014 的关闭证明。
+    pub async fn transaction(
+        &mut self,
+    ) -> Result<deadpool_postgres::Transaction<'_>, tokio_postgres::Error> {
+        self.lease_mut().stock_mut().transaction().await
+    }
+
+    /// 原 client 的 opaque legacy transaction builder。
+    pub fn build_transaction(&mut self) -> deadpool_postgres::TransactionBuilder<'_> {
+        self.lease_mut().stock_mut().build_transaction()
+    }
+
+    /// 受信 bootstrap 的 opaque PG builder；没有 mutable PgClient/Wrapper/Object 出口。
+    pub fn build_postgres_transaction(&mut self) -> tokio_postgres::TransactionBuilder<'_> {
+        tokio_postgres::Client::build_transaction(self.lease_mut().stock_mut())
+    }
+
+    /// 消费并永久脱池，保留两个既有 legacy detach 调用；该 Wrapper 永远不能回原 Pool。
+    pub fn take(mut this: Self) -> ClientWrapper {
+        this.lease
+            .take()
+            .expect("unconsumed pooled client")
+            .detach()
+    }
+
+    /// 仅原资源析构观察，不证明原事务成功、当前权限或远端关闭。
+    pub fn observation(&self) -> ConnectionObservation {
+        self.lease().observation()
+    }
+}
+
+impl Drop for PooledClient {
+    fn drop(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            lease.release(true);
+        }
+    }
+}
+
+/// 单一原事务 owner 的封闭错误；不携带 PG 原文或自由 SQL。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum TransactionOwnerError {
+    #[error("database_transaction_already_started")]
+    AlreadyStarted,
+    #[error("database_transaction_deadline_exceeded")]
+    DeadlineExceeded,
+    #[error("database_transaction_begin_unavailable")]
+    BeginUnavailable,
+    #[error("database_transaction_commit_unknown")]
+    CommitUnknown,
+    #[error("database_transaction_rollback_unproven")]
+    RollbackUnproven,
+    #[error("database_transaction_commit_ack_after_deadline")]
+    CommitAcknowledgedAfterDeadline,
+    #[error("database_transaction_rollback_ack_after_deadline")]
+    RollbackAcknowledgedAfterDeadline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransactionDisposition {
+    Unstarted,
+    BeginStarted,
+    InTransaction,
+    CommitStarted,
+    RollbackStarted,
+    CommitAcknowledged,
+    RollbackAcknowledged,
+    CommitAcknowledgedLate,
+    RollbackAcknowledgedLate,
+    CommitUnknown,
+    RollbackUnproven,
+}
+
+/// 014 client：没有 stock Object、detach、替换或 mutable Wrapper loan；默认永久退役。
+pub(crate) struct GuardedClient {
+    lease: Option<ClientLease>,
+    deadline: Instant,
+    disposition: TransactionDisposition,
+}
+
+impl fmt::Debug for GuardedClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("GuardedClient(<original-owner>)")
+    }
+}
+
+impl GuardedClient {
+    pub(crate) fn observation(&self) -> ConnectionObservation {
+        self.lease
+            .as_ref()
+            .expect("unconsumed guarded client")
+            .observation()
+    }
+
+    /// 只借这个原 client 的 immutable PG 查询面；不暴露 stock Object 或 mutable loan。
+    pub(crate) fn as_client(&self) -> &tokio_postgres::Client {
+        self.lease
+            .as_ref()
+            .expect("unconsumed guarded client")
+            .stock()
+    }
+
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    /// BEGIN 也计入原预算；只有一个事务，真实 Read Committed，不接受 foreign Transaction。
+    pub(crate) async fn begin_read_committed(
+        &mut self,
+    ) -> Result<GuardedTransaction<'_>, TransactionOwnerError> {
+        if self.disposition != TransactionDisposition::Unstarted {
+            return Err(TransactionOwnerError::AlreadyStarted);
+        }
+        if Instant::now() >= self.deadline {
+            return Err(TransactionOwnerError::DeadlineExceeded);
+        }
+        self.disposition = TransactionDisposition::BeginStarted;
+        let observation = self.observation();
+        let deadline = self.deadline;
+        let lease = self.lease.as_mut().expect("unconsumed guarded client");
+        let transaction = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            lease
+                .stock_mut()
+                .build_transaction()
+                .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+                .start(),
+        )
+        .await;
+        let transaction = match transaction {
+            Ok(Ok(transaction)) => transaction,
+            Ok(Err(_)) => return Err(TransactionOwnerError::BeginUnavailable),
+            Err(_) => return Err(TransactionOwnerError::DeadlineExceeded),
+        };
+        if Instant::now() >= deadline {
+            drop(transaction);
+            return Err(TransactionOwnerError::DeadlineExceeded);
+        }
+        self.disposition = TransactionDisposition::InTransaction;
+        Ok(GuardedTransaction {
+            transaction: Some(transaction),
+            disposition: &mut self.disposition,
+            deadline,
+            observation,
+        })
+    }
+
+    /// 同步永久脱池并请求原 task 退役；返回的观察由真实析构信号完成，不是 abort ACK。
+    pub(crate) fn retire(mut self) -> ConnectionObservation {
+        let observation = self.observation();
+        if let Some(lease) = self.lease.take() {
+            lease.release(false);
+        }
+        observation
+    }
+}
+
+impl Drop for GuardedClient {
+    fn drop(&mut self) {
+        let reusable = matches!(
+            self.disposition,
+            TransactionDisposition::CommitAcknowledged
+                | TransactionDisposition::RollbackAcknowledged
+        ) && Instant::now() < self.deadline;
+        if let Some(lease) = self.lease.take() {
+            lease.release(reusable);
+        }
+    }
+}
+
+/// 只由原 GuardedClient 的 BEGIN 构造。内部 ACK 路径是唯一可准许归池的路径。
+pub(crate) struct GuardedTransaction<'a> {
+    transaction: Option<deadpool_postgres::Transaction<'a>>,
+    disposition: &'a mut TransactionDisposition,
+    deadline: Instant,
+    observation: ConnectionObservation,
+}
+
+impl fmt::Debug for GuardedTransaction<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("GuardedTransaction(<original-owner>)")
+    }
+}
+
+impl<'a> GuardedTransaction<'a> {
+    /// 不可变借用同一个原 PG 事务；所有外部 SQL await 必须继续使用 deadline()。
+    pub(crate) fn as_transaction(&self) -> &tokio_postgres::Transaction<'a> {
+        self.transaction
+            .as_ref()
+            .expect("unconsumed original transaction")
+    }
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+    pub(crate) fn observation(&self) -> ConnectionObservation {
+        self.observation.clone()
+    }
+
+    pub(crate) async fn commit(mut self) -> Result<(), TransactionOwnerError> {
+        if Instant::now() >= self.deadline {
+            return Err(TransactionOwnerError::DeadlineExceeded);
+        }
+        *self.disposition = TransactionDisposition::CommitStarted;
+        let transaction = self
+            .transaction
+            .take()
+            .expect("unconsumed original transaction");
+        let result = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(self.deadline),
+            transaction.commit(),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => {
+                if Instant::now() >= self.deadline {
+                    // 实际 ACK 已有，不能倒记 Unknown；耗尽预算仍禁止归池。
+                    *self.disposition = TransactionDisposition::CommitAcknowledgedLate;
+                    return Err(TransactionOwnerError::CommitAcknowledgedAfterDeadline);
+                }
+                *self.disposition = TransactionDisposition::CommitAcknowledged;
+                Ok(())
+            }
+            _ => {
+                *self.disposition = TransactionDisposition::CommitUnknown;
+                Err(TransactionOwnerError::CommitUnknown)
+            }
+        }
+    }
+
+    pub(crate) async fn rollback(mut self) -> Result<(), TransactionOwnerError> {
+        if Instant::now() >= self.deadline {
+            return Err(TransactionOwnerError::DeadlineExceeded);
+        }
+        *self.disposition = TransactionDisposition::RollbackStarted;
+        let transaction = self
+            .transaction
+            .take()
+            .expect("unconsumed original transaction");
+        let result = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(self.deadline),
+            transaction.rollback(),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => {
+                if Instant::now() >= self.deadline {
+                    *self.disposition = TransactionDisposition::RollbackAcknowledgedLate;
+                    return Err(TransactionOwnerError::RollbackAcknowledgedAfterDeadline);
+                }
+                *self.disposition = TransactionDisposition::RollbackAcknowledged;
+                Ok(())
+            }
+            _ => {
+                *self.disposition = TransactionDisposition::RollbackUnproven;
+                Err(TransactionOwnerError::RollbackUnproven)
+            }
+        }
+    }
+}
+
+impl Drop for GuardedTransaction<'_> {
+    fn drop(&mut self) {
+        match *self.disposition {
+            TransactionDisposition::CommitStarted => {
+                *self.disposition = TransactionDisposition::CommitUnknown
+            }
+            TransactionDisposition::InTransaction | TransactionDisposition::RollbackStarted => {
+                *self.disposition = TransactionDisposition::RollbackUnproven;
+            }
+            _ => {}
+        }
+        // stock Transaction Drop 的 queued rollback 不提供 ACK；原 client 仍默认退役。
+    }
+}
 
 /// 默认连接池上限。
 pub const DEFAULT_MAX_POOL_SIZE: usize = 16;
@@ -222,7 +674,7 @@ impl fmt::Debug for DatabaseConfig {
 /// # Errors
 ///
 /// 建池或首次取连接失败返回 [`InfraError::Connect`]。
-pub async fn connect(config: &DatabaseConfig) -> Result<Pool, InfraError> {
+pub async fn connect(config: &DatabaseConfig) -> Result<DatabasePool, InfraError> {
     connect_config(
         config.to_pg_config(),
         config.max_pool_size,
@@ -243,20 +695,9 @@ pub(super) async fn connect_config(
     max_pool_size: usize,
     connect_timeout: Duration,
     context: impl Into<String>,
-) -> Result<Pool, InfraError> {
+) -> Result<DatabasePool, InfraError> {
     let context = context.into();
-    let manager = Manager::from_config(
-        config,
-        NoTls,
-        ManagerConfig {
-            recycling_method: RecyclingMethod::Fast,
-        },
-    );
-    let pool = Pool::builder(manager)
-        .max_size(max_pool_size)
-        .runtime(Runtime::Tokio1)
-        .create_timeout(Some(connect_timeout))
-        .build()
+    let pool = DatabasePool::build_config(config, max_pool_size, connect_timeout)
         .map_err(|source| InfraError::connect(format!("建立{context}连接池"), source))?;
     let _probe = pool
         .get()

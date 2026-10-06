@@ -6,7 +6,6 @@ mod harness;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deadpool_postgres::Pool;
 use openbot_application::{
     AgentContextSource, BeginThreadRunRequest, McpConnectionAdministration,
     McpConnectionError as Error, ProviderMessageRole, RunExecutionLease, ThreadDirectory,
@@ -23,6 +22,7 @@ use openbot_domain::{
     thread::FencingToken,
     vault::{KeyVersion, WrappingKey},
 };
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::{
     db::{fresh, pool},
     mcp::SafeRmcpClient,

@@ -50,7 +50,7 @@ pub const MAX_AGENT_CONTEXT_BYTES: usize = 6 * 1024 * 1024;
 /// Production PostgreSQL context source。
 #[derive(Clone, Debug)]
 pub struct PostgresAgentContextSource {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     deployment: DeploymentId,
     tenant: TenantId,
     max_output_tokens: Option<u32>,
@@ -67,7 +67,7 @@ pub struct PostgresAgentContextSource {
 impl PostgresAgentContextSource {
     /// Construct a bounded context source; first-party tools may be attached with [`Self::with_tools`].
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         deployment: DeploymentId,
         tenant: TenantId,
         max_output_tokens: Option<u32>,

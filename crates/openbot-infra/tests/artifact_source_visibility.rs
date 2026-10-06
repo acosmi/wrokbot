@@ -32,7 +32,7 @@ const RUNTIME_OWNER: &str = "artifact-source-fixture-owner";
 const PRIVATE_MARKER: &str = "PRIVATE_SOURCE_SENTINEL_003";
 
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     registry: ArtifactDatasetRegistry,
     directory: PostgresThreadDirectory,
     begin: BeginThreadRunRequest,

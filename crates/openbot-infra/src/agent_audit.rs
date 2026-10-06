@@ -10,14 +10,14 @@ use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 
 /// Production lifecycle audit writer；checkpoint key Debug/Drop 由 SecretBytes 管理。
 pub struct PostgresAgentAudit {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     checkpoint_key: SecretBytes,
 }
 
 impl PostgresAgentAudit {
     /// Construct with the same domain-separated audit key as every other writer。
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         checkpoint_key: Vec<u8>,
     ) -> Result<Self, AgentAuditError> {
         if checkpoint_key.is_empty() {

@@ -28,7 +28,7 @@ struct ActiveState {
 }
 
 pub(super) struct AuthorityInner {
-    pub(super) pool: deadpool_postgres::Pool,
+    pub(super) pool: crate::db::pool::DatabasePool,
     pub(super) vault: crate::vault::CredentialRecordVault,
     pub(super) audit_key: SecretBytes,
     pub(super) scope: Scope,
@@ -40,7 +40,7 @@ pub(super) struct AuthorityInner {
 
 impl AuthorityInner {
     pub(super) fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         vault: crate::vault::CredentialRecordVault,
         audit_key: SecretBytes,
         scope: Scope,

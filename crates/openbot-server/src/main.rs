@@ -100,7 +100,7 @@ type AuthAssembly = (
 type AgentAssembly = (Arc<dyn RunDispatchConsumer>, Option<BuiltInAgentRuntime>);
 
 struct BuiltInAgentAssemblyInput {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     deployment: DeploymentId,
     tenant: TenantId,
     runtime: Arc<dyn RunRuntime>,
@@ -260,6 +260,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     let mut artifact_session_resolver: Option<PostgresSessionAuthResolver> = None;
+    let mut remember_session_resolver: Option<PostgresSessionAuthResolver> = None;
+    let mut remember_single_user_resolver: Option<SingleUserAuthResolver> = None;
     let (auth, sensitive, floor, oidc_login): AuthAssembly = if let Some(config) = auth_config {
         let oidc = build_oidc_login(
             &config,
@@ -283,6 +285,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         {
             artifact_session_resolver = Some(resolver.clone());
         }
+        remember_session_resolver = Some(resolver.clone());
         (
             Arc::new(resolver),
             sensitive,
@@ -299,15 +302,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let origins = configured_origins(&env)?;
         let principal =
             load_single_user_principal(&pool, deployment.clone(), tenant.clone()).await?;
+        let resolver = SingleUserAuthResolver::from_verified_principal(principal, lifetime);
+        remember_single_user_resolver = Some(resolver.clone());
         (
-            Arc::new(SingleUserAuthResolver::from_verified_principal(
-                principal, lifetime,
-            )),
+            Arc::new(resolver),
             SensitiveWriteSecurity::new(lifetime, origins),
             None,
             None,
         )
     };
+
+    // This is the exact supervised application Pool, not a second connection pool
+    // assembled from matching labels. Construction validates configuration only;
+    // every repository operation proves current storage and authorization itself.
+    let remember_preference_repository = Arc::new(
+        openbot_infra::approval_preferences::PostgresRememberPreferenceRepository::new(
+            pool.clone(),
+            deployment.clone(),
+            tenant.clone(),
+            SecretBytes::new(audit_key.expose().to_vec()),
+        )
+        .map_err(|_| startup_error("approval_preference_repository_unavailable"))?,
+    );
+    if let Some(resolver) = &remember_session_resolver {
+        resolver
+            .install_remember_preference_repository(&remember_preference_repository)
+            .map_err(|_| startup_error("approval_preference_host_unavailable"))?;
+    } else if let Some(resolver) = &remember_single_user_resolver {
+        resolver
+            .install_remember_preference_repository(&remember_preference_repository)
+            .map_err(|_| startup_error("approval_preference_host_unavailable"))?;
+    } else {
+        return Err(startup_error("approval_preference_host_unavailable").into());
+    }
+    // Guards retain only Weak attachments; the composition root retains the actual
+    // repository for the complete server runtime lifetime.
+    let _remember_preference_repository = remember_preference_repository;
 
     let audience_context = if single_user {
         TenantPackageAudienceContext::single_user(ActorId::new(SINGLE_USER_ACTOR_ID))?
@@ -941,7 +971,7 @@ fn provider_base(base: &str, code: &'static str) -> Result<Url, std::io::Error> 
 
 async fn build_oidc_login(
     config: &AuthConfig,
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     tenant: &TenantId,
     audit_key: &[u8],
     wrapping_key: WrappingKey,
@@ -1017,7 +1047,7 @@ async fn build_oidc_login(
 }
 
 async fn database_has_dynamic_provider(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
 ) -> Result<bool, Box<dyn Error>> {
     let client = pool.get().await?;
     Ok(client

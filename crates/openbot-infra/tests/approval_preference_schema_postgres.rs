@@ -96,7 +96,7 @@ async fn insert(client: &Client, row: &FixtureRow) -> Result<u64, tokio_postgres
         .await
 }
 
-async fn fresh_pool(config: &DatabaseConfig) -> deadpool_postgres::Pool {
+async fn fresh_pool(config: &DatabaseConfig) -> openbot_infra::db::pool::DatabasePool {
     let pool = pool::connect(config).await.unwrap();
     let mut client = pool.get().await.unwrap();
     fresh::apply(&mut client).await.unwrap();

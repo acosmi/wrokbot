@@ -197,7 +197,7 @@ struct HttpFacts {
     value: Value,
 }
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     config: DatabaseConfig,
     resolver: Arc<dyn AuthResolver>,
     application: Arc<dyn ApplicationService>,

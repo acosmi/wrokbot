@@ -59,7 +59,7 @@ fn update(row: &ModelConnection) -> UpdateModelConnection {
     }
 }
 async fn setup(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
 ) -> Result<(PostgresModelConnections, CredentialRecordVault), String> {
     let mut c = pool.get().await.map_err(|e| e.to_string())?;
     baseline::apply(&c).await.map_err(|e| e.to_string())?;
@@ -81,7 +81,7 @@ async fn setup(
     .unwrap();
     Ok((port, vault))
 }
-async fn current_secret(pool: &deadpool_postgres::Pool, id: &str) -> (Uuid, String) {
+async fn current_secret(pool: &openbot_infra::db::pool::DatabasePool, id: &str) -> (Uuid, String) {
     let c = pool.get().await.unwrap();
     let id = Uuid::parse_str(id).unwrap();
     let row=c.query_one("SELECT s.id,s.encrypted_value FROM public.model_connections c JOIN public.model_connection_secrets s ON s.id=c.current_secret_id WHERE c.id=$1",&[&id]).await.unwrap();

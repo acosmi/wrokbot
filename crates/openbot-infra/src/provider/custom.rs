@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 /// Shared Server/Desktop factory; every start reopens current authority and a short-lived key.
 pub struct PostgresCustomModelProvider {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     vault: CredentialRecordVault,
     deployment: DeploymentId,
     tenant: TenantId,
@@ -40,7 +40,7 @@ pub struct PostgresCustomModelProvider {
 impl PostgresCustomModelProvider {
     /// Bind only trusted host infrastructure. URL/model/key are never accepted by this factory.
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         vault: CredentialRecordVault,
         deployment: DeploymentId,
         tenant: TenantId,
@@ -69,7 +69,7 @@ impl PostgresCustomModelProvider {
 
     async fn start_locked(
         &self,
-        client: &mut deadpool_postgres::Client,
+        client: &mut crate::db::pool::PooledClient,
         request: ProviderRequest,
         progress: &StartProgress,
     ) -> Attempt {
@@ -274,7 +274,7 @@ struct Attempt {
 /// Normal completion explicitly confirms rollback. Cancellation detaches the physical connection
 /// before sending its private PG cancellation token; no subsequent caller can be cancelled by it.
 struct StartConnection {
-    client: Option<deadpool_postgres::Client>,
+    client: Option<crate::db::pool::PooledClient>,
     clean: bool,
     cancel_budget: Duration,
 }
@@ -286,7 +286,7 @@ impl Drop for StartConnection {
         let Some(client) = self.client.take() else {
             return;
         };
-        let owned = deadpool_postgres::Client::take(client);
+        let owned = crate::db::pool::PooledClient::take(client);
         let cancel = owned.cancel_token();
         let budget = self.cancel_budget;
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {

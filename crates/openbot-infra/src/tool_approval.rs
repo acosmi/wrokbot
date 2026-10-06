@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{
     AppEventStream, ToolApprovalAdministration, ToolApprovalAdministrationError,
     ToolApprovalRequest, ToolPortError,
@@ -918,7 +918,7 @@ fn valid_approval_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && !value.as_bytes().contains(&0)
 }
 
-fn unavailable(error: deadpool_postgres::PoolError) -> ToolPortError {
+fn unavailable(error: crate::db::pool::PoolError) -> ToolPortError {
     tracing::error!(error = %error, "tool approval 获取 PostgreSQL 连接失败");
     ToolPortError::Unavailable {
         dependency: "tool_approval",
@@ -936,7 +936,7 @@ const fn corrupt(field: &'static str) -> ToolPortError {
     ToolPortError::Corrupt { field }
 }
 
-fn admin_unavailable(error: deadpool_postgres::PoolError) -> ToolApprovalAdministrationError {
+fn admin_unavailable(error: crate::db::pool::PoolError) -> ToolApprovalAdministrationError {
     tracing::error!(error = %error, "tool approval admin 获取 PostgreSQL 连接失败");
     ToolApprovalAdministrationError::Unavailable
 }

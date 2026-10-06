@@ -16,7 +16,7 @@ use super::store::{self, DetachedSession};
 use super::strict::AuthorityInner;
 
 pub(super) struct EnrollmentFence {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     auth: AuthContext,
     deployment: DeploymentId,
     tenant: TenantId,
@@ -25,7 +25,7 @@ pub(super) struct EnrollmentFence {
 
 impl EnrollmentFence {
     pub(super) fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         auth: AuthContext,
         deployment: DeploymentId,
         tenant: TenantId,

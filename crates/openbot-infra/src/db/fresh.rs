@@ -4,10 +4,8 @@
 //! 无 Drizzle/native 账本的 0012 schema，无法与“运维手工迁过但 0003 是否执行未知”的库区分。
 //! 本入口让 baseline、0013–0016 与自有账本在一个事务里一起出现或一起消失。
 
-use tokio_postgres::Client;
-
 use crate::db::InfraError;
-use crate::db::native::{self, ApplyOutcome};
+use crate::db::native::{self, ApplyOutcome, BootstrapTransactionClient};
 
 /// fresh bootstrap 在锁内重检后的结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,9 +21,11 @@ pub enum FreshApplyOutcome {
 /// # Errors
 ///
 /// 开事务、任一 DDL/账本步骤或 commit 失败时返回脱敏 [`InfraError`]；事务整体回滚。
-pub async fn apply(client: &mut Client) -> Result<FreshApplyOutcome, InfraError> {
+pub async fn apply(
+    client: &mut impl BootstrapTransactionClient,
+) -> Result<FreshApplyOutcome, InfraError> {
     let transaction = client
-        .build_transaction()
+        .bootstrap_transaction_builder()
         .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
         .start()
         .await

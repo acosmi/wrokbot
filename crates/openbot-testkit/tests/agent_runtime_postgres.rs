@@ -75,7 +75,7 @@ use tokio::sync::{Barrier, oneshot};
 use url::Url;
 use uuid::Uuid;
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await
@@ -322,7 +322,7 @@ struct RememberLoopProvider {
 
 struct RevokeBeforeSecondRemember {
     inner: PostgresMemoryAdministration,
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     policy: PolicyStore,
     calls: AtomicUsize,
 }
@@ -3172,7 +3172,7 @@ struct ManagedRunHarness<'a> {
     context: Arc<PostgresAgentContextSource>,
     package: Arc<RejectingPackageProvider>,
     directory: &'a PostgresThreadDirectory,
-    pool: &'a deadpool_postgres::Pool,
+    pool: &'a openbot_infra::db::pool::DatabasePool,
     deployment: &'a DeploymentId,
     tenant: &'a TenantId,
 }
@@ -3295,7 +3295,7 @@ async fn begin_test_run_for_bot(
 }
 
 async fn wait_for_terminal(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     run_id: &str,
     expected_text: &str,
 ) -> Result<(), String> {
@@ -3331,7 +3331,7 @@ async fn wait_for_terminal(
 }
 
 async fn wait_for_remote_projection_count(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     run_id: &str,
     expected: i64,
 ) -> Result<(), String> {
@@ -3365,7 +3365,7 @@ async fn wait_for_remote_projection_count(
 }
 
 async fn wait_for_failure(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     run_id: &str,
     expected_code: &str,
 ) -> Result<(), String> {
@@ -3393,7 +3393,7 @@ async fn wait_for_failure(
 }
 
 async fn wait_for_status(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     run_id: &str,
     expected_status: &str,
     expected_code: Option<&str>,

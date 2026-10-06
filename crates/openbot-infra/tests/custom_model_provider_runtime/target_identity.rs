@@ -31,7 +31,7 @@ fn suffix(protocol: CustomModelProtocol) -> &'static str {
 }
 
 async fn observe(
-    client: &deadpool_postgres::Client,
+    client: &openbot_infra::db::pool::PooledClient,
     connection: Uuid,
     run: &str,
 ) -> (Value, bool, i32) {

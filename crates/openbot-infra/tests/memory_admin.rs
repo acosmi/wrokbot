@@ -19,7 +19,7 @@ use openbot_contracts::memory::{
 use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::memory_admin::PostgresMemoryAdministration;
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await

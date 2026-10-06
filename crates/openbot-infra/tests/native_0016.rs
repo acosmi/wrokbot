@@ -27,7 +27,7 @@ fn facts(raw: &str) -> SchemaFacts {
     serde_json::from_str(raw).expect("schema fixture 必须合法")
 }
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await

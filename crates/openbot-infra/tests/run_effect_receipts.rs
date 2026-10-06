@@ -28,7 +28,7 @@ use serde_json::Value;
 const PRIVATE_MARKER: &str = "PRIVATE_BUSINESS_SENTINEL_075";
 
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     directory: PostgresThreadDirectory,
     begin: BeginThreadRunRequest,
 }

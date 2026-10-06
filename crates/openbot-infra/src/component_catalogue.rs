@@ -1,7 +1,7 @@
 //! PostgreSQL compiled-component governance projection and additive build catalogue sync.
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{
     ComponentAdministration, ComponentAdministrationError, ComponentFunctionArguments,
     ComponentFunctionCallPlan, ComponentHumanDecisionDraft, ComponentHumanDecisionScope,
@@ -1968,7 +1968,7 @@ fn corrupt(field: &'static str) -> ComponentAdministrationError {
     ComponentAdministrationError::Corrupt { field }
 }
 
-fn unavailable(error: deadpool_postgres::PoolError) -> ComponentAdministrationError {
+fn unavailable(error: crate::db::pool::PoolError) -> ComponentAdministrationError {
     tracing::warn!(error = %error, "component catalogue pool unavailable");
     ComponentAdministrationError::Unavailable
 }

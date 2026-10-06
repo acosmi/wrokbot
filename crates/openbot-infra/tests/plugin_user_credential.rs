@@ -37,7 +37,7 @@ const AUDIT_KEY: &[u8] = b"plugin-user-credential-audit-key-at-least-32";
 
 #[derive(Clone)]
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     vault: CredentialRecordVault,
     store: PluginUserCredentialStore,
     retirer: PostgresOwnedCredentialRetirer,
@@ -303,7 +303,7 @@ impl RotatingOAuthTokenExchanger for EmptyExchanger {
 }
 
 struct EgressDriftExchanger {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
 }
 
 #[async_trait]

@@ -65,7 +65,9 @@ use openbot_contracts::remote_interrupt::{RemoteInterruptAnswer, RemoteInterrupt
 use openbot_contracts::request_binding::{
     ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadTailWitness,
     HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingIdentity,
-    HostRequestBindingKind, RequestBindingIssuer, RequestBindingOwnerLease,
+    HostRequestBindingKind, RememberPreferenceHostObservation, RememberPreferenceHostTailFactory,
+    RememberPreferenceHostTailWitness, RememberPreferenceHostTarget,
+    RememberPreferenceSessionFacts, RequestBindingIssuer, RequestBindingOwnerLease,
     RequestBindingOwnerObservation, SourceRunArtifactIdsCurrentCheck,
     SourceRunArtifactIdsCurrentTarget, VerifiedHostRequestBinding,
 };
@@ -417,6 +419,19 @@ struct WindowRequestBindingGuard {
     upstream: Option<VerifiedHostRequestBinding>,
 }
 impl WindowRequestBindingGuard {
+    fn remember_preference_tail_source(&self) -> Self {
+        Self {
+            registry: self.registry.clone(),
+            owner: self.owner.clone(),
+            issuer: self.issuer.clone(),
+            label: self.label.clone(),
+            id: self.id,
+            expected: self.expected.clone(),
+            source: None,
+            upstream: None,
+        }
+    }
+
     fn check_window(&self, auth: &AuthContext) -> Result<(), HostRequestBindingError> {
         if !self.owner.is_current() || auth != &self.expected {
             return Err(HostRequestBindingError::NotCurrent);
@@ -448,6 +463,54 @@ impl WindowRequestBindingGuard {
     }
 }
 impl HostRequestBindingGuard for WindowRequestBindingGuard {
+    fn borrow_remember_preference_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn RememberPreferenceHostTarget,
+        deadline: Instant,
+    ) -> Result<RememberPreferenceHostObservation<'a>, HostRequestBindingError> {
+        self.check_window(auth)?;
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if !self
+            .issuer
+            .matches_desktop_window_epoch(binding.identity(), &self.label, self.id)
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        // The enrolled real Local source lends its repository attachment. Its async
+        // current guard and an upstream Remote binding do not authorize this operation.
+        let source = self
+            .source
+            .as_ref()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let inner = source.borrow_remember_preference_host_before(auth, target, deadline)?;
+        self.check_window(auth)?;
+        if inner.kind() != HostRequestBindingKind::DesktopWindow
+            || !inner.identity().same_binding(binding.identity())
+            || inner.server_session_epoch().is_some()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        RememberPreferenceHostObservation::from_trusted_host(
+            HostRequestBindingKind::DesktopWindow,
+            binding.identity().clone(),
+            None,
+            Box::new(WindowRememberPreferenceTailFactory {
+                window: self.remember_preference_tail_source(),
+                original: binding.identity().clone(),
+                inner,
+            }),
+        )
+    }
+
     fn verify_source_run_artifact_ids_current_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -674,6 +737,75 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
             self.check_window(auth)?;
             result
         })
+    }
+}
+
+/// The actual window observation wraps the enrolled Local producer's synchronous tail.
+/// No host lease, database transaction or fresh time budget is created here.
+struct WindowRememberPreferenceTailFactory<'a> {
+    window: WindowRequestBindingGuard,
+    original: HostRequestBindingIdentity,
+    inner: RememberPreferenceHostObservation<'a>,
+}
+impl RememberPreferenceHostTailFactory for WindowRememberPreferenceTailFactory<'_> {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<RememberPreferenceSessionFacts>,
+        deadline: Instant,
+    ) -> Result<Box<dyn RememberPreferenceHostTailWitness>, HostRequestBindingError> {
+        self.window.check_window(auth)?;
+        if !auth
+            .request_binding()
+            .is_some_and(|binding| self.original.same_binding(binding.identity()))
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let inner = self.inner.witness(auth, session, deadline)?;
+        let witness = WindowRememberPreferenceTail {
+            window: self.window.remember_preference_tail_source(),
+            original: self.original.clone(),
+            inner,
+        };
+        witness.verify_current(auth, deadline)?;
+        Ok(Box::new(witness))
+    }
+}
+
+struct WindowRememberPreferenceTail {
+    window: WindowRequestBindingGuard,
+    original: HostRequestBindingIdentity,
+    inner: Box<dyn RememberPreferenceHostTailWitness>,
+}
+impl RememberPreferenceHostTailWitness for WindowRememberPreferenceTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        self.window.check_window(auth)?;
+        if !auth.request_binding().is_some_and(|binding| {
+            self.original.same_binding(binding.identity())
+                && self.window.issuer.matches_desktop_window_epoch(
+                    binding.identity(),
+                    &self.window.label,
+                    self.window.id,
+                )
+        }) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        self.inner.verify_current(auth, deadline)?;
+        self.window.check_window(auth)?;
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        Ok(())
     }
 }
 
@@ -920,6 +1052,17 @@ impl DesktopTauriProtocol {
         self.local_capability_authority = Some(source.clone());
         self.current_identity_source = Some(source);
         self
+    }
+
+    #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+    pub(crate) fn with_remember_preference_identity_source(
+        self,
+        source: Arc<crate::local_confirmation_authority::PostgresLocalConfirmationAuthority>,
+    ) -> Result<Self, HostRequestBindingError> {
+        // One real issuer belongs to this protocol; each bound window retains its own
+        // original label/id epoch, which the wrapper checks on every observation.
+        source.enroll_remember_preference_window_issuer(&self.request_binding_issuer)?;
+        Ok(self.with_current_identity_source(source))
     }
 
     /// Bind one host-created webview label to verified local session authority.

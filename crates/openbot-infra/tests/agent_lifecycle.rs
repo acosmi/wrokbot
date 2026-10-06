@@ -89,7 +89,7 @@ fn scope(actor: &str, admin: bool) -> AgentAdministrationScope {
 }
 
 async fn race_package_attachment(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     lifecycle: Arc<PostgresAgentAdministration>,
     actor: AgentAdministrationScope,
     agent_id: BotId,

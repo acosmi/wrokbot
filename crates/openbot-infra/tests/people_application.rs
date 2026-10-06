@@ -17,7 +17,10 @@ use openbot_infra::repo::people_admin::PostgresPeopleAdministration;
 
 const AUDIT_KEY: &[u8] = b"people-application-postgres17-test-key";
 
-async fn provision(pool: &deadpool_postgres::Pool, people_sql: &str) -> Result<(), String> {
+async fn provision(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    people_sql: &str,
+) -> Result<(), String> {
     let mut client = pool
         .get()
         .await
@@ -35,14 +38,17 @@ async fn provision(pool: &deadpool_postgres::Pool, people_sql: &str) -> Result<(
 }
 
 fn adapter(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     floor: Option<AdminFloor>,
 ) -> Result<PostgresPeopleAdministration, String> {
     PostgresPeopleAdministration::new(pool.clone(), floor, AUDIT_KEY)
         .map_err(|error| error.to_string())
 }
 
-async fn scalar_i64(pool: &deadpool_postgres::Pool, sql: &str) -> Result<i64, String> {
+async fn scalar_i64(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    sql: &str,
+) -> Result<i64, String> {
     pool.get()
         .await
         .map_err(|error| error.to_string())?
@@ -98,7 +104,7 @@ const PAGING_IDS: [&str; 10] = [
 
 async fn with_paging_fixture<F, Fut>(test_name: &'static str, tag: &'static str, body: F)
 where
-    F: FnOnce(deadpool_postgres::Pool, PostgresPeopleAdministration) -> Fut,
+    F: FnOnce(openbot_infra::db::pool::DatabasePool, PostgresPeopleAdministration) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
     let admin = admin_config(test_name);

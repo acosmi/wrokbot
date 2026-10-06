@@ -101,7 +101,7 @@ impl Drop for OwnedRoot {
 }
 
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     config: DatabaseConfig,
     registry: Arc<ArtifactDatasetRegistry>,
     directory: PostgresThreadDirectory,
@@ -438,7 +438,10 @@ impl Fixture {
         self.facts_using(&self.pool).await
     }
 
-    async fn facts_using(&self, pool: &deadpool_postgres::Pool) -> Result<Value, String> {
+    async fn facts_using(
+        &self,
+        pool: &openbot_infra::db::pool::DatabasePool,
+    ) -> Result<Value, String> {
         let client = pool.get().await.map_err(|error| error.to_string())?;
         client
             .query_one(

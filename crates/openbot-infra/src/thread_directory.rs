@@ -57,14 +57,14 @@ struct RuntimeLease {
 /// OS CSPRNG issuer + scope-aware PostgreSQL status/transactional append。
 #[derive(Clone)]
 pub struct PostgresThreadDirectory {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     runtime: Option<RuntimeLease>,
 }
 
 impl PostgresThreadDirectory {
     /// 用共享连接池构造只读/mint 目录；`begin_thread_run` 会 fail-closed。
     #[must_use]
-    pub fn new(pool: deadpool_postgres::Pool) -> Self {
+    pub fn new(pool: crate::db::pool::DatabasePool) -> Self {
         Self {
             pool,
             runtime: None,
@@ -77,7 +77,7 @@ impl PostgresThreadDirectory {
     ///
     /// owner 为空或 duration 非正时拒绝构造。
     pub fn with_runtime(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         database: impl Into<ThreadListenerDatabase>,
         owner_id: String,
         duration: Duration,
@@ -790,7 +790,7 @@ async fn listen_thread_once(
 }
 
 async fn supervise_thread_stream(
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     database: ThreadListenerDatabase,
     request: ThreadEventSubscription,
     sender: mpsc::Sender<AppEvent>,
@@ -888,7 +888,7 @@ async fn supervise_thread_stream(
 }
 
 async fn replay_all(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::db::pool::DatabasePool,
     request: &ThreadEventSubscription,
     sender: &mpsc::Sender<AppEvent>,
     cursor: &mut i64,
@@ -915,7 +915,7 @@ async fn replay_all(
 }
 
 async fn replay_batch(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::db::pool::DatabasePool,
     request: &ThreadEventSubscription,
     cursor: i64,
 ) -> Result<Vec<ThreadRunEvent>, ThreadDirectoryError> {
@@ -1046,7 +1046,7 @@ async fn listen_channel_once(
 }
 
 async fn drive_channel_activity(
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     request: ChannelActivitySubscription,
     sender: mpsc::Sender<AppEvent>,
     mut stop: watch::Receiver<bool>,
@@ -1115,7 +1115,7 @@ fn channel_event_is_bounded(event: &ChannelActivityEvent) -> bool {
 }
 
 async fn channel_visible(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::db::pool::DatabasePool,
     request: &ChannelActivitySubscription,
     event: &ChannelActivityEvent,
 ) -> Result<bool, ThreadDirectoryError> {

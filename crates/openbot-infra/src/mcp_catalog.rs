@@ -166,7 +166,7 @@ pub struct McpCatalogSweep {
 /// Unique production catalog store and RMCP refresh adapter.
 #[derive(Clone)]
 pub struct PostgresMcpCatalog {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     rmcp: SafeRmcpClient,
     checkpoint_key: Arc<SecretBytes>,
     validators: Arc<RwLock<BTreeMap<Sha256Digest, Arc<jsonschema::Validator>>>>,
@@ -175,7 +175,7 @@ pub struct PostgresMcpCatalog {
 impl PostgresMcpCatalog {
     /// Construct; empty audit key refuses startup.
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         rmcp: SafeRmcpClient,
         checkpoint_key: Vec<u8>,
     ) -> Result<Self, McpCatalogError> {
@@ -1343,7 +1343,7 @@ fn parse_transport(value: &str) -> Result<VendorTransportKind, McpCatalogError> 
     }
 }
 
-fn unavailable(error: deadpool_postgres::PoolError) -> McpCatalogError {
+fn unavailable(error: crate::db::pool::PoolError) -> McpCatalogError {
     tracing::error!(error = %error, "MCP catalog 获取 PostgreSQL 连接失败");
     McpCatalogError::Unavailable
 }

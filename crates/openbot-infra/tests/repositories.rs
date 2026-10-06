@@ -46,7 +46,7 @@ use openbot_infra::vault::CredentialRepo;
 
 const SEED_SQL: &str = include_str!("../../../fixtures/db/seed-0012.sql");
 
-async fn provision(pool: &deadpool_postgres::Pool, seed: bool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool, seed: bool) -> Result<(), String> {
     let mut client = pool
         .get()
         .await
@@ -66,7 +66,7 @@ async fn provision(pool: &deadpool_postgres::Pool, seed: bool) -> Result<(), Str
     Ok(())
 }
 
-async fn seed_tool_run(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn seed_tool_run(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     pool.get()
         .await
         .map_err(|error| error.to_string())?

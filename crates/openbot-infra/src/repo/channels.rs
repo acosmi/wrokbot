@@ -29,8 +29,8 @@
 //! actor、游标、limit 全部走 `$n` 绑定，SQL 文本是编译期常量，零字符串拼接
 //! （v3 §5.2：transport 不得传任意 query；actor 与 cursor 同样是外部值）。
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{
     ChannelAdministration, ChannelAdministrationError, ChannelCreateRequest, ChannelCursor,
     ChannelReadScope, ChannelReader, PortError,

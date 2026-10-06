@@ -44,7 +44,7 @@ pub(crate) fn readonly_configuration_valid(
 
 /// One configured deployment/tenant; no caller can manufacture another scope or owner.
 pub struct PostgresModelConnections {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     vault: CredentialRecordVault,
     deployment: DeploymentId,
     tenant: TenantId,
@@ -54,7 +54,7 @@ pub struct PostgresModelConnections {
 impl PostgresModelConnections {
     /// Bind the existing PG/Vault/audit infrastructure without accessing it at construction.
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         vault: CredentialRecordVault,
         deployment: DeploymentId,
         tenant: TenantId,

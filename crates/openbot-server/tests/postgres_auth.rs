@@ -29,7 +29,7 @@ const RAW_TOKEN: &str = "raw-session-token-with-enough-entropy-001";
 const SECOND_RAW_TOKEN: &str = "raw-session-token-with-enough-entropy-002";
 const SESSION_KEY: &[u8] = b"postgres-auth-resolver-test-session-key";
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await
@@ -40,7 +40,7 @@ async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
     Ok(())
 }
 
-async fn seed_session(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn seed_session(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let now = OffsetDateTime::now_utc();
     let token_hash = SessionTokenHash::compute(
         SessionToken::new(RAW_TOKEN.as_bytes()),
@@ -81,7 +81,7 @@ async fn seed_session(pool: &deadpool_postgres::Pool) -> Result<(), String> {
     Ok(())
 }
 
-fn resolver(pool: &deadpool_postgres::Pool) -> PostgresSessionAuthResolver {
+fn resolver(pool: &openbot_infra::db::pool::DatabasePool) -> PostgresSessionAuthResolver {
     PostgresSessionAuthResolver::new(
         pool.clone(),
         SESSION_KEY,

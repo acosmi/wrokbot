@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_application::runtime_capabilities::{
     CapabilityDeadline, RuntimeCapabilitiesCollectionError as Error, RuntimeCapabilitiesCollector,
     RuntimeCapabilityHostScope, RuntimeCapabilityObservation, RuntimeCapabilityTailWitness,

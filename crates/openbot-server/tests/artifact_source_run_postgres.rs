@@ -126,7 +126,7 @@ impl Drop for OwnedRoot {
     }
 }
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     resolver: Arc<PostgresSessionAuthResolver>,
     application: Arc<dyn ApplicationService>,
     router: axum::Router,
@@ -643,7 +643,7 @@ struct WaitSample {
     waiter: Option<i32>,
 }
 async fn actual_source_wait(
-    observer: &deadpool_postgres::Object,
+    observer: &openbot_infra::db::pool::PooledClient,
     controller: i32,
     sample: &mut Option<WaitSample>,
 ) -> Result<i32, String> {

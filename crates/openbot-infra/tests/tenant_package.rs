@@ -64,7 +64,7 @@ fn loads_the_mounted_fintech_package_without_a_theme_file() {
 
 async fn with_package_database<F, Fut>(test_name: &'static str, tag: &'static str, body: F)
 where
-    F: FnOnce(deadpool_postgres::Pool, PostgresTenantPackageSynchronizer) -> Fut,
+    F: FnOnce(openbot_infra::db::pool::DatabasePool, PostgresTenantPackageSynchronizer) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
     let admin = admin_config(test_name);
@@ -160,7 +160,7 @@ fn multi_with_mapping() -> TenantPackageAudienceContext {
 }
 
 async fn insert_user(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     id: &str,
     email: &str,
     groups: &[&str],
@@ -180,7 +180,7 @@ async fn insert_user(
 }
 
 async fn scalar(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     sql: &str,
     params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
 ) -> Result<i64, String> {

@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_contracts::artifacts::is_valid_artifact_identity;
 use openbot_contracts::ids::{DeploymentId, TenantId};
 use serde_json::Value;

@@ -10,7 +10,7 @@
 #[path = "desktop_local.rs"]
 pub mod desktop_local;
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 use openbot_domain::identity::roles::plan_set_role;
@@ -60,6 +60,14 @@ impl VerifiedSingleUserPrincipal {
     #[must_use]
     pub fn matches_pool_scope(&self, pool: &Pool) -> bool {
         std::ptr::eq(self.pool.manager(), pool.manager())
+    }
+    /// Trusted composition enrollment only; current canonical rows are read by the repository.
+    #[must_use]
+    pub fn matches_remember_preference_repository(
+        &self,
+        repository: &crate::approval_preferences::PostgresRememberPreferenceRepository,
+    ) -> bool {
+        repository.matches_pool_scope(&self.pool, self.auth.deployment(), self.auth.tenant())
     }
     #[cfg(feature = "server-runtime")]
     pub fn matches_capability_facts(

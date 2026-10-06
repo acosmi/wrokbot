@@ -84,7 +84,7 @@ impl Outcomes {
 }
 
 struct DatabaseFixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     vault: CredentialRecordVault,
     accounts: PostgresGatewayAccounts,
 }

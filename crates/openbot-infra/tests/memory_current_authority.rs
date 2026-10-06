@@ -10,7 +10,6 @@ mod tool_support;
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use deadpool_postgres::Pool;
 use openbot_application::{
     ApplicationService, BeginThreadRunRequest, MemoryAdministration,
     MemoryAdministrationError as MemoryError, OpenBotApplication, PeopleAdministration,
@@ -29,6 +28,7 @@ use openbot_contracts::{
     },
     tool::ToolInvocation,
 };
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::{
     db::{baseline, native, pool, pool::DatabaseConfig},
     memory_admin::PostgresMemoryAdministration,

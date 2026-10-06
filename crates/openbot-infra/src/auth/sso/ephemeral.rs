@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::db::pool::DatabasePool as Pool;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use deadpool_postgres::Pool;
 use hmac::{Hmac, Mac};
 use openbot_contracts::ids::TenantId;
 use openbot_domain::vault::SecretBytes;
