@@ -3864,6 +3864,10 @@ mod artifact_source_run_local_tests;
 #[path = "tauri_host/runtime_capabilities_local_tests.rs"]
 mod runtime_capabilities_local_tests;
 
+#[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
+#[path = "tauri_host/approval_preference_local_tests.rs"]
+mod approval_preference_local_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
