@@ -56,12 +56,11 @@ async fn join_http(
     let task = pending
         .as_mut()
         .ok_or("C7 original request handle missing")?;
-    let result = tokio::time::timeout(limit, task)
+    let joined = tokio::time::timeout(limit, task)
         .await
-        .map_err(|_| "C7 original HTTP request exceeded outer observation bound".to_owned())?
-        .map_err(|_| "C7 original HTTP request task failed".to_owned())?;
+        .map_err(|_| "C7 original HTTP request exceeded outer observation bound".to_owned())?;
     *pending = None;
-    result
+    joined.map_err(|_| "C7 original HTTP request task failed".to_owned())?
 }
 
 async fn close_pending(pending: Option<JoinHandle<Result<HttpFacts, String>>>) {
