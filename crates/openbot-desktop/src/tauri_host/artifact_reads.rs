@@ -29,7 +29,7 @@ pub(super) enum PreparedPublicReadResponse {
     Immediate(Response<Vec<u8>>),
     Control {
         authority: WindowAuthority,
-        delivery: PublicArtifactReadControlDelivery,
+        delivery: Box<PublicArtifactReadControlDelivery>,
         encoded: Zeroizing<Vec<u8>>,
     },
     Block {
@@ -196,7 +196,7 @@ impl DesktopTauriProtocol {
         };
         PreparedPublicReadResponse::Control {
             authority,
-            delivery,
+            delivery: Box::new(delivery),
             encoded: Zeroizing::new(encoded),
         }
     }
