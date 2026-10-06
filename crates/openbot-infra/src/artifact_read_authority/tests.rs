@@ -1477,17 +1477,17 @@ async fn shared_pg_control_tail_leg(config: DatabaseConfig) -> Result<(), String
         )
         .with_subscriber(dispatch.clone())
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("control_tail_phase=open_execute original_error={error}"))?;
     let opened = match &reply {
         AppReply::ArtifactReadOpened(value) => value.clone(),
         _ => return Err("real control-tail Open returned another reply".to_owned()),
     };
     let control = application
         .take_artifact_read_control_delivery(auth.clone(), reply)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("control_tail_phase=open_take_control original_error={error}"))?;
     control
         .verify_current_tail(&auth)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("control_tail_phase=open_verify_tail original_error={error}"))?;
     drop(control);
     let input = ReadArtifactReadBlock {
         handle_id: opened.handle_id.clone(),
@@ -1500,13 +1500,13 @@ async fn shared_pg_control_tail_leg(config: DatabaseConfig) -> Result<(), String
         )
         .with_subscriber(dispatch.clone())
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("control_tail_phase=next_execute original_error={error}"))?;
     let delivery = application
         .take_artifact_read_delivery(auth.clone(), input)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("control_tail_phase=next_take_delivery original_error={error}"))?;
     let block = delivery
         .handoff(&auth)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("control_tail_phase=next_handoff original_error={error}"))?
         .ok_or("actual nonempty control-tail transport block missing")?;
     require(
         block.as_ref() == EXACT.as_bytes(),
@@ -1523,17 +1523,17 @@ async fn shared_pg_control_tail_leg(config: DatabaseConfig) -> Result<(), String
         )
         .with_subscriber(dispatch.clone())
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("control_tail_phase=ack_execute original_error={error}"))?;
     require(
         matches!(&reply, AppReply::ArtifactReadAcknowledged(_)),
         "original normal ACK did not end its real registry/transport allocation",
     )?;
     let control = application
         .take_artifact_read_control_delivery(auth.clone(), reply)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("control_tail_phase=ack_take_control original_error={error}"))?;
     control
         .verify_current_tail(&auth)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("control_tail_phase=ack_verify_tail original_error={error}"))?;
     drop(control);
     let counts = phases.counts();
     require(
