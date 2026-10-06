@@ -2069,6 +2069,82 @@ struct CoreSessionGuard {
     lifetime: SessionLifetimePolicy,
 }
 impl HostRequestBindingGuard for CoreSessionGuard {
+    fn verify_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        deadline: Instant,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>> {
+        Box::pin(async move {
+            deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(HostRequestBindingError::Unavailable)?;
+            let authority = self
+                .authority
+                .upgrade()
+                .ok_or(HostRequestBindingError::Unavailable)?;
+            let administration = authority
+                .administration
+                .upgrade()
+                .ok_or(HostRequestBindingError::Unavailable)?;
+            let binding = auth
+                .request_binding()
+                .ok_or(HostRequestBindingError::Missing)?;
+            let epoch = self
+                .issuer
+                .borrow_server_session_epoch(binding.identity())?;
+            let mut client = administration
+                .registry
+                .pool()
+                .get_guarded(deadline)
+                .await
+                .map_err(|_| HostRequestBindingError::Unavailable)?;
+            let original_transaction = client
+                .begin_read_committed_read_only()
+                .await
+                .map_err(|_| HostRequestBindingError::Unavailable)?;
+            let outcome = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                async {
+                    let tx = original_transaction.as_transaction();
+                    let remaining = deadline
+                        .checked_duration_since(Instant::now())
+                        .filter(|remaining| !remaining.is_zero())
+                        .ok_or(HostRequestBindingError::Unavailable)?;
+                    let millis = remaining.as_millis().clamp(1, 5000);
+                    tx.batch_execute(&format!("SET LOCAL statement_timeout='{millis}ms'; SET LOCAL lock_timeout='{millis}ms'"))
+                        .await.map_err(|_| HostRequestBindingError::Unavailable)?;
+                    let row = tx.query_one(
+                        "SELECT u.id AS read_host_user,u.auth_generation AS read_host_generation, \
+                          u.email AS read_host_email,EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)) AS read_host_revoked, \
+                          ARRAY(SELECT role::text FROM public.user_roles WHERE user_id=u.id ORDER BY role::text) AS read_host_roles, \
+                          s.id AS read_session_id,s.user_id AS read_session_user,s.token AS read_session_token, \
+                          s.created_at AS read_session_created,s.updated_at AS read_session_updated,s.expires_at AS read_session_expires,s.auth_generation AS read_session_generation \
+                         FROM (SELECT 1) a LEFT JOIN public.users u ON u.id=$1 LEFT JOIN public.sessions s ON s.id=$2 AND s.user_id=u.id",
+                        &[&auth.actor().as_str(), &epoch.lookup_id()],
+                    ).await.map_err(|_| HostRequestBindingError::Unavailable)?;
+                    decode_host(&administration, auth, &row, &CurrentHost::Session { epoch, lifetime: self.lifetime })
+                        .map_err(|error| match error {
+                            ArtifactReadCurrentError::Host(error) => error,
+                            _ => HostRequestBindingError::Unavailable,
+                        })
+                },
+            ).await.map_err(|_| HostRequestBindingError::Unavailable);
+            // Only the actual original ACK can reuse this lease. Cancellation or any
+            // unacknowledged exit retires the original guarded client under its deadline.
+            original_transaction
+                .rollback()
+                .await
+                .map_err(|_| HostRequestBindingError::Unavailable)?;
+            let witness = outcome??;
+            witness
+                .verify_current(auth, deadline)
+                .map_err(|error| match error {
+                    ArtifactReadCurrentError::Host(error) => error,
+                    _ => HostRequestBindingError::Unavailable,
+                })
+        })
+    }
     fn verify_current<'a>(
         &'a self,
         auth: &'a AuthContext,
