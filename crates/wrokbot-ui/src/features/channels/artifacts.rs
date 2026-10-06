@@ -1027,6 +1027,17 @@ impl ActionState {
         }
     }
 
+    fn origin_probe_pending(&self, id: ChannelHandoffToken, intent: &RunIntent) -> bool {
+        self.auth_read_generation == id.probe
+            && self.auth_probe == Some((id.probe, id.mount))
+            && self.origin_probe.as_ref().is_some_and(|probe| {
+                probe.id == id
+                    && probe.scope_at_start == self.scope_generation
+                    && probe.intent.matches(intent)
+                    && probe.observed.is_none()
+            })
+    }
+
     fn capture_origin(&mut self, id: ChannelHandoffToken, intent: &RunIntent) -> bool {
         if self.auth_read_generation != id.probe
             || !self
@@ -1035,6 +1046,9 @@ impl ActionState {
                 .is_some_and(|probe| probe.id == id)
         {
             return false;
+        }
+        if self.origin_probe_pending(id, intent) {
+            return false; // Keep this original read alive; Begin still dispatches immediately.
         }
         let Some(probe) = self.origin_probe.take() else {
             return false;
@@ -1491,13 +1505,20 @@ pub(crate) struct ChannelOriginLease {
 #[cfg(any(target_arch = "wasm32", test))]
 impl ChannelOriginLease {
     pub(crate) fn capture(&mut self, intent: &RunIntent) {
-        self.captured = self.owner.upgrade().is_some()
+        let live = self.owner.upgrade().is_some();
+        self.captured = live
             && self
                 .actions
                 .state
                 .try_update(|state| state.capture_origin(self.id, intent))
                 .unwrap_or(false);
-        if !self.captured {
+        let pending = live
+            && self
+                .actions
+                .state
+                .try_with_untracked(|state| state.origin_probe_pending(self.id, intent))
+                .unwrap_or(false);
+        if !self.captured && !pending {
             self.actions.cancel_channel_handoff(self.id);
         }
     }
@@ -1507,12 +1528,19 @@ impl ChannelOriginLease {
         intent: &RunIntent,
         result: Result<&ThreadRunStarted, ()>,
     ) -> Option<ChannelHandoffToken> {
-        if !self.captured || self.owner.upgrade().is_none() {
+        if self.owner.upgrade().is_none() {
             return None;
         }
         let Ok(ack) = result else {
             return None;
         };
+        if !self.captured {
+            // Recheck only the same original probe after the original Begin has returned.
+            self.capture(intent);
+        }
+        if !self.captured {
+            return None;
+        }
         let accepted = self
             .actions
             .state
@@ -2791,11 +2819,12 @@ mod tests {
             assert!(state.handoff.is_none());
         }
 
-        // Create wins the legitimate optional-read race. No provenance, and no late mutation.
+        // A cancelled origin cannot accept a late reply or mutate actor/scope.
         let mut state = ActionState::default();
         let observation = origin_intent(&intent);
         let old = state.start_origin(observation.clone()).unwrap();
         assert!(!state.capture_origin(old, &intent));
+        state.cancel_handoff(old);
         let scope = state.scope_generation;
         state.origin_reply(old, &observation, Some(read().source.actor));
         assert!(state.actor.is_none());
@@ -2811,6 +2840,118 @@ mod tests {
         let replacement = state.start_actor_probe(99).unwrap();
         assert!(!state.capture_origin(latest, &intent));
         assert_eq!(state.auth_probe, Some((replacement, 99)));
+    }
+
+    #[test]
+    fn channel_origin_pending_read_requires_same_live_lease_intent_and_original_ack() {
+        for case in [
+            "completed",
+            "pending",
+            "replaced",
+            "revoked",
+            "dead-owner",
+            "changed-intent",
+            "bad-ack",
+        ] {
+            let root = Owner::new();
+            let actions = root.with(ArtifactActions::new);
+            let mut origin = Some(root.with(Owner::new));
+            let actor = read().source.actor;
+            actions.state.update(|state| {
+                state.actor = Some(actor.clone());
+                state.scope_generation = 1;
+            });
+            let intent = channel_intent();
+            let observation = origin_intent(&intent);
+            let id = actions
+                .state
+                .try_update(|state| state.start_origin(observation.clone()))
+                .flatten()
+                .unwrap();
+            let mut lease = ChannelOriginLease {
+                actions,
+                id,
+                owner: origin.as_ref().unwrap().downgrade(),
+                captured: false,
+                ready: false,
+            };
+            lease.capture(&intent);
+            assert!(!lease.captured, "{case}");
+            actions.state.with_untracked(|state| {
+                assert!(state.origin_probe_pending(id, &intent), "{case}");
+                assert!(state.handoff.is_none(), "{case}");
+            });
+
+            let replacement = if case == "replaced" {
+                actions
+                    .state
+                    .try_update(|state| state.start_origin(observation.clone()))
+                    .flatten()
+            } else {
+                None
+            };
+            if case != "pending" {
+                actions.state.update(|state| {
+                    state.origin_reply(
+                        id,
+                        &observation,
+                        (case != "revoked").then_some(actor.clone()),
+                    );
+                });
+            }
+            if case == "dead-owner" {
+                drop(origin.take());
+            }
+            let mut supplied = intent.clone();
+            if case == "changed-intent" {
+                supplied.message.push(' ');
+            }
+            let mut ack = channel_ack(&intent);
+            if case == "bad-ack" {
+                ack.run_id = RunId::new("other-run");
+            }
+            let accepted = lease.reply(&supplied, Ok(&ack));
+            if case == "completed" {
+                assert_eq!(accepted, Some(id));
+                assert!(lease.captured && lease.ready);
+                actions.state.update(|state| {
+                    let handoff = state.handoff.as_mut().unwrap();
+                    assert_eq!(handoff.join.ack.as_ref(), Some(&ack));
+                    assert!(handoff.join.started.is_none());
+                    assert!(handoff.join.take_read().is_none());
+                    assert!(state.commit_handoff(id, "/channel/channel-1"));
+                    let thread = intent.thread_id.as_ref().unwrap();
+                    let claim = state
+                        .claim_handoff(2, 1, thread, &intent.agent_id, &intent.anchor)
+                        .unwrap();
+                    let mut join = state
+                        .adopt_handoff(claim, &actor, thread, &intent.agent_id, &intent.anchor)
+                        .unwrap();
+                    assert!(join.take_read().is_none());
+                    join.observe_started(&channel_started(&intent));
+                    let proven = join.take_read().unwrap();
+                    assert_eq!(proven.original_text.as_bytes(), intent.message.as_bytes());
+                    assert_eq!(proven.source.actor, actor);
+                    assert_eq!(proven.source.started_sequence, 0);
+                    assert!(join.take_read().is_none());
+                });
+            } else {
+                assert_eq!(accepted, None, "{case}");
+                assert!(!lease.ready, "{case}");
+            }
+            drop(lease);
+            actions.state.with_untracked(|state| {
+                assert!(state.handoff.is_none(), "{case}");
+                if let Some(replacement) = replacement {
+                    assert_eq!(state.auth_probe, Some((replacement.probe, replacement.mount)));
+                    assert_eq!(state.origin_probe.as_ref().unwrap().id, replacement);
+                }
+                if case == "revoked" {
+                    assert!(state.actor.is_none());
+                    assert_eq!(state.scope_generation, 2);
+                }
+            });
+        }
     }
 
     #[test]
