@@ -1,0 +1,524 @@
+{
+  "guard": {
+    "name": "prevent_artifact_cleanup_fence_mutation",
+    "schema": "openbot_internal",
+    "strict": false,
+    "language": "plpgsql",
+    "parallel": "u",
+    "arguments": "",
+    "leakproof": false,
+    "definition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_artifact_cleanup_fence_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n    IF TG_OP IN ('DELETE', 'TRUNCATE') THEN\n        RAISE EXCEPTION 'artifact cleanup fences cannot be removed'\n            USING ERRCODE = '55000';\n    END IF;\n    IF TG_OP = 'INSERT' THEN\n        IF NEW.phase IS DISTINCT FROM 'armed' THEN\n            RAISE EXCEPTION 'artifact cleanup fences must begin armed'\n                USING ERRCODE = '55000';\n        END IF;\n        RETURN NEW;\n    END IF;\n    IF TG_OP <> 'UPDATE' THEN\n        RAISE EXCEPTION 'artifact cleanup fence operation is unsupported'\n            USING ERRCODE = '55000';\n    END IF;\n    IF ROW(NEW.deployment_id, NEW.tenant_id, NEW.dataset_id, NEW.operation_id,\n           NEW.artifact_id, NEW.terminal_status)\n       IS DISTINCT FROM\n       ROW(OLD.deployment_id, OLD.tenant_id, OLD.dataset_id, OLD.operation_id,\n           OLD.artifact_id, OLD.terminal_status) THEN\n        RAISE EXCEPTION 'artifact cleanup fence identity and intent are immutable'\n            USING ERRCODE = '55000';\n    END IF;\n    IF NEW IS NOT DISTINCT FROM OLD THEN\n        RETURN NEW;\n    END IF;\n    IF OLD.phase IS DISTINCT FROM 'armed' OR NEW.phase IS DISTINCT FROM 'completed' THEN\n        RAISE EXCEPTION 'artifact cleanup fence phase cannot reopen'\n            USING ERRCODE = '55000';\n    END IF;\n    IF NOT EXISTS (\n        SELECT 1\n        FROM openbot_internal.artifact_records AS record\n        JOIN openbot_internal.artifact_save_operations AS operation\n          ON operation.deployment_id = record.deployment_id\n         AND operation.tenant_id = record.tenant_id\n         AND operation.dataset_id = record.dataset_id\n         AND operation.operation_id = record.operation_id\n         AND operation.artifact_id = record.artifact_id\n        WHERE record.deployment_id = NEW.deployment_id\n          AND record.tenant_id = NEW.tenant_id\n          AND record.dataset_id = NEW.dataset_id\n          AND record.operation_id = NEW.operation_id\n          AND record.artifact_id = NEW.artifact_id\n          AND record.status = NEW.terminal_status\n          AND operation.state = NEW.terminal_status\n          AND operation.request_id IS NOT DISTINCT FROM record.request_id\n          AND operation.owner_actor_id IS NOT DISTINCT FROM record.owner_actor_id\n          AND operation.source_thread_id IS NOT DISTINCT FROM record.source_thread_id\n          AND operation.source_run_id IS NOT DISTINCT FROM record.source_run_id\n          AND operation.source_message_id IS NOT DISTINCT FROM record.source_message_id\n          AND operation.source_call_seq IS NOT DISTINCT FROM record.source_call_seq\n          AND operation.source_attempt_seq IS NOT DISTINCT FROM record.source_attempt_seq\n    ) THEN\n        RAISE EXCEPTION 'artifact cleanup completion requires the exact original terminal pair'\n            USING ERRCODE = '55000';\n    END IF;\n    RETURN NEW;\nEND;\n$function$\n",
+    "returnType": "trigger",
+    "volatility": "v",
+    "configuration": null,
+    "securityDefiner": false
+  },
+  "rules": [],
+  "columns": [
+    {
+      "name": "deployment_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 1,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "tenant_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 2,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "dataset_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 3,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "operation_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 4,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "artifact_id",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 5,
+      "identity": "",
+      "collation": "C",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "terminal_status",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 6,
+      "identity": "",
+      "collation": "default",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    },
+    {
+      "name": "phase",
+      "type": "text",
+      "default": null,
+      "notNull": true,
+      "ordinal": 7,
+      "identity": "",
+      "collation": "default",
+      "generated": "",
+      "collationSchema": "pg_catalog"
+    }
+  ],
+  "indexes": [
+    {
+      "keys": "1 2 3 5",
+      "live": true,
+      "name": "artifact_cleanup_fences_pkey",
+      "ready": true,
+      "valid": true,
+      "schema": "openbot_internal",
+      "unique": true,
+      "primary": true,
+      "keyCount": 4,
+      "immediate": true,
+      "predicate": null,
+      "definition": "CREATE UNIQUE INDEX artifact_cleanup_fences_pkey ON openbot_internal.artifact_cleanup_fences USING btree (deployment_id, tenant_id, dataset_id, artifact_id)",
+      "expressions": null,
+      "accessMethod": "btree",
+      "attributeCount": 4
+    }
+  ],
+  "relation": {
+    "kind": "r",
+    "name": "artifact_cleanup_fences",
+    "schema": "openbot_internal",
+    "options": null,
+    "partition": false,
+    "persistence": "p",
+    "rowSecurity": false,
+    "accessMethod": "heap",
+    "replicaIdentity": "d",
+    "forceRowSecurity": false
+  },
+  "triggers": [
+    {
+      "name": "artifact_cleanup_fences_identity_guard",
+      "type": 31,
+      "enabled": "O",
+      "deferred": false,
+      "deferrable": false,
+      "definition": "CREATE TRIGGER artifact_cleanup_fences_identity_guard BEFORE INSERT OR DELETE OR UPDATE ON openbot_internal.artifact_cleanup_fences FOR EACH ROW EXECUTE FUNCTION openbot_internal.prevent_artifact_cleanup_fence_mutation()",
+      "functionName": "prevent_artifact_cleanup_fence_mutation",
+      "functionSchema": "openbot_internal",
+      "functionArguments": "",
+      "functionDefinition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_artifact_cleanup_fence_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n    IF TG_OP IN ('DELETE', 'TRUNCATE') THEN\n        RAISE EXCEPTION 'artifact cleanup fences cannot be removed'\n            USING ERRCODE = '55000';\n    END IF;\n    IF TG_OP = 'INSERT' THEN\n        IF NEW.phase IS DISTINCT FROM 'armed' THEN\n            RAISE EXCEPTION 'artifact cleanup fences must begin armed'\n                USING ERRCODE = '55000';\n        END IF;\n        RETURN NEW;\n    END IF;\n    IF TG_OP <> 'UPDATE' THEN\n        RAISE EXCEPTION 'artifact cleanup fence operation is unsupported'\n            USING ERRCODE = '55000';\n    END IF;\n    IF ROW(NEW.deployment_id, NEW.tenant_id, NEW.dataset_id, NEW.operation_id,\n           NEW.artifact_id, NEW.terminal_status)\n       IS DISTINCT FROM\n       ROW(OLD.deployment_id, OLD.tenant_id, OLD.dataset_id, OLD.operation_id,\n           OLD.artifact_id, OLD.terminal_status) THEN\n        RAISE EXCEPTION 'artifact cleanup fence identity and intent are immutable'\n            USING ERRCODE = '55000';\n    END IF;\n    IF NEW IS NOT DISTINCT FROM OLD THEN\n        RETURN NEW;\n    END IF;\n    IF OLD.phase IS DISTINCT FROM 'armed' OR NEW.phase IS DISTINCT FROM 'completed' THEN\n        RAISE EXCEPTION 'artifact cleanup fence phase cannot reopen'\n            USING ERRCODE = '55000';\n    END IF;\n    IF NOT EXISTS (\n        SELECT 1\n        FROM openbot_internal.artifact_records AS record\n        JOIN openbot_internal.artifact_save_operations AS operation\n          ON operation.deployment_id = record.deployment_id\n         AND operation.tenant_id = record.tenant_id\n         AND operation.dataset_id = record.dataset_id\n         AND operation.operation_id = record.operation_id\n         AND operation.artifact_id = record.artifact_id\n        WHERE record.deployment_id = NEW.deployment_id\n          AND record.tenant_id = NEW.tenant_id\n          AND record.dataset_id = NEW.dataset_id\n          AND record.operation_id = NEW.operation_id\n          AND record.artifact_id = NEW.artifact_id\n          AND record.status = NEW.terminal_status\n          AND operation.state = NEW.terminal_status\n          AND operation.request_id IS NOT DISTINCT FROM record.request_id\n          AND operation.owner_actor_id IS NOT DISTINCT FROM record.owner_actor_id\n          AND operation.source_thread_id IS NOT DISTINCT FROM record.source_thread_id\n          AND operation.source_run_id IS NOT DISTINCT FROM record.source_run_id\n          AND operation.source_message_id IS NOT DISTINCT FROM record.source_message_id\n          AND operation.source_call_seq IS NOT DISTINCT FROM record.source_call_seq\n          AND operation.source_attempt_seq IS NOT DISTINCT FROM record.source_attempt_seq\n    ) THEN\n        RAISE EXCEPTION 'artifact cleanup completion requires the exact original terminal pair'\n            USING ERRCODE = '55000';\n    END IF;\n    RETURN NEW;\nEND;\n$function$\n"
+    },
+    {
+      "name": "artifact_cleanup_fences_no_truncate",
+      "type": 34,
+      "enabled": "O",
+      "deferred": false,
+      "deferrable": false,
+      "definition": "CREATE TRIGGER artifact_cleanup_fences_no_truncate BEFORE TRUNCATE ON openbot_internal.artifact_cleanup_fences FOR EACH STATEMENT EXECUTE FUNCTION openbot_internal.prevent_artifact_cleanup_fence_mutation()",
+      "functionName": "prevent_artifact_cleanup_fence_mutation",
+      "functionSchema": "openbot_internal",
+      "functionArguments": "",
+      "functionDefinition": "CREATE OR REPLACE FUNCTION openbot_internal.prevent_artifact_cleanup_fence_mutation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n    IF TG_OP IN ('DELETE', 'TRUNCATE') THEN\n        RAISE EXCEPTION 'artifact cleanup fences cannot be removed'\n            USING ERRCODE = '55000';\n    END IF;\n    IF TG_OP = 'INSERT' THEN\n        IF NEW.phase IS DISTINCT FROM 'armed' THEN\n            RAISE EXCEPTION 'artifact cleanup fences must begin armed'\n                USING ERRCODE = '55000';\n        END IF;\n        RETURN NEW;\n    END IF;\n    IF TG_OP <> 'UPDATE' THEN\n        RAISE EXCEPTION 'artifact cleanup fence operation is unsupported'\n            USING ERRCODE = '55000';\n    END IF;\n    IF ROW(NEW.deployment_id, NEW.tenant_id, NEW.dataset_id, NEW.operation_id,\n           NEW.artifact_id, NEW.terminal_status)\n       IS DISTINCT FROM\n       ROW(OLD.deployment_id, OLD.tenant_id, OLD.dataset_id, OLD.operation_id,\n           OLD.artifact_id, OLD.terminal_status) THEN\n        RAISE EXCEPTION 'artifact cleanup fence identity and intent are immutable'\n            USING ERRCODE = '55000';\n    END IF;\n    IF NEW IS NOT DISTINCT FROM OLD THEN\n        RETURN NEW;\n    END IF;\n    IF OLD.phase IS DISTINCT FROM 'armed' OR NEW.phase IS DISTINCT FROM 'completed' THEN\n        RAISE EXCEPTION 'artifact cleanup fence phase cannot reopen'\n            USING ERRCODE = '55000';\n    END IF;\n    IF NOT EXISTS (\n        SELECT 1\n        FROM openbot_internal.artifact_records AS record\n        JOIN openbot_internal.artifact_save_operations AS operation\n          ON operation.deployment_id = record.deployment_id\n         AND operation.tenant_id = record.tenant_id\n         AND operation.dataset_id = record.dataset_id\n         AND operation.operation_id = record.operation_id\n         AND operation.artifact_id = record.artifact_id\n        WHERE record.deployment_id = NEW.deployment_id\n          AND record.tenant_id = NEW.tenant_id\n          AND record.dataset_id = NEW.dataset_id\n          AND record.operation_id = NEW.operation_id\n          AND record.artifact_id = NEW.artifact_id\n          AND record.status = NEW.terminal_status\n          AND operation.state = NEW.terminal_status\n          AND operation.request_id IS NOT DISTINCT FROM record.request_id\n          AND operation.owner_actor_id IS NOT DISTINCT FROM record.owner_actor_id\n          AND operation.source_thread_id IS NOT DISTINCT FROM record.source_thread_id\n          AND operation.source_run_id IS NOT DISTINCT FROM record.source_run_id\n          AND operation.source_message_id IS NOT DISTINCT FROM record.source_message_id\n          AND operation.source_call_seq IS NOT DISTINCT FROM record.source_call_seq\n          AND operation.source_attempt_seq IS NOT DISTINCT FROM record.source_attempt_seq\n    ) THEN\n        RAISE EXCEPTION 'artifact cleanup completion requires the exact original terminal pair'\n            USING ERRCODE = '55000';\n    END IF;\n    RETURN NEW;\nEND;\n$function$\n"
+    }
+  ],
+  "constraints": [
+    {
+      "kind": "c",
+      "name": "artifact_cleanup_fences_id_shape",
+      "columns": [
+        "operation_id",
+        "artifact_id"
+      ],
+      "deferred": false,
+      "noInherit": false,
+      "reference": null,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((octet_length(operation_id) = 36) AND (octet_length(artifact_id) = 36) AND ((operation_id COLLATE \"C\") ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND ((artifact_id COLLATE \"C\") ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)))"
+    },
+    {
+      "kind": "c",
+      "name": "artifact_cleanup_fences_identity_shape",
+      "columns": [
+        "deployment_id",
+        "tenant_id",
+        "dataset_id"
+      ],
+      "deferred": false,
+      "noInherit": false,
+      "reference": null,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND ((deployment_id COLLATE \"C\") !~ '[\u0001-\u001f\u007f-\u009f]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND ((tenant_id COLLATE \"C\") !~ '[\u0001-\u001f\u007f-\u009f]'::text) AND ((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND ((dataset_id COLLATE \"C\") !~ '[\u0001-\u001f\u007f-\u009f]'::text)))"
+    },
+    {
+      "kind": "c",
+      "name": "artifact_cleanup_fences_phase",
+      "columns": [
+        "phase"
+      ],
+      "deferred": false,
+      "noInherit": false,
+      "reference": null,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((phase = ANY (ARRAY['armed'::text, 'completed'::text])))"
+    },
+    {
+      "kind": "p",
+      "name": "artifact_cleanup_fences_pkey",
+      "columns": [
+        "deployment_id",
+        "tenant_id",
+        "dataset_id",
+        "artifact_id"
+      ],
+      "deferred": false,
+      "noInherit": true,
+      "reference": null,
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (deployment_id, tenant_id, dataset_id, artifact_id)"
+    },
+    {
+      "kind": "f",
+      "name": "artifact_cleanup_fences_record_pair_fkey",
+      "columns": [
+        "deployment_id",
+        "tenant_id",
+        "dataset_id",
+        "operation_id",
+        "artifact_id"
+      ],
+      "deferred": false,
+      "noInherit": true,
+      "reference": {
+        "key": {
+          "kind": "u",
+          "name": "artifact_records_receipt_pair",
+          "deferred": false,
+          "indexName": "artifact_records_receipt_pair",
+          "validated": true,
+          "deferrable": false,
+          "definition": "UNIQUE (deployment_id, tenant_id, dataset_id, operation_id, artifact_id)",
+          "indexReady": true,
+          "indexValid": true,
+          "indexUnique": true,
+          "indexPrimary": false,
+          "indexImmediate": true,
+          "indexDefinition": "CREATE UNIQUE INDEX artifact_records_receipt_pair ON openbot_internal.artifact_records USING btree (deployment_id, tenant_id, dataset_id, operation_id, artifact_id)"
+        },
+        "match": "s",
+        "schema": "openbot_internal",
+        "columns": [
+          "deployment_id",
+          "tenant_id",
+          "dataset_id",
+          "operation_id",
+          "artifact_id"
+        ],
+        "relation": "artifact_records",
+        "deleteAction": "r",
+        "updateAction": "r"
+      },
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (deployment_id, tenant_id, dataset_id, operation_id, artifact_id) REFERENCES openbot_internal.artifact_records(deployment_id, tenant_id, dataset_id, operation_id, artifact_id) ON UPDATE RESTRICT ON DELETE RESTRICT"
+    },
+    {
+      "kind": "c",
+      "name": "artifact_cleanup_fences_terminal_status",
+      "columns": [
+        "terminal_status"
+      ],
+      "deferred": false,
+      "noInherit": false,
+      "reference": null,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((terminal_status = ANY (ARRAY['deleted'::text, 'expired'::text])))"
+    }
+  ],
+  "nativeLedger": [
+    {
+      "name": "native_0013_audit_tool_pipeline",
+      "version": 13,
+      "checksum": "2a014032687e25f12a65ac0206d07e9eb5bbd8e5788886b1672a15ebfa5e1e9a"
+    },
+    {
+      "name": "native_0014_user_auth_generation",
+      "version": 14,
+      "checksum": "eba4c43ec8df642acc0040f2c70d7b7de32cd373b3652728a6450c7ecc28b503"
+    },
+    {
+      "name": "native_0015_session_auth_generation",
+      "version": 15,
+      "checksum": "0e56ec50750efff4e4da2f8a838cb6a7aeeb3d41f6ef765aeb03ddb1cfca551f"
+    },
+    {
+      "name": "native_0016_thread_realtime_memory_base",
+      "version": 16,
+      "checksum": "1257d418aed7104c538e3d673930794ad19e55b3a72dc994c0ea137e98854fc2"
+    },
+    {
+      "name": "native_0017_mcp_catalog_callback_sequence",
+      "version": 17,
+      "checksum": "9e355743bdc038eddefae73c57791994747e0f1dd915457e3418bf1d777e0104"
+    },
+    {
+      "name": "native_0018_mcp_credential_generation",
+      "version": 18,
+      "checksum": "e3c36a9aec65258ec53eef7bce3f566e349a96ffdb9bca1f40af954a5a32df10"
+    },
+    {
+      "name": "native_0019_vendor_transport_identity",
+      "version": 19,
+      "checksum": "43b212c176cbf12047264114b66dea3b94487c15baccd0918758167bd51e7283"
+    },
+    {
+      "name": "native_0020_tool_approvals",
+      "version": 20,
+      "checksum": "bb1b043e39e407dea5b0c85b1e30cfe68e2bfe2daf64aa2bf27e8ea290e461c0"
+    },
+    {
+      "name": "native_0021_user_ui_preferences",
+      "version": 21,
+      "checksum": "a1a0d1bc9900c84ede743401cf7c90bd90262bbe9cc47cdc69b3321d828946f1"
+    },
+    {
+      "name": "native_0022_user_memory_controls",
+      "version": 22,
+      "checksum": "b3c6c50c9b1506489f8da315b11b938ffd470feb2d9d5593a78f834a619e78d4"
+    },
+    {
+      "name": "native_0023_component_human_decisions",
+      "version": 23,
+      "checksum": "aadbbed8879c4ddd8d2b0fa81d1ac5fe2ba5424fc04b76753e841979516b5a6d"
+    },
+    {
+      "name": "native_0024_run_token_usage",
+      "version": 24,
+      "checksum": "bf2e4aa4a9a07edf38809bf82c04df3c1dd9e577c8273460f4fd91860c28469d"
+    },
+    {
+      "name": "native_0025_run_provider_cost_upper_bound",
+      "version": 25,
+      "checksum": "77157c5bb8a4f380564f4cdcf37610565798befd9d5941dd21b1830114eed3ed"
+    },
+    {
+      "name": "native_0026_user_run_cost_budgets",
+      "version": 26,
+      "checksum": "338d160d2ae3898d57893d972f27a793c129015c93bd4bf2c2afec0ba5974c26"
+    },
+    {
+      "name": "native_0027_terminal_reasoning_retention",
+      "version": 27,
+      "checksum": "50d7d1017564c00491f2c625c54977ab0a0e2706634752bc44344af58c7eb43d"
+    },
+    {
+      "name": "native_0028_remote_agent_interrupts",
+      "version": 28,
+      "checksum": "b2e16fbeb76a115f3cecc0540d2f43cf14cd91c9ccb095d8cf70e27e7a6fb4a2"
+    },
+    {
+      "name": "native_0029_mcp_private_egress",
+      "version": 29,
+      "checksum": "8eef859dbd916637cdd0af15fd7e2be7290a05988888df0306a25eb5f5252f43"
+    },
+    {
+      "name": "native_0030_personal_model_connections",
+      "version": 30,
+      "checksum": "4a3db8d8c6b86366fcd01bb938957256f271d086e0e4a1c1121e124eaadba19c"
+    },
+    {
+      "name": "native_0031_run_model_selections",
+      "version": 31,
+      "checksum": "88e09189f835a730ab0d57a9524435cef0374e5b3457fee64af18f4f9d26e10c"
+    },
+    {
+      "name": "native_0032_desktop_vault_canary",
+      "version": 32,
+      "checksum": "ee65a257e6d87aaf4f8f94b193cd1dcbf2c0708289c5e40075d6bde2268eae7e"
+    },
+    {
+      "name": "native_0033_sdk_gateway_authority",
+      "version": 33,
+      "checksum": "4ef597246a9dd187de695e8663f353b0770e104d7a55a8bcbade5db78bb3e1f0"
+    },
+    {
+      "name": "native_0034_oauth_refresh_operations",
+      "version": 34,
+      "checksum": "2fb35e683f15b902b03f7547caa66f2012b93ef1e9cf5b76241329bc089f0a6e"
+    },
+    {
+      "name": "native_0035_remember_effect_receipts",
+      "version": 35,
+      "checksum": "e1ae386fc022461f77353534ea021c37600892e68fde8b7e3876535081f42f2a"
+    },
+    {
+      "name": "native_0036_thread_run_occupancy",
+      "version": 36,
+      "checksum": "cacd4059e1098a5e825bcc9f11ab9447885ac790a3cff1a814ff056827b44262"
+    },
+    {
+      "name": "native_0037_memory_provenance",
+      "version": 37,
+      "checksum": "2798f92af55f46585032a433e8b833e88b27cda83a156f5e9fd53902b74f7a0c"
+    },
+    {
+      "name": "native_0038_sandbox_editing_revision",
+      "version": 38,
+      "checksum": "32ca5d32751724ba2916e23ab84d898d1a61e4dcb547a1ef900b08c3576cece9"
+    },
+    {
+      "name": "native_0039_skill_editing_revision",
+      "version": 39,
+      "checksum": "5e087fac0debc9c770496f1a070cf999f40975b79deb3f879f720c794f68d966"
+    },
+    {
+      "name": "native_0040_ui_preferences_revision",
+      "version": 40,
+      "checksum": "fc4fee23460f6620cb77243233e357cf5239e1b8d38a650730ca1a7431d5b161"
+    },
+    {
+      "name": "native_0041_artifact_dataset_binding",
+      "version": 41,
+      "checksum": "d1b53e36319c220363a7c6751f0cff34d3ab4742123836f329b71ee99757cd89"
+    },
+    {
+      "name": "native_0042_artifact_registration",
+      "version": 42,
+      "checksum": "79a679b71f6b148c4255a784b3271ee396689fe3ccfd321b8075f9b5110e6e37"
+    },
+    {
+      "name": "native_0043_approval_preferences",
+      "version": 43,
+      "checksum": "bc6b1f5f9ca84070035cf7e0f9d1dbd2ab511af28c8289cd630989e7bf05dc7e"
+    },
+    {
+      "name": "native_0044_artifact_cleanup_fences",
+      "version": 44,
+      "checksum": "58c15737be39cce81a4dbeec747d8624e329fc478bad607cbfe6f24303377c5c"
+    }
+  ],
+  "droppedAttributes": [],
+  "foreignKeyTriggers": [
+    {
+      "type": 5,
+      "columns": "",
+      "enabled": "O",
+      "deferred": false,
+      "relation": "artifact_cleanup_fences",
+      "arguments": "",
+      "condition": null,
+      "constraint": "artifact_cleanup_fences_record_pair_fkey",
+      "deferrable": false,
+      "functionName": "RI_FKey_check_ins",
+      "newTransition": null,
+      "oldTransition": null,
+      "functionSchema": "pg_catalog",
+      "relationSchema": "openbot_internal",
+      "functionArguments": ""
+    },
+    {
+      "type": 17,
+      "columns": "",
+      "enabled": "O",
+      "deferred": false,
+      "relation": "artifact_cleanup_fences",
+      "arguments": "",
+      "condition": null,
+      "constraint": "artifact_cleanup_fences_record_pair_fkey",
+      "deferrable": false,
+      "functionName": "RI_FKey_check_upd",
+      "newTransition": null,
+      "oldTransition": null,
+      "functionSchema": "pg_catalog",
+      "relationSchema": "openbot_internal",
+      "functionArguments": ""
+    },
+    {
+      "type": 9,
+      "columns": "",
+      "enabled": "O",
+      "deferred": false,
+      "relation": "artifact_records",
+      "arguments": "",
+      "condition": null,
+      "constraint": "artifact_cleanup_fences_record_pair_fkey",
+      "deferrable": false,
+      "functionName": "RI_FKey_restrict_del",
+      "newTransition": null,
+      "oldTransition": null,
+      "functionSchema": "pg_catalog",
+      "relationSchema": "openbot_internal",
+      "functionArguments": ""
+    },
+    {
+      "type": 17,
+      "columns": "",
+      "enabled": "O",
+      "deferred": false,
+      "relation": "artifact_records",
+      "arguments": "",
+      "condition": null,
+      "constraint": "artifact_cleanup_fences_record_pair_fkey",
+      "deferrable": false,
+      "functionName": "RI_FKey_restrict_upd",
+      "newTransition": null,
+      "oldTransition": null,
+      "functionSchema": "pg_catalog",
+      "relationSchema": "openbot_internal",
+      "functionArguments": ""
+    }
+  ],
+  "terminalConstraints": [
+    {
+      "kind": "c",
+      "name": "artifact_records_payload",
+      "schema": "openbot_internal",
+      "relation": "artifact_records",
+      "noInherit": false,
+      "validated": true,
+      "definition": "CHECK ((((status = ANY (ARRAY['deleted'::text, 'expired'::text])) AND (workspace_kind IS NULL) AND (workspace_id IS NULL) AND (media_type IS NULL) AND (byte_length IS NULL) AND (sha256 IS NULL) AND (retention_class IS NULL) AND (saved_by IS NULL) AND (saved_at IS NULL)) OR ((status = ANY (ARRAY['available'::text, 'failed_partial'::text])) AND (workspace_kind IS NOT NULL) AND (workspace_kind = ANY (ARRAY['channel'::text, 'thread'::text])) AND (workspace_id IS NOT NULL) AND ((octet_length(workspace_id) >= 1) AND (octet_length(workspace_id) <= 512)) AND (workspace_id !~ '[\u0001-\u001f\u007f-\u009f]'::text) AND (media_type IS NOT NULL) AND (media_type = 'text/plain; charset=utf-8'::text) AND (byte_length IS NOT NULL) AND ((byte_length >= 0) AND (byte_length <= 67108864)) AND (sha256 IS NOT NULL) AND (sha256 ~ '^[0-9a-f]{64}$'::text) AND (retention_class IS NOT NULL) AND (retention_class = 'explicit_saved'::text) AND (saved_by IS NOT NULL) AND (saved_by = owner_actor_id) AND (saved_at IS NOT NULL))))"
+    },
+    {
+      "kind": "c",
+      "name": "artifact_save_operations_payload",
+      "schema": "openbot_internal",
+      "relation": "artifact_save_operations",
+      "noInherit": false,
+      "validated": true,
+      "definition": "CHECK ((((state = ANY (ARRAY['deleted'::text, 'expired'::text])) AND (store_id IS NULL) AND (workspace_kind IS NULL) AND (workspace_id IS NULL) AND (expected_sha256 IS NULL) AND (expected_bytes IS NULL) AND (charged_bytes IS NULL) AND (created_at IS NULL) AND (actual_absent IS NULL) AND (actual_byte_length IS NULL) AND (actual_sha256 IS NULL) AND (actual_location IS NULL) AND (observation_phase IS NULL)) OR ((state <> ALL (ARRAY['deleted'::text, 'expired'::text])) AND (store_id IS NOT NULL) AND (store_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text) AND (workspace_kind IS NOT NULL) AND (workspace_kind = ANY (ARRAY['channel'::text, 'thread'::text])) AND (workspace_id IS NOT NULL) AND ((octet_length(workspace_id) >= 1) AND (octet_length(workspace_id) <= 512)) AND (workspace_id !~ '[\u0001-\u001f\u007f-\u009f]'::text) AND (expected_sha256 IS NOT NULL) AND (expected_sha256 ~ '^[0-9a-f]{64}$'::text) AND (expected_bytes IS NOT NULL) AND ((expected_bytes >= 1) AND (expected_bytes <= 67108864)) AND (charged_bytes IS NOT NULL) AND ((charged_bytes >= 0) AND (charged_bytes <= 67108864)) AND (created_at IS NOT NULL))))"
+    }
+  ]
+}

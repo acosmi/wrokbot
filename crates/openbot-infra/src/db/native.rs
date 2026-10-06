@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0043_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0044_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -284,6 +284,13 @@ pub const NATIVE_0043_VERSION: i32 = 43;
 pub const NATIVE_0043_NAME: &str = "native_0043_approval_preferences";
 /// Additive bounded keys, immutable record identity and exact revision advancement.
 pub const NATIVE_0043_SQL: &str = include_str!("../../sql/native_0043.sql");
+
+/// Existing-record durable cleanup fence foundation; no physical deletion is performed.
+pub const NATIVE_0044_VERSION: i32 = 44;
+/// Stable ledger identity for the additive cleanup fence migration.
+pub const NATIVE_0044_NAME: &str = "native_0044_artifact_cleanup_fences";
+/// Immutable cleanup intent, original record-pair key and closed phase guard.
+pub const NATIVE_0044_SQL: &str = include_str!("../../sql/native_0044.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -454,6 +461,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0043_VERSION,
         name: NATIVE_0043_NAME,
         sql: NATIVE_0043_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0044_VERSION,
+        name: NATIVE_0044_NAME,
+        sql: NATIVE_0044_SQL,
     },
 ];
 
@@ -686,6 +698,12 @@ pub fn native_0042_checksum() -> String {
 #[must_use]
 pub fn native_0043_checksum() -> String {
     Sha256Digest::of(NATIVE_0043_SQL.as_bytes()).to_hex()
+}
+
+/// Checksum of the exact existing-record cleanup fence expansion.
+#[must_use]
+pub fn native_0044_checksum() -> String {
+    Sha256Digest::of(NATIVE_0044_SQL.as_bytes()).to_hex()
 }
 
 /// SHA-256 of the registered sandbox editing migration.
@@ -1329,7 +1347,7 @@ mod tests {
         assert_ne!(native_0035_checksum(), native_0036_checksum());
         assert_eq!(native_0037_checksum().len(), 64);
         assert_ne!(native_0036_checksum(), native_0037_checksum());
-        assert_eq!(MIGRATIONS.len(), 31);
+        assert_eq!(MIGRATIONS.len(), 32);
         assert_eq!(native_0038_checksum().len(), 64);
         assert_ne!(native_0037_checksum(), native_0038_checksum());
         assert_eq!(native_0039_checksum().len(), 64);
@@ -1342,6 +1360,8 @@ mod tests {
         assert_ne!(native_0041_checksum(), native_0042_checksum());
         assert_eq!(native_0043_checksum().len(), 64);
         assert_ne!(native_0042_checksum(), native_0043_checksum());
-        assert_eq!(MIGRATIONS[30].version, NATIVE_LATEST_VERSION);
+        assert_eq!(native_0044_checksum().len(), 64);
+        assert_ne!(native_0043_checksum(), native_0044_checksum());
+        assert_eq!(MIGRATIONS[31].version, NATIVE_LATEST_VERSION);
     }
 }
