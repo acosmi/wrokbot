@@ -637,7 +637,8 @@ fn control<T: serde::de::DeserializeOwned>(response: Response<Vec<u8>>) -> Resul
     require(
         response.status() == StatusCode::OK,
         "actual Desktop control did not succeed",
-    )?;
+    )
+    .map_err(|message| format!("{message}: status={}", response.status().as_u16()))?;
     serde_json::from_slice(response.body()).map_err(|error| error.to_string())
 }
 
@@ -971,8 +972,10 @@ async fn actual_prepared_local_public_reader_close_isolated_original_resources()
         let protocol = fixture.prepared().protocol();
         protocol.bind_window("peer", fixture.prepared().auth_context().clone(), None)
             .map_err(|error| error.to_string())?;
-        let original: ArtifactReadOpened = control(bridge(protocol, "main", open_request(&fixture.artifact.artifact_id)?).await)?;
-        let peer: ArtifactReadOpened = control(bridge(protocol, "peer", open_request(&fixture.artifact.artifact_id)?).await)?;
+        let original: ArtifactReadOpened = control(bridge(protocol, "main", open_request(&fixture.artifact.artifact_id)?).await)
+            .map_err(|error| format!("original_open: {error}"))?;
+        let peer: ArtifactReadOpened = control(bridge(protocol, "peer", open_request(&fixture.artifact.artifact_id)?).await)
+            .map_err(|error| format!("peer_open: {error}"))?;
         status(protocol.handle("peer", next_request(&original.handle_id, 0)?).await, StatusCode::NOT_FOUND)?;
         let prepared = protocol.prepare_public_artifact_read_response("main", next_request(&original.handle_id, 0)?).await;
         let original_close_request = close_request(&original.handle_id)?;
@@ -995,7 +998,8 @@ async fn actual_prepared_local_public_reader_close_isolated_original_resources()
             let peer_data = protocol.handle("peer", next_request(&peer.handle_id, 0)?).await;
             data(&peer_data, &peer.handle_id, 0, false)?;
             require(peer_data.body().as_slice() == PAYLOAD.as_bytes(), "own Close blocked another real Window's bytes")?;
-            let peer_closed: ArtifactReadClosed = control(protocol.handle("peer", close_request(&peer.handle_id)?).await)?;
+            let peer_closed: ArtifactReadClosed = control(protocol.handle("peer", close_request(&peer.handle_id)?).await)
+                .map_err(|error| format!("peer_close: {error}"))?;
             require(peer_closed.handle_id == peer.handle_id, "peer Close borrowed original resource inventory")?;
             require(tokio::time::timeout(Duration::from_millis(30), &mut closing).await.is_err(),
                 "peer completion falsely closed a still-held original responder owner")
@@ -1008,13 +1012,16 @@ async fn actual_prepared_local_public_reader_close_isolated_original_resources()
         while_held?;
         require(!gate.timed_out.load(Ordering::SeqCst), "actual responder was released only by timeout")?;
         data(&response, &original.handle_id, 0, false)?;
-        let closed: ArtifactReadClosed = control(closed)?;
+        let closed: ArtifactReadClosed = control(closed)
+            .map_err(|error| format!("original_close: {error}"))?;
         require(closed.handle_id == original.handle_id, "real original Close returned another Window's handle")?;
         protocol.unbind_window("main").map_err(|error| error.to_string())?;
-        let surviving: ArtifactReadOpened = control(bridge(protocol, "peer", open_request(&fixture.artifact.artifact_id)?).await)?;
+        let surviving: ArtifactReadOpened = control(bridge(protocol, "peer", open_request(&fixture.artifact.artifact_id)?).await)
+            .map_err(|error| format!("surviving_open: {error}"))?;
         let survived = protocol.handle("peer", next_request(&surviving.handle_id, 0)?).await;
         data(&survived, &surviving.handle_id, 0, false)?;
-        let _: ArtifactReadClosed = control(protocol.handle("peer", close_request(&surviving.handle_id)?).await)?;
+        let _: ArtifactReadClosed = control(protocol.handle("peer", close_request(&surviving.handle_id)?).await)
+            .map_err(|error| format!("surviving_close: {error}"))?;
         protocol.unbind_window("peer").map_err(|error| error.to_string())?;
         Ok(())
     }.await;
