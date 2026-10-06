@@ -47,6 +47,7 @@ pub mod admin;
 pub mod agent_tools;
 pub mod agents;
 pub mod approvals;
+pub mod artifact_reads;
 pub mod artifact_save_receipts;
 pub mod artifacts;
 pub mod auth_oidc;
@@ -720,6 +721,19 @@ pub fn router(state: ServerState) -> Router {
             axum::routing::put(memories::correct).delete(memories::delete),
         )
         .route("/api/memories/{memory_id}/forbid", post(memories::forbid))
+        .route("/api/artifact-reads", post(artifact_reads::open))
+        .route(
+            "/api/artifact-reads/{handle_id}/next",
+            post(artifact_reads::next),
+        )
+        .route(
+            "/api/artifact-reads/{handle_id}/ack",
+            post(artifact_reads::acknowledge),
+        )
+        .route(
+            "/api/artifact-reads/{handle_id}",
+            delete(artifact_reads::close),
+        )
         .route(
             "/api/artifacts/save-run-message-text",
             post(artifacts::save),
@@ -870,6 +884,7 @@ pub fn router(state: ServerState) -> Router {
         .layer(axum::middleware::from_fn(
             runtime_capabilities::response_policy,
         ))
+        .layer(axum::middleware::from_fn(artifact_reads::response_policy))
         .layer(axum::middleware::from_fn(
             artifact_save_receipts::response_policy,
         ))

@@ -35,6 +35,8 @@ sha2.workspace = true
 # 排序键 `coalesce(last_message_at, created_at)` 的类型，以及游标里的 RFC 3339 时间戳。
 time.workspace = true
 url.workspace = true
+# Ephemeral artifact reader locators; original host binding supplies authority.
+uuid.workspace = true
 
 # 心跳订阅的节拍源（`tokio::time::Interval`）。
 tokio.workspace = true
