@@ -1528,9 +1528,7 @@ impl ChannelOriginLease {
         intent: &RunIntent,
         result: Result<&ThreadRunStarted, ()>,
     ) -> Option<ChannelHandoffToken> {
-        if self.owner.upgrade().is_none() {
-            return None;
-        }
+        self.owner.upgrade()?;
         let Ok(ack) = result else {
             return None;
         };
