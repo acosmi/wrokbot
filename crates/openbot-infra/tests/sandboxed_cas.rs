@@ -1,7 +1,6 @@
 //! R415 exact production writes on owned PostgreSQL; no equivalent-SQL writer substitute.
 mod harness;
 
-use deadpool_postgres::Pool;
 use openbot_application::{
     SandboxedComponentAdministration, SandboxedComponentAdministrationError as Error,
     SandboxedComponentDraft,
@@ -11,6 +10,7 @@ use openbot_contracts::{
     ids::{ActorId, DeploymentId, TenantId},
     revision::RevisionSnapshot,
 };
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::{
     db::{fresh, pool},
     sandboxed_components::PostgresSandboxedComponentAdministration,

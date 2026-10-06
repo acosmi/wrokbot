@@ -14,7 +14,7 @@ use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::repo::ChannelRepo;
 use openbot_infra::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await
@@ -68,7 +68,7 @@ fn request(actor: &str, admin: bool, agents: &[&str]) -> ChannelCreateRequest {
 }
 
 async fn surface_counts(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
 ) -> Result<(i64, i64, i64, i64, i64, i64), String> {
     let client = pool.get().await.map_err(|error| error.to_string())?;
     let row = client

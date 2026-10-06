@@ -75,6 +75,7 @@
 pub mod agent_admin;
 mod app;
 pub mod approval_admin;
+pub mod approval_preferences;
 mod artifact_save_receipt;
 pub mod artifacts;
 pub mod builtin_tools;

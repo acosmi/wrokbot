@@ -111,7 +111,7 @@ impl RunRelay {
 /// Run runtime 的 production PostgreSQL adapter。
 #[derive(Clone)]
 pub struct PostgresRunRuntime {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     owner_id: String,
     lease_duration: Duration,
     claim_duration: Duration,
@@ -129,7 +129,7 @@ impl core::fmt::Debug for PostgresRunRuntime {
 impl PostgresRunRuntime {
     /// 用与 `PostgresThreadDirectory` 相同的 process owner 构造。
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         owner_id: String,
         lease_duration: Duration,
         claim_duration: Duration,
@@ -152,7 +152,7 @@ impl PostgresRunRuntime {
         })
     }
 
-    async fn client(&self) -> Result<deadpool_postgres::Client, RunRuntimeError> {
+    async fn client(&self) -> Result<crate::db::pool::PooledClient, RunRuntimeError> {
         self.pool.get().await.map_err(|error| {
             tracing::error!(error = %error, "run runtime 获取数据库连接失败");
             RunRuntimeError::Unavailable
@@ -2745,7 +2745,7 @@ async fn database_now(transaction: &Transaction<'_>) -> Result<OffsetDateTime, R
 }
 
 async fn database_now_client(
-    client: &deadpool_postgres::Client,
+    client: &crate::db::pool::PooledClient,
 ) -> Result<OffsetDateTime, RunRuntimeError> {
     client
         .query_one("SELECT now()", &[])

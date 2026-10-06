@@ -8,9 +8,9 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::db::pool::DatabasePool as Pool;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use deadpool_postgres::Pool;
 use openbot_contracts::auth::{AuthGeneration, Role};
 use openbot_contracts::ids::{ActorId, ChannelId};
 use openbot_domain::audit::event::{AuditEvent, AuditEventType};

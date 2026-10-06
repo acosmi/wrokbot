@@ -6,7 +6,6 @@ mod harness;
 mod support;
 
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{
     AuthorizedToolCall, BeginThreadRunRequest, CommittedMemoryEffect, MemoryAdministrationError,
     RememberToolMemory, RememberToolMemoryRequest, ResolvedToolScope, RunExecutionLease,
@@ -46,6 +45,7 @@ use openbot_domain::{
         pipeline::{ApprovalEvidence, ApprovalOutcome, DurableDecisionReceipt},
     },
 };
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::{
     agent_tools::PostgresBuiltInToolControlPlane,
     db::{fresh, pool, pool::DatabaseConfig},

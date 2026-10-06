@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_application::{ArtifactAdministrationError, CurrentArtifactReadChunk};
 use openbot_contracts::artifact_read::PendingArtifactReadBuffer;
 use openbot_contracts::artifacts::{ArtifactRegistrationReceipt, ArtifactWorkspace};

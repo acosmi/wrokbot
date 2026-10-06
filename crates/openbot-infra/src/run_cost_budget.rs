@@ -10,13 +10,13 @@ use tokio_postgres::Row;
 /// Production cross-device cost-budget store used by both Server and Desktop.
 #[derive(Clone)]
 pub struct PostgresRunCostBudgetAdministration {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
 }
 
 impl PostgresRunCostBudgetAdministration {
     /// Construct from the shared PostgreSQL pool.
     #[must_use]
-    pub fn new(pool: deadpool_postgres::Pool) -> Self {
+    pub fn new(pool: crate::db::pool::DatabasePool) -> Self {
         Self { pool }
     }
 }

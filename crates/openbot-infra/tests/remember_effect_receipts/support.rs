@@ -2,7 +2,6 @@
 //! every effect assertion invokes the production PostgreSQL memory adapter.
 
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{
     CommittedMemoryEffect, MemoryAdministrationError, RememberToolMemory,
     RememberToolMemoryRequest, ToolDecisionDraft, ToolJournal, ToolOutcomeDraft, ToolPortError,
@@ -18,6 +17,7 @@ use openbot_domain::{
     policy::{ActionPolicy, PolicyMode},
     tool::pipeline::DurableDecisionReceipt,
 };
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::{
     agent_tools::PostgresBuiltInToolControlPlane, memory_admin::PostgresMemoryAdministration,
     policy::PolicyStore, repo::tools::PostgresToolJournal,

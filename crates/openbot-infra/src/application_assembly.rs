@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_application::provider::RemoteAguiTransport;
 use openbot_application::{
     ApplicationService, ArtifactAdministration, OpenBotApplication, ProviderAdapter, RunRuntime,

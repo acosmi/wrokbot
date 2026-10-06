@@ -9,7 +9,7 @@ use openbot_infra::db::tables::current_table_specs;
 use openbot_infra::db::{baseline, native, pool};
 use openbot_server::database::{DatabaseInitializationError, DatabaseOrigin, initialize};
 
-async fn scalar(pool: &deadpool_postgres::Pool, sql: &str) -> Result<i64, String> {
+async fn scalar(pool: &openbot_infra::db::pool::DatabasePool, sql: &str) -> Result<i64, String> {
     pool.get()
         .await
         .map_err(|error| error.to_string())?

@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0043_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0044_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -284,6 +284,13 @@ pub const NATIVE_0043_VERSION: i32 = 43;
 pub const NATIVE_0043_NAME: &str = "native_0043_approval_preferences";
 /// Additive bounded keys, immutable record identity and exact revision advancement.
 pub const NATIVE_0043_SQL: &str = include_str!("../../sql/native_0043.sql");
+
+/// Existing-record durable cleanup fence foundation; no physical deletion is performed.
+pub const NATIVE_0044_VERSION: i32 = 44;
+/// Stable ledger identity for the additive cleanup fence migration.
+pub const NATIVE_0044_NAME: &str = "native_0044_artifact_cleanup_fences";
+/// Immutable cleanup intent, original record-pair key and closed phase guard.
+pub const NATIVE_0044_SQL: &str = include_str!("../../sql/native_0044.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -454,6 +461,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0043_VERSION,
         name: NATIVE_0043_NAME,
         sql: NATIVE_0043_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0044_VERSION,
+        name: NATIVE_0044_NAME,
+        sql: NATIVE_0044_SQL,
     },
 ];
 
@@ -688,10 +700,45 @@ pub fn native_0043_checksum() -> String {
     Sha256Digest::of(NATIVE_0043_SQL.as_bytes()).to_hex()
 }
 
+/// Checksum of the exact existing-record cleanup fence expansion.
+#[must_use]
+pub fn native_0044_checksum() -> String {
+    Sha256Digest::of(NATIVE_0044_SQL.as_bytes()).to_hex()
+}
+
 /// SHA-256 of the registered sandbox editing migration.
 #[must_use]
 pub fn native_0038_checksum() -> String {
     Sha256Digest::of(NATIVE_0038_SQL.as_bytes()).to_hex()
+}
+
+mod bootstrap_client_private {
+    pub trait Sealed {}
+
+    impl Sealed for tokio_postgres::Client {}
+    impl Sealed for crate::db::pool::PooledClient {}
+}
+
+/// The two owned client types that can construct an atomic database bootstrap transaction.
+///
+/// This sealed bridge preserves existing raw PostgreSQL callers and accepts the supervised pool
+/// facade without exposing a mutable client or stock pool object. The opaque builder retains the
+/// original client borrow; it does not grant current application or host authorization.
+pub trait BootstrapTransactionClient: bootstrap_client_private::Sealed {
+    /// Start configuring a transaction on this exact client without lending the mutable client.
+    fn bootstrap_transaction_builder(&mut self) -> tokio_postgres::TransactionBuilder<'_>;
+}
+
+impl BootstrapTransactionClient for tokio_postgres::Client {
+    fn bootstrap_transaction_builder(&mut self) -> tokio_postgres::TransactionBuilder<'_> {
+        self.build_transaction()
+    }
+}
+
+impl BootstrapTransactionClient for crate::db::pool::PooledClient {
+    fn bootstrap_transaction_builder(&mut self) -> tokio_postgres::TransactionBuilder<'_> {
+        self.build_postgres_transaction()
+    }
 }
 
 /// 在一个已到 0012 的数据库上施加当前二进制认识的全部 Rust-owned migrations。
@@ -701,7 +748,9 @@ pub fn native_0038_checksum() -> String {
 /// - 连接/DDL/账本查询失败返回脱敏的 [`InfraError::Query`]；
 /// - 同版本账本漂移或出现版本空洞返回 [`InfraError::NativeMigration`]；
 /// - commit 失败同样返回查询错误，事务由 PostgreSQL 回滚。
-pub async fn apply(client: &mut Client) -> Result<ApplyOutcome, InfraError> {
+pub async fn apply(
+    client: &mut impl BootstrapTransactionClient,
+) -> Result<ApplyOutcome, InfraError> {
     apply_through(client, NATIVE_LATEST_VERSION).await
 }
 
@@ -709,11 +758,11 @@ pub async fn apply(client: &mut Client) -> Result<ApplyOutcome, InfraError> {
 ///
 /// 生产启动应调用 [`apply`]。本入口仍走同一账本/锁/摘要校验，不是绕过 migration 的测试后门。
 pub async fn apply_through(
-    client: &mut Client,
+    client: &mut impl BootstrapTransactionClient,
     max_version: i32,
 ) -> Result<ApplyOutcome, InfraError> {
     let transaction = client
-        .build_transaction()
+        .bootstrap_transaction_builder()
         .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
         .start()
         .await
@@ -1298,7 +1347,7 @@ mod tests {
         assert_ne!(native_0035_checksum(), native_0036_checksum());
         assert_eq!(native_0037_checksum().len(), 64);
         assert_ne!(native_0036_checksum(), native_0037_checksum());
-        assert_eq!(MIGRATIONS.len(), 31);
+        assert_eq!(MIGRATIONS.len(), 32);
         assert_eq!(native_0038_checksum().len(), 64);
         assert_ne!(native_0037_checksum(), native_0038_checksum());
         assert_eq!(native_0039_checksum().len(), 64);
@@ -1311,6 +1360,8 @@ mod tests {
         assert_ne!(native_0041_checksum(), native_0042_checksum());
         assert_eq!(native_0043_checksum().len(), 64);
         assert_ne!(native_0042_checksum(), native_0043_checksum());
-        assert_eq!(MIGRATIONS[30].version, NATIVE_LATEST_VERSION);
+        assert_eq!(native_0044_checksum().len(), 64);
+        assert_ne!(native_0043_checksum(), native_0044_checksum());
+        assert_eq!(MIGRATIONS[31].version, NATIVE_LATEST_VERSION);
     }
 }

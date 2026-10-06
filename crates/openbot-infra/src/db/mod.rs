@@ -22,6 +22,7 @@
 //! 本层刻意**不**实现 downgrade：v3 §14.3 逐字「无 downgrade migration」。
 
 pub mod approval_preference_schema;
+pub mod artifact_cleanup_schema;
 pub mod baseline;
 pub mod compat;
 pub mod desktop_local;

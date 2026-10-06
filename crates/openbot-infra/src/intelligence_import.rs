@@ -26,17 +26,17 @@ use tokio_postgres::{GenericClient, Row, Transaction};
 /// Production one-shot importer adapter；Server request path 不构造它。
 #[derive(Clone, Debug)]
 pub struct PostgresIntelligenceImportStore {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
 }
 
 impl PostgresIntelligenceImportStore {
     /// 用 migration pool 构造。
     #[must_use]
-    pub fn new(pool: deadpool_postgres::Pool) -> Self {
+    pub fn new(pool: crate::db::pool::DatabasePool) -> Self {
         Self { pool }
     }
 
-    async fn client(&self) -> Result<deadpool_postgres::Client, IntelligenceImportError> {
+    async fn client(&self) -> Result<crate::db::pool::PooledClient, IntelligenceImportError> {
         self.pool.get().await.map_err(|error| {
             tracing::error!(error = %error, "intelligence importer 获取连接失败");
             IntelligenceImportError::Unavailable

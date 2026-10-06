@@ -195,7 +195,8 @@ async fn run_tool_run_fk_validation()
     result
 }
 
-async fn connect_migration_database() -> Result<deadpool_postgres::Pool, MigrationFailure> {
+async fn connect_migration_database()
+-> Result<openbot_infra::db::pool::DatabasePool, MigrationFailure> {
     let database_url = std::env::var_os("DATABASE_URL")
         .and_then(|value| value.into_string().ok())
         .filter(|value| !value.is_empty())

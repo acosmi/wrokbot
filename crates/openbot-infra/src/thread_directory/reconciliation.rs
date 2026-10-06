@@ -61,7 +61,7 @@ ORDER BY a.call_sequence,a.attempt_sequence
 ";
 
 pub(super) async fn read(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::db::pool::DatabasePool,
     request: RunReconciliationRequest,
 ) -> Result<RunReconciliationSnapshot, ThreadDirectoryError> {
     if !ThreadIdentity::is_plausible(&request.thread) {

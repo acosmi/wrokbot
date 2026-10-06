@@ -826,6 +826,8 @@ struct DesktopLocalBackgroundOwner {
     agent_host: Option<DesktopAgentHost>,
     assembly: Option<PostgresApplicationAssembly>,
     data_plane: Option<RunningDesktopLocalDataPlane>,
+    _remember_preference_repository:
+        Arc<openbot_infra::approval_preferences::PostgresRememberPreferenceRepository>,
     read_lifecycle: Arc<openbot_infra::artifact_read_lifecycle::ArtifactReadLifecycle>,
 }
 
@@ -1427,6 +1429,19 @@ pub(crate) async fn prepare_desktop_local_runtime(
         }
     };
     let (key_material, proof, database_origin) = vault_ready.into_parts();
+    // Copy sealed provenance while the real verified canary and its actual database
+    // owner are both live. Namespace strings cannot construct this proof.
+    let remember_preference_provenance =
+        match proof.remember_preference_provenance(prepared_data_plane.database()) {
+            Some(provenance) => provenance,
+            None => {
+                return Err(if prepared_data_plane.shutdown().await.is_ok() {
+                    DesktopLocalRuntimeError::DataPlane
+                } else {
+                    DesktopLocalRuntimeError::FailureCleanup
+                });
+            }
+        };
     let data_plane = prepared_data_plane
         .complete_after_vault(
             &package,
@@ -1468,6 +1483,26 @@ pub(crate) async fn prepare_desktop_local_runtime(
     let auth = data_plane.auth_context().clone();
     let (credential_vault, audit_key, remote_assertions, mcp_oauth_state_key) =
         key_material.into_assembly_parts();
+    let remember_preference_repository =
+        match openbot_infra::approval_preferences::PostgresRememberPreferenceRepository::new(
+            pool.clone(),
+            auth.deployment().clone(),
+            auth.tenant().clone(),
+            openbot_domain::vault::SecretBytes::new(audit_key.expose().to_vec()),
+        ) {
+            Ok(repository) => Arc::new(repository),
+            Err(_) => {
+                return Err(
+                    cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await,
+                );
+            }
+        };
+    if remember_preference_repository
+        .adopt_desktop_provenance(remember_preference_provenance)
+        .is_err()
+    {
+        return Err(cleanup_data_plane(data_plane, DesktopLocalRuntimeError::Application).await);
+    }
     let agent_credential_vault = credential_vault.clone();
     let agent_audit_key = audit_key.expose().to_vec();
     let agent_remote_assertions = Arc::clone(&remote_assertions);
@@ -1627,10 +1662,35 @@ pub(crate) async fn prepare_desktop_local_runtime(
         )
         .await);
     }
+    #[cfg(target_os = "macos")]
+    if current_identity_source
+        .install_remember_preference_repository(&remember_preference_repository)
+        .is_err()
+    {
+        return Err(cleanup_agent_host(
+            data_plane,
+            assembly,
+            agent_host,
+            DesktopLocalRuntimeError::Host,
+        )
+        .await);
+    }
     let protocol = match opened_protocol {
         Ok(protocol) => {
             #[cfg(target_os = "macos")]
-            let protocol = protocol.with_current_identity_source(current_identity_source);
+            let protocol =
+                match protocol.with_remember_preference_identity_source(current_identity_source) {
+                    Ok(protocol) => protocol,
+                    Err(_) => {
+                        return Err(cleanup_agent_host(
+                            data_plane,
+                            assembly,
+                            agent_host,
+                            DesktopLocalRuntimeError::Host,
+                        )
+                        .await);
+                    }
+                };
             Arc::new(
                 protocol.with_first_frame_projection(DesktopUiPreferenceStore::new(
                     app_data_root.as_path().join(DESKTOP_UI_PREFERENCES_FILE),
@@ -1679,6 +1739,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
         agent_host: Some(agent_host),
         assembly: Some(assembly),
         data_plane: Some(data_plane),
+        _remember_preference_repository: remember_preference_repository,
         read_lifecycle: artifact_administration.read_authority().read_lifecycle(),
     });
     Ok(PreparedDesktopLocalRuntime {

@@ -4,8 +4,8 @@
 mod lifecycle;
 pub use lifecycle::PostgresAgentAdministration;
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{AgentDirectory, AgentReadScope, PortError};
 use openbot_contracts::agent::{AgentProfile, AgentVisibility};
 use openbot_contracts::ids::BotId;
@@ -62,7 +62,7 @@ impl PostgresAgentDirectory {
         Self { pool }
     }
 
-    async fn client(&self) -> Result<deadpool_postgres::Object, PortError> {
+    async fn client(&self) -> Result<crate::db::pool::PooledClient, PortError> {
         self.pool.get().await.map_err(|error| {
             tracing::error!(error = %error, "agent directory pool unavailable");
             PortError::Unavailable {

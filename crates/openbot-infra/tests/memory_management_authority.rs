@@ -8,7 +8,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deadpool_postgres::Pool;
 use harness::{admin_config, with_temp_database};
 use openbot_application::{
     ApplicationService, MemoryAdministration, OpenBotApplication, PeopleAdministration,
@@ -23,6 +22,7 @@ use openbot_contracts::memory::{
     RememberMemory, UpdateMemoryControl,
 };
 use openbot_infra::db::pool::DatabaseConfig;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::memory_admin::PostgresMemoryAdministration;
 use openbot_infra::repo::ChannelRepo;

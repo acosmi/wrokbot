@@ -15,7 +15,7 @@ pub struct ThreadRepo {
 impl ThreadRepo {
     /// 用共享池构造。
     #[must_use]
-    pub fn new(pool: deadpool_postgres::Pool) -> Self {
+    pub fn new(pool: crate::db::pool::DatabasePool) -> Self {
         Self {
             core: RepoCore::new(pool),
         }

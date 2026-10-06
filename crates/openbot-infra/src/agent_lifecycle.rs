@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 #[cfg(test)]
 use openbot_application::RemoteAguiEventStream;
 use openbot_application::{
@@ -1054,7 +1054,7 @@ where
     row.try_get(field).map_err(|_| corrupt(field))
 }
 
-fn pool_unavailable(error: deadpool_postgres::PoolError) -> AgentAdministrationError {
+fn pool_unavailable(error: crate::db::pool::PoolError) -> AgentAdministrationError {
     tracing::error!(error = %error, "agent lifecycle pool unavailable");
     AgentAdministrationError::Unavailable
 }

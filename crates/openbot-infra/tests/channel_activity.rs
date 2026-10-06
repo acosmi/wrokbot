@@ -52,7 +52,7 @@ async fn expect_no_activity(
 }
 
 async fn expect_listener_count(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     expected: i64,
 ) -> Result<(), String> {
     for _ in 0..50 {
@@ -112,7 +112,7 @@ fn request(
     }
 }
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await

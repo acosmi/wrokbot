@@ -8,8 +8,8 @@
 
 use core::time::Duration;
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{
     ToolDecisionDraft, ToolJournal, ToolOutcomeDraft, ToolPortError, ToolRefusalDraft,
 };
@@ -641,7 +641,7 @@ fn outcome_event_type(draft: &ToolOutcomeDraft) -> AuditEventType {
     }
 }
 
-fn pool_port_error(error: deadpool_postgres::PoolError) -> ToolPortError {
+fn pool_port_error(error: crate::db::pool::PoolError) -> ToolPortError {
     tracing::error!(error = %error, "tool journal 获取连接失败");
     ToolPortError::Unavailable {
         dependency: "database",

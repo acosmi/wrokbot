@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use deadpool_postgres::{ClientWrapper, Pool};
+use crate::db::pool::DatabasePool as Pool;
+use deadpool_postgres::ClientWrapper;
 use openbot_contracts::auth::{AuthContext, Role};
 use openbot_domain::audit::{
     event::{AuditEvent, AuditEventType},
@@ -62,7 +63,7 @@ impl DetachedSession {
             _ = tokio::time::sleep_until(sql_deadline) => return Err(GatewayAuthorityError::Timeout),
             client = pool.get() => client.map_err(|_| GatewayAuthorityError::Unavailable)?,
         };
-        let client = deadpool_postgres::Client::take(pooled);
+        let client = crate::db::pool::PooledClient::take(pooled);
         let session = Arc::new(Self {
             client: tokio::sync::Mutex::new(Some(client)),
             permit: Mutex::new(Some(permit)),

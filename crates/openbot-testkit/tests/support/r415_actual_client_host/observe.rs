@@ -1,5 +1,5 @@
-use deadpool_postgres::Pool;
 use openbot_contracts::revision::RevisionSnapshot;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 

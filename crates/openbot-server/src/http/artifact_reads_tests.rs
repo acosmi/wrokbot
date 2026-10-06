@@ -243,7 +243,7 @@ impl ArtifactAdministration for ObservedAdministration {
 }
 
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     resolver: Arc<PostgresSessionAuthResolver>,
     application: Arc<dyn ApplicationService>,
     router: axum::Router,

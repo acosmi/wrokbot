@@ -11,7 +11,7 @@ use openbot_infra::db::{baseline, native, pool};
 use openbot_infra::thread_directory::PostgresThreadDirectory;
 use time::Duration;
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await
@@ -74,7 +74,7 @@ async fn count(client: &tokio_postgres::Client, table: &str) -> Result<i64, Stri
         .map_err(|error| error.to_string())
 }
 
-async fn provision_skills(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision_skills(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let client = pool.get().await.map_err(|error| error.to_string())?;
     client.batch_execute(
         "INSERT INTO public.user_roles(user_id,role) VALUES('actor-a','user');

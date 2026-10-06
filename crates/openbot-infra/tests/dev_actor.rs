@@ -4,9 +4,8 @@ mod harness;
 
 use std::time::Duration;
 
-use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use harness::{admin_config, with_temp_database};
-use tokio_postgres::NoTls;
+use openbot_infra::db::pool::DatabasePool as Pool;
 
 use openbot_contracts::auth::Role;
 use openbot_contracts::ids::{DeploymentId, TenantId};
@@ -17,25 +16,11 @@ use openbot_infra::auth::single_user::{
 use openbot_infra::db::{baseline, native, pool};
 
 fn unreachable_lazy_pool() -> Pool {
-    let mut config = tokio_postgres::Config::new();
-    config
-        .host("127.0.0.1")
-        .port(1)
-        .user("must-not-connect")
-        .dbname("must-not-connect");
-    let manager = Manager::from_config(
-        config,
-        NoTls,
-        ManagerConfig {
-            recycling_method: RecyclingMethod::Fast,
-        },
-    );
-    Pool::builder(manager)
-        .max_size(1)
-        .runtime(Runtime::Tokio1)
-        .create_timeout(Some(Duration::from_millis(10)))
-        .build()
-        .expect("惰性池构造不建连")
+    let mut config =
+        pool::DatabaseConfig::new("127.0.0.1", 1, "must-not-connect", "must-not-connect")
+            .with_max_pool_size(1);
+    config.connect_timeout = Duration::from_millis(10);
+    Pool::build_unprobed(&config).expect("惰性池构造不建连")
 }
 
 async fn provision(pool: &Pool) -> Result<(), String> {

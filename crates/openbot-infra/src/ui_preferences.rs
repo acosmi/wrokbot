@@ -24,7 +24,7 @@ const COLUMNS: &str = "theme,locale,coalesce(revision,1)::bigint AS revision,upd
 /// One configured host scope; Desktop and Server share this authoritative editing port.
 #[derive(Clone)]
 pub struct PostgresUiPreferenceAdministration {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     deployment: DeploymentId,
     tenant: TenantId,
     audit_key: Arc<SecretBytes>,
@@ -33,7 +33,7 @@ pub struct PostgresUiPreferenceAdministration {
 impl PostgresUiPreferenceAdministration {
     /// Bind existing PostgreSQL and audit infrastructure without performing I/O.
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         deployment: DeploymentId,
         tenant: TenantId,
         audit_key: SecretBytes,

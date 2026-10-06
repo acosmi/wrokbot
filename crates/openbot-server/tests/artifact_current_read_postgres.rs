@@ -270,7 +270,7 @@ impl ArtifactAdministration for ActualPort {
     }
 }
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     config: DatabaseConfig,
     resolver: Arc<PostgresSessionAuthResolver>,
     application: Arc<dyn ApplicationService>,

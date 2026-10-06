@@ -113,7 +113,7 @@ async fn lost_response_restart_and_old_timestamp_never_resend_but_reconnect_reco
 }
 
 struct DriftBeforeSend {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     calls: AtomicUsize,
 }
 #[async_trait]

@@ -394,7 +394,7 @@ pub async fn blocked(
     .map_err(|_| "owned journal barrier did not reach expected blocker".to_owned())?
 }
 
-pub async fn gate(pool: &Pool) -> Result<(deadpool_postgres::Client, i32), String> {
+pub async fn gate(pool: &Pool) -> Result<(openbot_infra::db::pool::PooledClient, i32), String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
     let pid = client.query_one("SELECT pg_backend_pid(),pg_advisory_lock(hashtextextended(current_database()||':journal_fence',0))", &[])
         .await.map_err(|e| e.to_string())?.get(0);

@@ -54,8 +54,11 @@ use openbot_contracts::request_binding::{
     SourceRunArtifactIdsCurrentCheck, SourceRunArtifactIdsCurrentTarget,
 };
 use openbot_contracts::request_binding::{
-    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind, RequestBindingIssuer,
-    RequestBindingOwnerLease, RequestBindingOwnerObservation, ServerSessionBindingIdentity,
+    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind,
+    RememberPreferenceHostObservation, RememberPreferenceHostTailFactory,
+    RememberPreferenceHostTailWitness, RememberPreferenceHostTarget,
+    RememberPreferenceSessionFacts, RequestBindingIssuer, RequestBindingOwnerLease,
+    RequestBindingOwnerObservation, ServerSessionBindingIdentity,
 };
 use openbot_domain::identity::roles::resolve_effective_role;
 use openbot_domain::identity::session::{
@@ -63,6 +66,7 @@ use openbot_domain::identity::session::{
     SessionHashKey, SessionLifetimePolicy, SessionState, SessionToken, SessionTokenHash,
     TrustedOrigins, authorize_fresh_origin_write, authorize_sensitive_write, evaluate_session,
 };
+use openbot_infra::approval_preferences::PostgresRememberPreferenceRepository;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority;
 use openbot_infra::auth::sso::ReadOnlySsoCapabilitySource;
@@ -461,7 +465,7 @@ pub const SESSION_COOKIE_NAME: &str = "openbot_session";
 /// PostgreSQL session + ACL 的生产 resolver。
 #[derive(Clone)]
 pub struct PostgresSessionAuthResolver {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     hash_key: std::sync::Arc<[u8]>,
     lifetime: SessionLifetimePolicy,
     deployment: DeploymentId,
@@ -493,11 +497,12 @@ impl Drop for ServerSessionBindingOwner {
 }
 
 struct ServerSessionProbeState {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     lifetime: SessionLifetimePolicy,
     deployment: DeploymentId,
     tenant: TenantId,
     capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
+    remember_preferences: std::sync::OnceLock<Weak<PostgresRememberPreferenceRepository>>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     artifact_read_authority: std::sync::OnceLock<Weak<PostgresArtifactReadAuthority>>,
 }
@@ -513,7 +518,6 @@ struct ServerSessionRowTuple {
 struct ServerSessionCurrentGuard {
     probe: Weak<ServerSessionProbeState>,
     owner: RequestBindingOwnerObservation,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     issuer: RequestBindingIssuer,
     original: AuthContext,
     row: ServerSessionRowTuple,
@@ -527,6 +531,61 @@ const CURRENT_SESSION_SQL: &str = "SELECT s.id,s.user_id,s.token,s.expires_at,s.
     WHERE s.id=$1 AND s.user_id=$2 AND s.token=$3 AND s.created_at=$4 AND s.auth_generation=$5";
 
 impl HostRequestBindingGuard for ServerSessionCurrentGuard {
+    fn borrow_remember_preference_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn RememberPreferenceHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<RememberPreferenceHostObservation<'a>, HostRequestBindingError> {
+        if auth != &self.original || !self.owner.is_current() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let repository = probe
+            .remember_preferences
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !repository.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant)
+            || !repository.matches_host_target(target, auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        let epoch = self
+            .issuer
+            .borrow_server_session_epoch(binding.identity())?;
+        if !epoch.matches_raw_row(
+            &self.row.id,
+            &self.row.user_id,
+            &self.row.token_column,
+            self.row.created_at,
+            self.row.issued_generation,
+        ) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        RememberPreferenceHostObservation::from_trusted_host(
+            HostRequestBindingKind::ServerSession,
+            binding.identity().clone(),
+            Some(epoch),
+            Box::new(ServerRememberPreferenceTailFactory {
+                probe: self.probe.clone(),
+                owner: self.owner.clone(),
+                issuer: self.issuer.clone(),
+                original: auth.clone(),
+                lifetime: probe.lifetime,
+                created_at: self.row.created_at,
+            }),
+        )
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn verify_source_run_artifact_ids_current_before<'a>(
         &'a self,
@@ -771,6 +830,105 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
     }
 }
 
+#[derive(Clone)]
+struct ServerRememberPreferenceTailFactory {
+    probe: Weak<ServerSessionProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+    lifetime: SessionLifetimePolicy,
+    created_at: OffsetDateTime,
+}
+fn verify_remember_preference_attachment(
+    owner: &RequestBindingOwnerObservation,
+    issuer: &RequestBindingIssuer,
+    original: &AuthContext,
+    auth: &AuthContext,
+    deadline: std::time::Instant,
+) -> Result<(), HostRequestBindingError> {
+    if !owner.is_current()
+        || auth != original
+        || !original
+            .request_binding()
+            .zip(auth.request_binding())
+            .is_some_and(|(a, b)| {
+                a.identity().same_binding(b.identity()) && issuer.owns_identity(b.identity())
+            })
+    {
+        return Err(HostRequestBindingError::NotCurrent);
+    }
+    if std::time::Instant::now() >= deadline {
+        return Err(HostRequestBindingError::Unavailable);
+    }
+    Ok(())
+}
+impl RememberPreferenceHostTailFactory for ServerRememberPreferenceTailFactory {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<RememberPreferenceSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn RememberPreferenceHostTailWitness>, HostRequestBindingError> {
+        let session = session.ok_or(HostRequestBindingError::NotCurrent)?;
+        if session.created_at != self.created_at {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let witness = ServerRememberPreferenceTail {
+            source: self.clone(),
+            session,
+        };
+        witness.verify_current(auth, deadline)?;
+        Ok(Box::new(witness))
+    }
+}
+struct ServerRememberPreferenceTail {
+    source: ServerRememberPreferenceTailFactory,
+    session: RememberPreferenceSessionFacts,
+}
+impl RememberPreferenceHostTailWitness for ServerRememberPreferenceTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        verify_remember_preference_attachment(
+            &self.source.owner,
+            &self.source.issuer,
+            &self.source.original,
+            auth,
+            deadline,
+        )?;
+        if self.source.probe.upgrade().is_none() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let now = OffsetDateTime::now_utc();
+        if now < self.session.observed_wall
+            || std::time::Instant::now() < self.session.observed_monotonic
+            || now >= self.session.expires_at
+            || evaluate_session(
+                self.source.lifetime,
+                SessionState::rehydrate(
+                    self.session.created_at,
+                    self.session.updated_at,
+                    auth.auth_generation(),
+                ),
+                auth.auth_generation(),
+                now,
+            )
+            .is_err()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        verify_remember_preference_attachment(
+            &self.source.owner,
+            &self.source.issuer,
+            &self.source.original,
+            auth,
+            deadline,
+        )
+    }
+}
+
 /// The pending read keeps only observations; it cannot keep the resolver owner's lease alive.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 struct ServerArtifactReadTail {
@@ -951,7 +1109,7 @@ impl ServerSessionCurrentGuard {
 impl PostgresSessionAuthResolver {
     /// 构造。session hash key 为空会使所有 token 共享无密钥摘要，直接拒绝。
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: openbot_infra::db::pool::DatabasePool,
         hash_key: impl Into<Vec<u8>>,
         lifetime: SessionLifetimePolicy,
         deployment: DeploymentId,
@@ -971,6 +1129,7 @@ impl PostgresSessionAuthResolver {
             deployment: deployment.clone(),
             tenant: tenant.clone(),
             capability_facts: std::sync::OnceLock::new(),
+            remember_preferences: std::sync::OnceLock::new(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             artifact_read_authority: std::sync::OnceLock::new(),
         });
@@ -1003,6 +1162,24 @@ impl PostgresSessionAuthResolver {
             .probe
             .artifact_read_authority
             .set(Arc::downgrade(authority))
+            .map_err(|_| HostRequestBindingError::Unavailable)
+    }
+
+    /// Enroll this actual resolver's same-Pool repository and original issuer once.
+    pub fn install_remember_preference_repository(
+        &self,
+        repository: &Arc<PostgresRememberPreferenceRepository>,
+    ) -> Result<(), HostRequestBindingError> {
+        if !self.binding_owner.issuer.observation().is_current()
+            || !repository.matches_pool_scope(&self.pool, &self.deployment, &self.tenant)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        repository.enroll_host_issuer(&self.binding_owner.issuer)?;
+        self.binding_owner
+            .probe
+            .remember_preferences
+            .set(Arc::downgrade(repository))
             .map_err(|_| HostRequestBindingError::Unavailable)
     }
 
@@ -1132,7 +1309,6 @@ impl PostgresSessionAuthResolver {
         let guard = Arc::new(ServerSessionCurrentGuard {
             probe: Arc::downgrade(&self.binding_owner.probe),
             owner: self.binding_owner.issuer.observation(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
             issuer: self.binding_owner.issuer.clone(),
             original: context.clone(),
             row: ServerSessionRowTuple {
@@ -1282,14 +1458,66 @@ struct SingleUserBindingOwner {
 struct SingleUserProbeState {
     principal: openbot_infra::auth::single_user::VerifiedSingleUserPrincipal,
     capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
+    remember_preferences: std::sync::OnceLock<Weak<PostgresRememberPreferenceRepository>>,
 }
 
 struct SingleUserCurrentGuard {
     probe: Weak<SingleUserProbeState>,
     owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
 }
 
 impl HostRequestBindingGuard for SingleUserCurrentGuard {
+    fn borrow_remember_preference_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn RememberPreferenceHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<RememberPreferenceHostObservation<'a>, HostRequestBindingError> {
+        if !self.owner.is_current() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        if probe.principal.auth_context() != auth {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let repository = probe
+            .remember_preferences
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !probe
+            .principal
+            .matches_remember_preference_repository(&repository)
+            || !repository.matches_host_target(target, auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if binding.kind() != HostRequestBindingKind::ServerSingleUserOwner
+            || !self.issuer.owns_identity(binding.identity())
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let factory = SingleUserRememberPreferenceTail {
+            probe: self.probe.clone(),
+            owner: self.owner.clone(),
+            issuer: self.issuer.clone(),
+            original: auth.clone(),
+        };
+        factory.verify_current(auth, deadline)?;
+        RememberPreferenceHostObservation::from_trusted_host(
+            HostRequestBindingKind::ServerSingleUserOwner,
+            binding.identity().clone(),
+            None,
+            Box::new(factory),
+        )
+    }
     fn verify_current<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -1336,6 +1564,51 @@ impl HostRequestBindingGuard for SingleUserCurrentGuard {
     }
 }
 
+#[derive(Clone)]
+struct SingleUserRememberPreferenceTail {
+    probe: Weak<SingleUserProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+}
+impl RememberPreferenceHostTailFactory for SingleUserRememberPreferenceTail {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<RememberPreferenceSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn RememberPreferenceHostTailWitness>, HostRequestBindingError> {
+        if session.is_some() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        self.verify_current(auth, deadline)?;
+        Ok(Box::new(self.clone()))
+    }
+}
+impl RememberPreferenceHostTailWitness for SingleUserRememberPreferenceTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        verify_remember_preference_attachment(
+            &self.owner,
+            &self.issuer,
+            &self.original,
+            auth,
+            deadline,
+        )?;
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        if probe.principal.auth_context() != auth {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        Ok(())
+    }
+}
+
 impl core::fmt::Debug for SingleUserAuthResolver {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1366,9 +1639,35 @@ impl SingleUserAuthResolver {
                 probe: Arc::new(SingleUserProbeState {
                     principal,
                     capability_facts: std::sync::OnceLock::new(),
+                    remember_preferences: std::sync::OnceLock::new(),
                 }),
             })),
         }
+    }
+
+    /// Enroll only the real canonical principal's same-Pool repository; no synthetic Session.
+    pub fn install_remember_preference_repository(
+        &self,
+        repository: &Arc<PostgresRememberPreferenceRepository>,
+    ) -> Result<(), HostRequestBindingError> {
+        let owner = self
+            .binding_owner
+            .as_ref()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !owner.issuer.observation().is_current()
+            || !owner
+                .probe
+                .principal
+                .matches_remember_preference_repository(repository)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        repository.enroll_host_issuer(&owner.issuer)?;
+        owner
+            .probe
+            .remember_preferences
+            .set(Arc::downgrade(repository))
+            .map_err(|_| HostRequestBindingError::Unavailable)
     }
 
     /// Permanently close the actual runtime owner; synthetic test identities have no owner.
@@ -1420,6 +1719,7 @@ impl SingleUserAuthResolver {
             let guard = Arc::new(SingleUserCurrentGuard {
                 probe: Arc::downgrade(&owner.probe),
                 owner: owner.issuer.observation(),
+                issuer: owner.issuer.clone(),
             });
             let binding = owner
                 .issuer

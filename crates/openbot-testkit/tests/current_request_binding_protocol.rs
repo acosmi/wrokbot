@@ -217,7 +217,7 @@ struct ProtocolFacts {
     value: Value,
 }
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     resolver: Arc<dyn AuthResolver>,
     application: Arc<ObservedApplication>,
     assets: OwnedRoot,

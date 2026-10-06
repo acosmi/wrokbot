@@ -86,7 +86,7 @@ fn no_secret(text: &str) -> Result<(), String> {
     )
 }
 
-async fn seed_identity(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn seed_identity(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|e| e.to_string())?;
     baseline::apply(&client).await.map_err(|e| e.to_string())?;
     native::apply(&mut client)
@@ -133,7 +133,7 @@ async fn seed_identity(pool: &deadpool_postgres::Pool) -> Result<(), String> {
 }
 
 async fn assemble(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     config: &DatabaseConfig,
 ) -> Result<
     (
@@ -306,7 +306,7 @@ fn read_shape(row: &Value) -> Result<(), String> {
 }
 
 async fn current_secret(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     vault: &CredentialRecordVault,
     id: &str,
     expected: &str,
@@ -362,7 +362,7 @@ async fn current_secret(
     Ok(secret_id)
 }
 
-async fn snapshot(pool: &deadpool_postgres::Pool) -> Result<Value, String> {
+async fn snapshot(pool: &openbot_infra::db::pool::DatabasePool) -> Result<Value, String> {
     pool.get().await.map_err(|e|e.to_string())?.query_one(
         "SELECT jsonb_build_object(
            'connections',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY id),'[]') FROM public.model_connections c),
@@ -374,7 +374,7 @@ async fn snapshot(pool: &deadpool_postgres::Pool) -> Result<Value, String> {
 
 async fn guard_matrix(
     router: &axum::Router,
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     path: &str,
 ) -> Result<(), String> {
     let before = snapshot(pool).await?;
@@ -435,7 +435,7 @@ async fn guard_matrix(
 
 async fn journey(
     router: &axum::Router,
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     vault: &CredentialRecordVault,
 ) -> Result<(), String> {
     let created = send(

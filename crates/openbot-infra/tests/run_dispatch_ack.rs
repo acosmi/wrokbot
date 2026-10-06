@@ -13,7 +13,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{
     BeginThreadRunRequest, RunCancellationDisposition, RunDispatchConsumer, RunDispatchDecision,
     RunExecutionLease, RunFailureCode, RunReconciliationRequest, RunRuntime,
@@ -25,6 +24,7 @@ use openbot_contracts::{
     ids::{ActorId, BotId, DeploymentId, RunId, TenantId, thread::ThreadIdentity},
     reconciliation::RunReconciliationStatus,
 };
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::{
     db::{fresh, pool, pool::DatabaseConfig},
     repo::run::RunRepo,

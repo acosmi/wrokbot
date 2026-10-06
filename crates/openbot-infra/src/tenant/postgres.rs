@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::tenant::package::{
     LoadedTenantPackage, TenantAgentConfiguration, TenantAgentType, TenantPackageAudienceContext,
     TenantPackageCollision, TenantPackageStoreError, TenantPackageSyncReport,

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use hmac::{Hmac, Mac};
 use openbot_contracts::ids::TenantId;
 use openbot_domain::vault::SecretBytes;

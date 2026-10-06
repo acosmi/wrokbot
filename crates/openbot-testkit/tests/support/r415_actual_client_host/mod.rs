@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::provider::{
     RemoteAguiEventStream, RemoteAguiTransport, RemoteAguiTransportError,
 };
@@ -25,6 +24,7 @@ use openbot_infra::application_assembly::{
     ChannelRoutingProviderInput, PostgresApplicationAssemblyInput, assemble_postgres_application,
 };
 use openbot_infra::auth::config::default_session_lifetime;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::db::{fresh, pool};
 use openbot_infra::policy::PolicyStore;
 use openbot_infra::ui_preferences::PostgresUiPreferenceAdministration;

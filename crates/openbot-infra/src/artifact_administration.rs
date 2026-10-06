@@ -5,8 +5,8 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{ArtifactAdministration, ArtifactAdministrationError};
 use openbot_contracts::artifacts::{
     ArtifactGoneStatus, ArtifactMetadata, ArtifactRecordMetadata, ArtifactRegistrationReceipt,
@@ -529,7 +529,9 @@ impl PostgresArtifactAdministration {
         })
     }
 
-    async fn connection(&self) -> Result<deadpool_postgres::Object, ArtifactAdministrationError> {
+    async fn connection(
+        &self,
+    ) -> Result<crate::db::pool::PooledClient, ArtifactAdministrationError> {
         tokio::time::timeout(WAIT, self.registry.pool().get())
             .await
             .map_err(|_| unavailable())?

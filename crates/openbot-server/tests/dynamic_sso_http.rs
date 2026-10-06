@@ -35,7 +35,7 @@ const SESSION_KEY: &[u8] = b"dynamic-sso-http-session-key-at-least-32";
 const AUDIT_KEY: &[u8] = b"dynamic-sso-http-audit-key-at-least-32";
 const CERT_DER_BASE64: &str = "MIIDIzCCAgugAwIBAgIUX4VCIW1pLys81pciNp1/JOQoi4QwDQYJKoZIhvcNAQELBQAwIDEeMBwGA1UEAwwVT3BlbkJvdCBTQU1MIFRlc3QgSWRQMCAXDTI2MDgyMzE5NDEzNloYDzIxMjYwNzMwMTk0MTM2WjAgMR4wHAYDVQQDDBVPcGVuQm90IFNBTUwgVGVzdCBJZFAwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC6H3yHJdqdNCah3hVBs6//CoHo5GcYluT90b9+A8Jy5jyjCk+WFTvb3cGAuH9MMZCEAvXmMJr0pD3XFOHeguXzLXz+vkQTyb3fw/6QTI6wi2zYchdLajsUSXGujDUdKTfwWn7S7Q3vfaVYZymt69kdG/JhXa8tZ1dPzJKGLsthaKfMx8DQ0/AG9lXSKBrJtY39muVbRi4gCZHnxemQIMRaE7FDr83Jn6Ixugi0XG2MTY3XMT1lITALd3UMqkxs5PxrLMyt5wbxPzNFw3ZjcNIPSngxvtDBgeK3iMoARk/wOINqm+Kel9PXRI77By/hTtJPshRpSqCke4KBPPbGP7qfAgMBAAGjUzBRMB0GA1UdDgQWBBRiEZ5u2WJHOQeOrautNPOahGlEDTAfBgNVHSMEGDAWgBRiEZ5u2WJHOQeOrautNPOahGlEDTAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQA4VkmWF6Q/Eb255tJWnlg3rot5RBNihPY9YL9TLtxdhkCzq+0KsFoafrdQLR2tzMZ6fKzBgGf1XPiciHLfapddQRIvm5AgId87Taeo6hBfqzsv8kJEBgEkT5XTwjsxXcG++a+RRKCweOBx2hhcd0lWpC905KaAbOcw3EOkpjjGPVjXqIQ/9OiPus2ILuQPJJH3zTGXUPO0wIxEINOBmBCFnp1/xNJl5UzHbIfifrVY0n5VPg4FCC8TSQr950YapOr2eAbbVr4sRtyrAYaYBdKgAnpqllB7Uh0dIESP+JyE07YNBUdBQCxzrF0na5GqJALXyL/YlLfTKoRSgbQJv+xW";
 
-async fn setup(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn setup(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await

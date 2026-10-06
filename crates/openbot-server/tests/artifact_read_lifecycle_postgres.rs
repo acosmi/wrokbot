@@ -105,7 +105,7 @@ impl Drop for OwnedRoot {
 }
 
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     resolver: Arc<PostgresSessionAuthResolver>,
     state: ServerState,
     actual: Arc<PostgresArtifactAdministration>,

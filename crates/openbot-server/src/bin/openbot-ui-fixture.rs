@@ -3030,7 +3030,7 @@ struct ApprovalFixtureAssembly {
 
 #[derive(Clone)]
 struct PostgresApprovalProbe {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     waiter_state: Arc<AtomicU8>,
 }
 
@@ -3375,7 +3375,7 @@ fn validate_fixture_database(
 }
 
 async fn seed_postgres_approval_scope(
-    client: &mut tokio_postgres::Client,
+    client: &mut openbot_infra::db::pool::PooledClient,
     now: OffsetDateTime,
 ) -> Result<(), tokio_postgres::Error> {
     let token_hash = SessionTokenHash::compute(

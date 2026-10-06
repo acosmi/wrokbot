@@ -21,7 +21,7 @@ use openbot_infra::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThr
 use serde_json::{Value, json};
 use time::macros::datetime;
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await
@@ -63,7 +63,10 @@ fn request(deployment: &DeploymentId, entropy_tail: u64, run_id: &str) -> BeginT
     }
 }
 
-fn runtime(pool: &deadpool_postgres::Pool, owner: &str) -> Result<PostgresRunRuntime, String> {
+fn runtime(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    owner: &str,
+) -> Result<PostgresRunRuntime, String> {
     PostgresRunRuntime::new(
         pool.clone(),
         owner.to_owned(),
@@ -1124,7 +1127,10 @@ async fn production_relay_fail_closed_consumer_never_leaves_a_fake_running_run()
     .await;
 }
 
-async fn expire_lease(pool: &deadpool_postgres::Pool, thread_id: &str) -> Result<(), String> {
+async fn expire_lease(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    thread_id: &str,
+) -> Result<(), String> {
     let client = pool.get().await.map_err(|error| error.to_string())?;
     client
         .execute(

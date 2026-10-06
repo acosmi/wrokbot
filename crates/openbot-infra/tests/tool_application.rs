@@ -206,7 +206,7 @@ fn invocation(call_id: &str, call_seq: u64) -> ToolInvocation {
     }
 }
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await
@@ -228,7 +228,7 @@ async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
     Ok(())
 }
 
-async fn scalar(pool: &deadpool_postgres::Pool, sql: &str) -> Result<i64, String> {
+async fn scalar(pool: &openbot_infra::db::pool::DatabasePool, sql: &str) -> Result<i64, String> {
     pool.get()
         .await
         .map_err(|error| error.to_string())?

@@ -8,9 +8,9 @@ use openbot_infra::db::schema_facts::SchemaFacts;
 use openbot_infra::db::tables::{
     NATIVE_0030_TABLES, TableRow, model_connection_secrets, model_connections,
 };
-use openbot_infra::db::{baseline, pool, schema_facts};
+use openbot_infra::db::{baseline, pool, pool::PooledClient, schema_facts};
 use time::OffsetDateTime;
-use tokio_postgres::{Client, Transaction, error::SqlState};
+use tokio_postgres::{Transaction, error::SqlState};
 use uuid::Uuid;
 
 const POST_0029: &str = include_str!("../../../fixtures/db/schema-0029.json");
@@ -19,7 +19,7 @@ fn post_0030_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/db/schema-0030.json")
 }
 
-async fn initialize(client: &mut Client) -> Result<(), String> {
+async fn initialize(client: &mut PooledClient) -> Result<(), String> {
     baseline::apply(client).await.map_err(|e| e.to_string())?;
     native::apply_through(client, native::NATIVE_0030_VERSION)
         .await
@@ -93,11 +93,15 @@ async fn insert_row<R: TableRow>(transaction: &Transaction<'_>, row: &R) -> Resu
 }
 
 async fn insert_pair(
-    client: &mut Client,
+    client: &mut PooledClient,
     connection: &model_connections::Row,
     secret: &model_connection_secrets::Row,
 ) -> Result<(), String> {
-    let transaction = client.transaction().await.map_err(|e| e.to_string())?;
+    let transaction = client
+        .build_postgres_transaction()
+        .start()
+        .await
+        .map_err(|e| e.to_string())?;
     // The reciprocal references are intentionally deferred until both rows exist.
     insert_row(&transaction, connection).await?;
     insert_row(&transaction, secret).await?;

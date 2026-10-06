@@ -13,7 +13,7 @@ use crate::vault::CredentialRecordVault;
 /// effect without rebuilding an Agent object. A matching but corrupt stored row never falls back
 /// to the environment, matching the fixed upstream fail-closed order。
 pub struct PostgresOpenAiCredentialSource {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     vault: CredentialRecordVault,
     key_id: String,
     environment_fallback: Option<OpenAiApiKey>,
@@ -22,7 +22,7 @@ pub struct PostgresOpenAiCredentialSource {
 impl PostgresOpenAiCredentialSource {
     /// Construct from the verified package `credential_secret_ref` and optional environment key。
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         vault: CredentialRecordVault,
         key_id: String,
         environment_fallback: Option<OpenAiApiKey>,

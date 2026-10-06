@@ -10,7 +10,6 @@ mod recovery;
 #[path = "remember_effect_receipts/support.rs"]
 mod support;
 
-use deadpool_postgres::Pool;
 use openbot_application::{
     BeginThreadRunRequest, CancelThreadRunRequest, MemoryAdministration,
     MemoryAdministrationError as MemoryError, MutateMemoryRequest, RememberToolMemory,
@@ -29,6 +28,7 @@ use openbot_contracts::{
     tool::ToolInvocation,
 };
 use openbot_domain::tool::commit::CommitState;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::{
     db::pool::DatabaseConfig,
     db::{baseline, native, pool},

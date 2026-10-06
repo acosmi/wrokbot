@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_agent::{
     AuthorizedAgentToolGateway, BuiltInAgentConfig, BuiltInAgentRuntime, ProviderRouter,
     RemoteAguiProvider, RetryingProvider, RetryingProviderConfig,
@@ -36,6 +35,7 @@ use openbot_infra::application_assembly::{
     ChannelRoutingProviderInput, PostgresApplicationAssemblyInput, assemble_postgres_application,
 };
 use openbot_infra::auth::config::default_session_lifetime;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::db::{fresh, pool};
 use openbot_infra::net::safe_http::{SafeHttpBudget, SchemePolicy};
 use openbot_infra::policy::PolicyStore;

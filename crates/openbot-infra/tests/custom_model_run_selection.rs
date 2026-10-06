@@ -85,7 +85,7 @@ fn request(index: u64, channel: bool, row: Option<&ModelConnection>) -> BeginThr
 async fn setup(
     config: &openbot_infra::db::pool::DatabaseConfig,
 ) -> (
-    deadpool_postgres::Pool,
+    openbot_infra::db::pool::DatabasePool,
     PostgresThreadDirectory,
     PostgresModelConnections,
 ) {
@@ -120,7 +120,7 @@ async fn setup(
     .unwrap();
     (pool, directory, management)
 }
-async fn counts(pool: &deadpool_postgres::Pool) -> Vec<i64> {
+async fn counts(pool: &openbot_infra::db::pool::DatabasePool) -> Vec<i64> {
     let c = pool.get().await.unwrap();
     let mut out = vec![];
     for table in [
@@ -142,7 +142,10 @@ async fn counts(pool: &deadpool_postgres::Pool) -> Vec<i64> {
     }
     out
 }
-async fn snapshot(pool: &deadpool_postgres::Pool, id: &str) -> run_model_selections::Row {
+async fn snapshot(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    id: &str,
+) -> run_model_selections::Row {
     let c = pool.get().await.unwrap();
     run_model_selections::Row::try_from(
         &c.query_one(
@@ -335,7 +338,7 @@ async fn current_channel_and_package_tenant_gate_and_transaction_fault_roll_back
  }).await;
 }
 
-async fn wait_for_lock_waiters(pool: &deadpool_postgres::Pool, minimum: i64) {
+async fn wait_for_lock_waiters(pool: &openbot_infra::db::pool::DatabasePool, minimum: i64) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let c = tokio::time::timeout_at(deadline, pool.get())
