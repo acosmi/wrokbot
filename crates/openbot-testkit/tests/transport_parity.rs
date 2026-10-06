@@ -526,6 +526,7 @@ fn http_route_of(command: &AppCommand) -> Option<String> {
         | AppCommand::SaveRunMessageTextArtifact(_)
         | AppCommand::GetArtifactMetadata(_)
         | AppCommand::GetSourceRunArtifactIds(_)
+        | AppCommand::GetArtifactSaveReceipt(_)
         | AppCommand::OpenArtifactRead(_)
         | AppCommand::ReadArtifactReadBlock(_)
         | AppCommand::AcknowledgeArtifactReadBlock(_)

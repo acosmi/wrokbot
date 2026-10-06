@@ -132,6 +132,8 @@ pub enum AppCommand {
     GetArtifactMetadata(crate::artifacts::GetArtifactMetadata),
     /// Observe current materialized identities for the exact source Run.
     GetSourceRunArtifactIds(crate::artifacts::GetSourceRunArtifactIds),
+    /// Observe the original positive save receipt without retrying the save operation.
+    GetArtifactSaveReceipt(crate::artifacts::GetArtifactSaveReceipt),
     /// Prepare an original current-host-bound memory-only artifact reader.
     OpenArtifactRead(crate::artifact_read_protocol::OpenArtifactRead),
     /// Select one sequential block; serialized control metadata never includes bytes.

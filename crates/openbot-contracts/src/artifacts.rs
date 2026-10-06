@@ -25,6 +25,14 @@ pub struct SaveRunMessageTextArtifact {
     pub expected_sha256: String,
 }
 
+/// Observe an existing positive explicit-save receipt; a request locator is not authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetArtifactSaveReceipt {
+    /// Original UUIDv7 request locator, canonicalized without creating a new save operation.
+    pub request_id: String,
+}
+
 /// Closed metadata selector; an ID cannot grant visibility or byte access.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -75,6 +75,7 @@
 pub mod agent_admin;
 mod app;
 pub mod approval_admin;
+mod artifact_save_receipt;
 pub mod artifacts;
 pub mod builtin_tools;
 pub mod chunk;
@@ -111,6 +112,7 @@ pub use approval_admin::{
     NoToolApprovalAdministration, ToolApprovalAdministration, ToolApprovalAdministrationError,
     decide_tool_approval, list_pending_tool_approvals, subscribe_tool_approval_activity,
 };
+pub use artifact_save_receipt::get_artifact_save_receipt;
 pub use artifacts::{
     ArtifactAdministration, ArtifactAdministrationError, CurrentArtifactReadChunk,
     NoArtifactAdministration, get_artifact_metadata, get_source_run_artifact_ids,

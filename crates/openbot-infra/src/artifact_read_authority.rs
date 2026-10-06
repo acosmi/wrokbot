@@ -37,6 +37,8 @@ use crate::auth::single_user::desktop_local::{
 
 #[path = "artifact_read_authority/public_read_prepare.rs"]
 pub(super) mod public_read_prepare;
+#[path = "artifact_read_authority/save_receipt.rs"]
+mod save_receipt;
 #[path = "artifact_read_authority/source_run_ids.rs"]
 mod source_run_ids;
 
@@ -46,6 +48,8 @@ pub struct PostgresArtifactReadAuthority {
     administration: Weak<PostgresArtifactAdministration>,
     identity: Arc<()>,
     lifecycle: Arc<ArtifactReadLifecycle>,
+    #[cfg(test)]
+    save_receipt_rollback_gate: Mutex<Option<save_receipt::SaveReceiptRollbackGate>>,
     #[cfg(test)]
     source_run_ids_rollback_gate: Mutex<Option<source_run_ids::SourceRunIdsRollbackGate>>,
     #[cfg(test)]
@@ -67,6 +71,8 @@ impl PostgresArtifactReadAuthority {
             administration: Arc::downgrade(administration),
             identity: Arc::new(()),
             lifecycle: ArtifactReadLifecycle::new(),
+            #[cfg(test)]
+            save_receipt_rollback_gate: Mutex::new(None),
             #[cfg(test)]
             source_run_ids_rollback_gate: Mutex::new(None),
             #[cfg(test)]
@@ -119,6 +125,52 @@ impl PostgresArtifactReadAuthority {
                 .registry
                 .matches_pool_scope(pool, deployment, tenant)
         })
+    }
+
+    /// Observe an original positive receipt and real Session epoch in one current own-Pool statement.
+    pub async fn observe_artifact_save_receipt_server_session(
+        &self,
+        auth: &AuthContext,
+        target: &dyn openbot_contracts::request_binding::ArtifactSaveReceiptCurrentTarget,
+        epoch: BorrowedServerSessionEpoch<'_>,
+        lifetime: SessionLifetimePolicy,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentOutcome {
+        save_receipt::observe(
+            self,
+            auth,
+            target,
+            CurrentHost::Session { epoch, lifetime },
+            deadline,
+        )
+        .await
+    }
+
+    /// Observe an original receipt only through the enrolled Local installation and same Pool.
+    pub async fn observe_artifact_save_receipt_desktop_local(
+        &self,
+        auth: &AuthContext,
+        target: &dyn openbot_contracts::request_binding::ArtifactSaveReceiptCurrentTarget,
+        installation: &DesktopLocalAuthority,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentOutcome {
+        save_receipt::observe(
+            self,
+            auth,
+            target,
+            CurrentHost::Desktop(installation),
+            deadline,
+        )
+        .await
+    }
+
+    pub(super) async fn artifact_save_receipt_current(
+        self: &Arc<Self>,
+        auth: &AuthContext,
+        input: &openbot_contracts::artifacts::GetArtifactSaveReceipt,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentOutcome {
+        save_receipt::current(self, auth, input, deadline).await
     }
 
     /// Observe IDs and the original real Session epoch in one own-Pool current statement.
