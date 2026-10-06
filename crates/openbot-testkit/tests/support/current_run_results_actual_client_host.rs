@@ -22,7 +22,7 @@ use openbot_application::provider::{
 use openbot_application::{
     AgentAudit, AgentAuditError, AgentAuditKind, ProviderAdapter, ProviderEvent, ProviderFailure,
     ProviderMessageRole, ProviderPortError, ProviderRequest, ProviderRoute, ProviderSession,
-    RunExecutionLease, RunModelBinding, remember_provider_tool,
+    RunExecutionLease, remember_provider_tool,
 };
 use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 use openbot_domain::audit::hash::Sha256Digest;

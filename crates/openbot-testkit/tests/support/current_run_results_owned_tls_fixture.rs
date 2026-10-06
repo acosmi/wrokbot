@@ -582,7 +582,8 @@ impl OwnedWire {
         Ok(locked(&self.shared)?.requests.clone())
     }
     pub fn state(&self) -> Result<Value, &'static str> {
-        Ok(shared_value(&locked(&self.shared)?))
+        let shared = locked(&self.shared)?;
+        Ok(shared_value(&shared))
     }
     pub fn positive_witness(&self) -> PositiveStreamWitness {
         PositiveStreamWitness {
