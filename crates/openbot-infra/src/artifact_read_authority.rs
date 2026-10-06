@@ -548,11 +548,11 @@ impl PostgresArtifactReadAuthority {
             (data.reader.take(), data.position)
         };
         let input = match reader {
-            Some(reader) => Ok(ReadInput::Retained(reader)),
+            Some(reader) => Ok(ReadInput::Retained(Box::new(reader))),
             None => self
                 .observe_state_record(&administration, state)
                 .await
-                .map(ReadInput::Fresh),
+                .map(|record| ReadInput::Fresh(Box::new(record))),
         };
         let worker = match input {
             Ok(input) => {
@@ -581,7 +581,7 @@ impl PostgresArtifactReadAuthority {
                             worker_state.check_current()?;
                         }
                         let mut reader = match input {
-                            ReadInput::Retained(reader) => reader,
+                            ReadInput::Retained(reader) => *reader,
                             ReadInput::Fresh(snapshot) => {
                                 if worker_state.original_deadline.is_some() {
                                     let mut is_current = |after_sha_segment| {
@@ -598,9 +598,9 @@ impl PostgresArtifactReadAuthority {
                                         let _ = after_sha_segment;
                                         !worker_state.is_stopped()
                                     };
-                                    store.open_observed_record_guarded(snapshot, &mut is_current)
+                                    store.open_observed_record_guarded(*snapshot, &mut is_current)
                                 } else {
-                                    store.open_observed_record(snapshot)
+                                    store.open_observed_record(*snapshot)
                                 }
                                 .map_err(|_| ArtifactReadCurrentError::Unavailable)?
                             }
@@ -953,8 +953,8 @@ impl ArtifactReadCurrentTarget for TrackedArtifactReadTarget {
     }
 }
 enum ReadInput {
-    Fresh(ObservedArtifactReadRecord),
-    Retained(StoreBoundArtifactReader),
+    Fresh(Box<ObservedArtifactReadRecord>),
+    Retained(Box<StoreBoundArtifactReader>),
 }
 struct OperationWorkerResult {
     pending: PendingArtifactReadBuffer,
