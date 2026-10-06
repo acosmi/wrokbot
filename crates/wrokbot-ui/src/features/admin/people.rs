@@ -793,7 +793,10 @@ mod tests {
             );
 
             assert_eq!(people.with_untracked(Vec::len), 1);
-            assert_eq!(people.get_untracked()[0].get_untracked(), person("person-1"));
+            assert_eq!(
+                people.get_untracked()[0].get_untracked(),
+                person("person-1")
+            );
             assert_eq!(next_cursor.get_untracked(), Some(cursor));
             assert_eq!(query.get_untracked(), "member + one");
             assert_eq!(request_epoch.get_untracked(), 4);

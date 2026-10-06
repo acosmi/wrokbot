@@ -6,8 +6,7 @@ use super::DesktopTauriProtocol;
 use crate::InProcessTransport;
 use crate::local_confirmation_authority::PostgresLocalConfirmationAuthority;
 use openbot_application::approval_preferences::{
-    RememberPreferenceRepository,
-    RememberPreferenceRepositoryError as RepositoryError,
+    RememberPreferenceRepository, RememberPreferenceRepositoryError as RepositoryError,
 };
 use openbot_application::{ApplicationService, OpenBotApplication};
 use openbot_contracts::approval_preferences::{
