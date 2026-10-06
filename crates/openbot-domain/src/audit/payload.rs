@@ -44,6 +44,7 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
+use openbot_contracts::approval_preferences::RememberPreferenceRevision;
 use serde_json::{Map, Value};
 
 use super::hash::{CanonicalWriter, Sha256Digest};
@@ -287,6 +288,8 @@ pub enum AuditFact {
     SkillRevision(u64),
     /// Committed actor-scoped UI preference editing version.
     UiPreferencesRevision(u64),
+    /// remember 批准偏好的正版本；纯字段不证明业务与审计已原子提交。
+    ApprovalPreferenceRevision(RememberPreferenceRevision),
     /// 该次工具调用的权威 Bot；绝不取自模型或 callback body。
     Bot(AuditIdentifier),
     /// Canonical remote Agent origin; path, query, fragment, userinfo, and credential are absent.
@@ -421,6 +424,7 @@ impl AuditFact {
             Self::ComponentEditingRevision(_) => "component_editing_revision",
             Self::SkillRevision(_) => "skill_revision",
             Self::UiPreferencesRevision(_) => "ui_preferences_revision",
+            Self::ApprovalPreferenceRevision(_) => "approval_preference_revision",
             Self::Bot(_) => "bot",
             Self::AgentEndpointOrigin(_) => "agent_endpoint_origin",
             Self::EffectClass(_) => "effect_class",
@@ -532,6 +536,7 @@ impl AuditFact {
             | Self::InputBytes(value)
             | Self::OutputBytes(value) => Value::Number((*value).into()),
             Self::AttemptNumber(value) => Value::Number((*value).into()),
+            Self::ApprovalPreferenceRevision(value) => Value::Number(value.get().into()),
             Self::HumanTakeover(phase) => Value::String(phase.as_str().to_owned()),
             Self::RoutingCandidates(values) => Value::Array(
                 values
@@ -628,6 +633,12 @@ impl AuditFact {
             | Self::InputBytes(value)
             | Self::OutputBytes(value) => writer.u64(*value),
             Self::AttemptNumber(value) => writer.u32(*value),
+            Self::ApprovalPreferenceRevision(value) => {
+                // 正 i64 纯类型保证该转换无损；沿用审计正计数的固定 8 字节编码。
+                writer.u64(
+                    u64::try_from(value.get()).expect("positive approval preference revision"),
+                );
+            }
             Self::HumanTakeover(phase) => writer.str(phase.as_str()),
             Self::RoutingCandidates(values) => {
                 writer.u64(values.as_slice().len() as u64);
@@ -672,6 +683,7 @@ pub const AUDIT_FIELD_LEDGER: &[&str] = &[
     "component_editing_revision",
     "skill_revision",
     "ui_preferences_revision",
+    "approval_preference_revision",
     "bot",
     "agent_endpoint_origin",
     "effect_class",
@@ -820,6 +832,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn approval_preference_revision_payload_is_closed_and_numeric() {
+        let payload = AuditPayload::from_facts([
+            AuditFact::ConfigurationChange(AuditLabel::new("approval_preference_saved")),
+            AuditFact::ApprovalPreferenceRevision(RememberPreferenceRevision::new(7).unwrap()),
+        ])
+        .unwrap();
+        assert_eq!(
+            payload.to_json(),
+            serde_json::json!({
+                "approval_preference_revision":7,
+                "change":"approval_preference_saved",
+            })
+        );
+        assert_eq!(payload.len(), 2);
+        assert_eq!(
+            payload.get("approval_preference_revision"),
+            Some(&AuditFact::ApprovalPreferenceRevision(
+                RememberPreferenceRevision::new(7).unwrap()
+            ))
+        );
+        assert_eq!(
+            AUDIT_FIELD_LEDGER
+                .iter()
+                .filter(|field| **field == "approval_preference_revision")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn approval_preference_revision_canonical_encoding_matches_independent_digest() {
+        let payload = AuditPayload::from_facts([AuditFact::ApprovalPreferenceRevision(
+            RememberPreferenceRevision::new(i64::MAX).unwrap(),
+        )])
+        .unwrap();
+        assert_eq!(
+            payload.to_json(),
+            serde_json::json!({"approval_preference_revision":i64::MAX})
+        );
+        let mut writer = CanonicalWriter::new("approval-preference-test");
+        payload.write_canonical(&mut writer);
+        // 独立字节：u64be(24)||domain||u64be(1)||u64be(28)||field||0x7fffffffffffffff。
+        assert_eq!(
+            Sha256Digest::of(&writer.finish()).to_hex(),
+            "6c1ca94c74f5b5b56e6df4a1c9d9609f7914ff7ba28fca913fe4e154129eea58"
+        );
+        let mut different = CanonicalWriter::new("approval-preference-test");
+        AuditPayload::from_facts([AuditFact::ApprovalPreferenceRevision(
+            RememberPreferenceRevision::first(),
+        )])
+        .unwrap()
+        .write_canonical(&mut different);
+        assert_ne!(
+            Sha256Digest::of(&different.finish()).to_hex(),
+            "6c1ca94c74f5b5b56e6df4a1c9d9609f7914ff7ba28fca913fe4e154129eea58"
+        );
+    }
+
+    #[test]
     fn artifact_saved_fact_shape_contains_only_two_new_object_id_fields() {
         let artifact = "019a0300-0000-7000-8000-000000000001";
         let operation = "019a0300-0000-7000-8000-000000000002";
@@ -884,6 +955,7 @@ mod tests {
             AuditFact::ComponentEditingRevision(9),
             AuditFact::SkillRevision(3),
             AuditFact::UiPreferencesRevision(2),
+            AuditFact::ApprovalPreferenceRevision(RememberPreferenceRevision::first()),
             AuditFact::Bot(identifier("bot-1")),
             AuditFact::AgentEndpointOrigin(
                 AuditEndpointOrigin::new("https://agent.example:8443").unwrap(),
