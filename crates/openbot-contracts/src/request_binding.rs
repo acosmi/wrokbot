@@ -62,8 +62,42 @@ pub type SourceRunArtifactIdsCurrentOutcome = Result<
 pub type SourceRunArtifactIdsCurrentCheck<'a> =
     Pin<Box<dyn Future<Output = SourceRunArtifactIdsCurrentOutcome> + Send + 'a>>;
 
+/// Dedicated request locator and enrolled adapter attachment; this port grants no authority.
+pub trait ArtifactSaveReceiptCurrentTarget: Send + Sync {
+    /// Canonical original UUIDv7 request locator.
+    fn request_id(&self) -> &str;
+    /// Compare the original enrolled adapter identity, independently of its namespace.
+    fn matches_authority(&self, identity: &Arc<()>) -> bool;
+    /// Compare all six Auth facts and the original attached request binding.
+    fn matches_auth(&self, auth: &AuthContext) -> bool;
+}
+/// The same current host witness accompanies either a positive receipt or a refused observation.
+pub type ArtifactSaveReceiptCurrentOutcome = Result<
+    (
+        Box<dyn ArtifactReadTailWitness>,
+        Result<crate::artifacts::ArtifactRegistrationReceipt, ArtifactReadCurrentError>,
+    ),
+    ArtifactReadCurrentError,
+>;
+/// Dedicated non-Serde observation future under the original absolute deadline.
+pub type ArtifactSaveReceiptCurrentCheck<'a> =
+    Pin<Box<dyn Future<Output = ArtifactSaveReceiptCurrentOutcome> + Send + 'a>>;
+
 /// 受信 Rust host 的当前验证 port；任意 Rust 实现不自动取得可信身份。
 pub trait HostRequestBindingGuard: Send + Sync {
+    /// Observe an original positive save receipt and current host together, or refuse unsupported composition.
+    fn verify_artifact_save_receipt_current_before<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+        _target: &'a dyn ArtifactSaveReceiptCurrentTarget,
+        _deadline: std::time::Instant,
+    ) -> ArtifactSaveReceiptCurrentCheck<'a> {
+        Box::pin(async {
+            Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ))
+        })
+    }
     /// Observe the original current host and source together, or refuse unsupported composition.
     fn verify_source_run_artifact_ids_current_before<'a>(
         &'a self,
@@ -122,6 +156,9 @@ pub struct ArtifactReadRecordFacts<'a> {
 }
 /// 受信真实 reader 的私有目标 port；任意 Rust 实现不自动成为生产 authority。
 pub trait ArtifactReadCurrentTarget: Send + Sync {
+    /// Notify only a loss of actual rollback completion proof; this never grants authority.
+    /// Existing targets have no new lifecycle effect.
+    fn mark_rollback_unproven(&self) {}
     /// 有界 ID 仅供真实 own-Pool 查询；不是票据。
     fn lookup_id(&self) -> &str;
     /// 精确适配器身份；必须另经真实 same-Pool enrollment。
@@ -598,6 +635,54 @@ impl VerifiedHostRequestBinding {
         }
         Ok(())
     }
+    /// Reject stale or expired receipt attachments without treating attachment as PG authority.
+    pub fn check_artifact_save_receipt_attachment(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.check_artifact_read_attachment(auth, deadline)
+    }
+    /// Retain the original binding and current witness on both receipt success and refusal.
+    pub async fn verify_artifact_save_receipt_current_before(
+        &self,
+        auth: &AuthContext,
+        target: &dyn ArtifactSaveReceiptCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> ArtifactSaveReceiptCurrentOutcome {
+        self.check_artifact_save_receipt_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        let outcome = self
+            .guard
+            .verify_artifact_save_receipt_current_before(auth, target, deadline)
+            .await;
+        self.check_artifact_save_receipt_attachment(auth, deadline)?;
+        let (witness, receipt) = outcome?;
+        self.verify_artifact_save_receipt_tail(auth, witness.as_ref(), deadline)?;
+        Ok((
+            Box::new(OriginalArtifactReadTail {
+                original: self.clone(),
+                witness,
+            }),
+            receipt,
+        ))
+    }
+    /// Check the same original binding, owner and receipt witness synchronously before handoff.
+    pub fn verify_artifact_save_receipt_tail(
+        &self,
+        auth: &AuthContext,
+        witness: &dyn ArtifactReadTailWitness,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.check_artifact_save_receipt_attachment(auth, deadline)?;
+        witness.verify_current(auth, deadline)?;
+        self.check_artifact_save_receipt_attachment(auth, deadline)
+    }
+
     /// Reject missing, stale or expired attachments without treating attachment as PG authority.
     pub fn check_source_run_artifact_ids_attachment(
         &self,
@@ -686,6 +771,18 @@ impl VerifiedHostRequestBinding {
             ));
         }
         target.verify_physical_current()?;
+        witness.verify_current(auth, deadline)?;
+        self.check_artifact_read_attachment(auth, deadline)
+    }
+    /// Check an actual retained host witness for a no-byte ACK/closed control handoff.
+    /// This does not establish physical readability or grant another byte delivery.
+    pub fn verify_artifact_read_control_tail(
+        &self,
+        auth: &AuthContext,
+        witness: &dyn ArtifactReadTailWitness,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.check_artifact_read_attachment(auth, deadline)?;
         witness.verify_current(auth, deadline)?;
         self.check_artifact_read_attachment(auth, deadline)
     }

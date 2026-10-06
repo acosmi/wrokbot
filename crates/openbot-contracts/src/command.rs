@@ -132,6 +132,16 @@ pub enum AppCommand {
     GetArtifactMetadata(crate::artifacts::GetArtifactMetadata),
     /// Observe current materialized identities for the exact source Run.
     GetSourceRunArtifactIds(crate::artifacts::GetSourceRunArtifactIds),
+    /// Observe the original positive save receipt without retrying the save operation.
+    GetArtifactSaveReceipt(crate::artifacts::GetArtifactSaveReceipt),
+    /// Prepare an original current-host-bound memory-only artifact reader.
+    OpenArtifactRead(crate::artifact_read_protocol::OpenArtifactRead),
+    /// Select one sequential block; serialized control metadata never includes bytes.
+    ReadArtifactReadBlock(crate::artifact_read_protocol::ReadArtifactReadBlock),
+    /// Acknowledge an actually handed-off original block without byte replay.
+    AcknowledgeArtifactReadBlock(crate::artifact_read_protocol::AcknowledgeArtifactReadBlock),
+    /// Close only this original reader, with a truthful physical completion result.
+    CloseArtifactRead(crate::artifact_read_protocol::CloseArtifactRead),
     /// 最小只读用例：探活。不读任何租户数据，也不产生 audit 事件。
     Health,
 
@@ -636,6 +646,14 @@ pub enum AppReply {
     ArtifactMetadata(crate::artifacts::ArtifactMetadata),
     /// Current IDs-only source observation; no body or read handle.
     SourceRunArtifactIds(crate::artifacts::SourceRunArtifactIds),
+    /// Actual prepared artifact facts and a bound memory locator.
+    ArtifactReadOpened(crate::artifact_read_protocol::ArtifactReadOpened),
+    /// Finite block control metadata; bytes use the trusted non-Serde delivery port.
+    ArtifactReadChunkDescriptor(crate::artifact_read_protocol::ArtifactReadChunkDescriptor),
+    /// Original accepted block acknowledgment, with no new IO or retry permission.
+    ArtifactReadAcknowledged(crate::artifact_read_protocol::ArtifactReadAcknowledged),
+    /// Actual completion of this reader's original physical resources.
+    ArtifactReadClosed(crate::artifact_read_protocol::ArtifactReadClosed),
     /// [`AppCommand::Health`] 的应答。
     Health(HealthReport),
     /// [`AppCommand::ListVisibleChannels`] 的应答。

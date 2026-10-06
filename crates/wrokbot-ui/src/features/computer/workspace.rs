@@ -108,8 +108,6 @@ fn CurrentRunResult(
             .map_or(OutputPhase::UnobservedTerminal, |row| row.phase)
     });
     let text = Signal::derive(move || current.get().map_or_else(String::new, |row| row.text));
-    let expected_terminal =
-        Signal::derive(move || current.get().and_then(|row| row.terminal_sequence));
     view! {
         <code data-result-run=run.as_str().to_owned()>{run.as_str().to_owned()}</code>
         <p class="ob-page-intro" data-run-phase=move || format!("{:?}",phase.get())>{move ||phase_label(phase.get())}</p>
@@ -117,7 +115,7 @@ fn CurrentRunResult(
         <Show when=move || !text.get().trim().is_empty() fallback=move || view! { <p>{t!(i18n, computer.no_current_output)}</p> }>
             <div data-current-run-output="">{move || view! { <MarkdownBody content=text.get()/> }}</div>
         </Show>
-        <Show when=move ||phase.get()==OutputPhase::Unknown>{move ||thread.get().map(|thread|view! { <crate::features::approvals::unknown::UnknownFacts thread run=identity.get_value() expected_terminal/> })}</Show>
+        <Show when=move ||phase.get()==OutputPhase::Unknown>{move ||thread.get().map(|thread|view! { <crate::features::approvals::unknown::UnknownFacts thread run=identity.get_value()/> })}</Show>
     }
 }
 

@@ -1,6 +1,7 @@
 //! Private original-host first-chunk consumer. The final own-Pool RC statement observes host
 //! and source together; the original FD and initialized RAII buffer survive every final await.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,10 @@ use crate::auth::single_user::desktop_local::{
     DESKTOP_LOCAL_ACTOR_ID, DESKTOP_LOCAL_EMAIL, DesktopLocalAuthority,
 };
 
+#[path = "artifact_read_authority/public_read_prepare.rs"]
+pub(super) mod public_read_prepare;
+#[path = "artifact_read_authority/save_receipt.rs"]
+mod save_receipt;
 #[path = "artifact_read_authority/source_run_ids.rs"]
 mod source_run_ids;
 
@@ -44,7 +49,11 @@ pub struct PostgresArtifactReadAuthority {
     identity: Arc<()>,
     lifecycle: Arc<ArtifactReadLifecycle>,
     #[cfg(test)]
+    save_receipt_rollback_gate: Mutex<Option<save_receipt::SaveReceiptRollbackGate>>,
+    #[cfg(test)]
     source_run_ids_rollback_gate: Mutex<Option<source_run_ids::SourceRunIdsRollbackGate>>,
+    #[cfg(test)]
+    public_prepare_probe: Mutex<Option<Arc<public_read_prepare::PublicPrepareProbe>>>,
     #[cfg(test)]
     final_query_gate: Mutex<
         Option<(
@@ -63,7 +72,11 @@ impl PostgresArtifactReadAuthority {
             identity: Arc::new(()),
             lifecycle: ArtifactReadLifecycle::new(),
             #[cfg(test)]
+            save_receipt_rollback_gate: Mutex::new(None),
+            #[cfg(test)]
             source_run_ids_rollback_gate: Mutex::new(None),
+            #[cfg(test)]
+            public_prepare_probe: Mutex::new(None),
             #[cfg(test)]
             final_query_gate: Mutex::new(None),
         }
@@ -72,6 +85,18 @@ impl PostgresArtifactReadAuthority {
     /// The exact same authority/root inventory, never a request-created tracker.
     pub fn read_lifecycle(&self) -> Arc<ArtifactReadLifecycle> {
         Arc::clone(&self.lifecycle)
+    }
+
+    pub(super) async fn prepare_host_bound_artifact_read(
+        self: &Arc<Self>,
+        auth: &AuthContext,
+        artifact_id: &str,
+        original_deadline: Instant,
+        observer: Arc<
+            dyn openbot_application::artifact_read_protocol::ArtifactReadPreparationObserver,
+        >,
+    ) -> Result<openbot_application::artifact_read_protocol::PreparedArtifactRead, AppError> {
+        public_read_prepare::prepare(self, auth, artifact_id, original_deadline, observer).await
     }
 
     pub(super) async fn open_host_bound_read_operation(
@@ -100,6 +125,52 @@ impl PostgresArtifactReadAuthority {
                 .registry
                 .matches_pool_scope(pool, deployment, tenant)
         })
+    }
+
+    /// Observe an original positive receipt and real Session epoch in one current own-Pool statement.
+    pub async fn observe_artifact_save_receipt_server_session(
+        &self,
+        auth: &AuthContext,
+        target: &dyn openbot_contracts::request_binding::ArtifactSaveReceiptCurrentTarget,
+        epoch: BorrowedServerSessionEpoch<'_>,
+        lifetime: SessionLifetimePolicy,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentOutcome {
+        save_receipt::observe(
+            self,
+            auth,
+            target,
+            CurrentHost::Session { epoch, lifetime },
+            deadline,
+        )
+        .await
+    }
+
+    /// Observe an original receipt only through the enrolled Local installation and same Pool.
+    pub async fn observe_artifact_save_receipt_desktop_local(
+        &self,
+        auth: &AuthContext,
+        target: &dyn openbot_contracts::request_binding::ArtifactSaveReceiptCurrentTarget,
+        installation: &DesktopLocalAuthority,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentOutcome {
+        save_receipt::observe(
+            self,
+            auth,
+            target,
+            CurrentHost::Desktop(installation),
+            deadline,
+        )
+        .await
+    }
+
+    pub(super) async fn artifact_save_receipt_current(
+        self: &Arc<Self>,
+        auth: &AuthContext,
+        input: &openbot_contracts::artifacts::GetArtifactSaveReceipt,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentOutcome {
+        save_receipt::current(self, auth, input, deadline).await
     }
 
     /// Observe IDs and the original real Session epoch in one own-Pool current statement.
@@ -308,6 +379,7 @@ impl PostgresArtifactReadAuthority {
                     id: artifact_id.to_owned(),
                     auth: auth.clone(),
                     identity: Arc::clone(&self.identity),
+                    state: None,
                 };
                 &request_target
             }
@@ -334,10 +406,22 @@ impl PostgresArtifactReadAuthority {
         let original = auth
             .request_binding()
             .ok_or_else(|| AppError::from(host_unavailable()))?;
-        original
-            .verify_current(auth)
-            .await
-            .map_err(|error| AppError::from(ArtifactReadCurrentError::Host(error)))?;
+        if state.original_deadline.is_some() {
+            let host = original
+                .verify_current_before(auth, state.joint_deadline()?)
+                .await;
+            if matches!(host, Err(HostRequestBindingError::Unavailable)) {
+                // The host-only port has no positive rollback ACK on an unavailable result.
+                state.mark_closure_unproven();
+            }
+            host.map_err(|error| AppError::from(ArtifactReadCurrentError::Host(error)))?;
+            state.check_current()?;
+        } else {
+            original
+                .verify_current(auth)
+                .await
+                .map_err(|error| AppError::from(ArtifactReadCurrentError::Host(error)))?;
+        }
         let administration = self
             .administration
             .upgrade()
@@ -351,11 +435,31 @@ impl PostgresArtifactReadAuthority {
         };
         let input = match reader {
             Some(reader) => Ok(ReadInput::Retained(reader)),
-            None => administration
-                .observe_read_record(auth, &state.artifact_id)
-                .await
-                .map(ReadInput::Fresh)
-                .map_err(source_error),
+            None => {
+                let snapshot = if state.original_deadline.is_some() {
+                    administration
+                        .observe_read_record_before_inner(
+                            auth,
+                            &state.artifact_id,
+                            state.joint_deadline()?,
+                        )
+                        .await
+                        .map_err(|failure| {
+                            if failure.rollback_unproven {
+                                state.mark_closure_unproven();
+                            }
+                            failure.error
+                        })
+                } else {
+                    administration
+                        .observe_read_record(auth, &state.artifact_id)
+                        .await
+                };
+                if state.original_deadline.is_some() {
+                    state.check_current()?;
+                }
+                snapshot.map(ReadInput::Fresh).map_err(source_error)
+            }
         };
         let worker = match input {
             Ok(input) => {
@@ -373,15 +477,49 @@ impl PostgresArtifactReadAuthority {
                 let store = Arc::clone(&administration.store);
                 tokio::task::spawn_blocking(move || {
                     tracing::dispatcher::with_default(&dispatcher, || {
+                        if worker_state.original_deadline.is_some() {
+                            #[cfg(test)]
+                            public_read_prepare::worker_entered(&worker_state)?;
+                            worker_state.check_current()?;
+                        }
                         let mut pending = PendingArtifactReadBuffer::new_initialized()?;
+                        if worker_state.original_deadline.is_some() {
+                            worker_state.check_current()?;
+                        }
                         let mut reader = match input {
                             ReadInput::Retained(reader) => reader,
-                            ReadInput::Fresh(snapshot) => store
-                                .open_observed_record(snapshot)
-                                .map_err(|_| ArtifactReadCurrentError::Unavailable)?,
+                            ReadInput::Fresh(snapshot) => {
+                                if worker_state.original_deadline.is_some() {
+                                    let mut is_current = |after_sha_segment| {
+                                        #[cfg(test)]
+                                        if public_read_prepare::hash_guard(
+                                            &worker_state,
+                                            after_sha_segment,
+                                        )
+                                        .is_err()
+                                        {
+                                            return false;
+                                        }
+                                        #[cfg(not(test))]
+                                        let _ = after_sha_segment;
+                                        !worker_state.is_stopped()
+                                    };
+                                    store.open_observed_record_guarded(snapshot, &mut is_current)
+                                } else {
+                                    store.open_observed_record(snapshot)
+                                }
+                                .map_err(|_| ArtifactReadCurrentError::Unavailable)?
+                            }
                         };
+                        if worker_state.original_deadline.is_some() {
+                            worker_state.check_current()?;
+                        }
                         let read =
                             read_segments(&mut reader, &mut pending, &worker_state, position);
+                        #[cfg(test)]
+                        if worker_state.original_deadline.is_some() && read.is_ok() {
+                            public_read_prepare::observe_prefix(&worker_state, &mut pending)?;
+                        }
                         Ok::<_, ArtifactReadCurrentError>(OperationWorkerResult {
                             pending,
                             reader,
@@ -418,9 +556,13 @@ impl PostgresArtifactReadAuthority {
             }
             Err(error) => (None, Err(error)),
         };
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(5))
-            .ok_or_else(|| AppError::from(host_unavailable()))?;
+        let deadline = if state.original_deadline.is_some() {
+            state.joint_deadline()?
+        } else {
+            Instant::now()
+                .checked_add(Duration::from_secs(5))
+                .ok_or_else(|| AppError::from(host_unavailable()))?
+        };
         let target: Arc<dyn ArtifactReadCurrentTarget> = if owned.0.is_some() {
             tracing::trace!(
                 artifact_read_phase = "actual_io_completed_before_joint",
@@ -435,6 +577,7 @@ impl PostgresArtifactReadAuthority {
                 id: state.artifact_id.clone(),
                 auth: auth.clone(),
                 identity: Arc::clone(&self.identity),
+                state: state.original_deadline.map(|_| Arc::downgrade(state)),
             })
         };
         // Missing/physical errors use this same anchored host-first statement, never early404.
@@ -497,9 +640,17 @@ impl PostgresArtifactReadAuthority {
             return Err(host_unavailable());
         }
         let limit = tokio::time::Instant::from_std(deadline);
+        let rollback_guard = JointRollbackGuard::new(target);
         tokio::time::timeout_at(
             limit,
-            self.observe_inner(&administration, auth, target, host, deadline),
+            self.observe_inner(
+                &administration,
+                auth,
+                target,
+                host,
+                deadline,
+                &rollback_guard,
+            ),
         )
         .await
         .map_err(|_| host_unavailable())?
@@ -512,10 +663,16 @@ impl PostgresArtifactReadAuthority {
         target: &dyn ArtifactReadCurrentTarget,
         host: CurrentHost<'_>,
         deadline: Instant,
+        rollback_guard: &JointRollbackGuard<'_>,
     ) -> Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError> {
-        super::verify_artifact_registration_schema(administration.registry.pool())
-            .await
-            .map_err(|_| host_unavailable())?;
+        rollback_guard.schema_started();
+        if let Err(error) =
+            super::verify_artifact_registration_schema(administration.registry.pool()).await
+        {
+            rollback_guard.schema_failed(&error);
+            return Err(host_unavailable());
+        }
+        rollback_guard.no_pending_transaction();
         remaining(deadline)?;
         let mut client = administration
             .registry
@@ -523,6 +680,7 @@ impl PostgresArtifactReadAuthority {
             .get()
             .await
             .map_err(|_| host_unavailable())?;
+        rollback_guard.transaction_started();
         let tx = client
             .build_transaction()
             .isolation_level(IsolationLevel::ReadCommitted)
@@ -582,6 +740,10 @@ impl PostgresArtifactReadAuthority {
         // Every real statement result, including host/source errors, awaits explicit rollback.
         // A dropped/timeout future is not reported as acknowledged rollback or worker completion.
         let rollback = tx.rollback().await.map_err(|_| host_unavailable());
+        if rollback.is_ok() {
+            // Record the real ACK before a pure clock/owner tail can refuse the result.
+            rollback_guard.acknowledged();
+        }
         if let Ok((witness, _)) = &outcome {
             witness.verify_current(auth, deadline)?;
         }
@@ -590,6 +752,50 @@ impl PostgresArtifactReadAuthority {
         let (witness, source) = outcome?;
         source?;
         Ok(Box::new(witness))
+    }
+}
+
+/// Tracks only this original joint future's unacknowledged PG work; it mints no positive proof.
+struct JointRollbackGuard<'a> {
+    target: &'a dyn ArtifactReadCurrentTarget,
+    phase: AtomicU8,
+}
+impl<'a> JointRollbackGuard<'a> {
+    fn new(target: &'a dyn ArtifactReadCurrentTarget) -> Self {
+        Self {
+            target,
+            phase: AtomicU8::new(0),
+        }
+    }
+    fn schema_started(&self) {
+        self.phase.store(1, Ordering::SeqCst);
+    }
+    fn schema_failed(&self, error: &ArtifactAdministrationError) {
+        if !matches!(
+            error,
+            ArtifactAdministrationError::Unavailable
+                | ArtifactAdministrationError::Corrupt {
+                    field: "registry_schema"
+                }
+        ) {
+            self.no_pending_transaction();
+        }
+    }
+    fn no_pending_transaction(&self) {
+        self.phase.store(0, Ordering::SeqCst);
+    }
+    fn transaction_started(&self) {
+        self.phase.store(2, Ordering::SeqCst);
+    }
+    fn acknowledged(&self) {
+        self.phase.store(3, Ordering::SeqCst);
+    }
+}
+impl Drop for JointRollbackGuard<'_> {
+    fn drop(&mut self) {
+        if matches!(self.phase.load(Ordering::SeqCst), 1 | 2) {
+            self.target.mark_rollback_unproven();
+        }
     }
 }
 
@@ -670,6 +876,10 @@ fn read_segments(
         let count = reader
             .read_observed_chunk(&mut pending.initialized_mut()[actual..end])
             .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        if state.original_deadline.is_some() && state.is_stopped() {
+            pending.wipe();
+            return Err(ArtifactReadCurrentError::Unavailable);
+        }
         actual += count;
         position = position
             .checked_add(count as u64)
@@ -727,6 +937,11 @@ impl RetainedOperationTarget {
     }
 }
 impl ArtifactReadCurrentTarget for RetainedOperationTarget {
+    fn mark_rollback_unproven(&self) {
+        if let Some(state) = self.state.upgrade() {
+            state.mark_closure_unproven();
+        }
+    }
     fn lookup_id(&self) -> &str {
         &self.source.artifact_id
     }
@@ -816,8 +1031,14 @@ struct RequestedArtifactReadTarget {
     id: String,
     auth: AuthContext,
     identity: Arc<()>,
+    state: Option<Weak<ReadOperationState>>,
 }
 impl ArtifactReadCurrentTarget for RequestedArtifactReadTarget {
+    fn mark_rollback_unproven(&self) {
+        if let Some(state) = self.state.as_ref().and_then(Weak::upgrade) {
+            state.mark_closure_unproven();
+        }
+    }
     fn lookup_id(&self) -> &str {
         &self.id
     }

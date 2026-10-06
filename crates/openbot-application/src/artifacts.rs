@@ -79,6 +79,31 @@ impl ArtifactAdministrationError {
 /// Shared authenticated port; each implementation owns its current transaction and byte proof.
 #[async_trait]
 pub trait ArtifactAdministration: Send + Sync {
+    /// Prepare the same actual retained FD before publishing a memory-only reader locator.
+    /// The immutable deadline was anchored by Application before its first await.
+    async fn prepare_host_bound_artifact_read(
+        &self,
+        _auth: &AuthContext,
+        _artifact_id: &str,
+        _original_deadline: std::time::Instant,
+        _observer: std::sync::Arc<
+            dyn crate::artifact_read_protocol::ArtifactReadPreparationObserver,
+        >,
+    ) -> Result<crate::artifact_read_protocol::PreparedArtifactRead, AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "artifacts",
+        })
+    }
+    /// Observe an original persisted save receipt under one current own-Pool host/source check.
+    /// An adapter without this dedicated observer must not fall back to the save producer.
+    async fn observe_artifact_save_receipt_current(
+        &self,
+        _auth: &AuthContext,
+        _input: &openbot_contracts::artifacts::GetArtifactSaveReceipt,
+        _deadline: std::time::Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentOutcome {
+        Err(openbot_contracts::request_binding::ArtifactReadCurrentError::Unavailable)
+    }
     /// One enrolled own-Pool host/source observation; unsupported adapters remain unavailable.
     async fn observe_source_run_artifact_ids_current(
         &self,

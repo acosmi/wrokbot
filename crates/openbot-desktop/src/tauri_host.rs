@@ -2,6 +2,8 @@
 
 mod artifact_read;
 pub use artifact_read::DesktopArtifactReadOperation;
+mod artifact_reads;
+mod artifact_save_receipt;
 mod artifacts;
 mod assets;
 #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
@@ -507,6 +509,67 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
         })
     }
 
+    fn verify_artifact_save_receipt_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn openbot_contracts::request_binding::ArtifactSaveReceiptCurrentTarget,
+        deadline: Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentCheck<'a> {
+        Box::pin(async move {
+            self.check_window(auth)
+                .map_err(ArtifactReadCurrentError::Host)?;
+            if deadline <= Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            let binding = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?;
+            if !self
+                .issuer
+                .matches_desktop_window_epoch(binding.identity(), &self.label, self.id)
+            {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let source = self.source.as_ref().ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::Unavailable,
+            ))?;
+            let result = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                source.verify_artifact_save_receipt_current_before(auth, target, deadline),
+            )
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable));
+            self.check_window(auth)
+                .map_err(ArtifactReadCurrentError::Host)?;
+            let (inner, outcome) = result??;
+            let witness = WindowReadTail {
+                window: WindowRequestBindingGuard {
+                    registry: self.registry.clone(),
+                    owner: self.owner.clone(),
+                    issuer: self.issuer.clone(),
+                    label: self.label.clone(),
+                    id: self.id,
+                    expected: self.expected.clone(),
+                    source: None,
+                    upstream: None,
+                },
+                original: binding.identity().clone(),
+                inner,
+            };
+            witness.verify_current(auth, deadline)?;
+            Ok((
+                Box::new(witness) as Box<dyn ArtifactReadTailWitness>,
+                outcome,
+            ))
+        })
+    }
+
     fn verify_artifact_read_current_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -682,6 +745,10 @@ pub struct DesktopTauriProtocol {
 impl Drop for DesktopTauriProtocol {
     fn drop(&mut self) {
         self.request_binding_lease.close();
+        let _closed = self
+            .transport
+            .service()
+            .close_public_artifact_reads_for_issuer(&self.request_binding_issuer);
         #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
         if let Some(reads) = self
             .local_capability_authority
@@ -822,6 +889,10 @@ impl DesktopTauriProtocol {
     /// Close the actual protocol owner before resource teardown; Arc allocation is not liveness.
     pub fn close_request_bindings(&self) {
         self.request_binding_lease.close();
+        let _closed = self
+            .transport
+            .service()
+            .close_public_artifact_reads_for_issuer(&self.request_binding_issuer);
         #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
         if let Some(reads) = self
             .local_capability_authority
@@ -964,6 +1035,12 @@ impl DesktopTauriProtocol {
             removed
         };
         if let Some(authority) = removed {
+            if let Some(binding) = authority.auth.request_binding() {
+                let _closed = self
+                    .transport
+                    .service()
+                    .close_public_artifact_reads_for_binding(binding.identity());
+            }
             #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
             if let (Some(reads), Some(binding)) = (
                 self.local_capability_authority
@@ -1072,6 +1149,36 @@ impl DesktopTauriProtocol {
 
     /// Handle one custom-protocol request. Public for deterministic host-adapter tests.
     pub async fn handle(&self, label: &str, mut request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+        if artifact_reads::owns_path(request.uri().path()) {
+            let prepared = self
+                .prepare_public_artifact_read_response(label, request)
+                .await;
+            return self.finish_public_artifact_read_response(label, prepared, |response| response);
+        }
+        if request.uri().path() == "/api/artifacts/save-requests"
+            || request
+                .uri()
+                .path()
+                .starts_with("/api/artifacts/save-requests/")
+        {
+            let authority = {
+                let windows = match self.window_registry.windows.try_read() {
+                    Ok(windows) => windows,
+                    Err(_) => {
+                        request.body_mut().fill(0);
+                        return error_response(AppError::DependencyUnavailable {
+                            dependency: "host_request_binding",
+                        });
+                    }
+                };
+                windows.get(label).cloned()
+            };
+            let Some(authority) = authority else {
+                request.body_mut().fill(0);
+                return error_response(AppError::Unauthenticated);
+            };
+            return self.artifact_save_receipt(label, request, authority).await;
+        }
         if request.uri().path() == "/api/artifacts/source-runs"
             || request
                 .uri()
@@ -3176,7 +3283,16 @@ pub(crate) fn register_tauri_protocol_slot(
             };
             let label = context.webview_label().to_owned();
             tauri::async_runtime::spawn(async move {
-                responder.respond(protocol.handle(&label, request).await);
+                if artifact_reads::owns_path(request.uri().path()) {
+                    let prepared = protocol
+                        .prepare_public_artifact_read_response(&label, request)
+                        .await;
+                    protocol.finish_public_artifact_read_response(&label, prepared, |response| {
+                        responder.respond(response);
+                    });
+                } else {
+                    responder.respond(protocol.handle(&label, request).await);
+                }
             });
         },
     ))

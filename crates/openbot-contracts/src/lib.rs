@@ -74,6 +74,7 @@
 
 pub mod agent;
 pub mod artifact_read;
+pub mod artifact_read_protocol;
 pub mod artifacts;
 pub mod audit;
 pub mod auth;
