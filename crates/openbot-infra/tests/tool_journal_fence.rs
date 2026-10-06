@@ -11,7 +11,6 @@ mod support;
 use std::future::Future;
 use std::time::Duration;
 
-use deadpool_postgres::Pool;
 use harness::{admin_config, with_temp_database};
 use openbot_application::{
     BeginThreadRunRequest, RunExecutionLease, RunFailureCode, RunRuntime, RunTerminal,
@@ -34,6 +33,7 @@ use openbot_domain::tool::metadata::{
 };
 use openbot_domain::tool::pipeline::{DurableDecisionReceipt, ToolOutcome};
 use openbot_infra::db::pool::DatabaseConfig;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::db::tables::{tool_attempts, tool_calls};
 use openbot_infra::db::{InfraError, baseline, native, pool};
 use openbot_infra::repo::tools::{

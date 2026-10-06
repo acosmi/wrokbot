@@ -4,12 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
+use crate::db::pool::DatabasePool as Pool;
 use aes_gcm::aead::{Aead as _, KeyInit as _, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use deadpool_postgres::{GenericClient, Pool};
+use deadpool_postgres::GenericClient;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use openbot_application::{
@@ -4090,7 +4091,7 @@ fn mutation_receipt(
     })
 }
 
-fn unavailable(error: deadpool_postgres::PoolError) -> McpConnectionError {
+fn unavailable(error: crate::db::pool::PoolError) -> McpConnectionError {
     tracing::error!(error = %error, "MCP connections 获取 PostgreSQL 连接失败");
     McpConnectionError::Unavailable
 }

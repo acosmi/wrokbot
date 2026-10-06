@@ -1,9 +1,10 @@
 //! `PeopleAdministration` 的 PostgreSQL 原子适配器。
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use deadpool_postgres::{GenericClient, Pool};
+use deadpool_postgres::GenericClient;
 use openbot_application::{
     OwnedCredentialRetirementError, OwnedCredentialRetirer, PeopleAdministration,
     PeoplePageRequest, PeoplePortError,
@@ -109,7 +110,7 @@ impl core::fmt::Debug for PostgresPeopleAdministration {
 impl PeopleAdministration for PostgresPeopleAdministration {
     async fn current_user(&self, actor: &ActorId) -> Result<CurrentUser, PeoplePortError> {
         let client = self.pool.get().await.map_err(log_unavailable)?;
-        let person = find_person(&client, actor, self.floor.as_ref())
+        let person = find_person(client.as_generic(), actor, self.floor.as_ref())
             .await
             .map_err(port_error)?
             .ok_or(PeoplePortError::Corrupt { field: "actor" })?;
@@ -124,7 +125,7 @@ impl PeopleAdministration for PostgresPeopleAdministration {
 
     async fn list_people(&self, request: PeoplePageRequest) -> Result<PeoplePage, PeoplePortError> {
         let client = self.pool.get().await.map_err(log_unavailable)?;
-        list_people(&client, request, self.floor.as_ref())
+        list_people(client.as_generic(), request, self.floor.as_ref())
             .await
             .map_err(port_error)
     }
@@ -650,7 +651,7 @@ fn access_rejection(error: AccessChangeRejection) -> PeoplePortError {
     }
 }
 
-fn log_unavailable(error: deadpool_postgres::PoolError) -> PeoplePortError {
+fn log_unavailable(error: crate::db::pool::PoolError) -> PeoplePortError {
     tracing::error!(error = %error, "people adapter 获取连接失败");
     PeoplePortError::Unavailable
 }

@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::{Pool, Transaction as PooledTransaction};
+use deadpool_postgres::Transaction as PooledTransaction;
 use openbot_application::{
     ComponentAdministrationError, ComponentRuntimeScope, GrantedSandboxedComponent,
     GrantedSandboxedComponents, SandboxedComponentAdministration,
@@ -938,7 +939,7 @@ fn corrupt(field: &'static str) -> SandboxedComponentAdministrationError {
     SandboxedComponentAdministrationError::Corrupt { field }
 }
 
-fn unavailable(error: deadpool_postgres::PoolError) -> SandboxedComponentAdministrationError {
+fn unavailable(error: crate::db::pool::PoolError) -> SandboxedComponentAdministrationError {
     tracing::error!(error = %error, "sandboxed component database pool unavailable");
     SandboxedComponentAdministrationError::Unavailable
 }

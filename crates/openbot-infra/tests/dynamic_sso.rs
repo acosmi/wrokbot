@@ -41,7 +41,7 @@ const TLS_LEAF_KEY_DER: &str = "MC4CAQAwBQYDK2VwBCIEIIhvzdQUg5xdTDZfBbx3RK3yTMHj
 const OIDC_RSA_KEY_DER: &str = "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCOwlECHGhbCo0GavhO8G+w5qxQc1+PdpBsgdd6two0pwvxo8u2mMry42lAhYJbrVUiqQjKBmCIHJ/+a0LfN/jrGPJtmTjzeGXmL4qRNWj/bSprl1xFcTKdM+B36xMFNS3xLc7LtnWrCGH+30h/vCZAqq21lajUypEs8tBYB/JDRm5BXM8GwMOV9UXhOmRn9QaV4a7/0hxPb3yGwejXpE9lNVU2P1LqTe+p8ArFMbJAxKGZRlkpWZNROej/pd9jrdh+s2WrmqXEahy4P1ztBMM6dO1DDOw9+aHzp9iWEs0LuMBfLRtJGC492Be5EFuZ0lP9K2AADRrXhgmHTI9XAQmTAgMBAAECggEAIr3dUwMwzj8iFNbBeQyAUe/BLY72SYaUHSP4GZAj9q5UdMjk0ZobgcKgIaicEc1784RpdCjbIyS8NwFJc+M+O5CFpvBr8KxzN/KH6VCzLb4WXbqnJOsoYyN11BksNs87T/9S3TaZKjdPCeSy0wsp0AD5Z0B1pttpOyQYWeQNLBvButokgPE0tvL8FotCiTLciAXkj0LLzJX28L5NGsEEdXLnQ/3MC7iLxd2c4Zi9k0bP+eAuKtNSFvMrbKSei5Cbby0SadAuv5S4r4GQ+XCemnvSaEnwWQucrE5dgvyVDeDenhi+DOl1OWXMCkKVxng69LkZvPLnfYKMCoDVbywVIQKBgQC/742drVx41MfQu4Gk6nqtAwSAzVlkJqhWdwJPOxSv+r9EmIiHPtH7owlEaYi0AtpDjS3vwfi0fYuVBRJEMFQWklFhzwsaKFEL0aLtoWTuwmnjpqsmcIKvnRVfjsR04qoeQAexBp0kzKCNTU5/zBnOrY24RMLqSSIUZI+SSXgf0QKBgQC+aLuCIiHcm+leM6YD2D2qLzpEkewP44l4vukw6LCShPCWiFlUPasvEpSc7TfYgVsz91KYtN2W3Xvr370D5j0GpFIx+nh0a2xZ6fYzgTWqt9sP9yEwSUixE1EyE6XayxxlsIgkty4yocFdcdSjTXjOjZ7eINGz3TeVU1O99KWwIwKBgD9PE+YrlbHhdZs7DhNIqHhC44xcr5yiR6pljOR3d2ZojghhS79YkEixSVBAgy/lNPtNKRbJY3CdbJoV1yWYz1O2pZNeiKnzHHCKkHRTZQiAJg9KHXALcn/cj306iUCIt1ZNBnx00wadXGPfWQI8X1LV2kYqoCRJRS120giNpUrRAoGANcXGDn4tKewt/5h+bd+HqqQjxHGhROtxS1Q+7r0IAJjiiOCAubWgvm504cxsVQxTAV37SXzqh0yNTpOlAZDn8xQ80jh2BArCUrIsAWegDFJX3y5fhQ9tI/TcnVPHJv7tShqMmDHTLiFYRld7QZMDZvG/x+Nk1XLH27fokmCg2hkCgYASbp3+tgJ51j3Ci+2nXJ8ISJIfx2I10pbXAsIXNqIqZ7AR3TV5Ezhde6Sb1fg2AoZZmuAxHbJ9/w6tib2nGp8VaNN+dkiyekbLIgfUMH8gQr3bCiMio1wFVWj/ptuioPbiHvEsC092HFJiUiUp9H/PwmVb42UzpznxmfCgSca6Wg==";
 const OIDC_RSA_N: &str = "jsJRAhxoWwqNBmr4TvBvsOasUHNfj3aQbIHXercKNKcL8aPLtpjK8uNpQIWCW61VIqkIygZgiByf_mtC3zf46xjybZk483hl5i-KkTVo_20qa5dcRXEynTPgd-sTBTUt8S3Oy7Z1qwhh_t9If7wmQKqttZWo1MqRLPLQWAfyQ0ZuQVzPBsDDlfVF4TpkZ_UGleGu_9IcT298hsHo16RPZTVVNj9S6k3vqfAKxTGyQMShmUZZKVmTUTno_6XfY63YfrNlq5qlxGocuD9c7QTDOnTtQwzsPfmh86fYlhLNC7jAXy0bSRguPdgXuRBbmdJT_StgAA0a14YJh0yPVwEJkw";
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|error| error.to_string())?;
     baseline::apply(&client)
         .await
@@ -96,11 +96,14 @@ fn registration(provider: &str, domain: &str) -> RegisterIdentityProviderInput {
     .unwrap()
 }
 
-fn service(pool: &deadpool_postgres::Pool) -> DynamicSsoService {
+fn service(pool: &openbot_infra::db::pool::DatabasePool) -> DynamicSsoService {
     service_with_dialer(pool, SafeDialer::new(EgressPolicy::default()))
 }
 
-fn service_with_dialer(pool: &deadpool_postgres::Pool, dialer: SafeDialer) -> DynamicSsoService {
+fn service_with_dialer(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    dialer: SafeDialer,
+) -> DynamicSsoService {
     DynamicSsoService::new(
         pool.clone(),
         &TenantId::new("tenant-1"),
@@ -163,7 +166,7 @@ async fn start(
     }
 }
 
-async fn scalar(pool: &deadpool_postgres::Pool, sql: &str) -> Result<i64, String> {
+async fn scalar(pool: &openbot_infra::db::pool::DatabasePool, sql: &str) -> Result<i64, String> {
     pool.get()
         .await
         .map_err(|error| error.to_string())?

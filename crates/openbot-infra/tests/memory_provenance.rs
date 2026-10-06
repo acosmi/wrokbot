@@ -24,7 +24,7 @@ const CHANNEL: &str = "550e8400-e29b-41d4-a716-446655440002";
 
 async fn fixture<F, Fut>(label: &str, body: F)
 where
-    F: FnOnce(deadpool_postgres::Pool) -> Fut,
+    F: FnOnce(openbot_infra::db::pool::DatabasePool) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
     harness::with_temp_database(&harness::admin_config(label), label, |config| async move {
@@ -38,7 +38,7 @@ where
     .await;
 }
 
-async fn provision(p: &deadpool_postgres::Pool, version: i32) {
+async fn provision(p: &openbot_infra::db::pool::DatabasePool, version: i32) {
     let mut c = p.get().await.unwrap();
     baseline::apply(&c).await.unwrap();
     native::apply_through(&mut c, version).await.unwrap();
@@ -410,7 +410,7 @@ async fn upgrade_preserves_legacy_null_and_correction_cannot_invent_source_autho
 }
 
 async fn wait_for_blocker(
-    c: &deadpool_postgres::Client,
+    c: &openbot_infra::db::pool::PooledClient,
     query_fragment: &str,
     blocker: i32,
 ) -> i32 {

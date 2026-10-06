@@ -421,7 +421,7 @@ struct HttpFacts {
     value: Value,
 }
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     config: DatabaseConfig,
     resolver: Arc<dyn AuthResolver>,
     application: Arc<ObservedApplication>,
@@ -1513,7 +1513,7 @@ async fn actual_final_sql_wait_spends_original_budget_and_timeout_is_not_worker_
 }
 
 async fn actual_blocked_pid(
-    observer: &deadpool_postgres::Object,
+    observer: &openbot_infra::db::pool::PooledClient,
     blocker: i32,
     needle: &str,
 ) -> Result<i32, String> {

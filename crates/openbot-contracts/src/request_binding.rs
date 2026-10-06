@@ -30,6 +30,109 @@ pub enum HostRequestBindingError {
     /// 依赖、争用或有界等待不可用。
     Unavailable,
 }
+
+/// Original internal repository invocation; implementing this port grants no authority.
+pub trait RememberPreferenceHostTarget: Send + Sync {
+    /// Compare the concrete enrolled repository instance, independently of its namespace.
+    fn matches_authority(&self, authority: &Arc<()>) -> bool;
+    /// Compare all original Auth facts and the original attached request binding.
+    fn matches_auth(&self, auth: &AuthContext) -> bool;
+}
+
+/// Actual session times decoded by the repository's own current statement, never a session proof.
+#[derive(Clone, Copy)]
+pub struct RememberPreferenceSessionFacts {
+    /// Original immutable creation time read from the session row.
+    pub created_at: OffsetDateTime,
+    /// Current idle activity time read without touching the session.
+    pub updated_at: OffsetDateTime,
+    /// Current expiry time read from the session row.
+    pub expires_at: OffsetDateTime,
+    /// Wall clock observed when the current row was decoded.
+    pub observed_wall: OffsetDateTime,
+    /// Monotonic clock observed when the current row was decoded.
+    pub observed_monotonic: std::time::Instant,
+}
+
+/// Synchronous actual-host tail; it owns no lifecycle lease and opens no database transaction.
+pub trait RememberPreferenceHostTailWitness: Send + Sync {
+    /// Recheck the original issuer, owner, window and clock under the original deadline.
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError>;
+}
+
+/// Real producer retains its own lifetime policy; arbitrary implementations are not enrollment.
+pub trait RememberPreferenceHostTailFactory: Send + Sync {
+    /// Produce a new synchronous tail from this same statement's actual session timing facts.
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<RememberPreferenceSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn RememberPreferenceHostTailWitness>, HostRequestBindingError>;
+}
+
+/// Borrowed original host input for one owned repository transaction; no Serde or secret Debug.
+pub struct RememberPreferenceHostObservation<'a> {
+    kind: HostRequestBindingKind,
+    identity: HostRequestBindingIdentity,
+    epoch: Option<BorrowedServerSessionEpoch<'a>>,
+    factory: Box<dyn RememberPreferenceHostTailFactory + 'a>,
+}
+impl<'a> RememberPreferenceHostObservation<'a> {
+    /// Trusted Rust producer constructor; the repository must independently check enrollment.
+    #[doc(hidden)]
+    pub fn from_trusted_host(
+        kind: HostRequestBindingKind,
+        identity: HostRequestBindingIdentity,
+        epoch: Option<BorrowedServerSessionEpoch<'a>>,
+        factory: Box<dyn RememberPreferenceHostTailFactory + 'a>,
+    ) -> Result<Self, HostRequestBindingError> {
+        if kind != identity.kind {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        match (&identity.epoch, &epoch) {
+            (Epoch::Session(original), Some(borrowed)) if original == borrowed.epoch => {}
+            (Epoch::SingleUser | Epoch::Window { .. }, None) => {}
+            _ => return Err(HostRequestBindingError::NotCurrent),
+        }
+        Ok(Self {
+            kind,
+            identity,
+            epoch,
+            factory,
+        })
+    }
+    /// Closed host kind, not evidence of current authority.
+    #[must_use]
+    pub const fn kind(&self) -> HostRequestBindingKind {
+        self.kind
+    }
+    /// Original attachment, to be checked against the repository's actual enrolled issuer.
+    #[must_use]
+    pub const fn identity(&self) -> &HostRequestBindingIdentity {
+        &self.identity
+    }
+    /// Reborrow the original issuer-owned epoch; no token getter or new epoch constructor.
+    #[must_use]
+    pub fn server_session_epoch(&self) -> Option<BorrowedServerSessionEpoch<'_>> {
+        self.epoch
+            .as_ref()
+            .map(|epoch| BorrowedServerSessionEpoch { epoch: epoch.epoch })
+    }
+    /// Create the original host's tail only after the repository decoded a fresh current row.
+    pub fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<RememberPreferenceSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn RememberPreferenceHostTailWitness>, HostRequestBindingError> {
+        self.factory.witness(auth, session, deadline)
+    }
+}
 /// 已登记成果联合校验的等价非 Serde Future 返回类型；不改变输出或生命周期。
 pub type ArtifactReadCurrentCheck<'a> = Pin<
     Box<
@@ -85,6 +188,15 @@ pub type ArtifactSaveReceiptCurrentCheck<'a> =
 
 /// 受信 Rust host 的当前验证 port；任意 Rust 实现不自动取得可信身份。
 pub trait HostRequestBindingGuard: Send + Sync {
+    /// Borrow original host input for an enrolled repository's own transaction, without I/O.
+    fn borrow_remember_preference_host_before<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+        _target: &'a dyn RememberPreferenceHostTarget,
+        _deadline: std::time::Instant,
+    ) -> Result<RememberPreferenceHostObservation<'a>, HostRequestBindingError> {
+        Err(HostRequestBindingError::Unavailable)
+    }
     /// Observe an original positive save receipt and current host together, or refuse unsupported composition.
     fn verify_artifact_save_receipt_current_before<'a>(
         &'a self,
@@ -349,6 +461,42 @@ pub struct VerifiedHostRequestBinding {
     guard: Arc<dyn HostRequestBindingGuard>,
 }
 impl VerifiedHostRequestBinding {
+    /// Pure attachment checks and real producer delegation; this opens no database transaction.
+    pub fn borrow_remember_preference_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn RememberPreferenceHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<RememberPreferenceHostObservation<'a>, HostRequestBindingError> {
+        self.check_remember_preference_attachment(auth, deadline)?;
+        let observation = self
+            .guard
+            .borrow_remember_preference_host_before(auth, target, deadline)?;
+        self.check_remember_preference_attachment(auth, deadline)?;
+        if observation.kind() != self.kind() || !self.identity.same_binding(observation.identity())
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        Ok(observation)
+    }
+    fn check_remember_preference_attachment(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        if !self.attached_to(auth)
+            || !auth
+                .request_binding()
+                .is_some_and(|current| self.identity.same_binding(current.identity()))
+            || self.identity.owner.closed.load(Ordering::SeqCst)
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        Ok(())
+    }
     /// 借用身份，仅供显式绑定比较。
     #[must_use]
     pub const fn identity(&self) -> &HostRequestBindingIdentity {

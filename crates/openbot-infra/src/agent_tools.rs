@@ -50,13 +50,13 @@ use crate::tool_approval::{DurableHumanDecision, PostgresToolApprovalCoordinator
 /// PostgreSQL run-local sequence allocator shared by every Server replica and callback path.
 #[derive(Clone)]
 pub struct PostgresAgentToolSequence {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
 }
 
 impl PostgresAgentToolSequence {
     /// Bind the native-0017 `runs.next_tool_call_seq` authority.
     #[must_use]
-    pub fn new(pool: deadpool_postgres::Pool) -> Self {
+    pub fn new(pool: crate::db::pool::DatabasePool) -> Self {
         Self { pool }
     }
 }
@@ -123,7 +123,7 @@ impl ToolCallSequence for PostgresAgentToolSequence {
 /// Reloads actor roles/access/generation and proves the run lease is still active before a tool.
 #[derive(Clone)]
 pub struct PostgresAgentAuthorizationSource {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     deployment: DeploymentId,
     tenant: TenantId,
     single_user: bool,
@@ -133,7 +133,7 @@ impl PostgresAgentAuthorizationSource {
     /// Construct for one deployment/tenant runtime.
     #[must_use]
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         deployment: DeploymentId,
         tenant: TenantId,
         single_user: bool,
@@ -238,7 +238,7 @@ impl AgentAuthorizationSource for PostgresAgentAuthorizationSource {
 /// First-party catalog/scope/policy/executor implementation. Initial catalog contains `remember`.
 #[derive(Clone)]
 pub struct PostgresBuiltInToolControlPlane<M> {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     deployment: DeploymentId,
     tenant: TenantId,
     policy: PolicyStore,
@@ -265,7 +265,7 @@ impl<M> PostgresBuiltInToolControlPlane<M> {
     /// Construct with the same policy hot cache and memory adapter used by ApplicationService.
     #[must_use]
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         deployment: DeploymentId,
         tenant: TenantId,
         policy: PolicyStore,
@@ -1259,7 +1259,7 @@ fn redact_approval_value(value: &serde_json::Value, depth: usize) -> serde_json:
 }
 
 async fn mcp_execution_scope_is_current(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::db::pool::DatabasePool,
     deployment: &DeploymentId,
     tenant: &TenantId,
     call: &ExecutableToolCall,

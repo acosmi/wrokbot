@@ -5,9 +5,9 @@ use crate::artifact_read_authority::PostgresArtifactReadAuthority;
 use crate::artifact_registry::ArtifactDatasetRegistry;
 use crate::artifact_store::DatasetBoundArtifactStore;
 use crate::db::pool::DatabaseConfig;
+use crate::db::pool::DatabasePool as Pool;
 use crate::db::{baseline, native, pool};
 use crate::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
-use deadpool_postgres::Pool;
 use openbot_application::{ArtifactAdministration, BeginThreadRunRequest, ThreadDirectory};
 use openbot_contracts::artifacts::{
     ArtifactRegistrationReceipt, GetArtifactSaveReceipt, SaveRunMessageTextArtifact,

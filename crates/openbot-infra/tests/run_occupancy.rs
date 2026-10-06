@@ -21,7 +21,7 @@ use std::future::Future;
 const OWNER: &str = "occupancy-runtime";
 
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     config: pool::DatabaseConfig,
     directory: PostgresThreadDirectory,
     begin: BeginThreadRunRequest,
@@ -198,7 +198,7 @@ impl Fixture {
 }
 
 fn directory(
-    p: &deadpool_postgres::Pool,
+    p: &openbot_infra::db::pool::DatabasePool,
     config: &pool::DatabaseConfig,
 ) -> PostgresThreadDirectory {
     PostgresThreadDirectory::with_runtime(

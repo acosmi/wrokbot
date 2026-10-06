@@ -40,7 +40,7 @@ const LEASE_DURATION: time::Duration = time::Duration::seconds(120);
 const AUDIT_KEY: &[u8] = b"synthetic-v6-pr-076-journal-journey-audit-key";
 
 pub struct Fixture {
-    pub pool: deadpool_postgres::Pool,
+    pub pool: openbot_infra::db::pool::DatabasePool,
     pub runtime: Arc<PostgresRunRuntime>,
     pub lease: RunExecutionLease,
     pub request: BeginThreadRunRequest,
@@ -213,7 +213,7 @@ impl Drop for Fixture {
 }
 
 fn directory(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     config: &DatabaseConfig,
     owner: &str,
 ) -> Result<PostgresThreadDirectory, String> {
@@ -226,7 +226,10 @@ fn directory(
     .map_err(|error| error.to_string())
 }
 
-fn runtime(pool: &deadpool_postgres::Pool, owner: &str) -> Result<PostgresRunRuntime, String> {
+fn runtime(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    owner: &str,
+) -> Result<PostgresRunRuntime, String> {
     PostgresRunRuntime::new(
         pool.clone(),
         owner.to_owned(),
@@ -447,7 +450,7 @@ pub async fn wait_for(notification: &Notify) -> Result<(), String> {
 
 /// One statement observes all rows, including xmin/ctid, so an otherwise invisible UPDATE fails
 /// the equality check. Only synthetic rows in this test's isolated database are inspected.
-pub async fn snapshot(pool: &deadpool_postgres::Pool) -> Result<Value, String> {
+pub async fn snapshot(pool: &openbot_infra::db::pool::DatabasePool) -> Result<Value, String> {
     let tables = [
         "runs",
         "threads",

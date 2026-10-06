@@ -1,6 +1,6 @@
 //! 动态 SSO 的唯一 application-facing 协调器；数据库每次重读保证跨 replica 新鲜。
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_contracts::ids::{ActorId, TenantId};
 use openbot_domain::identity::groups::{IdentityProviderId, IdpGroupMapping};
 use openbot_domain::identity::roles::AdminFloor;

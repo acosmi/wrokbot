@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use deadpool_postgres::Pool;
+use crate::db::pool::DatabasePool as Pool;
 use openbot_domain::audit::hash::Sha256Digest;
 use openbot_domain::vault::{
     DesktopVaultCanaryBinding, DesktopVaultCanaryEnvelope, KeyVersion, SecretBytes,
@@ -64,6 +64,75 @@ pub struct VerifiedDesktopVaultCanary {
     key_id: String,
     key_version: i32,
     encrypted_canary_digest: Sha256Digest,
+}
+
+/// Sealed same-database facts copied only from a verified canary and its actual Local DB owner.
+/// This is neither an installation-string constructor nor an artifact authority.
+pub struct VerifiedDesktopRememberPreferenceProvenance {
+    pool: Pool,
+    system_identifier: String,
+    database_oid: u32,
+    dataset_id: String,
+    deployment_id: String,
+    tenant_id: String,
+    key_id: String,
+    key_version: i32,
+    encrypted_canary_digest: Sha256Digest,
+}
+impl VerifiedDesktopRememberPreferenceProvenance {
+    /// Exact original Pool manager and cryptographically verified namespace enrollment.
+    #[must_use]
+    pub fn matches_pool_scope(
+        &self,
+        pool: &Pool,
+        deployment: &openbot_contracts::ids::DeploymentId,
+        tenant: &openbot_contracts::ids::TenantId,
+    ) -> bool {
+        std::ptr::eq(self.pool.manager(), pool.manager())
+            && self.deployment_id == deployment.as_str()
+            && self.tenant_id == tenant.as_str()
+    }
+    /// Compare the actual Local installation's namespace; this alone is not current authority.
+    #[must_use]
+    pub fn matches_installation(
+        &self,
+        installation: &crate::auth::single_user::desktop_local::DesktopLocalAuthority,
+    ) -> bool {
+        let scope = installation.auth_context();
+        self.deployment_id == scope.deployment().as_str()
+            && self.tenant_id == scope.tenant().as_str()
+    }
+    /// Decode one actual repository statement and compare the original physical/canary tuple.
+    pub fn matches_current_row(&self, row: &tokio_postgres::Row) -> Result<bool, RowDecodeError> {
+        fn column<T: for<'a> tokio_postgres::types::FromSql<'a>>(
+            row: &tokio_postgres::Row,
+            name: &'static str,
+        ) -> Result<Option<T>, RowDecodeError> {
+            row.try_get(name)
+                .map_err(|source| RowDecodeError::column(TABLE, name, source))
+        }
+        let encrypted: Option<String> = column(row, "preference_canary_encrypted")?;
+        Ok(
+            column::<String>(row, "preference_database_system_identifier")?.as_deref()
+                == Some(self.system_identifier.as_str())
+                && column::<u32>(row, "preference_database_oid")? == Some(self.database_oid)
+                && column::<String>(row, "preference_canary_dataset")?.as_deref()
+                    == Some(self.dataset_id.as_str())
+                && column::<String>(row, "preference_canary_deployment")?.as_deref()
+                    == Some(self.deployment_id.as_str())
+                && column::<String>(row, "preference_canary_tenant")?.as_deref()
+                    == Some(self.tenant_id.as_str())
+                && column::<String>(row, "preference_canary_key")?.as_deref()
+                    == Some(self.key_id.as_str())
+                && column::<i32>(row, "preference_canary_key_version")? == Some(self.key_version)
+                && column::<i16>(row, "preference_canary_schema")? == Some(1)
+                && encrypted.as_ref().is_some_and(|value| {
+                    !value.is_empty()
+                        && value.len() <= 4096
+                        && Sha256Digest::of(value.as_bytes()) == self.encrypted_canary_digest
+                }),
+        )
+    }
 }
 
 /// Sealed facts copied only from a cryptographically verified real Desktop database.
@@ -140,6 +209,28 @@ impl ValidatedDesktopVaultLayout {
 }
 
 impl VerifiedDesktopVaultCanary {
+    /// Copy only after this exact verified proof is bound to the actual Local database owner.
+    /// Runtime repository observations must still recheck the tuple in their own transaction.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn remember_preference_provenance(
+        &self,
+        database: &DesktopLocalDatabase,
+    ) -> Option<VerifiedDesktopRememberPreferenceProvenance> {
+        database.owns_token(&self.database_owner).then(|| {
+            VerifiedDesktopRememberPreferenceProvenance {
+                pool: database.clone_pool(),
+                system_identifier: self.system_identifier.clone(),
+                database_oid: self.database_oid,
+                dataset_id: self.dataset_id.clone(),
+                deployment_id: self.deployment_id.clone(),
+                tenant_id: self.tenant_id.clone(),
+                key_id: self.key_id.clone(),
+                key_version: self.key_version,
+                encrypted_canary_digest: self.encrypted_canary_digest,
+            }
+        })
+    }
     pub(crate) fn artifact_read_provenance(&self) -> VerifiedDesktopArtifactReadProvenance {
         VerifiedDesktopArtifactReadProvenance {
             system_identifier: self.system_identifier.clone(),
@@ -772,7 +863,7 @@ fn decode_row(row: tokio_postgres::Row) -> Result<DesktopVaultCanaryRow, InfraEr
     })
 }
 
-async fn client(pool: &Pool) -> Result<deadpool_postgres::Client, InfraError> {
+async fn client(pool: &Pool) -> Result<crate::db::pool::PooledClient, InfraError> {
     pool.get()
         .await
         .map_err(|source| InfraError::connect("取 Desktop Vault canary 连接", source))

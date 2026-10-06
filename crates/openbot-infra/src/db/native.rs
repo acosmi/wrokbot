@@ -694,6 +694,35 @@ pub fn native_0038_checksum() -> String {
     Sha256Digest::of(NATIVE_0038_SQL.as_bytes()).to_hex()
 }
 
+mod bootstrap_client_private {
+    pub trait Sealed {}
+
+    impl Sealed for tokio_postgres::Client {}
+    impl Sealed for crate::db::pool::PooledClient {}
+}
+
+/// The two owned client types that can construct an atomic database bootstrap transaction.
+///
+/// This sealed bridge preserves existing raw PostgreSQL callers and accepts the supervised pool
+/// facade without exposing a mutable client or stock pool object. The opaque builder retains the
+/// original client borrow; it does not grant current application or host authorization.
+pub trait BootstrapTransactionClient: bootstrap_client_private::Sealed {
+    /// Start configuring a transaction on this exact client without lending the mutable client.
+    fn bootstrap_transaction_builder(&mut self) -> tokio_postgres::TransactionBuilder<'_>;
+}
+
+impl BootstrapTransactionClient for tokio_postgres::Client {
+    fn bootstrap_transaction_builder(&mut self) -> tokio_postgres::TransactionBuilder<'_> {
+        self.build_transaction()
+    }
+}
+
+impl BootstrapTransactionClient for crate::db::pool::PooledClient {
+    fn bootstrap_transaction_builder(&mut self) -> tokio_postgres::TransactionBuilder<'_> {
+        self.build_postgres_transaction()
+    }
+}
+
 /// 在一个已到 0012 的数据库上施加当前二进制认识的全部 Rust-owned migrations。
 ///
 /// # Errors
@@ -701,7 +730,9 @@ pub fn native_0038_checksum() -> String {
 /// - 连接/DDL/账本查询失败返回脱敏的 [`InfraError::Query`]；
 /// - 同版本账本漂移或出现版本空洞返回 [`InfraError::NativeMigration`]；
 /// - commit 失败同样返回查询错误，事务由 PostgreSQL 回滚。
-pub async fn apply(client: &mut Client) -> Result<ApplyOutcome, InfraError> {
+pub async fn apply(
+    client: &mut impl BootstrapTransactionClient,
+) -> Result<ApplyOutcome, InfraError> {
     apply_through(client, NATIVE_LATEST_VERSION).await
 }
 
@@ -709,11 +740,11 @@ pub async fn apply(client: &mut Client) -> Result<ApplyOutcome, InfraError> {
 ///
 /// 生产启动应调用 [`apply`]。本入口仍走同一账本/锁/摘要校验，不是绕过 migration 的测试后门。
 pub async fn apply_through(
-    client: &mut Client,
+    client: &mut impl BootstrapTransactionClient,
     max_version: i32,
 ) -> Result<ApplyOutcome, InfraError> {
     let transaction = client
-        .build_transaction()
+        .bootstrap_transaction_builder()
         .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
         .start()
         .await

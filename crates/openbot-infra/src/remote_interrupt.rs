@@ -29,7 +29,7 @@ pub const REMOTE_INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Production coordinator. The audit key is kept in one zeroizing allocation.
 pub struct PostgresRemoteInterruptCoordinator {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     owner: String,
     checkpoint_key: SecretBytes,
 }
@@ -37,7 +37,7 @@ pub struct PostgresRemoteInterruptCoordinator {
 impl PostgresRemoteInterruptCoordinator {
     /// Construct for the same process identity that owns [`crate::run_runtime::PostgresRunRuntime`].
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         owner: String,
         checkpoint_key: Vec<u8>,
     ) -> Result<Self, RemoteInterruptError> {
@@ -684,7 +684,7 @@ where
     row.try_get(field).map_err(|_| corrupt(field))
 }
 
-fn unavailable(error: deadpool_postgres::PoolError) -> RemoteInterruptError {
+fn unavailable(error: crate::db::pool::PoolError) -> RemoteInterruptError {
     tracing::warn!(error = %error, "remote interrupt pool unavailable");
     RemoteInterruptError::Unavailable
 }

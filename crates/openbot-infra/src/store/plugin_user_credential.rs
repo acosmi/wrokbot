@@ -9,8 +9,8 @@ mod refresh_operation;
 use refresh_operation::{OperationSendFence, RefreshSendFence};
 use std::sync::Arc;
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
-use deadpool_postgres::Pool;
 use openbot_application::{OwnedCredentialRetirementError, OwnedCredentialRetirer};
 use openbot_contracts::ids::ActorId;
 use openbot_domain::audit::event::{AuditEvent, AuditEventType};

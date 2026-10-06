@@ -15,7 +15,7 @@ const AUDIT_KEY: &[u8] = b"audit-reader-postgres17-test-key";
 
 async fn provision(
     config: &openbot_infra::db::pool::DatabaseConfig,
-) -> Result<deadpool_postgres::Pool, String> {
+) -> Result<openbot_infra::db::pool::DatabasePool, String> {
     let pool = pool::connect(config)
         .await
         .map_err(|error| format!("连接临时库失败：{error}"))?;
@@ -50,7 +50,7 @@ fn event(
     }
 }
 
-async fn seed_events(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn seed_events(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let repo = AuditEventRepo::new(pool.clone());
     for event in [
         event(

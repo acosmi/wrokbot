@@ -19,7 +19,7 @@ use openbot_infra::memory_admin::PostgresMemoryAdministration;
 const THREAD_A: &str = "550e8400-e29b-41d4-a716-446655440000";
 const THREAD_B: &str = "550e8400-e29b-41d4-a716-446655440001";
 
-async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
+async fn provision(pool: &openbot_infra::db::pool::DatabasePool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|e| e.to_string())?;
     baseline::apply(&client).await.map_err(|e| e.to_string())?;
     native::apply(&mut client)
@@ -50,7 +50,7 @@ async fn provision(pool: &deadpool_postgres::Pool) -> Result<(), String> {
 // Owned ranking/expiry fixture setup: construct a historical row at INSERT time. This is
 // not an adapter history rewrite and does not disable any production provenance guard.
 async fn dated_fixture(
-    client: &deadpool_postgres::Client,
+    client: &openbot_infra::db::pool::PooledClient,
     id: &str,
     days: i32,
     expired: bool,

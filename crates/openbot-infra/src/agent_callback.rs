@@ -27,7 +27,7 @@ use crate::repo::people_admin::lock_people;
 /// Production token store. Hash update and lifecycle audit share one transaction.
 #[derive(Clone)]
 pub struct PostgresAgentCallbackTokens {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     deployment: DeploymentId,
     tenant: TenantId,
     checkpoint_key: Arc<SecretBytes>,
@@ -36,7 +36,7 @@ pub struct PostgresAgentCallbackTokens {
 impl PostgresAgentCallbackTokens {
     /// Construct for one authoritative deployment/tenant.
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         deployment: DeploymentId,
         tenant: TenantId,
         checkpoint_key: Vec<u8>,
@@ -280,7 +280,7 @@ fn unavailable(operation: &'static str, error: impl core::fmt::Display) -> Agent
 /// Production token + assertion + active-run verifier. The current production tool set is empty
 /// until RMCP/Drive executors land, so valid callers reach an honest 404 rather than a fake tool.
 pub struct PostgresRemoteCallbackAuthenticator {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     deployment: DeploymentId,
     tenant: TenantId,
     single_user: bool,
@@ -292,7 +292,7 @@ pub struct PostgresRemoteCallbackAuthenticator {
 impl PostgresRemoteCallbackAuthenticator {
     /// Construct with the same run signer and audit checkpoint key used by production assembly.
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         deployment: DeploymentId,
         tenant: TenantId,
         single_user: bool,

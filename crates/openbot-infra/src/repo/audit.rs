@@ -5,10 +5,10 @@
 //! 或数据库 hash 无法解析时全部 fail-closed。这里没有 UPDATE/DELETE API，数据库 trigger 再挡
 //! 一层绕过。
 
+use crate::db::pool::DatabasePool as Pool;
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use deadpool_postgres::Pool;
 use openbot_application::{AuditPageRequest, AuditReadError, AuditReader};
 use openbot_contracts::audit::{AuditEventView, AuditPage};
 use openbot_contracts::ids::{ActorId, AuditEventId};

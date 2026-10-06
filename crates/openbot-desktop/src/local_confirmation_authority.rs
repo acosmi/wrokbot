@@ -16,6 +16,9 @@ pub(crate) struct PostgresLocalConfirmationAuthority {
     artifact_read_authority: std::sync::OnceLock<
         std::sync::Weak<openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority>,
     >,
+    remember_preferences: std::sync::OnceLock<
+        std::sync::Weak<openbot_infra::approval_preferences::PostgresRememberPreferenceRepository>,
+    >,
 }
 
 #[cfg(feature = "desktop-local-runtime")]
@@ -35,6 +38,7 @@ impl PostgresLocalConfirmationAuthority {
             installation,
             pool,
             artifact_read_authority: std::sync::OnceLock::new(),
+            remember_preferences: std::sync::OnceLock::new(),
         }
     }
 
@@ -52,6 +56,39 @@ impl PostgresLocalConfirmationAuthority {
         self.artifact_read_authority
             .set(std::sync::Arc::downgrade(authority))
             .map_err(|_| HostRequestBindingError::Unavailable)
+    }
+
+    pub(crate) fn install_remember_preference_repository(
+        &self,
+        repository: &std::sync::Arc<
+            openbot_infra::approval_preferences::PostgresRememberPreferenceRepository,
+        >,
+    ) -> Result<(), openbot_contracts::HostRequestBindingError> {
+        let original = self.installation.auth_context();
+        if !repository.matches_pool_scope(&self.pool, original.deployment(), original.tenant()) {
+            return Err(openbot_contracts::HostRequestBindingError::Unavailable);
+        }
+        self.remember_preferences
+            .set(std::sync::Arc::downgrade(repository))
+            .map_err(|_| openbot_contracts::HostRequestBindingError::Unavailable)
+    }
+
+    pub(crate) fn enroll_remember_preference_window_issuer(
+        &self,
+        issuer: &openbot_contracts::RequestBindingIssuer,
+    ) -> Result<(), openbot_contracts::HostRequestBindingError> {
+        let repository = self
+            .remember_preferences
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or(openbot_contracts::HostRequestBindingError::Unavailable)?;
+        let original = self.installation.auth_context();
+        if !repository.matches_pool_scope(&self.pool, original.deployment(), original.tenant())
+            || !issuer.observation().is_current()
+        {
+            return Err(openbot_contracts::HostRequestBindingError::Unavailable);
+        }
+        repository.enroll_host_issuer(issuer)
     }
 
     pub(crate) fn artifact_read_lifecycle(
@@ -201,6 +238,62 @@ mod tests;
 
 #[cfg(feature = "desktop-local-runtime")]
 impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAuthority {
+    fn borrow_remember_preference_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn openbot_contracts::request_binding::RememberPreferenceHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<
+        openbot_contracts::request_binding::RememberPreferenceHostObservation<'a>,
+        openbot_contracts::HostRequestBindingError,
+    > {
+        use openbot_contracts::request_binding::{
+            HostRequestBindingError, HostRequestBindingKind, RememberPreferenceHostObservation,
+        };
+        let installation = self.installation.auth_context();
+        if !auth.is_single_user()
+            || auth.deployment() != installation.deployment()
+            || auth.tenant() != installation.tenant()
+            || auth.actor() != installation.actor()
+            || auth.roles() != installation.roles()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let repository = self
+            .remember_preferences
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !repository.matches_pool_scope(
+            &self.pool,
+            installation.deployment(),
+            installation.tenant(),
+        ) || !repository.matches_host_target(target, auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if binding.kind() != HostRequestBindingKind::DesktopWindow {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let factory = LocalRememberPreferenceTail {
+            repository: std::sync::Arc::downgrade(&repository),
+            pool: self.pool.clone(),
+            installation: self.installation.clone(),
+            original: auth.clone(),
+        };
+        openbot_contracts::request_binding::RememberPreferenceHostTailWitness::verify_current(
+            &factory, auth, deadline,
+        )?;
+        RememberPreferenceHostObservation::from_trusted_host(
+            HostRequestBindingKind::DesktopWindow,
+            binding.identity().clone(),
+            None,
+            Box::new(factory),
+        )
+    }
     fn verify_source_run_artifact_ids_current_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -342,5 +435,77 @@ impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAut
             .await
             .unwrap_or(Err(openbot_contracts::HostRequestBindingError::Unavailable))
         })
+    }
+}
+
+#[cfg(feature = "desktop-local-runtime")]
+#[derive(Clone)]
+struct LocalRememberPreferenceTail {
+    repository:
+        std::sync::Weak<openbot_infra::approval_preferences::PostgresRememberPreferenceRepository>,
+    pool: openbot_infra::db::pool::DatabasePool,
+    installation: openbot_infra::auth::single_user::desktop_local::DesktopLocalAuthority,
+    original: AuthContext,
+}
+#[cfg(feature = "desktop-local-runtime")]
+impl openbot_contracts::request_binding::RememberPreferenceHostTailFactory
+    for LocalRememberPreferenceTail
+{
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<openbot_contracts::request_binding::RememberPreferenceSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<
+        Box<dyn openbot_contracts::request_binding::RememberPreferenceHostTailWitness>,
+        openbot_contracts::HostRequestBindingError,
+    > {
+        if session.is_some() {
+            return Err(openbot_contracts::HostRequestBindingError::NotCurrent);
+        }
+        openbot_contracts::request_binding::RememberPreferenceHostTailWitness::verify_current(
+            self, auth, deadline,
+        )?;
+        Ok(Box::new(self.clone()))
+    }
+}
+#[cfg(feature = "desktop-local-runtime")]
+impl openbot_contracts::request_binding::RememberPreferenceHostTailWitness
+    for LocalRememberPreferenceTail
+{
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), openbot_contracts::HostRequestBindingError> {
+        use openbot_contracts::request_binding::{HostRequestBindingError, HostRequestBindingKind};
+        if auth != &self.original
+            || !self
+                .original
+                .request_binding()
+                .zip(auth.request_binding())
+                .is_some_and(|(a, b)| {
+                    a.identity().same_binding(b.identity())
+                        && b.kind() == HostRequestBindingKind::DesktopWindow
+                })
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let repository = self
+            .repository
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let installation = self.installation.auth_context();
+        if !repository.matches_pool_scope(
+            &self.pool,
+            installation.deployment(),
+            installation.tenant(),
+        ) {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        Ok(())
     }
 }

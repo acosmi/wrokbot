@@ -70,7 +70,7 @@ fn write(
 }
 
 async fn setup(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
 ) -> Result<(PostgresCredentialAdministration, CredentialRecordVault), String> {
     let mut client = pool.get().await.map_err(|e| e.to_string())?;
     baseline::apply(&client).await.map_err(|e| e.to_string())?;

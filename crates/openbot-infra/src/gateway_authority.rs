@@ -145,7 +145,7 @@ impl fmt::Debug for GatewayOperation {
 
 /// Trusted host composition for SDK Gateway account persistence.
 pub struct PostgresGatewayAccounts {
-    pool: deadpool_postgres::Pool,
+    pool: crate::db::pool::DatabasePool,
     vault: CredentialRecordVault,
     deployment: DeploymentId,
     tenant: TenantId,
@@ -157,7 +157,7 @@ pub struct PostgresGatewayAccounts {
 impl PostgresGatewayAccounts {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        pool: deadpool_postgres::Pool,
+        pool: crate::db::pool::DatabasePool,
         vault: CredentialRecordVault,
         deployment: DeploymentId,
         tenant: TenantId,

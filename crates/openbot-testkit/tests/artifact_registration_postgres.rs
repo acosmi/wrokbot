@@ -127,7 +127,7 @@ struct ResponseFacts {
 }
 
 struct Fixture {
-    pool: deadpool_postgres::Pool,
+    pool: openbot_infra::db::pool::DatabasePool,
     router: axum::Router,
     desktop: DesktopTauriProtocol,
     begin: BeginThreadRunRequest,

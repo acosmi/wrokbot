@@ -17,7 +17,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use deadpool_postgres::Pool;
 use openbot_application::{
     ArtifactAdministration, BeginThreadRunRequest, CurrentArtifactReadOperation, ThreadDirectory,
 };
@@ -39,6 +38,7 @@ use openbot_infra::artifact_administration::PostgresArtifactAdministration;
 use openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority;
 use openbot_infra::artifact_registry::ArtifactDatasetRegistry;
 use openbot_infra::artifact_store::DatasetBoundArtifactStore;
+use openbot_infra::db::pool::DatabasePool as Pool;
 use openbot_infra::db::{baseline, native, pool, pool::DatabaseConfig};
 use openbot_infra::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThreadDirectory};
 use time::OffsetDateTime;

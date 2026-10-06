@@ -341,7 +341,7 @@ async fn audit_failure_rolls_back_enrollment_after_real_identity_reads() {
 }
 
 async fn install_rotation_audit_failure(
-    pool: &deadpool_postgres::Pool,
+    pool: &openbot_infra::db::pool::DatabasePool,
     audit_fact: &str,
 ) -> Result<(), String> {
     assert!(matches!(

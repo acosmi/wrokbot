@@ -31,7 +31,10 @@ fn policy(mode: PolicyMode, deny: &str) -> ActionPolicy {
 
 async fn with_policy_database<F, Fut>(test_name: &'static str, tag: &'static str, body: F)
 where
-    F: FnOnce(deadpool_postgres::Pool, openbot_infra::db::pool::DatabaseConfig) -> Fut,
+    F: FnOnce(
+        openbot_infra::db::pool::DatabasePool,
+        openbot_infra::db::pool::DatabaseConfig,
+    ) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
     let admin = admin_config(test_name);
@@ -57,7 +60,7 @@ where
     .await;
 }
 
-async fn scalar(pool: &deadpool_postgres::Pool, sql: &str) -> Result<i64, String> {
+async fn scalar(pool: &openbot_infra::db::pool::DatabasePool, sql: &str) -> Result<i64, String> {
     pool.get()
         .await
         .map_err(|error| error.to_string())?

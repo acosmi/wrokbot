@@ -80,7 +80,7 @@ ORDER BY x.call_sequence,x.attempt_sequence
 ";
 
 pub(super) async fn read(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::db::pool::DatabasePool,
     request: RunEffectReceiptsRequest,
 ) -> Result<RunEffectReceiptsSnapshot, ThreadDirectoryError> {
     if !ThreadIdentity::is_plausible(&request.thread) {
