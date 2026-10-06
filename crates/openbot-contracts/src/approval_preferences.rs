@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn stored_key_decode_rejects_unknown_kind_or_alias_targets() {
-        let decode = |kind, target| {
+        let decode = |kind: &str, target: &str| {
             RememberPreferenceKey::from_stored(
                 DeploymentId::new("deployment-A"),
                 TenantId::new("tenant-A"),
