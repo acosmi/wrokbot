@@ -1476,6 +1476,31 @@ impl SseController {
                 return Ok(());
             }
             if facts["reconnectCaptured"] == true {
+                // A new EventSource may bootstrap from the cursor already forwarded by the retry.
+                let ordinary_bootstrap = facts["releaseSent"] == true
+                    && facts["reconnectReceiverReturned"] == true
+                    && facts["originalHandlerReturned200"] == true
+                    && facts["remainingGates"] == 0
+                    && facts["sessionId"] == current.session
+                    && facts["actorId"] == current.actor
+                    && facts["authGeneration"] == generation
+                    && cookie
+                    && last_id.is_none()
+                    && cursor.is_some_and(|fresh| {
+                        facts["lastObservedGlobalCursor"]
+                            .as_u64()
+                            .is_some_and(|prior| fresh > prior)
+                            && facts["streams"].as_array().is_some_and(|streams| {
+                                streams.iter().any(|stream| {
+                                    stream["requestSequence"] == facts["reconnectRequestSequence"]
+                                        && stream["originalHandlerReturned200"] == true
+                                        && stream["lastForwardedEventId"].as_u64() == Some(fresh)
+                                })
+                            })
+                    });
+                if ordinary_bootstrap {
+                    return Ok(());
+                }
                 return Err("sse_extra_matching_reconnect".to_owned());
             }
             if facts["sessionId"] != current.session
