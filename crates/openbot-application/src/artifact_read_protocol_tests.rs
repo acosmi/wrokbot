@@ -632,6 +632,7 @@ async fn ordinary_notifications_do_not_cancel_original_reader_expiry() {
         cleanup_started: AtomicBool::new(false),
         changed: Notify::new(),
         completion: Mutex::new(Some(completion)),
+        control: Mutex::new(None),
         data: AsyncMutex::new(EntryData::opening()),
     });
     registry
