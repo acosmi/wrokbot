@@ -121,6 +121,7 @@ pub const fn command_kind(command: &AppCommand) -> &'static str {
     match command {
         AppCommand::GetRuntimeCapabilities => "get_runtime_capabilities",
         AppCommand::SaveRunMessageTextArtifact(_) => "save_run_message_text_artifact",
+        AppCommand::GetArtifactSaveReceipt(_) => "get_artifact_save_receipt",
         AppCommand::GetArtifactMetadata(_) => "get_artifact_metadata",
         AppCommand::GetSourceRunArtifactIds(_) => "get_source_run_artifact_ids",
         AppCommand::Health => "health",
@@ -279,6 +280,12 @@ mod tests {
                 "get_artifact_metadata",
             ),
             (AppCommand::GetRuntimeCapabilities, "get_runtime_capabilities"),
+            (
+                AppCommand::GetArtifactSaveReceipt(openbot_contracts::artifacts::GetArtifactSaveReceipt {
+                    request_id: "019a7778-abcd-7abc-8abc-0123456789ab".into(),
+                }),
+                "get_artifact_save_receipt",
+            ),
             (AppCommand::Health, "health"),
             (
                 AppCommand::ListVisibleChannels {
