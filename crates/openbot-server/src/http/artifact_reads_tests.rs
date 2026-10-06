@@ -389,7 +389,10 @@ impl Fixture {
                 default_session_lifetime(),
                 TrustedOrigins::from_configured([ORIGIN]).map_err(|error| error.to_string())?,
             ))
-            .into_router();
+            .into_router()
+            .layer(axum::Extension(axum::extract::ConnectInfo(
+                std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 40_012)),
+            )));
         root.1 = false;
         Ok(Self {
             pool,
