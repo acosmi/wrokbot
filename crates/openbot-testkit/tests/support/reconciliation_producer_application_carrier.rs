@@ -1765,10 +1765,10 @@ fn decode_reply(kind: ReadKind, body: &[u8]) -> Result<AppReply, String> {
     match kind {
         ReadKind::Attempts => serde_json::from_slice::<RunReconciliationSnapshot>(body)
             .map(AppReply::RunReconciliation)
-            .map_err(|_| "closed_074_host_dto"),
+            .map_err(|_| "closed_074_host_dto".to_owned()),
         ReadKind::Receipts => serde_json::from_slice::<RunEffectReceiptsSnapshot>(body)
             .map(AppReply::RunEffectReceipts)
-            .map_err(|_| "closed_075_host_dto"),
+            .map_err(|_| "closed_075_host_dto".to_owned()),
     }
 }
 fn parts(token: &str) -> Result<axum::http::request::Parts, String> {
