@@ -1691,7 +1691,7 @@ fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::B
     )?;
     let device = metadata.dev() & u64::from(u32::MAX);
     let inode = metadata.ino();
-    let sample = || -> Result<BTreeSet<u32>, String> {
+    let sample = || -> Result<std::collections::BTreeSet<u32>, String> {
         let pid = std::process::id();
         let mut child = Command::new("/usr/sbin/lsof")
             .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
