@@ -584,7 +584,13 @@ fn data_headers(
     require(
         response.status() == StatusCode::OK,
         "actual public block was not successful",
-    )?;
+    )
+    .map_err(|message| {
+        format!(
+            "{message}: status={} input_sequence={sequence}",
+            response.status().as_u16()
+        )
+    })?;
     require(
         response.headers().get("content-length").is_none(),
         "zero-length framing could bypass the actual EOF body poll",
