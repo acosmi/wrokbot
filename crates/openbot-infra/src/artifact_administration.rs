@@ -17,6 +17,9 @@ use openbot_contracts::auth::AuthContext;
 use openbot_contracts::ids::thread::ThreadIdentity;
 use openbot_contracts::ids::{ActorId, DeploymentId, RunId, TenantId, ThreadId};
 use openbot_domain::artifact::{ArtifactQuotaPolicy, ArtifactWorkspaceKey};
+use openbot_domain::artifact_cleanup::{
+    ArtifactCleanupFence, ArtifactCleanupFenceKey, ArtifactCleanupFencePhase,
+};
 use openbot_domain::audit::event::{AuditEvent, AuditEventType};
 use openbot_domain::audit::hash::Sha256Digest;
 use openbot_domain::audit::payload::{AuditFact, AuditIdentifier, AuditLabel, AuditPayload};
@@ -66,6 +69,13 @@ pub async fn capture_artifact_registration_schema(
         .await
         .map_err(|_| unavailable())?
         .map_err(|_| unavailable())?;
+    capture_artifact_registration_schema_on(&client).await
+}
+
+/// Capture the original registration facts on this exact caller-owned connection.
+pub(crate) async fn capture_artifact_registration_schema_on(
+    client: &tokio_postgres::Client,
+) -> Result<ArtifactRegistrationSchemaFacts, ArtifactAdministrationError> {
     let mut tables = Map::new();
     for name in TABLES {
         let sql = ARTIFACT_REGISTRY_SCHEMA_SQL.replace("artifact_dataset_bindings", name);
@@ -109,6 +119,28 @@ async fn verify_registration_schema_inner(pool: &Pool) -> Result<(), ArtifactAdm
         return Err(corrupt("registration_schema"));
     }
     Ok(())
+}
+
+/// Reader-only composition; Save and metadata keep their original registration boundary.
+pub(crate) async fn verify_artifact_read_schema_on(
+    client: &tokio_postgres::Client,
+) -> Result<(), ArtifactAdministrationError> {
+    crate::artifact_registry::verify_artifact_registry_schema_on(client)
+        .await
+        .map_err(|_| corrupt("registry_schema"))?;
+    let expected: Value = serde_json::from_str(REGISTERED_REGISTRATION_SCHEMA)
+        .map_err(|_| corrupt("registration_oracle"))?;
+    if capture_artifact_registration_schema_on(client).await? != expected {
+        return Err(corrupt("registration_schema"));
+    }
+    crate::db::artifact_cleanup_schema::verify(client)
+        .await
+        .map_err(|error| match error {
+            crate::db::artifact_cleanup_schema::ArtifactCleanupSchemaError::Unavailable => {
+                unavailable()
+            }
+            _ => corrupt("read_cleanup_schema"),
+        })
 }
 
 /// Shared authenticated save adapter, retaining the exact trusted dataset and live byte owner.
@@ -226,61 +258,72 @@ impl PostgresArtifactAdministration {
         self.observe_read_record_inner(auth, artifact_id).await
     }
 
-    /// A public operation's original collector awaits the actual query and rollback futures.
-    /// Its caller may time out, but does not cancel this collector or turn Drop into an ACK.
+    /// The original guarded owner bounds queries and rollback ACK by the caller's deadline.
+    /// Cancellation or timeout retires the owner and never turns Drop into a positive ACK.
     pub(super) async fn observe_read_record_before_inner(
         &self,
         auth: &AuthContext,
         artifact_id: &str,
         deadline: std::time::Instant,
     ) -> Result<ObservedArtifactReadRecord, PublicReadRecordFailure> {
-        let check_budget = || {
-            deadline
-                .checked_duration_since(std::time::Instant::now())
-                .filter(|remaining| !remaining.is_zero())
-                .ok_or_else(|| PublicReadRecordFailure::observed(unavailable()))
-        };
-        check_budget()?;
-        let id = canonical_artifact_uuid_v7(artifact_id).ok_or_else(|| {
-            PublicReadRecordFailure::observed(ArtifactAdministrationError::InvalidInput {
-                field: "artifactId",
-            })
-        })?;
-        self.check_namespace(auth)
-            .map_err(PublicReadRecordFailure::observed)?;
-        if let Err(error) = verify_artifact_registration_schema(self.registry.pool()).await {
-            // This existing schema boundary may have dropped a still-running PG query.
-            return Err(
-                if matches!(
-                    &error,
-                    ArtifactAdministrationError::Unavailable
-                        | ArtifactAdministrationError::Corrupt {
-                            field: "registry_schema"
-                        }
-                ) {
-                    PublicReadRecordFailure::unproven(error)
-                } else {
-                    PublicReadRecordFailure::observed(error)
-                },
-            );
-        }
-        check_budget()?;
-        let mut client = self
-            .registry
-            .pool()
-            .get()
+        #[cfg(test)]
+        return self
+            .observe_read_record_guarded(auth, artifact_id, deadline, None)
+            .await;
+        #[cfg(not(test))]
+        self.observe_read_record_guarded(auth, artifact_id, deadline)
             .await
-            .map_err(|_| PublicReadRecordFailure::observed(unavailable()))?;
-        check_budget()?;
-        let tx = client
-            .build_transaction()
-            .isolation_level(IsolationLevel::ReadCommitted)
-            .read_only(true)
-            .start()
+    }
+
+    async fn observe_read_record_guarded(
+        &self,
+        auth: &AuthContext,
+        artifact_id: &str,
+        deadline: std::time::Instant,
+        #[cfg(test)] final_query_gate: Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    ) -> Result<ObservedArtifactReadRecord, PublicReadRecordFailure> {
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+            let check_budget = || {
+                deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .filter(|remaining| !remaining.is_zero())
+                    .ok_or_else(|| PublicReadRecordFailure::observed(unavailable()))
+            };
+            check_budget()?;
+            let id = canonical_artifact_uuid_v7(artifact_id).ok_or_else(|| {
+                PublicReadRecordFailure::observed(ArtifactAdministrationError::InvalidInput {
+                    field: "artifactId",
+                })
+            })?;
+            self.check_namespace(auth)
+                .map_err(PublicReadRecordFailure::observed)?;
+            let checkout_limit = deadline.min(std::time::Instant::now() + WAIT);
+            let mut client = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(checkout_limit),
+                self.registry.pool().get_guarded(deadline),
+            )
             .await
+            .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?
             .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?;
-        let outcome =
-            async {
+            // Every schema future belongs to this same guarded owner. Any unacknowledged exit
+            // permanently retires it; returning an error does not invent a resource destruction ACK.
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline.min(std::time::Instant::now() + PG_PHASE)),
+                verify_artifact_read_schema_on(client.as_client()),
+            )
+            .await
+            .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?
+            .map_err(PublicReadRecordFailure::unproven)?;
+            check_budget()?;
+            let original_transaction = client
+                .begin_read_committed_read_only()
+                .await
+                .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?;
+            let outcome = async {
+                let tx = original_transaction.as_transaction();
                 let remaining = deadline
                     .checked_duration_since(std::time::Instant::now())
                     .filter(|remaining| !remaining.is_zero())
@@ -309,86 +352,7 @@ impl PostgresArtifactAdministration {
                 if std::time::Instant::now() >= deadline {
                     return Err(unavailable());
                 }
-                let row = tx
-                    .query_opt(
-                        observed_read_sql(),
-                        &[
-                            &thread,
-                            &run,
-                            &auth.actor().as_str(),
-                            &auth.deployment().as_str(),
-                            &auth.tenant().as_str(),
-                            &generation,
-                            &id,
-                            &b.dataset_id(),
-                            &b.binding_schema(),
-                            &b.initial_origin(),
-                            &b.created_at(),
-                            &self.store.store_id().to_string(),
-                            &physical.device(),
-                            &physical.inode(),
-                            &physical.uid(),
-                        ],
-                    )
-                    .await
-                    .map_err(|_| unavailable())?
-                    .ok_or(ArtifactAdministrationError::NotVisible)?;
-                self.decode_read_record(auth, &row)
-            }
-            .await;
-        // No timeout surrounds this original rollback future. The caller's permit remains live.
-        tx.rollback()
-            .await
-            .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?;
-        check_budget()?;
-        outcome.map_err(PublicReadRecordFailure::observed)
-    }
-
-    async fn observe_read_record_inner(
-        &self,
-        auth: &AuthContext,
-        artifact_id: &str,
-        #[cfg(test)] final_query_gate: Option<(
-            tokio::sync::oneshot::Sender<()>,
-            tokio::sync::oneshot::Receiver<()>,
-        )>,
-    ) -> Result<ObservedArtifactReadRecord, ArtifactAdministrationError> {
-        tokio::time::timeout(PG_PHASE, async {
-            let id = canonical_artifact_uuid_v7(artifact_id).ok_or(
-                ArtifactAdministrationError::InvalidInput {
-                    field: "artifactId",
-                },
-            )?;
-            self.check_namespace(auth)?;
-            verify_artifact_registration_schema(self.registry.pool()).await?;
-            let mut client = self.connection().await?;
-            let tx = client
-                .build_transaction()
-                .isolation_level(IsolationLevel::ReadCommitted)
-                .read_only(true)
-                .start()
-                .await
-                .map_err(|_| unavailable())?;
-            // Every statement outcome, including an error, is retained until rollback is
-            // explicitly awaited. Timeout/drop does not prove the server worker has finished.
-            let outcome = async {
-                setup(&tx).await?;
-                let b = self.registry.binding();
-                let seed = tx.query_opt(
-                    "SELECT source_thread_id,source_run_id FROM openbot_internal.artifact_records \
-                     WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 \
-                       AND artifact_id=$4 AND owner_actor_id=$5",
-                    &[&b.deployment_id(), &b.tenant_id(), &b.dataset_id(), &id,
-                      &auth.actor().as_str()],
-                ).await.map_err(|_| unavailable())?
-                    .ok_or(ArtifactAdministrationError::NotVisible)?;
-                let thread: String = value(&seed, "source_thread_id")?;
-                let run: String = value(&seed, "source_run_id")?;
-                let generation = i64::try_from(auth.auth_generation().get())
-                    .map_err(|_| ArtifactAdministrationError::NotVisible)?;
-                let physical = self.store.physical_binding();
-                // Tests coordinate after the actual preflight/seed, then still require the
-                // final statement's real PG lock wait. No gate exists in release builds.
+                // The existing private test gate coordinates only after schema/setup/seed.
                 #[cfg(test)]
                 if let Some((reached, proceed)) = final_query_gate {
                     reached.send(()).map_err(|_| unavailable())?;
@@ -421,11 +385,39 @@ impl PostgresArtifactAdministration {
                 self.decode_read_record(auth, &row)
             }
             .await;
-            tx.rollback().await.map_err(|_| unavailable())?;
-            outcome
+            // The genuine ACK is bounded by the original deadline. Queued Drop rollback is not ACK.
+            original_transaction
+                .rollback()
+                .await
+                .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?;
+            check_budget()?;
+            outcome.map_err(PublicReadRecordFailure::observed)
         })
         .await
-        .map_err(|_| unavailable())?
+        .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?
+    }
+
+    async fn observe_read_record_inner(
+        &self,
+        auth: &AuthContext,
+        artifact_id: &str,
+        #[cfg(test)] final_query_gate: Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    ) -> Result<ObservedArtifactReadRecord, ArtifactAdministrationError> {
+        let deadline = std::time::Instant::now()
+            .checked_add(PG_PHASE)
+            .ok_or_else(unavailable)?;
+        #[cfg(test)]
+        return self
+            .observe_read_record_guarded(auth, artifact_id, deadline, final_query_gate)
+            .await
+            .map_err(|failure| failure.error);
+        #[cfg(not(test))]
+        self.observe_read_record_guarded(auth, artifact_id, deadline)
+            .await
+            .map_err(|failure| failure.error)
     }
 
     fn decode_read_record(
@@ -513,6 +505,21 @@ impl PostgresArtifactAdministration {
             || value::<Option<String>>(row, "op_observation_phase")?.as_deref() != Some("installed")
         {
             return Err(corrupt("read_operation_payload"));
+        }
+        let binding = self.registry.binding();
+        let record_key = ArtifactCleanupFenceKey::from_stored(
+            DeploymentId::new(binding.deployment_id()),
+            TenantId::new(binding.tenant_id()),
+            binding.dataset_id(),
+            &source.operation_id,
+            &source.artifact_id,
+        )
+        .map_err(|_| corrupt("read_cleanup_fence"))?;
+        if let Some(fence) = decode_read_cleanup_fence(row, &record_key)? {
+            return Err(match fence.phase() {
+                ArtifactCleanupFencePhase::Armed => unavailable(),
+                ArtifactCleanupFencePhase::Completed => corrupt("read_cleanup_fence"),
+            });
         }
         let blob = ArtifactBlob::from_record(
             Uuid::parse_str(&source.artifact_id).map_err(|_| corrupt("read_artifact_id"))?,
@@ -1602,6 +1609,10 @@ fn observed_read_sql() -> &'static str {
           o.expected_sha256 AS op_expected_sha256,o.expected_bytes AS op_expected_bytes,o.charged_bytes AS op_charged_bytes, \
           o.actual_absent AS op_actual_absent,o.actual_byte_length AS op_actual_byte_length,o.actual_sha256 AS op_actual_sha256, \
           o.actual_location AS op_actual_location,o.observation_phase AS op_observation_phase, \
+          c.deployment_id AS cleanup_deployment_id,c.tenant_id AS cleanup_tenant_id, \
+          c.dataset_id AS cleanup_dataset_id,c.operation_id AS cleanup_operation_id, \
+          c.artifact_id AS cleanup_artifact_id,c.terminal_status AS cleanup_terminal_status, \
+          c.phase AS cleanup_phase, \
           EXISTS(SELECT 1 FROM openbot_internal.artifact_dataset_bindings d \
              JOIN openbot_internal.artifact_store_bindings s USING(deployment_id,tenant_id,dataset_id) \
              WHERE d.deployment_id=$4 AND d.tenant_id=$5 AND d.dataset_id=$8 AND d.binding_schema=$9 \
@@ -1619,8 +1630,56 @@ fn observed_read_sql() -> &'static str {
           AND o.source_run_id=a.source_run_id AND o.source_message_id=a.source_message_id \
           AND o.source_call_seq IS NOT DISTINCT FROM a.source_call_seq \
           AND o.source_attempt_seq IS NOT DISTINCT FROM a.source_attempt_seq \
+        LEFT JOIN openbot_internal.artifact_cleanup_fences c \
+          ON c.deployment_id=a.deployment_id AND c.tenant_id=a.tenant_id \
+          AND c.dataset_id=a.dataset_id AND c.artifact_id=a.artifact_id \
         WHERE a.owner_actor_id=$3 AND a.deployment_id=$4 AND a.tenant_id=$5 \
           AND a.artifact_id=$7 AND a.dataset_id=$8"))
+}
+
+fn decode_read_cleanup_fence(
+    row: &Row,
+    expected: &ArtifactCleanupFenceKey,
+) -> Result<Option<ArtifactCleanupFence>, ArtifactAdministrationError> {
+    let fields = [
+        "cleanup_deployment_id",
+        "cleanup_tenant_id",
+        "cleanup_dataset_id",
+        "cleanup_operation_id",
+        "cleanup_artifact_id",
+        "cleanup_terminal_status",
+        "cleanup_phase",
+    ]
+    .map(|name| value::<Option<String>>(row, name));
+    let fields = fields
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| corrupt("read_cleanup_fence"))?;
+    if fields.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let stored = fields
+        .iter()
+        .map(|field| {
+            field
+                .as_deref()
+                .ok_or_else(|| corrupt("read_cleanup_fence"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let key = ArtifactCleanupFenceKey::from_stored(
+        DeploymentId::new(stored[0]),
+        TenantId::new(stored[1]),
+        stored[2],
+        stored[3],
+        stored[4],
+    )
+    .map_err(|_| corrupt("read_cleanup_fence"))?;
+    if &key != expected {
+        return Err(corrupt("read_cleanup_fence"));
+    }
+    ArtifactCleanupFence::from_stored(key, stored[5], stored[6])
+        .map(Some)
+        .map_err(|_| corrupt("read_cleanup_fence"))
 }
 
 #[cfg(test)]

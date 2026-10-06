@@ -474,12 +474,19 @@ pub async fn verify_artifact_registry_schema(pool: &Pool) -> Result<(), Artifact
         .get()
         .await
         .map_err(|_| ArtifactRegistryError::Unavailable)?;
-    native::validate_current(&client)
+    verify_artifact_registry_schema_on(&client).await
+}
+
+/// Verify the same native/public/internal facts on the caller's original immutable client.
+pub(crate) async fn verify_artifact_registry_schema_on(
+    client: &tokio_postgres::Client,
+) -> Result<(), ArtifactRegistryError> {
+    native::validate_current(client)
         .await
         .map_err(|_| corrupt("native_schema"))?;
     let public: schema_facts::SchemaFacts = serde_json::from_str(REGISTERED_PUBLIC_SCHEMA)
         .map_err(|_| corrupt("public_schema_oracle"))?;
-    if schema_facts::fetch(&client)
+    if schema_facts::fetch(client)
         .await
         .map_err(|_| ArtifactRegistryError::Unavailable)?
         != public
@@ -488,7 +495,7 @@ pub async fn verify_artifact_registry_schema(pool: &Pool) -> Result<(), Artifact
     }
     let expected: ArtifactRegistrySchemaFacts = serde_json::from_str(REGISTERED_INTERNAL_SCHEMA)
         .map_err(|_| corrupt("internal_schema_oracle"))?;
-    if capture_schema_on(&client).await? != expected {
+    if capture_schema_on(client).await? != expected {
         return Err(corrupt("internal_schema"));
     }
     Ok(())
