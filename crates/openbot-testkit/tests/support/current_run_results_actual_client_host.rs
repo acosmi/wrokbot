@@ -610,7 +610,7 @@ fn prefix_sse() -> String {
 fn tail_sse(mode: CaseMode) -> String {
     if mode == CaseMode::Failed {
         let failure = json!({"id":"owned-c6-current","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]});
-        return format!("data: {failure}\n\ndata: [DONE]\n\n");
+        return format!("data: {failure}\n\n");
     }
     let delta = json!({"id":"owned-c6-current","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":INTENT_B_TAIL},"finish_reason":null}]});
     let stop = json!({"id":"owned-c6-current","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]});
