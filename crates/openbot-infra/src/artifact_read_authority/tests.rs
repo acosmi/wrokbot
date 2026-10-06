@@ -1315,16 +1315,16 @@ async fn shared_pg_initial_cancel_leg(config: DatabaseConfig) -> Result<(), Stri
     )?;
     state
         .enroll_store(f.store.clone(), None)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{error:?}"))?;
     authority
         .lifecycle
         .register(&state)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{error:?}"))?;
     let job = authority
         .lifecycle
         .admit_operation(&state)
-        .map_err(|error| error.to_string())?;
-    state.begin().map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{error:?}"))?;
+    state.begin().map_err(|error| format!("{error:?}"))?;
     let phases = Arc::new(SharedPgReadPhases::default());
     let dispatch = tracing::Dispatch::new(SharedPgPhaseSubscriber(phases.clone()));
     let original_state = state.clone();
