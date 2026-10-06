@@ -760,6 +760,7 @@ async fn second_block_final_cleanup_fence_wait_commit_ack_denies_body() {
             Some(transaction) => transaction.rollback().await.map_err(|error| error.to_string()),
             None => Ok(()),
         };
+        drop(transaction);
         let result = task.await.map_err(|error| error.to_string());
         let after = observer.query_one(FACTS, &[]).await.map_err(|error| error.to_string()).map(|row| row.get::<_, serde_json::Value>(0));
         let lifecycle = fixture.actual.read_authority().read_lifecycle();

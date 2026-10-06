@@ -1229,6 +1229,7 @@ async fn actual_worker_ack_then_final_cleanup_fence_wait_observes_armed_commit()
             }
             None => Ok(()),
         };
+        drop(transaction);
         let joined = task.await;
         diagnostic.reader_join_ack = joined.is_ok();
         let result = joined.map_err(|error| error.to_string());
