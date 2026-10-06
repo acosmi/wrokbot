@@ -1494,3 +1494,307 @@ WHERE a.datname=current_database()
     }
     Err("actual final joint statement/controller Lock wait was not observed".to_owned())
 }
+
+
+
+// Controlled 0044 rows are consumer inputs only. These observations never assert deletion,
+// directory sync, refund, cleanup authorization or a producer receipt.
+const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
+ 'bindings',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY to_jsonb(b)::text),'[]') FROM openbot_internal.artifact_dataset_bindings b), \
+ 'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
+ 'records',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_records r), \
+ 'receipts',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_saved_receipts r), \
+ 'stores',(SELECT coalesce(jsonb_agg(to_jsonb(s) ORDER BY to_jsonb(s)::text),'[]') FROM openbot_internal.artifact_store_bindings s), \
+ 'workspace',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_workspace_quotas q), \
+ 'runquota',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_run_quotas q), \
+ 'fences',(SELECT coalesce(jsonb_agg(to_jsonb(f) ORDER BY to_jsonb(f)::text),'[]') FROM openbot_internal.artifact_cleanup_fences f), \
+ 'audit',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY to_jsonb(e)::text),'[]') FROM public.audit_events e), \
+ 'users',(SELECT coalesce(jsonb_agg(to_jsonb(u) ORDER BY to_jsonb(u)::text),'[]') FROM public.users u), \
+ 'roles',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM public.user_roles r), \
+ 'sessions',(SELECT coalesce(jsonb_agg(to_jsonb(s) ORDER BY id),'[]') FROM public.sessions s), \
+ 'messages',(SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text),'[]') FROM public.messages m))";
+
+async fn cleanup_public_read_facts_on(
+    client: &tokio_postgres::Client,
+) -> Result<serde_json::Value, String> {
+    client.query_one(CLEANUP_PUBLIC_READ_FACTS, &[]).await
+        .map_err(|error| error.to_string())?
+        .try_get(0).map_err(|error| error.to_string())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned PostgreSQL binaries and actual Local final-query Lock/COMMIT ACK"]
+async fn actual_local_worker_ack_then_final_cleanup_fence_wait_observes_armed_commit() {
+    use tracing::instrument::WithSubscriber as _;
+    with_fixture("local_read_cleanup_final_wait", |fixture| Box::pin(async move {
+
+        let protocol = Arc::new(fixture.protocol()?);
+        protocol.bind_window("main", fixture.original.clone(), None).map_err(|error| error.to_string())?;
+        let mut controller = fixture.pool().get().await.map_err(|error| error.to_string())?;
+        let observer = fixture.pool().get().await.map_err(|error| error.to_string())?;
+        let controller_pid: i32 = controller.query_one("SELECT pg_backend_pid()", &[]).await
+            .map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())?;
+        let observer_pid: i32 = observer.query_one("SELECT pg_backend_pid()", &[]).await
+            .map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())?;
+        let activity_capacity_bytes: i64 = observer.query_one(
+            "SELECT pg_size_bytes(current_setting('track_activity_query_size'))", &[],
+        ).await.map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())?;
+        require(controller_pid != observer_pid, "actual controller and observer PIDs were not distinct")?;
+        require(activity_capacity_bytes >= 16_384, "owned Local activity query width was not actually sixteen KiB")?;
+        let artifact_path = fixture.artifact_root.join("objects").join(&fixture.receipt.artifact_id);
+        require(cleanup_owned_inode_fds(&artifact_path)?.is_empty(),
+            "owned original Local artifact unexpectedly began with a live read FD")?;
+        let before = cleanup_public_read_facts_on(&observer).await?;
+        require(before["fences"] == serde_json::json!([]), "owned final-wait fixture unexpectedly began fenced")?;
+        let mut expected = before.clone();
+        let mut diagnostic = HostReadWaitDiagnostic {
+            controller_pid,
+            observer_pid,
+            activity_capacity_bytes,
+            ..HostReadWaitDiagnostic::default()
+        };
+        let gate = TracePhaseGate::new();
+        let dispatch = tracing::Dispatch::new(ReadPhaseSubscriber(gate.clone()));
+        let called = protocol.clone();
+        let id = fixture.receipt.artifact_id.clone();
+        let mut task = Some(tokio::spawn(
+            async move { called.read_current_artifact_chunk("main", id).await }.with_subscriber(dispatch),
+        ));
+        let notification = tokio::time::timeout(Duration::from_secs(5), gate.entered.notified()).await;
+        let entered_at = std::time::Instant::now();
+        diagnostic.io_seen = gate.io_seen.load(Ordering::SeqCst);
+        diagnostic.ready_seen = gate.ready_seen.load(Ordering::SeqCst);
+        let mut failure = notification
+            .map_err(|_| "actual Local IO/final-ready phases were not observed".to_owned())
+            .and_then(|_| require(diagnostic.io_seen && diagnostic.ready_seen, "actual Local worker ACK did not precede final-ready"))
+            .err();
+        let mut transaction = if failure.is_none() {
+            match controller.transaction().await {
+                Ok(transaction) => Some(transaction),
+                Err(error) => {
+                    failure = Some(error.to_string());
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let attempted: Result<i32, String> = if let Some(error) = failure {
+            Err(error)
+        } else {
+            async {
+                transaction.as_ref().expect("actual controller transaction retained")
+                    .batch_execute("SET LOCAL lock_timeout='1s'; LOCK TABLE public.users IN ACCESS EXCLUSIVE MODE").await.map_err(|error| error.to_string())?;
+                diagnostic.controller_lock_ack = true;
+                diagnostic.entered_notification_to_lock_ack_ms = Some(entered_at.elapsed().as_millis());
+                diagnostic.barrier_timed_out_before_release = Some(gate.timed_out.load(Ordering::SeqCst));
+                diagnostic.read_task_finished_before_release = Some(task.as_ref().expect("original reader retained").is_finished());
+                require(diagnostic.barrier_timed_out_before_release == Some(false), "Local trace barrier timed out instead of controller release")?;
+                require(diagnostic.read_task_finished_before_release == Some(false), "original Local reader ended before the actual final PG wait")?;
+                gate.release();
+                let observed = actual_final_wait(&observer, controller_pid, &mut diagnostic).await;
+                diagnostic.barrier_timed_out_after_observation = Some(gate.timed_out.load(Ordering::SeqCst));
+                diagnostic.read_task_finished_after_observation = Some(task.as_ref().expect("original reader retained").is_finished());
+                let waiter = observed?;
+                require(diagnostic.barrier_timed_out_after_observation == Some(false), "Local trace barrier timed out instead of controller release")?;
+                require(waiter != controller_pid && waiter != observer_pid,
+                    "final waiter borrowed the actual controller or observer connection")?;
+                require(diagnostic.read_task_finished_after_observation == Some(false),
+                    "original reader ended while its tagged final SQL was actually blocked")?;
+                let inserted: serde_json::Value = transaction.as_ref().expect("actual controller transaction retained")
+                    .query_one(
+                        "INSERT INTO openbot_internal.artifact_cleanup_fences \
+                         (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
+                         SELECT deployment_id,tenant_id,dataset_id,operation_id,artifact_id,'deleted','armed' \
+                         FROM openbot_internal.artifact_records \
+                         WHERE deployment_id=$1 AND tenant_id=$2 AND operation_id=$3 AND artifact_id=$4 AND owner_actor_id=$5 \
+                         RETURNING to_jsonb(artifact_cleanup_fences)",
+                        &[&fixture.original.deployment().as_str(), &fixture.original.tenant().as_str(),
+                          &fixture.receipt.operation_id, &fixture.receipt.artifact_id, &fixture.original.actor().as_str()],
+                    ).await.map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())?;
+                require(inserted["operation_id"] == fixture.receipt.operation_id
+                    && inserted["artifact_id"] == fixture.receipt.artifact_id
+                    && inserted["terminal_status"] == "deleted" && inserted["phase"] == "armed",
+                    "controlled armed fence did not retain the actual original pair and intent")?;
+                expected["fences"] = serde_json::json!([inserted]);
+                transaction.take().expect("actual controller transaction retained")
+                    .commit().await.map_err(|error| error.to_string())?;
+                diagnostic.controller_commit_ack = true;
+                Ok(waiter)
+            }.await
+        };
+        gate.release();
+        if let Some(transaction) = transaction.take() {
+            diagnostic.controller_rollback_attempted = true;
+            diagnostic.controller_rollback_ack = transaction.rollback().await.is_ok();
+        }
+        let joined = task.take().expect("original reader retained").await;
+        let read_result = match joined {
+            Ok(result) => {
+                diagnostic.reader_join_ack = true;
+                diagnostic.reader_join_outcome = Some("read_result");
+                diagnostic.reader_terminal_class = Some(host_read_terminal_class(&result));
+                Ok(result)
+            }
+            Err(error) => {
+                let (closed, failure) = if error.is_panic() {
+                    ("read_task_panicked", "actual read task panicked")
+                } else {
+                    ("read_task_cancelled", "actual read task was cancelled")
+                };
+                diagnostic.reader_join_outcome = Some(closed);
+                Err(failure.to_owned())
+            }
+        };
+        let outcome = match attempted {
+            Err(original_failure) => Err(original_failure),
+            Ok(waiter) => match read_result {
+                Ok(Err(AppError::DependencyUnavailable { dependency: "artifacts" })) => {
+                    require(diagnostic.controller_commit_ack && diagnostic.reader_join_ack,
+                        "actual cleanup fence refusal lacked original COMMIT and reader join ACK")?;
+                    require(cleanup_public_read_facts_on(&observer).await? == expected,
+                        "actual final cleanup-fence consumer changed original source, record, receipt, charge, quota, store, fence or audit facts")?;
+                    let lifecycle = fixture.port.actual.read_authority().read_lifecycle();
+                    lifecycle.close();
+                    lifecycle.drain_before(std::time::Instant::now() + Duration::from_secs(5)).await
+                        .map_err(|_| "original Local final-wait inventory did not actually drain".to_owned())?;
+                    require(cleanup_owned_inode_fds(&artifact_path)?.is_empty(),
+                        "original Local object inode FD survived actual final refusal and inventory drain")?;
+                    eprintln!("ARTIFACT_CURRENT_LOCAL_CLEANUP_FINAL_WAIT io_ack=true final_marker=true wait_type=Lock blocker_pid={controller_pid} observer_pid={observer_pid} waiter_pid={waiter} controller_commit_ack=true original_reader_join_ack=true actual_inventory_drain_ack=true own_inode_fd_absent=true body_refused=true business_facts_unchanged=true");
+                    Ok(())
+                }
+                Ok(_) => Err("actual Local final statement did not refuse the committed original armed cleanup fence".to_owned()),
+                Err(error) => Err(error),
+            },
+        };
+        if outcome.is_err() {
+            emit_host_read_wait_diagnostic(&diagnostic);
+        }
+        drop(transaction);
+        drop(observer);
+        drop(controller);
+        drop(protocol);
+        outcome
+     })).await;
+}
+
+// Read only this Rust process's bounded f/device/inode inventory. No path fields or peer PIDs.
+fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+    use std::io::Read as _;
+    use std::os::unix::fs::MetadataExt as _;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        metadata.is_file() && metadata.nlink() == 1,
+        "owned FD oracle requires original regular inode",
+    )?;
+    let device = metadata.dev() & u64::from(u32::MAX);
+    let inode = metadata.ino();
+    let sample = || -> Result<BTreeSet<u32>, String> {
+        let pid = std::process::id();
+        let mut child = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "own-PID lsof is unavailable (Unproven)".to_owned())?;
+        let stdout = child.stdout.take().ok_or("lsof stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("lsof stderr unavailable")?;
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let errors = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output.join();
+                let _ = errors.join();
+                return Err("own-PID lsof exceeded original five seconds (Unproven)".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let output = output
+            .join()
+            .map_err(|_| "lsof output worker panicked")?
+            .map_err(|error| error.to_string())?;
+        let errors = errors
+            .join()
+            .map_err(|_| "lsof error worker panicked")?
+            .map_err(|error| error.to_string())?;
+        require(
+            status.success()
+                && output.len() <= 65_536
+                && errors.len() <= 8_192
+                && output.ends_with(b"\n"),
+            "lsof incomplete/failed/truncated (Unproven)",
+        )?;
+        let text = std::str::from_utf8(&output).map_err(|_| "lsof output invalid (Unproven)")?;
+        let mut self_pid = false;
+        let mut fd = None;
+        let mut dev = None;
+        let mut ino = None;
+        let mut found = std::collections::BTreeSet::new();
+        for line in text.lines().chain(std::iter::once("f")) {
+            let (kind, value) = line
+                .split_at_checked(1)
+                .ok_or("lsof empty field (Unproven)")?;
+            match kind {
+                "p" => {
+                    require(
+                        value.parse::<u32>().ok() == Some(pid),
+                        "lsof observed another PID",
+                    )?;
+                    self_pid = true;
+                }
+                "f" => {
+                    if dev == Some(device) && ino == Some(inode) {
+                        found.insert(
+                            fd.ok_or("original inode has an ambiguous nonnumeric FD (Unproven)")?,
+                        );
+                    }
+                    fd = value.parse::<u32>().ok();
+                    dev = None;
+                    ino = None;
+                }
+                "D" => {
+                    dev = Some(
+                        if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16)
+                        } else {
+                            value.parse::<u64>()
+                        }
+                        .map_err(|_| "lsof device invalid (Unproven)")?,
+                    );
+                }
+                "i" => {
+                    ino = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "lsof inode invalid (Unproven)")?,
+                    );
+                }
+                _ => return Err("lsof unexpected field (Unproven)".to_owned()),
+            }
+        }
+        require(self_pid, "lsof self-PID field missing (Unproven)")?;
+        Ok(found)
+    };
+    let first = sample()?;
+    let second = sample()?;
+    require(
+        first == second,
+        "own original FD inventory was unstable (Unproven)",
+    )?;
+    Ok(first)
+}

@@ -297,6 +297,20 @@ impl GuardedClient {
     pub(crate) async fn begin_read_committed(
         &mut self,
     ) -> Result<GuardedTransaction<'_>, TransactionOwnerError> {
+        self.begin_read_committed_mode(false).await
+    }
+
+    /// 原 reader 的固定只读 RC 事务，复用同一 owner、绝对期限及真实 ACK 路径。
+    pub(crate) async fn begin_read_committed_read_only(
+        &mut self,
+    ) -> Result<GuardedTransaction<'_>, TransactionOwnerError> {
+        self.begin_read_committed_mode(true).await
+    }
+
+    async fn begin_read_committed_mode(
+        &mut self,
+        read_only: bool,
+    ) -> Result<GuardedTransaction<'_>, TransactionOwnerError> {
         if self.disposition != TransactionDisposition::Unstarted {
             return Err(TransactionOwnerError::AlreadyStarted);
         }
@@ -306,15 +320,19 @@ impl GuardedClient {
         self.disposition = TransactionDisposition::BeginStarted;
         let deadline = self.deadline;
         let lease = self.lease.as_mut().expect("unconsumed guarded client");
-        let transaction = tokio::time::timeout_at(
-            tokio::time::Instant::from_std(deadline),
-            lease
-                .stock_mut()
-                .build_transaction()
-                .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
-                .start(),
-        )
-        .await;
+        let builder = lease
+            .stock_mut()
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted);
+        let builder = if read_only {
+            builder.read_only(true)
+        } else {
+            // 保留014原BEGIN的默认读写选项，不新增SET或READ WRITE语句。
+            builder
+        };
+        let transaction =
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), builder.start())
+                .await;
         let transaction = match transaction {
             Ok(Ok(transaction)) => transaction,
             Ok(Err(_)) => return Err(TransactionOwnerError::BeginUnavailable),

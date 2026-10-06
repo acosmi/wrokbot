@@ -1160,3 +1160,101 @@ async fn actual_worker_ack_then_final_session_statement_wait_observes_delete_com
         outcome
     }).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned PostgreSQL and real post-IO cleanup-fence Lock/COMMIT ACK"]
+async fn actual_worker_ack_then_final_cleanup_fence_wait_observes_armed_commit() {
+    use tracing::instrument::WithSubscriber as _;
+    with_fixture("read-real-cleanup-final-wait", |fixture| async move {
+        let mut controller = fixture.pool.get().await.map_err(|error| error.to_string())?;
+        let observer = fixture.pool.get().await.map_err(|error| error.to_string())?;
+        let controller_pid: i32 = controller.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|error| error.to_string())?.get(0);
+        let observer_pid: i32 = observer.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|error| error.to_string())?.get(0);
+        let activity_capacity_bytes: i64 = observer.query_one(
+            "SELECT pg_size_bytes(current_setting('track_activity_query_size'))", &[],
+        ).await.map_err(|error| error.to_string())?.get(0);
+        require(controller_pid != observer_pid && activity_capacity_bytes >= 16_384, "actual controller/observer or original activity width was invalid")?;
+        const FACTS: &str = "SELECT jsonb_build_object( \
+          'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
+          'records',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_records r), \
+          'receipts',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_saved_receipts r), \
+          'workspace',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_workspace_quotas q), \
+          'runquota',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_run_quotas q), \
+          'audit',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY id),'[]') FROM public.audit_events e))";
+        let before: serde_json::Value = observer.query_one(FACTS, &[]).await.map_err(|error| error.to_string())?.get(0);
+        let mut diagnostic = HostReadWaitDiagnostic { controller_pid, observer_pid, activity_capacity_bytes, ..HostReadWaitDiagnostic::default() };
+        let gate = TracePhaseGate::new();
+        let dispatch = tracing::Dispatch::new(ReadPhaseSubscriber(Arc::clone(&gate)));
+        let state = fixture.state.clone();
+        let id = fixture.receipt.artifact_id.clone();
+        let request = parts(COOKIE_A)?;
+        let task = tokio::spawn(async move { state.read_current_artifact_chunk(&request, id).await }.with_subscriber(dispatch));
+        let mut transaction = None;
+        let attempted = async {
+            tokio::time::timeout(Duration::from_secs(5), gate.entered.notified()).await.map_err(|_| "actual cleanup read final-ready phase not observed".to_owned())?;
+            diagnostic.io_seen = gate.io_seen.load(Ordering::SeqCst);
+            diagnostic.ready_seen = gate.ready_seen.load(Ordering::SeqCst);
+            require(diagnostic.io_seen && diagnostic.ready_seen && !gate.timed_out.load(Ordering::SeqCst), "actual worker ACK did not precede controlled final joint")?;
+            transaction = Some(controller.transaction().await.map_err(|error| error.to_string())?);
+            transaction.as_ref().unwrap().batch_execute(
+                "SET LOCAL lock_timeout='1s'; LOCK TABLE openbot_internal.artifact_cleanup_fences IN ACCESS EXCLUSIVE MODE",
+            ).await.map_err(|error| error.to_string())?;
+            diagnostic.controller_lock_ack = true;
+            diagnostic.barrier_timed_out_before_release = Some(gate.timed_out.load(Ordering::SeqCst));
+            diagnostic.read_task_finished_before_release = Some(task.is_finished());
+            require(!gate.timed_out.load(Ordering::SeqCst) && !task.is_finished(), "final-ready gate expired or original read ended before release")?;
+            gate.release();
+            let waiter = actual_final_wait(&observer, controller_pid, &mut diagnostic).await?;
+            require(waiter != controller_pid && waiter != observer_pid && !gate.timed_out.load(Ordering::SeqCst) && !task.is_finished(), "original final waiter identity or gate state was invalid")?;
+            // Only a controlled input on the actual saved five-key row; no cleanup producer.
+            let changed = transaction.as_ref().unwrap().execute(
+                "INSERT INTO openbot_internal.artifact_cleanup_fences \
+                 (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) \
+                 SELECT deployment_id,tenant_id,dataset_id,operation_id,artifact_id,'deleted','armed' \
+                 FROM openbot_internal.artifact_records WHERE deployment_id=$1 AND tenant_id=$2 AND artifact_id=$3",
+                &[&DEPLOYMENT, &TENANT, &fixture.receipt.artifact_id],
+            ).await.map_err(|error| error.to_string())?;
+            require(changed == 1, "controller did not arm exactly the original real Save row")?;
+            transaction.take().unwrap().commit().await.map_err(|error| error.to_string())?;
+            diagnostic.controller_commit_ack = true;
+            Ok::<_, String>(waiter)
+        }.await;
+        gate.release();
+        let rollback = match transaction.take() {
+            Some(transaction) => {
+                diagnostic.controller_rollback_attempted = true;
+                let result = transaction.rollback().await;
+                diagnostic.controller_rollback_ack = result.is_ok();
+                result.map_err(|error| error.to_string())
+            }
+            None => Ok(()),
+        };
+        let joined = task.await;
+        diagnostic.reader_join_ack = joined.is_ok();
+        let result = joined.map_err(|error| error.to_string());
+        if let Ok(result) = &result { diagnostic.reader_terminal_class = Some(host_read_terminal_class(result)); }
+        let after = observer.query_one(FACTS, &[]).await.map_err(|error| error.to_string()).map(|row| row.get::<_, serde_json::Value>(0));
+        let lifecycle = fixture.port.actual.read_authority().read_lifecycle();
+        lifecycle.close();
+        let drained = lifecycle.drain_before(std::time::Instant::now() + Duration::from_secs(3)).await;
+        let outcome = async {
+            let waiter = attempted?;
+            rollback?;
+            require(matches!(result?, Err(AppError::DependencyUnavailable { dependency: "artifacts" })), "actual final joint ignored the committed armed fence or released a body")?;
+            require(before == after?, "read-only cleanup consumer changed original business/charge/receipt/audit rows")?;
+            require(drained.is_ok(), "original failed read resources did not really drain")?;
+            require(fixture.root.0.join("objects").join(&fixture.receipt.artifact_id).is_file(), "controlled armed input was counted as physical deletion")?;
+            eprintln!("ARTIFACT_CURRENT_SERVER_CLEANUP_FINAL_WAIT io_ack=true final_ready=true actual_lock=true controller_pid={controller_pid} observer_pid={observer_pid} waiter_pid={waiter} commit_ack=true bytes_released=false");
+            Ok::<_, String>(())
+        }.await;
+        if outcome.is_err() { emit_host_read_wait_diagnostic(&diagnostic); }
+        fixture.resolver.close_request_bindings();
+        drop(observer);
+        drop(controller);
+        let observations = fixture.pool.connection_observations();
+        fixture.pool.close();
+        let cleanup_deadline = std::time::Instant::now() + Duration::from_secs(3);
+        for observation in observations { observation.wait_for_destruction_before(cleanup_deadline).await.map_err(|error| error.to_string())?; }
+        outcome
+    }).await;
+}
