@@ -598,6 +598,76 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn verify_artifact_save_receipt_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn openbot_contracts::request_binding::ArtifactSaveReceiptCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> openbot_contracts::request_binding::ArtifactSaveReceiptCurrentCheck<'a> {
+        Box::pin(async move {
+            if auth != &self.original || !self.owner.is_current() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let probe = self.probe.upgrade().ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ))?;
+            let authority = probe
+                .artifact_read_authority
+                .get()
+                .and_then(Weak::upgrade)
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ))?;
+            let binding = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?;
+            let epoch = self
+                .issuer
+                .borrow_server_session_epoch(binding.identity())
+                .map_err(ArtifactReadCurrentError::Host)?;
+            if deadline <= std::time::Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            let result = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                authority.observe_artifact_save_receipt_server_session(
+                    auth,
+                    target,
+                    epoch,
+                    probe.lifetime,
+                    deadline,
+                ),
+            )
+            .await
+            .map_err(|_| ArtifactReadCurrentError::Host(HostRequestBindingError::Unavailable));
+            if !self.owner.is_current() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let (inner, source) = result??;
+            let witness = ServerArtifactReadTail {
+                probe: self.probe.clone(),
+                owner: self.owner.clone(),
+                issuer: self.issuer.clone(),
+                original: auth.clone(),
+                inner,
+            };
+            witness.verify_current(auth, deadline)?;
+            Ok((
+                Box::new(witness) as Box<dyn ArtifactReadTailWitness>,
+                source,
+            ))
+        })
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn verify_artifact_read_current_before<'a>(
         &'a self,
         auth: &'a AuthContext,
