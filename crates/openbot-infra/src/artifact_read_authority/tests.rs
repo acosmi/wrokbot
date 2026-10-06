@@ -480,6 +480,7 @@ async fn cleanup_schema_original_owner_control(config: DatabaseConfig, cancel: b
             .map_err(|error| error.to_string()),
         None => Err("original controller transaction was lost before rollback ACK".to_owned()),
     };
+    drop(transaction);
     let after = cleanup_consumer_facts_on(&observer).await;
     drop(held); // All seven still-held original leases finish before Pool close.
     let closed = close_cleanup_fixture(&f).await;
