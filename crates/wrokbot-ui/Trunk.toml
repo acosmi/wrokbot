@@ -25,10 +25,10 @@ pattern_script = '<script type="module" src="{base}openbot-bootstrap.mjs"></scri
 tailwindcss = "4.3.3"
 wasm_opt = "version_132"
 
-# Asset pipelines run concurrently. `design/tokens.css` is intentionally untracked, so a clean
-# checkout cannot let Tailwind race the Rust build.rs that creates it. Pre-build invokes the same
-# shared generator source through xtask before Trunk spawns either pipeline; no second token
-# generator exists and Cargo build-script caching cannot skip this explicit materialization.
+# The pre-build xtask uses the shared token generator, then the checksum-verified pinned Tailwind.
+# TRUNK_PROFILE=release selects Tailwind's native --minify before Trunk hashes design/generated/app.css
+# and computes its SRI. Trunk's global minifier stays disabled: the server must retain the exact
+# HTML root marker and the existing external bootstrap. Debug builds keep readable CSS.
 [[hooks]]
 stage = "pre_build"
 command = "cargo"
@@ -42,7 +42,7 @@ stage = "post_build"
 command = "cargo"
 command_arguments = ["run", "--manifest-path", "../../Cargo.toml", "--locked", "--offline", "--package", "openbot-testkit", "--features", "xtask", "--target-dir", "../../target-xtask", "--bin", "xtask", "--", "ui-finalize"]
 
-# trunk 调 Tailwind 的参数是 --input/--output/--minify（读自其 tailwind_css pipeline），
+# release 下 ui-assets 调固定 Tailwind 的参数是 --input/--output/--minify，
 # 与 Tailwind v4 CLI 兼容，不传 --config —— v4 的配置在 design/app.css 的 @theme inline 里。
 #
 # wasm-bindgen CLI 的版本不在这里钉：它必须等于 Cargo.lock 里的 wasm-bindgen crate 版本，
