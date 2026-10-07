@@ -1593,10 +1593,27 @@ struct SingleUserBindingOwner {
     probe: Arc<SingleUserProbeState>,
 }
 
+impl Drop for SingleUserBindingOwner {
+    fn drop(&mut self) {
+        self.lease.close();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(authority) = self
+            .probe
+            .artifact_read_authority
+            .get()
+            .and_then(Weak::upgrade)
+        {
+            authority.read_lifecycle().close_issuer(&self.issuer);
+        }
+    }
+}
+
 struct SingleUserProbeState {
     principal: openbot_infra::auth::single_user::VerifiedSingleUserPrincipal,
     capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
     remember_preferences: std::sync::OnceLock<Weak<PostgresRememberPreferenceRepository>>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    artifact_read_authority: std::sync::OnceLock<Weak<PostgresArtifactReadAuthority>>,
 }
 
 struct SingleUserCurrentGuard {
@@ -1606,6 +1623,71 @@ struct SingleUserCurrentGuard {
 }
 
 impl HostRequestBindingGuard for SingleUserCurrentGuard {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn verify_artifact_read_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn ArtifactReadCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> openbot_contracts::request_binding::ArtifactReadCurrentCheck<'a> {
+        Box::pin(async move {
+            if !self.owner.is_current() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let probe = self.probe.upgrade().ok_or(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ))?;
+            if probe.principal.auth_context() != auth {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let binding = auth
+                .request_binding()
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Missing,
+                ))?;
+            if binding.kind() != HostRequestBindingKind::ServerSingleUserOwner
+                || !self.issuer.owns_identity(binding.identity())
+            {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::NotCurrent,
+                ));
+            }
+            let authority = probe
+                .artifact_read_authority
+                .get()
+                .and_then(Weak::upgrade)
+                .ok_or(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ))?;
+            if !probe.principal.matches_artifact_read_authority(&authority) {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            if deadline <= std::time::Instant::now() {
+                return Err(ArtifactReadCurrentError::Host(
+                    HostRequestBindingError::Unavailable,
+                ));
+            }
+            let inner = authority
+                .observe_server_single_user(auth, target, &probe.principal, deadline)
+                .await?;
+            let witness = SingleUserArtifactReadTail {
+                probe: self.probe.clone(),
+                owner: self.owner.clone(),
+                issuer: self.issuer.clone(),
+                original: auth.clone(),
+                inner,
+            };
+            witness.verify_current(auth, deadline)?;
+            Ok(Box::new(witness) as Box<dyn ArtifactReadTailWitness>)
+        })
+    }
+
     fn borrow_remember_preference_host_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -1702,6 +1784,43 @@ impl HostRequestBindingGuard for SingleUserCurrentGuard {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct SingleUserArtifactReadTail {
+    probe: Weak<SingleUserProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+    inner: Box<dyn ArtifactReadTailWitness>,
+}
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl ArtifactReadTailWitness for SingleUserArtifactReadTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        verify_repository_host_attachment(
+            &self.owner,
+            &self.issuer,
+            &self.original,
+            auth,
+            deadline,
+        )
+        .map_err(ArtifactReadCurrentError::Host)?;
+        let probe = self.probe.upgrade().ok_or(ArtifactReadCurrentError::Host(
+            HostRequestBindingError::NotCurrent,
+        ))?;
+        if probe.principal.auth_context() != auth {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        self.inner.verify_current(auth, deadline)?;
+        verify_repository_host_attachment(&self.owner, &self.issuer, &self.original, auth, deadline)
+            .map_err(ArtifactReadCurrentError::Host)
+    }
+}
+
 #[derive(Clone)]
 struct SingleUserRememberPreferenceTail {
     probe: Weak<SingleUserProbeState>,
@@ -1778,9 +1897,36 @@ impl SingleUserAuthResolver {
                     principal,
                     capability_facts: std::sync::OnceLock::new(),
                     remember_preferences: std::sync::OnceLock::new(),
+                    #[cfg(any(target_os = "macos", target_os = "linux"))]
+                    artifact_read_authority: std::sync::OnceLock::new(),
                 }),
             })),
         }
+    }
+
+    /// Enroll the actual canonical principal's read owner once; no synthetic Session or Pool.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub fn install_artifact_read_authority(
+        &self,
+        authority: &Arc<PostgresArtifactReadAuthority>,
+    ) -> Result<(), HostRequestBindingError> {
+        let owner = self
+            .binding_owner
+            .as_ref()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !owner.issuer.observation().is_current()
+            || !owner
+                .probe
+                .principal
+                .matches_artifact_read_authority(authority)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        owner
+            .probe
+            .artifact_read_authority
+            .set(Arc::downgrade(authority))
+            .map_err(|_| HostRequestBindingError::Unavailable)
     }
 
     /// Enroll only the real canonical principal's same-Pool repository; no synthetic Session.
@@ -1812,6 +1958,15 @@ impl SingleUserAuthResolver {
     pub fn close_request_bindings(&self) {
         if let Some(owner) = &self.binding_owner {
             owner.lease.close();
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            if let Some(authority) = owner
+                .probe
+                .artifact_read_authority
+                .get()
+                .and_then(Weak::upgrade)
+            {
+                authority.read_lifecycle().close_issuer(&owner.issuer);
+            }
             if let Some(facts) = owner.probe.capability_facts.get().and_then(Weak::upgrade) {
                 facts.close();
             }

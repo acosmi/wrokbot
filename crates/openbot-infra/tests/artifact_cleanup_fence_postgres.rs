@@ -380,10 +380,10 @@ async fn assert_old_oracles(pool: &DatabasePool) {
 #[ignore = "requires owned isolated PostgreSQL 17; explicit include-ignored only"]
 async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
     let expected: Value = serde_json::from_str(include_str!(
-        "../../../fixtures/db/artifact-cleanup-fences-0044.json"
+        "../../../fixtures/db/artifact-cleanup-fences-0045.json"
     ))
     .unwrap();
-    assert_eq!(native::NATIVE_LATEST_VERSION, 44);
+    assert_eq!(native::NATIVE_LATEST_VERSION, 45);
     for upgrade in [false, true] {
         let expected = expected.clone();
         harness::with_temp_database(
@@ -396,7 +396,7 @@ async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
                 let old_rows;
                 if upgrade {
                     baseline::apply(&client).await.unwrap();
-                    native::apply_through(&mut client, native::NATIVE_0043_VERSION)
+                    native::apply_through(&mut client, native::NATIVE_0044_VERSION)
                         .await
                         .unwrap();
                     let receipt = Receipt::new();
@@ -414,14 +414,20 @@ async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
                         .unwrap();
                     old_ledger = ledger(&client).await;
                     old_rows = legacy_rows(&client).await;
-                    assert!(
-                        client
-                            .query_one("SELECT to_regclass($1)::text", &[&TABLE])
-                            .await
-                            .unwrap()
-                            .get::<_, Option<String>>(0)
-                            .is_none()
-                    );
+                    let raw: String = client
+                        .query_one(
+                            artifact_cleanup_schema::ARTIFACT_CLEANUP_SCHEMA_0044_SQL,
+                            &[],
+                        )
+                        .await
+                        .unwrap()
+                        .get(0);
+                    let original: Value = serde_json::from_str(&raw).unwrap();
+                    let old: Value = serde_json::from_str(include_str!(
+                        "../../../fixtures/db/artifact-cleanup-fences-0044.json"
+                    ))
+                    .unwrap();
+                    assert_eq!(original, old);
                     assert!(artifact_cleanup_schema::verify(&client).await.is_err());
                     assert_eq!(ledger(&client).await, old_ledger);
                     assert_eq!(legacy_rows(&client).await, old_rows);
@@ -442,12 +448,12 @@ async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
                 let current = ledger(&client).await;
                 assert_eq!(
                     current.iter().map(|row| row.0).collect::<Vec<_>>(),
-                    (13..=44).collect::<Vec<_>>()
+                    (13..=45).collect::<Vec<_>>()
                 );
-                assert_eq!(current.last().unwrap().1, native::NATIVE_0044_NAME);
+                assert_eq!(current.last().unwrap().1, native::NATIVE_0045_NAME);
                 assert_eq!(
                     current.last().unwrap().2,
-                    format!("{:x}", Sha256::digest(native::NATIVE_0044_SQL.as_bytes()))
+                    format!("{:x}", Sha256::digest(native::NATIVE_0045_SQL.as_bytes()))
                 );
                 if upgrade {
                     assert_eq!(&current[..old_ledger.len()], old_ledger.as_slice());
@@ -974,6 +980,138 @@ async fn completion_requires_null_safe_retained_receipt_identity() {
     .await;
 }
 
+#[tokio::test]
+#[ignore = "requires owned isolated PostgreSQL 17; explicit include-ignored only"]
+async fn completion_checks_existing_saved_receipt_including_null_sequences() {
+    harness::with_temp_database(
+        &harness::admin_config("cleanup45receipt"),
+        "cleanup45receipt",
+        |config| async move {
+            let pool = fresh_pool(&config).await;
+            let client = pool.get().await.unwrap();
+            // All seven mismatches are legal under the original FK/checks; completion must refuse.
+            for coordinate in 0..9 {
+                let mut original = Receipt::new();
+                if coordinate == 8 {
+                    original.call = None;
+                    original.attempt = None;
+                }
+                insert_pair(&client, &original, "deleted", "deleted").await;
+                let mut saved = original.clone();
+                match coordinate {
+                    0 => saved.request = Uuid::now_v7().to_string(),
+                    1 => saved.owner = "other-saved-owner".to_owned(),
+                    2 => saved.thread = "other-saved-thread".to_owned(),
+                    3 => saved.run = "other-saved-run".to_owned(),
+                    4 => saved.message = "other-saved-message".to_owned(),
+                    5 => saved.call = Some(8),
+                    6 => saved.attempt = Some(12),
+                    7 => {
+                        saved.call = None;
+                        saved.attempt = None;
+                    }
+                    _ => {
+                        saved.call = Some(7);
+                        saved.attempt = Some(11);
+                    }
+                }
+                insert_saved_receipt(&client, &saved).await;
+                let fence = Fence::armed(&original, "deleted");
+                insert_fence(&client, &fence).await.unwrap();
+                assert_completion_refused(&client, &fence).await;
+            }
+            for terminal in ["deleted", "expired"] {
+                for has_receipt in [false, true] {
+                    for null_sequences in [false, true] {
+                        let mut original = Receipt::new();
+                        if null_sequences {
+                            original.call = None;
+                            original.attempt = None;
+                        }
+                        insert_pair(&client, &original, terminal, terminal).await;
+                        if has_receipt {
+                            insert_saved_receipt(&client, &original).await;
+                        }
+                        let fence = Fence::armed(&original, terminal);
+                        insert_fence(&client, &fence).await.unwrap();
+                        assert_eq!(complete(&client, &fence).await.unwrap(), 1);
+                    }
+                }
+            }
+            artifact_cleanup_schema::verify(&client).await.unwrap();
+            drop(client);
+            pool.close();
+            Ok(())
+        },
+    )
+    .await;
+}
+
+async fn insert_saved_receipt(client: &Client, receipt: &Receipt) {
+    client
+        .execute(
+            "INSERT INTO openbot_internal.artifact_saved_receipts
+         (deployment_id,tenant_id,dataset_id,operation_id,artifact_id,request_id,
+          owner_actor_id,source_thread_id,source_run_id,source_message_id,
+          source_call_seq,source_attempt_seq) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+            &[
+                &receipt.namespace[0],
+                &receipt.namespace[1],
+                &receipt.namespace[2],
+                &receipt.operation,
+                &receipt.artifact,
+                &receipt.request,
+                &receipt.owner,
+                &receipt.thread,
+                &receipt.run,
+                &receipt.message,
+                &receipt.call,
+                &receipt.attempt,
+            ],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires owned isolated PostgreSQL 17; explicit include-ignored only"]
+async fn missing_disabled_and_replaced_parent_terminal_guards_are_refused_read_only() {
+    harness::with_temp_database(&harness::admin_config("cleanup45parents"), "cleanup45parents", |config| async move {
+        let pool = fresh_pool(&config).await;
+        let client = pool.get().await.unwrap();
+        let receipt = Receipt::new();
+        insert_pair(&client, &receipt, "deleted", "deleted").await;
+        insert_fence(&client, &Fence::armed(&receipt, "deleted")).await.unwrap();
+        for ddl in [
+            "ALTER TABLE openbot_internal.artifact_records DISABLE TRIGGER artifact_records_identity_guard",
+            "DROP TRIGGER artifact_records_identity_guard ON openbot_internal.artifact_records",
+            "ALTER TABLE openbot_internal.artifact_save_operations DISABLE TRIGGER artifact_save_operations_identity_guard",
+            "DROP TRIGGER artifact_save_operations_identity_guard ON openbot_internal.artifact_save_operations",
+            "CREATE OR REPLACE FUNCTION openbot_internal.prevent_artifact_record_misuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
+            "CREATE OR REPLACE FUNCTION openbot_internal.prevent_artifact_operation_misuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
+            "ALTER FUNCTION openbot_internal.prevent_artifact_record_misuse() SECURITY DEFINER",
+            "ALTER FUNCTION openbot_internal.prevent_artifact_operation_misuse() SET search_path TO public",
+        ] {
+            let before = business_rows(&client).await;
+            let migration_before = ledger(&client).await;
+            client.batch_execute("BEGIN").await.unwrap();
+            client.batch_execute(ddl).await.unwrap();
+            // The cleanup relation alone is unchanged; its parent dependencies must still fail.
+            let catalog = artifact_cleanup_schema::capture(&client).await.unwrap();
+            assert!(matches!(artifact_cleanup_schema::verify(&client).await,
+                Err(ArtifactCleanupSchemaError::Corrupt { field: "parent_triggers" | "parent_guards" })));
+            assert_eq!(artifact_cleanup_schema::capture(&client).await.unwrap(), catalog);
+            assert_eq!(business_rows(&client).await, before);
+            assert_eq!(ledger(&client).await, migration_before);
+            client.batch_execute("ROLLBACK").await.unwrap();
+            artifact_cleanup_schema::verify(&client).await.unwrap();
+        }
+        drop(client);
+        pool.close();
+        Ok(())
+    }).await;
+}
+
 async fn assert_catalog_drift_refused(client: &Client, ddl: &str) {
     let original = artifact_cleanup_schema::capture(client).await.unwrap();
     let rows = business_rows(client).await;
@@ -1028,7 +1166,7 @@ async fn assert_ledger_drift_refused(client: &Client, mutation: &str) {
             field: "native_prefix"
         })
     );
-    // Capture intentionally includes the <=0044 ledger; compare the same mutated snapshot.
+    // Capture intentionally includes the <=0045 ledger; compare the same mutated snapshot.
     assert_eq!(observed, changed_schema);
     assert_eq!(observed_rows, rows);
     assert_eq!(observed_ledger, changed);
@@ -1091,7 +1229,7 @@ async fn catalog_guard_and_migration_drift_are_rejected_read_only() {
                 "DELETE FROM openbot_internal.schema_migrations WHERE version=44",
                 "DELETE FROM openbot_internal.schema_migrations WHERE version=43",
                 "INSERT INTO openbot_internal.schema_migrations(version,name,checksum)
-                 VALUES(45,'fixture_unknown_migration',repeat('0',64))",
+                 VALUES(46,'fixture_unknown_migration',repeat('0',64))",
             ] {
                 assert_ledger_drift_refused(&client, mutation).await;
             }

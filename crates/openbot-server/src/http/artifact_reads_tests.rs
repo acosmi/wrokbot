@@ -927,6 +927,359 @@ async fn actual_server_session_public_reader_stream_ack_eof_and_foreign_scope() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL and an acknowledged pre-BEGIN schema refusal"]
+async fn actual_completed_schema_refusal_does_not_poison_shared_read_admission() {
+    let tag = "read_schema_refusal";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config, 4096).await?;
+        let outcome = async {
+            let auth = fixture.resolver.resolve(&parts(COOKIE_A)?).await.map_err(|e| e.to_string())?;
+            let record = fixture.actual.observe_read_record(&auth, &fixture.receipt.artifact_id).await.map_err(|e| e.to_string())?;
+            for (disable, restore) in [
+                ("ALTER TABLE openbot_internal.artifact_cleanup_fences DISABLE TRIGGER artifact_cleanup_fences_saved_receipt_guard",
+                 "ALTER TABLE openbot_internal.artifact_cleanup_fences ENABLE TRIGGER artifact_cleanup_fences_saved_receipt_guard"),
+                ("ALTER TABLE openbot_internal.artifact_records DISABLE TRIGGER artifact_records_identity_guard",
+                 "ALTER TABLE openbot_internal.artifact_records ENABLE TRIGGER artifact_records_identity_guard"),
+            ] {
+                fixture.pool.get().await.map_err(|e| e.to_string())?.batch_execute(disable).await.map_err(|e| e.to_string())?;
+                let before = fixture.original_completions.count()?;
+                status(fixture.request(Method::POST, super::PREFIX, COOKIE_A,
+                    Some(serde_json::json!({"artifactId": fixture.receipt.artifact_id}))).await?,
+                    StatusCode::SERVICE_UNAVAILABLE).await?;
+                let failed = fixture.original_completions.original_after(before)?;
+                failed.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|e| e.to_string())?;
+                fixture.pool.get().await.map_err(|e| e.to_string())?.batch_execute(restore).await.map_err(|e| e.to_string())?;
+                let (opened, original) = fixture.open_with_original_completion(COOKIE_A).await?;
+                let _: ArtifactReadClosed = control(fixture.close(COOKIE_A, &opened.handle_id).await?).await?;
+                original.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|e| e.to_string())?;
+            }
+            fixture.actual.close_observed_artifact_reads(&record).map_err(|e| e.to_string())?
+                .drain_before(Instant::now() + Duration::from_secs(5)).await
+                .map_err(|_| "acknowledged schema refusal poisoned the original Store".to_owned())?;
+            Ok(())
+        }.await;
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    }).await;
+}
+
+struct ActualSingleUserRead {
+    resolver: Arc<crate::SingleUserAuthResolver>,
+    router: axum::Router,
+    receipt: ArtifactRegistrationReceipt,
+}
+impl ActualSingleUserRead {
+    async fn new(fixture: &Fixture, config: DatabaseConfig) -> Result<Self, String> {
+        use openbot_infra::auth::single_user::{
+            SINGLE_USER_ACTOR_ID, SINGLE_USER_EMAIL, load_single_user_principal,
+        };
+        let client = fixture.pool.get().await.map_err(|e| e.to_string())?;
+        client
+            .execute(
+                "INSERT INTO public.users(id,email,auth_generation) VALUES($1,$2,0)",
+                &[&SINGLE_USER_ACTOR_ID, &SINGLE_USER_EMAIL],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        client
+            .execute(
+                "INSERT INTO public.user_roles(user_id,role) VALUES($1,'admin')",
+                &[&SINGLE_USER_ACTOR_ID],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        drop(client);
+        let deployment = DeploymentId::new(DEPLOYMENT);
+        let tenant = TenantId::new(TENANT);
+        let principal =
+            load_single_user_principal(&fixture.pool, deployment.clone(), tenant.clone())
+                .await
+                .map_err(|e| e.to_string())?;
+        let resolver = Arc::new(crate::SingleUserAuthResolver::from_verified_principal(
+            principal,
+            default_session_lifetime(),
+        ));
+        let foreign_pool = pool::connect(&config.clone().with_max_pool_size(1))
+            .await
+            .map_err(|e| e.to_string())?;
+        let foreign = crate::SingleUserAuthResolver::from_verified_principal(
+            load_single_user_principal(&foreign_pool, deployment.clone(), tenant.clone())
+                .await
+                .map_err(|e| e.to_string())?,
+            default_session_lifetime(),
+        );
+        require(
+            foreign
+                .install_artifact_read_authority(&fixture.actual.read_authority())
+                .is_err(),
+            "different actual Pool enrolled as the original SingleUser read owner",
+        )?;
+        foreign.close_request_bindings();
+        foreign_pool.close();
+        resolver
+            .install_artifact_read_authority(&fixture.actual.read_authority())
+            .map_err(|_| "canonical same-Pool read enrollment failed")?;
+        let auth = resolver
+            .resolve(&parts(COOKIE_A)?)
+            .await
+            .map_err(|e| e.to_string())?;
+        let begin = BeginThreadRunRequest {
+            deployment: deployment.clone(),
+            tenant,
+            actor: auth.actor().clone(),
+            auth_generation: auth.auth_generation(),
+            command: BeginThreadRun {
+                thread_id: ThreadIdentity::new(&deployment).mint_from_entropy([17; 16]),
+                run_id: RunId::new(format!("single-user-read-{}", Uuid::now_v7())),
+                bot_id: BotId::new("current-read-bot"),
+                anchor: ThreadRunAnchor::DirectBot,
+                message: TEXT.to_owned(),
+                selected_skill_slugs: Vec::new(),
+                model_selection: None,
+            },
+        };
+        PostgresThreadDirectory::with_runtime(
+            fixture.pool.clone(),
+            config,
+            "single-user-read-fixture".to_owned(),
+            DEFAULT_THREAD_LEASE_DURATION,
+        )
+        .map_err(|e| e.to_string())?
+        .begin_thread_run(begin.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+        let receipt = fixture
+            .actual
+            .save_run_message_text(
+                &auth,
+                SaveRunMessageTextArtifact {
+                    request_id: Uuid::now_v7().to_string(),
+                    source_thread_id: begin.command.thread_id,
+                    source_run_id: begin.command.run_id.clone(),
+                    source_message_id: format!("{}:input", begin.command.run_id.as_str()),
+                    expected_sha256: format!("{:x}", Sha256::digest(TEXT.as_bytes())),
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let policy = ServerConfig::from_env_map(&EnvMap::new())
+            .map_err(|_| "owned single-user transport config")?
+            .transport_policy(true);
+        let router = ServerBuilder::new(fixture.application.clone(), resolver.clone())
+            .with_transport_policy(policy)
+            .with_sensitive_write_security(SensitiveWriteSecurity::new(
+                default_session_lifetime(),
+                TrustedOrigins::from_configured([ORIGIN]).map_err(|e| e.to_string())?,
+            ))
+            .into_router()
+            .layer(axum::Extension(axum::extract::ConnectInfo(
+                std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 40_013)),
+            )));
+        Ok(Self {
+            resolver,
+            router,
+            receipt,
+        })
+    }
+    async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        payload: Option<serde_json::Value>,
+    ) -> Result<axum::response::Response, String> {
+        let body = payload
+            .map(|value| serde_json::to_vec(&value))
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("origin", ORIGIN)
+            .header("content-type", "application/json")
+            .header("content-length", body.len())
+            .body(Body::from(body))
+            .map_err(|e| e.to_string())?;
+        self.router
+            .clone()
+            .oneshot(request)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn open(&self) -> Result<ArtifactReadOpened, String> {
+        let response = self
+            .request(
+                Method::POST,
+                super::PREFIX,
+                Some(serde_json::json!({"artifactId": self.receipt.artifact_id})),
+            )
+            .await?;
+        if response.status() != StatusCode::OK {
+            return Err(format!(
+                "SingleUser original Open returned HTTP {}",
+                response.status().as_u16()
+            ));
+        }
+        control(response).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL, canonical SingleUser owner and actual public byte carriers"]
+async fn actual_single_user_public_reader_delivers_original_bytes_and_closes_owner() {
+    let tag = "single_user_reader";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config.clone(), 4096).await?;
+        let single = ActualSingleUserRead::new(&fixture, config).await?;
+        let outcome = async {
+            let sessions: i64 = fixture
+                .pool
+                .get()
+                .await
+                .map_err(|e| e.to_string())?
+                .query_one(
+                    "SELECT count(*) FROM public.sessions WHERE user_id='dev-local-user'",
+                    &[],
+                )
+                .await
+                .map_err(|e| e.to_string())?
+                .get(0);
+            require(
+                sessions == 0,
+                "SingleUser read required a synthetic Session",
+            )?;
+            let opened = single.open().await?;
+            let next = format!("{}/{}/next", super::PREFIX, opened.handle_id);
+            let response = single
+                .request(Method::POST, &next, Some(serde_json::json!({"sequence":0})))
+                .await?;
+            let (length, eof) = data_headers(&response, &opened.handle_id, 0)?;
+            let bytes = to_bytes(response.into_body(), FIRST_BLOCK)
+                .await
+                .map_err(|e| format!("SingleUser original first body: {e}"))?;
+            require(
+                !eof && length == TEXT.len() && bytes.as_ref() == TEXT.as_bytes(),
+                "SingleUser actual body differed from the saved source",
+            )?;
+            drop(bytes);
+            let _: ArtifactReadAcknowledged = control(
+                single
+                    .request(
+                        Method::POST,
+                        &format!("{}/{}/ack", super::PREFIX, opened.handle_id),
+                        Some(serde_json::json!({"sequence":0})),
+                    )
+                    .await?,
+            )
+            .await?;
+            let response = single
+                .request(Method::POST, &next, Some(serde_json::json!({"sequence":1})))
+                .await?;
+            require(
+                data_headers(&response, &opened.handle_id, 1)? == (0, true),
+                "SingleUser read did not reach genuine EOF",
+            )?;
+            require(
+                to_bytes(response.into_body(), FIRST_BLOCK)
+                    .await
+                    .map_err(|e| format!("SingleUser original EOF body: {e}"))?
+                    .is_empty(),
+                "SingleUser EOF contained bytes",
+            )?;
+            let before = fixture.original_completions.count()?;
+            let live = single.open().await?;
+            let completion = fixture.original_completions.original_after(before)?;
+            single.resolver.close_request_bindings();
+            status(
+                single
+                    .request(
+                        Method::POST,
+                        &format!("{}/{}/next", super::PREFIX, live.handle_id),
+                        Some(serde_json::json!({"sequence":0})),
+                    )
+                    .await?,
+                StatusCode::UNAUTHORIZED,
+            )
+            .await?;
+            completion
+                .drain_before(Instant::now() + Duration::from_secs(5))
+                .await
+                .map_err(|e| format!("SingleUser original close drain: {e}"))?;
+            Ok(())
+        }
+        .await;
+        single.resolver.close_request_bindings();
+        drop(single);
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL and original SingleUser last-owner drop"]
+async fn actual_single_user_drop_stops_original_cached_entry_without_global_close() {
+    let tag = "single_user_drop";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config.clone(), 4096).await?;
+        let single = ActualSingleUserRead::new(&fixture, config).await?;
+        let outcome = async {
+            let before = fixture.original_completions.count()?;
+            let _opened = single.open().await?;
+            let original = fixture.original_completions.original_after(before)?;
+            // The Router and resolver are the last real issuer owners. No explicit issuer
+            // or Application-wide close occurs before this original physical drain.
+            drop(single);
+            original
+                .drain_before(Instant::now() + Duration::from_secs(5))
+                .await
+                .map_err(|e| format!("SingleUser last-owner original drain: {e}"))?;
+            Ok(())
+        }
+        .await;
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL and canonical SingleUser changes after actual Open"]
+async fn actual_single_user_cached_first_rechecks_canonical_role_email_generation_and_deny() {
+    let tag = "single_user_current";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let fixture = Fixture::new(config.clone(), 4096).await?;
+        let single = ActualSingleUserRead::new(&fixture, config).await?;
+        let outcome = async {
+            for (change, restore) in [
+                ("DELETE FROM public.user_roles WHERE user_id='dev-local-user'",
+                 "INSERT INTO public.user_roles(user_id,role) VALUES('dev-local-user','admin')"),
+                ("UPDATE public.users SET email='changed@example.test' WHERE id='dev-local-user'",
+                 "UPDATE public.users SET email='dev@openbot.local' WHERE id='dev-local-user'"),
+                ("UPDATE public.users SET auth_generation=1 WHERE id='dev-local-user'",
+                 "UPDATE public.users SET auth_generation=0 WHERE id='dev-local-user'"),
+                ("INSERT INTO public.revoked_access(email,revoked_by) VALUES('dev@openbot.local','owned-test')",
+                 "DELETE FROM public.revoked_access WHERE email='dev@openbot.local'"),
+            ] {
+                let before = fixture.original_completions.count()?;
+                let opened = single.open().await?;
+                let original = fixture.original_completions.original_after(before)?;
+                fixture.pool.get().await.map_err(|e| e.to_string())?.batch_execute(change).await.map_err(|e| e.to_string())?;
+                status(single.request(Method::POST, &format!("{}/{}/next", super::PREFIX, opened.handle_id),
+                    Some(serde_json::json!({"sequence":0}))).await?, StatusCode::UNAUTHORIZED).await?;
+                original.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|e| e.to_string())?;
+                fixture.pool.get().await.map_err(|e| e.to_string())?.batch_execute(restore).await.map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }.await;
+        single.resolver.close_request_bindings();
+        drop(single);
+        let cleaned = fixture.finish().await;
+        outcome.and(cleaned)
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Root-owned PostgreSQL; true Bytes last-owner drop and per-reader close"]
 async fn actual_server_session_public_reader_delayed_body_and_close_wait_for_original_carrier() {
     let tag = "public-reader-carrier";

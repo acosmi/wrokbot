@@ -412,6 +412,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .install_artifact_read_authority(&administration.read_authority())
                     .map_err(|_| startup_error("artifact_read_authority_unavailable"))?;
             }
+            if let Some(resolver) = &remember_single_user_resolver {
+                resolver
+                    .install_artifact_read_authority(&administration.read_authority())
+                    .map_err(|_| startup_error("artifact_read_authority_unavailable"))?;
+            }
             artifact_read_lifecycle = Some(administration.read_authority().read_lifecycle());
             Some(administration)
         } else {

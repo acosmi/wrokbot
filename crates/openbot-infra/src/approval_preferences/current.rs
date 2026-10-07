@@ -112,7 +112,20 @@ impl<'a> CurrentRequest<'a> {
             authority_sql::LOCK_ACTOR,
             &[&self.auth.actor().as_str()],
         )
-        .await
+        .await?;
+        // Logout deletes this row independently of the actor generation. Keep it locked
+        // through the original commit/rollback; the next joint observation verifies its
+        // complete immutable epoch and current lifetime after this NOWAIT lock.
+        if let Some(epoch) = self.host.server_session_epoch() {
+            required(
+                tx,
+                deadline,
+                authority_sql::LOCK_SESSION,
+                &[&epoch.lookup_id(), &self.auth.actor().as_str()],
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// 新 statement 的 Host 行、actor 代际/角色/deny、Bot 与 Thread 来源共同解码。
