@@ -73,12 +73,16 @@ impl ArtifactReadLifecycle {
         });
     }
     fn close_matching(&self, matches: impl Fn(&ReadOperationState) -> bool) {
+        let mut original_stops = Vec::new();
         match self.gate.try_lock() {
             Ok(mut gate) => {
                 gate.retain(|entry| {
                     if let Some(state) = entry.upgrade() {
                         if matches(&state) {
                             state.close();
+                            if let Some(stop) = state.entry_stop.get() {
+                                original_stops.push(Arc::clone(stop));
+                            }
                         }
                         true
                     } else {
@@ -89,6 +93,11 @@ impl ArtifactReadLifecycle {
             Err(_) => {
                 self.unavailable.store(true, Ordering::SeqCst);
             }
+        }
+        // The original port holds only a weak Entry. Stop cached allocations outside this
+        // inventory gate; neither the callback nor close substitutes a query/resource ACK.
+        for stop in original_stops {
+            stop.request_stop();
         }
         self.changed.notify_waiters();
     }
@@ -269,6 +278,7 @@ pub(crate) struct ReadOperationState {
     jobs: AtomicUsize,
     allocations: AtomicUsize,
     shared: OnceLock<StoreReadEnrollment>,
+    entry_stop: OnceLock<Arc<dyn ArtifactReadEntryStop>>,
     #[cfg(test)]
     pub(super) public_prepare_probe:
         Mutex<Option<Arc<super::artifact_read_authority::public_read_prepare::PublicPrepareProbe>>>,
@@ -305,6 +315,7 @@ impl ReadOperationState {
             jobs: AtomicUsize::new(0),
             allocations: AtomicUsize::new(0),
             shared: OnceLock::new(),
+            entry_stop: OnceLock::new(),
             #[cfg(test)]
             public_prepare_probe: Mutex::new(None),
         })
@@ -324,12 +335,18 @@ impl ReadOperationState {
         if self.shared.get().is_some() || data.phase != ReadPhase::Idle {
             return Err(ArtifactReadCurrentError::Unavailable);
         }
+        let original_entry_stop = entry_stop.clone();
         let enrollment = store
             .enroll_read(self, &self.artifact_id, entry_stop)
             .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
         self.shared
             .set(enrollment)
             .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        if let Some(stop) = original_entry_stop {
+            self.entry_stop
+                .set(stop)
+                .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        }
         Ok(())
     }
 

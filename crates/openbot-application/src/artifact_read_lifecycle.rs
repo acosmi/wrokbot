@@ -43,7 +43,9 @@ impl CurrentArtifactReadOperation {
             Some(binding)
                 if matches!(
                     binding.kind(),
-                    HostRequestBindingKind::ServerSession | HostRequestBindingKind::DesktopWindow
+                    HostRequestBindingKind::ServerSession
+                        | HostRequestBindingKind::ServerSingleUserOwner
+                        | HostRequestBindingKind::DesktopWindow
                 ) =>
             {
                 binding

@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0044_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0045_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -291,6 +291,13 @@ pub const NATIVE_0044_VERSION: i32 = 44;
 pub const NATIVE_0044_NAME: &str = "native_0044_artifact_cleanup_fences";
 /// Immutable cleanup intent, original record-pair key and closed phase guard.
 pub const NATIVE_0044_SQL: &str = include_str!("../../sql/native_0044.sql");
+
+/// Additive validation of an existing original saved receipt at cleanup completion.
+pub const NATIVE_0045_VERSION: i32 = 45;
+/// Stable ledger identity; earlier migration bytes and guards stay unchanged.
+pub const NATIVE_0045_NAME: &str = "native_0045_artifact_cleanup_saved_receipts";
+/// Null-safe original receipt guard; no cleanup producer or receipt backfill.
+pub const NATIVE_0045_SQL: &str = include_str!("../../sql/native_0045.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -466,6 +473,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0044_VERSION,
         name: NATIVE_0044_NAME,
         sql: NATIVE_0044_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0045_VERSION,
+        name: NATIVE_0045_NAME,
+        sql: NATIVE_0045_SQL,
     },
 ];
 
@@ -704,6 +716,12 @@ pub fn native_0043_checksum() -> String {
 #[must_use]
 pub fn native_0044_checksum() -> String {
     Sha256Digest::of(NATIVE_0044_SQL.as_bytes()).to_hex()
+}
+
+/// Checksum of the exact additive saved-receipt completion guard.
+#[must_use]
+pub fn native_0045_checksum() -> String {
+    Sha256Digest::of(NATIVE_0045_SQL.as_bytes()).to_hex()
 }
 
 /// SHA-256 of the registered sandbox editing migration.
@@ -1120,6 +1138,7 @@ mod tests {
             .chain(statement_lines(NATIVE_0035_SQL))
             .chain(statement_lines(NATIVE_0037_SQL))
             .chain(statement_lines(NATIVE_0038_SQL))
+            .chain(statement_lines(NATIVE_0045_SQL))
             // Stored trigger bodies contain the specifically authorized exact-slot DELETE.
             // The migration's top-level DDL still has the same expand-only check.
             .chain(
@@ -1347,7 +1366,7 @@ mod tests {
         assert_ne!(native_0035_checksum(), native_0036_checksum());
         assert_eq!(native_0037_checksum().len(), 64);
         assert_ne!(native_0036_checksum(), native_0037_checksum());
-        assert_eq!(MIGRATIONS.len(), 32);
+        assert_eq!(MIGRATIONS.len(), 33);
         assert_eq!(native_0038_checksum().len(), 64);
         assert_ne!(native_0037_checksum(), native_0038_checksum());
         assert_eq!(native_0039_checksum().len(), 64);
@@ -1362,6 +1381,8 @@ mod tests {
         assert_ne!(native_0042_checksum(), native_0043_checksum());
         assert_eq!(native_0044_checksum().len(), 64);
         assert_ne!(native_0043_checksum(), native_0044_checksum());
-        assert_eq!(MIGRATIONS[31].version, NATIVE_LATEST_VERSION);
+        assert_eq!(native_0045_checksum().len(), 64);
+        assert_ne!(native_0044_checksum(), native_0045_checksum());
+        assert_eq!(MIGRATIONS[32].version, NATIVE_LATEST_VERSION);
     }
 }

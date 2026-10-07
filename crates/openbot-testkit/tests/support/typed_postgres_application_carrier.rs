@@ -16,7 +16,7 @@ use openbot_application::provider::{
 };
 use openbot_contracts::{
     auth::{AuthContext, Role},
-    command::{AppCommand, AppReply},
+    command::{AppCommand, AppReply, SubscriptionRequest},
     error::AppError,
     ids::{ActorId, DeploymentId, TenantId},
     model_connections::{
@@ -59,7 +59,7 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     task::Poll,
@@ -157,6 +157,7 @@ pub(crate) async fn run(case: Case) {
             transport: None,
             protocol: None,
             router: None,
+            capability_replies: None,
             identities: Vec::new(),
             wire: Arc::new(AtomicUsize::new(0)),
         };
@@ -191,6 +192,51 @@ impl RemoteAguiTransport for ClosedRemote {
         Err(RemoteAguiTransportError::Unavailable)
     }
 }
+// Observe the original production reply before either carrier returns/serializes it.
+// Each fresh collector query advances its own opaque revision, so only the same
+// original reply is an equality oracle. The delegate and its reply stay unchanged.
+struct CapabilityReplyObserver {
+    actual: Arc<dyn openbot_application::ApplicationService>,
+    reply: Mutex<Option<RuntimeCapabilitiesResponse>>,
+}
+impl CapabilityReplyObserver {
+    fn take_original(&self) -> Result<RuntimeCapabilitiesResponse, String> {
+        self.reply
+            .lock()
+            .map_err(|_| "capability_observer_poisoned")?
+            .take()
+            .ok_or_else(|| "capability_original_reply_missing".to_owned())
+    }
+}
+#[async_trait]
+impl openbot_application::ApplicationService for CapabilityReplyObserver {
+    async fn execute(&self, auth: AuthContext, command: AppCommand) -> Result<AppReply, AppError> {
+        let reply = self.actual.execute(auth, command).await?;
+        if let AppReply::RuntimeCapabilities(value) = &reply {
+            let mut original = self
+                .reply
+                .lock()
+                .map_err(|_| AppError::DependencyUnavailable {
+                    dependency: "owned_capability_observer",
+                })?;
+            if original.is_some() {
+                return Err(AppError::DependencyUnavailable {
+                    dependency: "owned_capability_observer",
+                });
+            }
+            *original = Some(value.clone());
+        }
+        Ok(reply)
+    }
+    async fn subscribe(
+        &self,
+        auth: AuthContext,
+        request: SubscriptionRequest,
+    ) -> Result<openbot_application::AppEventStream, AppError> {
+        self.actual.subscribe(auth, request).await
+    }
+}
+
 struct Host {
     pool: DatabasePool,
     vault: CredentialRecordVault,
@@ -200,6 +246,7 @@ struct Host {
     transport: Option<Arc<InProcessTransport>>,
     protocol: Option<DesktopTauriProtocol>,
     router: Option<Router>,
+    capability_replies: Option<Arc<CapabilityReplyObserver>>,
     identities: Vec<ResolvedAuth>,
     wire: Arc<AtomicUsize>,
 }
@@ -321,12 +368,18 @@ impl Host {
             .await
             .map_err(|_| "production_application_assembly")?,
         );
-        let application = self
+        let actual = self
             .assembly
             .as_ref()
             .ok_or("assembly_missing")?
             .application
             .clone();
+        let observed = Arc::new(CapabilityReplyObserver {
+            actual,
+            reply: Mutex::new(None),
+        });
+        let application: Arc<dyn openbot_application::ApplicationService> = observed.clone();
+        self.capability_replies = Some(observed);
         self.transport = Some(Arc::new(InProcessTransport::new(application.clone())));
         let transport = self.transport.as_ref().ok_or("transport_missing")?;
         require(
@@ -593,15 +646,29 @@ impl Host {
                 else {
                     return Err("capabilities_variant".to_owned());
                 };
+                let original_typed = self
+                    .capability_replies
+                    .as_ref()
+                    .ok_or("capability_observer_missing")?
+                    .take_original()?;
                 let (status, body) = http(router, TOKENS[0], "/api/me/capabilities").await?;
+                let original_http = self
+                    .capability_replies
+                    .as_ref()
+                    .ok_or("capability_observer_missing")?
+                    .take_original()?;
                 let from_http: RuntimeCapabilitiesResponse =
                     serde_json::from_slice(&body).map_err(|_| "http_capability_dto")?;
                 require(
                     status == StatusCode::OK
                         && typed.host_mode() == RuntimeCapabilityHostMode::Server
-                        && from_http.host_mode() == typed.host_mode()
                         && typed.capabilities().len() == 13
-                        && from_http.capabilities() == typed.capabilities(),
+                        && typed == original_typed
+                        && from_http == original_http
+                        && from_http.schema_version() == typed.schema_version()
+                        && from_http.host_mode() == typed.host_mode()
+                        && from_http.capabilities() == typed.capabilities()
+                        && from_http.revision() != typed.revision(),
                     "typed_http_actual_server_capabilities",
                 )?;
                 require(
@@ -800,6 +867,7 @@ impl Host {
         if let Some(assembly) = self.assembly.take() {
             assembly.shutdown().await;
         }
+        self.capability_replies.take();
         self.identities.clear();
         self.auth.take();
         self.pool.close();

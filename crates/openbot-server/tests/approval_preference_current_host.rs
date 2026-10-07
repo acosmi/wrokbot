@@ -1443,9 +1443,6 @@ async fn actual_session_rechecks_original_epoch_access_and_owner_after_wait() {
         harness::admin_config("actual_session_rechecks_original_epoch_access_and_owner_after_wait");
     for mutation in [
         "actor_generation",
-        "session_deleted",
-        "session_replaced",
-        "issued_generation",
         "role_removed",
         "deny_added",
         "owner_closed",
@@ -1490,9 +1487,6 @@ async fn actual_session_rechecks_original_epoch_access_and_owner_after_wait() {
             else {
                 let c = f.admin.get().await.map_err(|e| e.to_string())?;
                 c.batch_execute(match mutation {
-                    "session_deleted" => "DELETE FROM public.sessions WHERE id='preference-session-a'",
-                    "session_replaced" => "UPDATE public.sessions SET token='replacement-epoch-token',created_at=created_at+interval '1 microsecond' WHERE id='preference-session-a'",
-                    "issued_generation" => "UPDATE public.sessions SET auth_generation=1 WHERE id='preference-session-a'",
                     "role_removed" => "DELETE FROM public.user_roles WHERE user_id='preference-owner'",
                     "deny_added" => "INSERT INTO public.revoked_access(email,revoked_by) VALUES('owner@example.test','owned-test')",
                     _ => return Err("unregistered current-tail fixture".to_owned()),
@@ -1510,6 +1504,143 @@ async fn actual_session_rechecks_original_epoch_access_and_owner_after_wait() {
             // Other cases never pretend an UPDATE committed while that original SHARE was held.
             Ok(())
         }).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires owned isolated PostgreSQL; explicit exact --include-ignored only"]
+async fn actual_session_original_row_stays_locked_until_preference_commit() {
+    harness::with_temp_database(
+        &harness::admin_config("pref_logout_commit"),
+        "pref_logout_commit",
+        |config| async move {
+            let f = Fixture::new(config, false, false).await?;
+            let pid: i32 = f
+                .pool
+                .get()
+                .await
+                .map_err(|e| e.to_string())?
+                .query_one("SELECT pg_backend_pid()", &[])
+                .await
+                .map_err(|e| e.to_string())?
+                .get(0);
+            let mut blocker = f.admin.get().await.map_err(|e| e.to_string())?;
+            let tx = blocker.transaction().await.map_err(|e| e.to_string())?;
+            tx.query_one("SELECT pg_advisory_xact_lock($1)", &[&AUDIT_LOCK])
+                .await
+                .map_err(|e| e.to_string())?;
+            let repository = f.repository.clone();
+            let auth = f.auth.clone();
+            let write = tokio::spawn(async move {
+                repository
+                    .write(
+                        &auth,
+                        &BotId::new(BOT),
+                        Target::User,
+                        Preference::Never,
+                        None,
+                    )
+                    .await
+            });
+            wait_blocked(&f.admin, pid, "pg_advisory_xact_lock").await?;
+            let deleter = f.admin.get().await.map_err(|e| e.to_string())?;
+            let delete_pid: i32 = deleter
+                .query_one("SELECT pg_backend_pid()", &[])
+                .await
+                .map_err(|e| e.to_string())?
+                .get(0);
+            let logout = tokio::spawn(async move {
+                deleter
+                    .execute(
+                        "DELETE FROM public.sessions WHERE id='preference-session-a'",
+                        &[],
+                    )
+                    .await
+            });
+            wait_blocked(&f.admin, delete_pid, "DELETE FROM public.sessions").await?;
+            let observer = f.admin.get().await.map_err(|e| e.to_string())?;
+            let row = observer
+                .query_one(
+                    "SELECT $1::integer = ANY(pg_blocking_pids($2))",
+                    &[&pid, &delete_pid],
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            require(
+                row.get::<_, bool>(0),
+                "logout was not blocked by the original preference transaction",
+            )?;
+            drop(observer);
+            require(
+                f.counts().await? == (0, 0, 0),
+                "uncommitted preference became visible during logout wait",
+            )?;
+            tx.rollback().await.map_err(|e| e.to_string())?;
+            let stored = write
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+            require(
+                stored.preference() == Preference::Never,
+                "preference failed despite current locked original session",
+            )?;
+            require(
+                logout
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|_| "owned logout SQL failed")?
+                    == 1,
+                "logout did not resume after the original transaction ended",
+            )?;
+            require(
+                f.counts().await? == (1, 1, 1),
+                "preference/logout race changed the expected single commit",
+            )?;
+            Ok(())
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires owned isolated PostgreSQL; explicit exact --include-ignored only"]
+async fn actual_session_changed_epoch_before_lock_cannot_commit_preference() {
+    let admin = harness::admin_config("pref_prior_epoch");
+    for mutation in [
+        "DELETE FROM public.sessions WHERE id='preference-session-a'",
+        "UPDATE public.sessions SET token='replacement-epoch-token',created_at=created_at+interval '1 microsecond' WHERE id='preference-session-a'",
+        "UPDATE public.sessions SET auth_generation=1 WHERE id='preference-session-a'",
+    ] {
+        harness::with_temp_database(&admin, "pref_prior_epoch", |config| async move {
+            let f = Fixture::new(config, false, false).await?;
+            let before = f.snapshot().await?;
+            f.admin
+                .get()
+                .await
+                .map_err(|e| e.to_string())?
+                .batch_execute(mutation)
+                .await
+                .map_err(|e| e.to_string())?;
+            require(
+                f.repository
+                    .write(
+                        &f.auth,
+                        &BotId::new(BOT),
+                        Target::User,
+                        Preference::Never,
+                        None,
+                    )
+                    .await
+                    == Err(Error::NotVisible),
+                "changed original epoch was allowed to commit",
+            )?;
+            require(
+                f.snapshot().await? == before,
+                "prior session change altered business or audit",
+            )?;
+            Ok(())
+        })
+        .await;
     }
 }
 
