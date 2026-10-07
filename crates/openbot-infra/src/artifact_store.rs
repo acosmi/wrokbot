@@ -18,9 +18,10 @@ use uuid::Uuid;
 
 use crate::artifact_administration::ObservedArtifactReadRecord;
 pub(crate) use crate::artifact_bytes::ArtifactByteStorageLocation;
+pub(crate) use crate::artifact_bytes::OriginalArtifactPhysicalObject;
 use crate::artifact_bytes::{
-    ArtifactBlob, ArtifactBlobReader, ArtifactByteError, ArtifactByteProbe, ArtifactByteStore,
-    ArtifactProbePhase,
+    ArtifactBlob, ArtifactBlobReader, ArtifactByteError, ArtifactBytePhysicalUnlinkError,
+    ArtifactByteProbe, ArtifactByteStore, ArtifactProbePhase,
 };
 use crate::artifact_read_lifecycle::ReadOperationState;
 use crate::artifact_registry::ArtifactDatasetRegistry;
@@ -28,6 +29,7 @@ use crate::artifact_registry::ArtifactDatasetRegistry;
 mod read_barrier;
 pub use read_barrier::{ArtifactReadControlledBarrier, ArtifactReadControlledDrainAck};
 pub(crate) use read_barrier::{
+    PhysicalInvocationClaim, PhysicalInvocationQueryOwner, PhysicalWorkerLease,
     StoreReadEnrollment, StoreReadJobLease, StoreReadQueryLease, StoreReadQueryReservation,
 };
 use read_barrier::{StoreReadFdLease, StoreReadGate};
@@ -282,6 +284,115 @@ pub struct DatasetBoundArtifactStore {
     reads: Arc<StoreReadGate>,
 }
 
+/// Borrowed only inside the original blocking worker. The std guard is deliberately !Send;
+/// it is retained continuously through preflight, permission, actual IO and final observation.
+pub(crate) struct OriginalStorePhysicalIo<'store> {
+    original_store: &'store DatasetBoundArtifactStore,
+    original_io_guard: std::sync::MutexGuard<'store, ()>,
+    original_deadline: Instant,
+}
+
+pub(crate) enum ArtifactPhysicalUnlinkError<E> {
+    Check(ArtifactReadBridgeError),
+    Start(E),
+}
+
+impl OriginalStorePhysicalIo<'_> {
+    fn check_original_before(&self) -> Result<(), ArtifactStoreError> {
+        // Read the retained guard explicitly; this never reacquires the original mutex.
+        let _held = &self.original_io_guard;
+        if Instant::now() >= self.original_deadline {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        self.original_store.check_current()?;
+        if Instant::now() >= self.original_deadline {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn preflight_installed_guarded(
+        &self,
+        blob: &ArtifactBlob,
+        stop: &mut impl FnMut(ArtifactProbePhase) -> bool,
+    ) -> Result<OriginalArtifactPhysicalObject, ArtifactReadBridgeError> {
+        self.check_original_before()?;
+        let mut guarded_stop = |phase| {
+            self.check_original_before().is_err()
+                || stop(phase)
+                || self.check_original_before().is_err()
+        };
+        let original = self
+            .original_store
+            .bytes
+            .preflight_installed_guarded_before(blob, self.original_deadline, &mut guarded_stop)?;
+        self.check_original_before()?;
+        Ok(original)
+    }
+
+    pub(crate) fn execute_installed_guarded<E>(
+        &self,
+        original: &OriginalArtifactPhysicalObject,
+        remove: bool,
+        stop: &mut impl FnMut(ArtifactProbePhase) -> bool,
+        start: &mut impl FnMut() -> Result<(), E>,
+    ) -> Result<bool, ArtifactPhysicalUnlinkError<E>> {
+        self.check_original_before()
+            .map_err(|error| ArtifactPhysicalUnlinkError::Check(error.into()))?;
+        let mut guarded_stop = |phase| {
+            self.check_original_before().is_err()
+                || stop(phase)
+                || self.check_original_before().is_err()
+        };
+        let mut checked_start = || {
+            // This filesystem check happens before the caller enters its permission/gate locks.
+            self.check_original_before()
+                .map_err(|error| ArtifactPhysicalUnlinkError::Check(error.into()))?;
+            start().map_err(ArtifactPhysicalUnlinkError::Start)
+        };
+        match self.original_store.bytes.execute_installed_guarded_before(
+            original,
+            remove,
+            self.original_deadline,
+            &mut guarded_stop,
+            &mut checked_start,
+        ) {
+            Ok(unlinked) => Ok(unlinked),
+            Err(ArtifactBytePhysicalUnlinkError::Bytes(error)) => {
+                Err(ArtifactPhysicalUnlinkError::Check(error.into()))
+            }
+            Err(ArtifactBytePhysicalUnlinkError::Start(error)) => Err(error),
+        }
+    }
+
+    pub(crate) fn probe_actual_guarded(
+        &self,
+        id: Uuid,
+        stop: &mut impl FnMut(ArtifactProbePhase) -> bool,
+    ) -> ArtifactByteProbe {
+        if self.check_original_before().is_err() {
+            return ArtifactByteProbe::Indeterminate;
+        }
+        let mut guarded_stop = |phase| {
+            self.check_original_before().is_err()
+                || stop(phase)
+                || self.check_original_before().is_err()
+        };
+        // Direct ByteStore delegation keeps the original guard. The ordinary Store wrapper
+        // would try_lock a second time and is deliberately not used by this worker.
+        let observation = self.original_store.bytes.probe_actual_guarded_before(
+            id,
+            self.original_deadline,
+            &mut guarded_stop,
+        );
+        if self.check_original_before().is_err() {
+            ArtifactByteProbe::Indeterminate
+        } else {
+            observation
+        }
+    }
+}
+
 impl core::fmt::Debug for DatasetBoundArtifactStore {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DatasetBoundArtifactStore")
@@ -291,6 +402,23 @@ impl core::fmt::Debug for DatasetBoundArtifactStore {
 }
 
 impl DatasetBoundArtifactStore {
+    pub(crate) fn try_physical_io_before(
+        &self,
+        original_deadline: Instant,
+    ) -> Result<OriginalStorePhysicalIo<'_>, ArtifactStoreError> {
+        if Instant::now() >= original_deadline {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        let original_io_guard = self.io.try_lock().map_err(|_| ArtifactStoreError::Busy)?;
+        let original = OriginalStorePhysicalIo {
+            original_store: self,
+            original_io_guard,
+            original_deadline,
+        };
+        original.check_original_before()?;
+        Ok(original)
+    }
+
     /// Trusted host provides a no-symlink private directory descriptor, never a renderer path.
     /// Ordinary reopen is immutable; changed-root restore requires a separate future producer.
     pub async fn bind_host_root(

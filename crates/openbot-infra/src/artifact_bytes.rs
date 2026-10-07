@@ -54,17 +54,41 @@ pub(crate) enum ArtifactByteProbe {
     Indeterminate,
 }
 
+/// Original worker-local leaf ownership. No observation here grants current authorization.
+#[cfg(feature = "server-runtime")]
+pub(crate) struct OriginalArtifactPhysicalObject {
+    directories: Arc<StoreDirectories>,
+    id: Uuid,
+    retained: Option<(File, FileObservation)>,
+    // A preflight object must stay inside the blocking worker that owns its original IO guard.
+    _worker_local: core::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(feature = "server-runtime")]
+impl OriginalArtifactPhysicalObject {
+    pub(crate) fn original_leaf_fd(&self) -> Option<std::os::fd::RawFd> {
+        use std::os::fd::AsRawFd;
+        self.retained.as_ref().map(|(file, _)| file.as_raw_fd())
+    }
+}
+
+#[cfg(feature = "server-runtime")]
+pub(crate) enum ArtifactBytePhysicalUnlinkError<E> {
+    Bytes(ArtifactByteError),
+    Start(E),
+}
+
+#[cfg(feature = "server-runtime")]
+impl<E> From<ArtifactByteError> for ArtifactBytePhysicalUnlinkError<E> {
+    fn from(error: ArtifactByteError) -> Self {
+        Self::Bytes(error)
+    }
+}
+
 /// Trusted inspection cutpoints. `true` from the callback stops the observation; `false`
 /// supplies no permission and cannot replace the real deadline or filesystem checks.
 #[cfg(feature = "server-runtime")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "private guarded byte inspection foundation; producer integration is a separate task"
-    )
-)]
 pub(crate) enum ArtifactProbePhase {
     Entry,
     BeforeHashSegment,
@@ -194,13 +218,6 @@ impl StoreDirectories {
     }
 
     #[cfg(feature = "server-runtime")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "private guarded byte inspection foundation; producer integration is a separate task"
-        )
-    )]
     fn check_current_children(&self, original_deadline: Instant) -> Result<(), ArtifactByteError> {
         let root = probe_io_before(original_deadline, || {
             self.root.metadata().map_err(|_| ArtifactByteError::Io)
@@ -601,17 +618,219 @@ impl ArtifactByteStore {
         Ok(observation)
     }
 
+    /// Verify the complete expected object on the exact leaf FD retained by this worker.
+    /// Absence has no invented length/hash; staging or a replaced canonical name refuses.
+    #[cfg(feature = "server-runtime")]
+    pub(crate) fn preflight_installed_guarded_before(
+        &self,
+        blob: &ArtifactBlob,
+        original_deadline: Instant,
+        stop: &mut impl FnMut(ArtifactProbePhase) -> bool,
+    ) -> Result<OriginalArtifactPhysicalObject, ArtifactByteError> {
+        if blob.id.get_version_num() != 7 || blob.id.get_variant() != Variant::RFC4122 {
+            return Err(ArtifactByteError::InvalidBinding);
+        }
+        self.probe_cutpoint(original_deadline, stop, ArtifactProbePhase::Entry)?;
+        let name = blob.id.to_string();
+        let staging = probe_io_before(original_deadline, || {
+            probe_open(&self.directories.staging, &name)
+        })?;
+        self.check_probe_current(original_deadline)?;
+        if staging.is_some() {
+            return Err(ArtifactByteError::UnsafeObject);
+        }
+        let object = probe_io_before(original_deadline, || {
+            probe_open(&self.directories.objects, &name)
+        })?;
+        self.check_probe_current(original_deadline)?;
+        let retained = if let Some(mut file) = object {
+            let metadata = probe_io_before(original_deadline, || {
+                file.metadata().map_err(|_| ArtifactByteError::Io)
+            })?;
+            self.check_probe_current(original_deadline)?;
+            check_file(&metadata, self.directories.owner, blob.byte_length)?;
+            let root = probe_io_before(original_deadline, || {
+                self.directories
+                    .root
+                    .metadata()
+                    .map_err(|_| ArtifactByteError::Io)
+            })?;
+            self.check_probe_current(original_deadline)?;
+            if metadata.dev() != root.dev() || metadata.len() > self.max_byte_length {
+                return Err(ArtifactByteError::UnsafeObject);
+            }
+            let before = FileObservation::of(&metadata);
+            let mut remaining = metadata.len();
+            let mut hash = Sha256::new();
+            let mut buffer = [0u8; COPY_BUFFER_BYTES];
+            while remaining > 0 {
+                self.probe_cutpoint(
+                    original_deadline,
+                    stop,
+                    ArtifactProbePhase::BeforeHashSegment,
+                )?;
+                self.check_probe_retained_current(
+                    &name,
+                    ArtifactByteStorageLocation::Object,
+                    &file,
+                    before,
+                    original_deadline,
+                )?;
+                let length = remaining.min(COPY_BUFFER_BYTES as u64) as usize;
+                probe_io_before(original_deadline, || {
+                    file.read_exact(&mut buffer[..length])
+                        .map_err(|_| ArtifactByteError::Io)
+                })?;
+                hash.update(&buffer[..length]);
+                remaining -= length as u64;
+                self.probe_cutpoint(
+                    original_deadline,
+                    stop,
+                    ArtifactProbePhase::AfterHashSegment,
+                )?;
+                self.check_probe_retained_current(
+                    &name,
+                    ArtifactByteStorageLocation::Object,
+                    &file,
+                    before,
+                    original_deadline,
+                )?;
+            }
+            self.probe_cutpoint(original_deadline, stop, ArtifactProbePhase::BeforeEofRead)?;
+            self.check_probe_retained_current(
+                &name,
+                ArtifactByteStorageLocation::Object,
+                &file,
+                before,
+                original_deadline,
+            )?;
+            let trailing = probe_io_before(original_deadline, || {
+                file.read(&mut buffer[..1])
+                    .map_err(|_| ArtifactByteError::Io)
+            })?;
+            self.probe_cutpoint(original_deadline, stop, ArtifactProbePhase::AfterEofRead)?;
+            self.check_probe_retained_current(
+                &name,
+                ArtifactByteStorageLocation::Object,
+                &file,
+                before,
+                original_deadline,
+            )?;
+            if trailing != 0 {
+                return Err(ArtifactByteError::LengthMismatch);
+            }
+            if <[u8; 32]>::from(hash.finalize()) != blob.sha256 {
+                return Err(ArtifactByteError::ContentMismatch);
+            }
+            self.probe_cutpoint(original_deadline, stop, ArtifactProbePhase::BeforeFileSync)?;
+            self.check_probe_retained_current(
+                &name,
+                ArtifactByteStorageLocation::Object,
+                &file,
+                before,
+                original_deadline,
+            )?;
+            probe_io_before(original_deadline, || {
+                file.sync_all().map_err(|_| ArtifactByteError::Io)
+            })?;
+            self.probe_cutpoint(original_deadline, stop, ArtifactProbePhase::AfterFileSync)?;
+            self.check_probe_retained_current(
+                &name,
+                ArtifactByteStorageLocation::Object,
+                &file,
+                before,
+                original_deadline,
+            )?;
+            Some((file, before))
+        } else {
+            None
+        };
+        let original = OriginalArtifactPhysicalObject {
+            directories: Arc::clone(&self.directories),
+            id: blob.id,
+            retained,
+            _worker_local: core::marker::PhantomData,
+        };
+        self.check_physical_object_current(&original, original_deadline)?;
+        Ok(original)
+    }
+
+    #[cfg(feature = "server-runtime")]
+    fn check_physical_object_current(
+        &self,
+        original: &OriginalArtifactPhysicalObject,
+        original_deadline: Instant,
+    ) -> Result<(), ArtifactByteError> {
+        if !Arc::ptr_eq(&self.directories, &original.directories) {
+            return Err(ArtifactByteError::InvalidBinding);
+        }
+        self.check_probe_current(original_deadline)?;
+        let name = original.id.to_string();
+        if let Some((file, before)) = &original.retained {
+            self.check_probe_retained_current(
+                &name,
+                ArtifactByteStorageLocation::Object,
+                file,
+                *before,
+                original_deadline,
+            )?;
+        } else {
+            let staging = probe_io_before(original_deadline, || {
+                probe_open(&self.directories.staging, &name)
+            })?;
+            self.check_probe_current(original_deadline)?;
+            let object = probe_io_before(original_deadline, || {
+                probe_open(&self.directories.objects, &name)
+            })?;
+            self.check_probe_current(original_deadline)?;
+            if staging.is_some() || object.is_some() {
+                return Err(ArtifactByteError::UnsafeObject);
+            }
+        }
+        self.check_probe_current(original_deadline)
+    }
+
+    /// The final real filesystem check precedes the pure permission callback. The original
+    /// cooperative IO guard remains held outside this method. stat -> unlink is not atomic
+    /// against a hostile same-UID writer. The boolean records only an actual unlink syscall.
+    #[cfg(feature = "server-runtime")]
+    pub(crate) fn execute_installed_guarded_before<E>(
+        &self,
+        original: &OriginalArtifactPhysicalObject,
+        remove: bool,
+        original_deadline: Instant,
+        stop: &mut impl FnMut(ArtifactProbePhase) -> bool,
+        start: &mut impl FnMut() -> Result<(), E>,
+    ) -> Result<bool, ArtifactBytePhysicalUnlinkError<E>> {
+        self.probe_cutpoint(
+            original_deadline,
+            stop,
+            ArtifactProbePhase::FinalObservation,
+        )?;
+        self.check_physical_object_current(original, original_deadline)?;
+        start().map_err(ArtifactBytePhysicalUnlinkError::Start)?;
+        // Started cannot be rolled back into Cancelled. A late syscall still has real effects.
+        if Instant::now() >= original_deadline {
+            return Err(ArtifactByteError::Io.into());
+        }
+        if !remove || original.retained.is_none() {
+            return Ok(false);
+        }
+        rustix::fs::unlinkat(
+            &self.directories.objects,
+            original.id.to_string(),
+            AtFlags::empty(),
+        )
+        .map_err(|_| ArtifactByteError::CleanupFailed)?;
+        // The held original leaf remains alive for post-unlink metadata and FD-first closure.
+        // Directory durability belongs to the guarded ordinary probe, even if this returns late.
+        Ok(true)
+    }
+
     /// Ordinary byte observation on the original owned blocking worker. This carries no Host,
     /// deletion, read-barrier or durable product-state authority. The supplied budget is never
     /// refreshed; a synchronous syscall that returns late leaves the observation indeterminate.
     #[cfg(feature = "server-runtime")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "private guarded byte inspection foundation; producer integration is a separate task"
-        )
-    )]
     pub(crate) fn probe_actual_guarded_before(
         &self,
         id: Uuid,
@@ -623,13 +842,6 @@ impl ArtifactByteStore {
     }
 
     #[cfg(feature = "server-runtime")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "private guarded byte inspection foundation; producer integration is a separate task"
-        )
-    )]
     fn check_probe_current(&self, original_deadline: Instant) -> Result<(), ArtifactByteError> {
         if Instant::now() >= original_deadline {
             return Err(ArtifactByteError::Io);
@@ -642,13 +854,6 @@ impl ArtifactByteStore {
     }
 
     #[cfg(feature = "server-runtime")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "private guarded byte inspection foundation; producer integration is a separate task"
-        )
-    )]
     fn probe_cutpoint(
         &self,
         original_deadline: Instant,
@@ -664,13 +869,6 @@ impl ArtifactByteStore {
     }
 
     #[cfg(feature = "server-runtime")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "private guarded byte inspection foundation; producer integration is a separate task"
-        )
-    )]
     fn check_probe_retained_current(
         &self,
         name: &str,
@@ -714,13 +912,6 @@ impl ArtifactByteStore {
     }
 
     #[cfg(feature = "server-runtime")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "private guarded byte inspection foundation; producer integration is a separate task"
-        )
-    )]
     fn probe_actual_guarded_inner(
         &self,
         id: Uuid,
@@ -879,13 +1070,6 @@ fn probe_open(directory: &File, name: &str) -> Result<Option<File>, ArtifactByte
 }
 
 #[cfg(feature = "server-runtime")]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "private guarded byte inspection foundation; producer integration is a separate task"
-    )
-)]
 fn probe_io_before<T>(
     original_deadline: Instant,
     io: impl FnOnce() -> Result<T, ArtifactByteError>,

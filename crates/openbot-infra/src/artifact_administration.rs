@@ -47,6 +47,14 @@ pub mod artifact_read_lifecycle;
 mod cleanup_arm;
 pub use cleanup_arm::{ArmedArtifactCleanupIntent, ArtifactCleanupArmError};
 
+#[path = "artifact_administration/cleanup_physical.rs"]
+mod cleanup_physical;
+pub use cleanup_physical::{
+    ArtifactCleanupPhysicalError, ArtifactCleanupPhysicalIoPhase,
+    ArtifactCleanupPhysicalObservation, ArtifactCleanupPhysicalObserver,
+    ArtifactCleanupPhysicalState,
+};
+
 const WAIT: Duration = Duration::from_secs(5);
 const PG_PHASE: Duration = Duration::from_secs(30);
 const MEDIA: &str = "text/plain; charset=utf-8";
@@ -155,6 +163,7 @@ pub struct PostgresArtifactAdministration {
     policy: ArtifactQuotaPolicy,
     audit_key: SecretBytes,
     read_authority: OnceLock<Arc<artifact_read_authority::PostgresArtifactReadAuthority>>,
+    cleanup_physical_observer: OnceLock<Arc<dyn ArtifactCleanupPhysicalObserver>>,
 }
 
 /// A single owned-PG record/source snapshot bound to its exact actual byte-store owner.
@@ -268,6 +277,7 @@ impl PostgresArtifactAdministration {
             policy,
             audit_key,
             read_authority: OnceLock::new(),
+            cleanup_physical_observer: OnceLock::new(),
         })
     }
 

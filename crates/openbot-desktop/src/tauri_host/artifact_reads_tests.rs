@@ -27,6 +27,10 @@ use openbot_contracts::command::{AppCommand, AppReply, BeginThreadRun, ThreadRun
 use openbot_contracts::engine::ENGINE_RELEASE_EPOCH;
 use openbot_contracts::ids::{BotId, RunId, thread::ThreadIdentity};
 use openbot_domain::vault::SecretBytes;
+use openbot_infra::artifact_administration::{
+    ArtifactCleanupPhysicalError as PhysicalError, ArtifactCleanupPhysicalIoPhase as PhysicalPhase,
+    ArtifactCleanupPhysicalObserver, ArtifactCleanupPhysicalState as PhysicalState,
+};
 use openbot_infra::auth::single_user::desktop_local::CurrentOsUserAppDataRoot;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
@@ -2311,5 +2315,551 @@ async fn revoked_original_window_epoch_does_not_poison_rebound_same_store_artifa
     assert!(
         failures.is_empty(),
         "genuine old/new Window read and finite drain regressions: {failures:?}"
+    );
+}
+
+// Task020 original inode inventory also remains meaningful after actual unlink.
+fn physical_local_inode_fds(original: &PhysicalLocalObjectFact) -> Result<Vec<String>, String> {
+    physical_local_inode_fds_for(original.0, original.1)
+}
+fn physical_local_inode_fds_for(
+    original_device: u64,
+    original_inode: u64,
+) -> Result<Vec<String>, String> {
+    let device = original_device & u64::from(u32::MAX);
+    let sample = || -> Result<Vec<String>, String> {
+        let pid = std::process::id();
+        let mut child = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "finite original own-PID lsof unavailable (Unproven)")?;
+        let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("finite original lsof streams unavailable (Unproven)".to_owned());
+        };
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let errors = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let waited = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5))
+                }
+                Ok(None) => break Err("finite original own-PID lsof timed out (Unproven)"),
+                Err(_) => break Err("finite original own-PID lsof wait failed (Unproven)"),
+            }
+        };
+        // All error paths still reap this original child and both original pipe workers.
+        // A killed/timed-out/error child is never credited as a natural successful sample.
+        if waited.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let output = output.join();
+        let errors = errors.join();
+        let status = waited?;
+        let output = output
+            .map_err(|_| "original lsof stdout worker failed")?
+            .map_err(|_| "original lsof stdout read failed")?;
+        let errors = errors
+            .map_err(|_| "original lsof stderr worker failed")?
+            .map_err(|_| "original lsof stderr read failed")?;
+        require(
+            status.success()
+                && output.len() <= 65_536
+                && errors.is_empty()
+                && output.ends_with(b"\n"),
+            "original lsof was failed, incomplete, truncated or emitted stderr (Unproven)",
+        )?;
+        let text = std::str::from_utf8(&output).map_err(|_| "original lsof output invalid")?;
+        let mut self_pid = false;
+        let mut fd = None;
+        let mut dev = None;
+        let mut ino = None;
+        let mut found = std::collections::BTreeSet::new();
+        for line in text.lines().chain(std::iter::once("f")) {
+            let (kind, value) = line
+                .split_at_checked(1)
+                .ok_or("original lsof empty field")?;
+            match kind {
+                "p" => {
+                    require(
+                        value.parse::<u32>().ok() == Some(pid),
+                        "original lsof observed a peer PID",
+                    )?;
+                    self_pid = true;
+                }
+                "f" => {
+                    if dev == Some(device) && ino == Some(original_inode) {
+                        found.insert(fd.ok_or("original inode had a nonnumeric ambiguous FD")?);
+                    }
+                    fd = value.parse::<u32>().ok();
+                    dev = None;
+                    ino = None;
+                }
+                "D" => {
+                    dev = Some(
+                        if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16)
+                        } else {
+                            value.parse::<u64>()
+                        }
+                        .map_err(|_| "original lsof device invalid")?,
+                    );
+                }
+                "i" => {
+                    ino = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "original lsof inode invalid")?,
+                    );
+                }
+                _ => return Err("original lsof unexpected field".to_owned()),
+            }
+        }
+        require(self_pid, "original lsof self-PID field missing")?;
+        Ok(found.into_iter().map(|fd| fd.to_string()).collect())
+    };
+    let first = sample()?;
+    let second = sample()?;
+    require(
+        first == second,
+        "original inode FD inventory changed between two actual samples (Unproven)",
+    )?;
+    Ok(first)
+}
+
+type PhysicalLocalObjectFact = (u64, u64, u32, u32, u64, u64, String);
+#[derive(Default)]
+struct PhysicalLocalPhaseFacts {
+    seen: [usize; 4],
+    original_fd: Option<i32>,
+    nlink_after_unlink: Option<u64>,
+    error: Option<String>,
+    released: bool,
+}
+struct PhysicalLocalPhaseGate {
+    artifact: uuid::Uuid,
+    original: PhysicalLocalObjectFact,
+    pause: usize,
+    facts: Mutex<PhysicalLocalPhaseFacts>,
+    changed: Condvar,
+}
+impl PhysicalLocalPhaseGate {
+    fn new(
+        artifact: &str,
+        original: PhysicalLocalObjectFact,
+        pause: usize,
+    ) -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Self {
+            artifact: uuid::Uuid::parse_str(artifact).map_err(|e| e.to_string())?,
+            original,
+            pause,
+            facts: Mutex::new(PhysicalLocalPhaseFacts::default()),
+            changed: Condvar::new(),
+        }))
+    }
+    fn release(&self) {
+        if let Ok(mut facts) = self.facts.lock() {
+            facts.released = true;
+            self.changed.notify_all();
+        }
+    }
+    fn check(&self) -> Result<(), String> {
+        let facts = self
+            .facts
+            .lock()
+            .map_err(|_| "Local physical observer poisoned")?;
+        match &facts.error {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        }
+    }
+    async fn wait(&self, phase: usize, deadline: Instant) -> Result<(), String> {
+        loop {
+            let seen = self
+                .facts
+                .lock()
+                .map_err(|_| "Local physical observer poisoned")?
+                .seen[phase - 1]
+                > 0;
+            if seen {
+                return self.check();
+            }
+            require(
+                Instant::now() < deadline,
+                "Local actual original physical phase was not reached",
+            )?;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    fn after_unlink_zero_link(&self) -> Result<(), String> {
+        let facts = self
+            .facts
+            .lock()
+            .map_err(|_| "Local physical observer poisoned")?;
+        require(
+            facts.seen[2] == 1
+                && facts.original_fd.is_some()
+                && facts.nlink_after_unlink == Some(0),
+            "Local original worker did not actually hold the original zero-link inode after unlink",
+        )
+    }
+    fn observe(&self, phase: PhysicalPhase, artifact: uuid::Uuid, original_leaf_fd: Option<i32>) {
+        let index = match phase {
+            PhysicalPhase::PreflightReady => 1,
+            PhysicalPhase::BeforeFirstUnlink => 2,
+            PhysicalPhase::AfterUnlinkBeforeSync => 3,
+            PhysicalPhase::WorkerEnded => 4,
+        };
+        let observed = (|| -> Result<Option<u64>, String> {
+            require(
+                artifact == self.artifact,
+                "Local original observer changed artifact UUID",
+            )?;
+            if index == 4 {
+                require(
+                    original_leaf_fd.is_none(),
+                    "Local WorkerEnded retained its leaf FD",
+                )?;
+                return Ok(None);
+            }
+            let Some(fd) = original_leaf_fd else {
+                require(
+                    self.facts
+                        .lock()
+                        .is_ok_and(|f| f.nlink_after_unlink == Some(0)),
+                    "Local retained preflight did not have an actual original leaf FD",
+                )?;
+                return Ok(None);
+            };
+            // Explicit original same-process RawFd, no body read, unsafe borrow or FD scan.
+            let duplicate = std::fs::File::open(format!("/dev/fd/{fd}"))
+                .map_err(|_| "Local original physical FD duplicate failed")?;
+            let m = duplicate
+                .metadata()
+                .map_err(|_| "Local original physical FD metadata failed")?;
+            let valid = m.is_file()
+                && m.dev() == self.original.0
+                && m.ino() == self.original.1
+                && m.uid() == self.original.2
+                && m.mode() == self.original.3
+                && m.len() == self.original.5;
+            let nlink = m.nlink();
+            drop(duplicate);
+            require(
+                valid && if index == 3 { nlink == 0 } else { nlink == 1 },
+                "Local supplied phase FD was not the original inode with its actual expected link count",
+            )?;
+            Ok(Some(nlink))
+        })();
+        let Ok(mut facts) = self.facts.lock() else {
+            return;
+        };
+        facts.seen[index - 1] += 1;
+        match observed {
+            Ok(nlink) => {
+                if original_leaf_fd.is_some() {
+                    facts.original_fd = original_leaf_fd;
+                }
+                if index == 3 {
+                    facts.nlink_after_unlink = nlink;
+                }
+            }
+            Err(e) => facts.error = Some(e),
+        }
+        self.changed.notify_all();
+        let stop = Instant::now() + Duration::from_secs(8);
+        while index == self.pause && !facts.released {
+            let remaining = stop.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                facts.error = Some("Local original physical gate was not released".to_owned());
+                break;
+            }
+            match self.changed.wait_timeout(facts, remaining) {
+                Ok((next, _)) => facts = next,
+                Err(_) => return,
+            }
+        }
+    }
+}
+#[derive(Default)]
+struct PhysicalLocalOriginalObserver {
+    selected: Mutex<Option<Arc<PhysicalLocalPhaseGate>>>,
+}
+impl PhysicalLocalOriginalObserver {
+    fn select(&self, gate: Arc<PhysicalLocalPhaseGate>) -> Result<(), String> {
+        let mut selected = self
+            .selected
+            .lock()
+            .map_err(|_| "Local original observer selection poisoned")?;
+        if let Some(previous) = selected.as_ref() {
+            require(
+                previous
+                    .facts
+                    .lock()
+                    .map_err(|_| "Local prior observer poisoned")?
+                    .seen[3]
+                    > 0,
+                "Local observer replaced a still-live previous original worker",
+            )?;
+        }
+        *selected = Some(gate);
+        Ok(())
+    }
+}
+impl ArtifactCleanupPhysicalObserver for PhysicalLocalOriginalObserver {
+    fn on_phase(&self, phase: PhysicalPhase, artifact: uuid::Uuid, original_leaf_fd: Option<i32>) {
+        let selected = self.selected.lock().ok().and_then(|s| s.clone());
+        if let Some(gate) = selected {
+            gate.observe(phase, artifact, original_leaf_fd);
+        }
+    }
+}
+struct PhysicalLocalGateRelease(Arc<PhysicalLocalPhaseGate>);
+impl Drop for PhysicalLocalGateRelease {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+fn physical_local_absent(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+async fn physical_local_original_fd_closed(
+    gate: &Arc<PhysicalLocalPhaseGate>,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    gate.wait(4, deadline).await?;
+    let original = gate.original.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        loop {
+            if physical_local_inode_fds(&original)?.is_empty() {
+                return Ok(());
+            }
+            require(
+                Instant::now() < deadline,
+                "Local ended label did not close the actual original inode FD",
+            )?;
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    gate.check()
+}
+async fn physical_local_actual_query_pid(
+    observer: &openbot_infra::db::pool::PooledClient,
+) -> Result<i32, String> {
+    let rows = observer.query("SELECT pg_backend_pid() AS observer_pid,pid,xact_start IS NOT NULL AS actual_transaction,state FROM pg_catalog.pg_stat_activity WHERE datname=current_database() AND query LIKE '%artifact_cleanup_arm_current_joint%' AND state='idle in transaction'", &[]).await.map_err(|e| e.to_string())?;
+    require(
+        rows.len() == 1,
+        "Local preflight did not identify exactly one real original joint-query producer",
+    )?;
+    let pid: i32 = rows[0].get("pid");
+    require(
+        pid != rows[0].get::<_, i32>("observer_pid")
+            && rows[0].get::<_, bool>("actual_transaction"),
+        "Local preflight query observer replaced the true original transaction",
+    )?;
+    Ok(pid)
+}
+async fn physical_local_original_rollback_ack(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    observer: &openbot_infra::db::pool::PooledClient,
+    pid: i32,
+) -> Result<(), String> {
+    // A backend ROLLBACK by itself is not client ACK. First observe that exact backend's
+    // original transaction ended, then really reacquire that same live connection from
+    // its original Pool and execute a new command; retired or merely Drop-requested
+    // connections cannot satisfy this driver/protocol reuse proof.
+    let row = observer.query_opt("SELECT pg_backend_pid() AS observer_pid,state,xact_start IS NULL AS no_transaction,query FROM pg_catalog.pg_stat_activity WHERE pid=$1", &[&pid]).await.map_err(|e| e.to_string())?.ok_or("Local original acknowledged producer disappeared")?;
+    require(
+        row.get::<_, i32>("observer_pid") != pid
+            && row.get::<_, Option<String>>("state").as_deref() == Some("idle")
+            && row.get::<_, bool>("no_transaction")
+            && row
+                .get::<_, String>("query")
+                .trim()
+                .eq_ignore_ascii_case("ROLLBACK"),
+        "Local original physical query lacked its actual original completed ROLLBACK",
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut original_leases = Vec::new();
+    let mut found = false;
+    for _ in 0..16 {
+        let c = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), pool.get())
+            .await
+            .map_err(
+                |_| "Local original driver did not become reusable within finite proof budget",
+            )?
+            .map_err(|e| e.to_string())?;
+        let actual: i32 = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            c.query_one("SELECT pg_backend_pid()", &[]),
+        )
+        .await
+        .map_err(|_| "Local original reuse command timed out")?
+        .map_err(|e| e.to_string())?
+        .get(0);
+        if actual == pid {
+            require(
+                c.observation().snapshot().connection_started,
+                "Local reused original driver was not actually started",
+            )?;
+            found = true;
+        }
+        original_leases.push(c);
+        if found {
+            break;
+        }
+    }
+    drop(original_leases);
+    require(
+        found,
+        "Local original ROLLBACK did not really ACK/reuse its original driver",
+    )
+}
+
+#[tokio::test]
+#[ignore = "requires genuine Prepared Local/original Arc, two actual objects and original-window physical gates"]
+async fn actual_local_original_window_is_required_through_physical_cleanup_completion() {
+    let mut bundle = OwnedBundle::materialize().expect("Root-owned exact Local PostgreSQL bundle");
+    let bundle_path = bundle.root.0.clone();
+    let fixture = LocalFixture::new(&bundle, "physical-cleanup-original-window")
+        .await
+        .expect("genuine Prepared Local physical setup");
+    let fixture_path = fixture.root.0.clone();
+    let actual = fixture.prepared().artifact_administration.clone();
+    let protocol = fixture.prepared().protocol().clone();
+    let observer = Arc::new(PhysicalLocalOriginalObserver::default());
+    let outcome = async {
+        let original_auth = protocol.windows.try_read().map_err(|_| "Local Window registry unavailable")?.get("main").ok_or("Local original Window missing")?.auth.clone();
+        let second = fixture.prepared().application().execute(original_auth.clone(), AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
+            request_id: uuid::Uuid::now_v7().to_string(), source_thread_id: fixture.artifact.source_thread_id.clone(),
+            source_run_id: fixture.artifact.source_run_id.clone(), source_message_id: fixture.artifact.source_message_id.clone(),
+            expected_sha256: format!("{:x}", Sha256::digest(PAYLOAD.as_bytes())),
+        })).await.map_err(|e| e.to_string())?;
+        let second = match second { AppReply::ArtifactRegistrationReceipt(r) => r, _ => return Err("Local second genuine Save returned another reply".to_owned()) };
+        require(second.artifact_id != fixture.artifact.artifact_id && second.operation_id != fixture.artifact.operation_id,
+            "Local physical sublegs did not have two distinct genuinely saved original objects")?;
+        let first_path = fixture.root.0.join("artifacts/objects").join(&fixture.artifact.artifact_id);
+        let second_path = fixture.root.0.join("artifacts/objects").join(&second.artifact_id);
+        let first_object = cleanup_arm_local_object_fact(&first_path)?;
+        let second_object = cleanup_arm_local_object_fact(&second_path)?;
+        actual.install_cleanup_physical_observer(observer.clone()).map_err(|e| format!("{e:?}"))?;
+        let first_intent = Arc::new(actual.arm_explicit_saved_delete_before(&original_auth, &fixture.artifact.artifact_id,
+            Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("{e:?}"))?);
+        let first_armed = cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        let first_gate = PhysicalLocalPhaseGate::new(&fixture.artifact.artifact_id, first_object.clone(), 1)?;
+        observer.select(first_gate.clone())?;
+        let release = PhysicalLocalGateRelease(first_gate.clone());
+        let worker_actual = actual.clone(); let worker_auth = original_auth.clone(); let worker_intent = first_intent.clone();
+        let independent_observer = fixture.prepared().pool().get().await.map_err(|e| e.to_string())?;
+        let started = Instant::now();
+        let task = tokio::spawn(async move { worker_actual.remove_armed_explicit_saved_bytes_before(&worker_auth, &worker_intent, started + Duration::from_secs(5)).await });
+        let controlled = async {
+            first_gate.wait(1, Instant::now() + Duration::from_secs(2)).await?;
+            let pid = physical_local_actual_query_pid(&independent_observer).await?;
+            protocol.unbind_window("main").map_err(|e| e.to_string())?;
+            protocol.bind_window("main", fixture.prepared().auth_context().clone(), None).map_err(|e| e.to_string())?;
+            let rebound = protocol.windows.try_read().map_err(|_| "Local rebound Window unavailable")?.get("main").ok_or("Local rebound Window missing")?.auth.clone();
+            require(rebound == original_auth && !rebound.request_binding().ok_or("Local rebound binding missing")?.identity()
+                .same_binding(original_auth.request_binding().ok_or("Local original binding missing")?.identity()),
+                "Local pregrant controller did not really replace the original Window epoch")?;
+            Ok::<_, String>((pid, rebound))
+        }.await;
+        drop(release);
+        let result = task.await.map_err(|e| e.to_string())?;
+        let (first_pid, rebound) = controlled?;
+        require(matches!(result, Err(PhysicalError::Host(openbot_contracts::request_binding::HostRequestBindingError::NotCurrent)))
+            && started.elapsed() < Duration::from_secs(5), "Local pregrant original Window replacement gained a normal observation or unknown classification")?;
+        physical_local_original_rollback_ack(fixture.prepared().pool(), &independent_observer, first_pid).await?;
+        drop(independent_observer);
+        physical_local_original_fd_closed(&first_gate).await?;
+        require(first_gate.facts.lock().map_err(|_| "Local first phase facts poisoned")?.seen[2] == 0
+            && cleanup_arm_local_object_fact(&first_path)? == first_object
+            && cleanup_arm_local_database_facts(fixture.prepared().pool()).await? == first_armed,
+            "Local pregrant refusal unlinked bytes or changed armed business facts")?;
+        let retained = actual.observe_armed_explicit_saved_bytes_before(&rebound, &first_intent,
+            Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("Local definite acknowledged refusal invented poison: {e:?}"))?;
+        require(retained.state() == PhysicalState::Retained && cleanup_arm_local_object_fact(&first_path)? == first_object,
+            "Local rebound observe did not preserve its actually retained original object")?;
+        physical_local_original_fd_closed(&first_gate).await?;
+        drop(retained); drop(first_intent);
+        eprintln!("ARTIFACT_PHYSICAL_LOCAL_PREGRANT original_query_pid={first_pid} actual_preflight_original_fd=true original_window_replaced=true true_original_rollback_ack_and_driver_reuse=true zero_unlink=true original_object_retained=true new_current_same_store_retained_observation=true no_poison_clear=true");
+
+        let second_intent = Arc::new(actual.arm_explicit_saved_delete_before(&rebound, &second.artifact_id,
+            Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("{e:?}"))?);
+        let second_armed = cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        let second_gate = PhysicalLocalPhaseGate::new(&second.artifact_id, second_object, 3)?;
+        observer.select(second_gate.clone())?;
+        let release = PhysicalLocalGateRelease(second_gate.clone());
+        let worker_actual = actual.clone(); let worker_auth = rebound.clone(); let worker_intent = second_intent.clone();
+        let independent_observer = fixture.prepared().pool().get().await.map_err(|e| e.to_string())?;
+        let started = Instant::now();
+        let task = tokio::spawn(async move { worker_actual.remove_armed_explicit_saved_bytes_before(&worker_auth, &worker_intent, started + Duration::from_secs(5)).await });
+        let controlled = async {
+            second_gate.wait(3, Instant::now() + Duration::from_secs(2)).await?;
+            second_gate.after_unlink_zero_link()?;
+            let pid = physical_local_actual_query_pid(&independent_observer).await?;
+            protocol.unbind_window("main").map_err(|e| e.to_string())?;
+            protocol.bind_window("main", fixture.prepared().auth_context().clone(), None).map_err(|e| e.to_string())?;
+            let latest = protocol.windows.try_read().map_err(|_| "Local newest Window unavailable")?.get("main").ok_or("Local newest Window missing")?.auth.clone();
+            require(latest == rebound && !latest.request_binding().ok_or("Local latest binding missing")?.identity()
+                .same_binding(rebound.request_binding().ok_or("Local second original binding missing")?.identity()),
+                "Local post-Started controller did not replace the real second original Window epoch")?;
+            Ok::<_, String>((pid, latest))
+        }.await;
+        drop(release);
+        let result = task.await.map_err(|e| e.to_string())?;
+        let (second_pid, latest) = controlled?;
+        require(matches!(result, Err(PhysicalError::Host(openbot_contracts::request_binding::HostRequestBindingError::NotCurrent)))
+            && started.elapsed() < Duration::from_secs(5), "Local post-IO closed original Window published a normal witness or hid original classification")?;
+        physical_local_original_rollback_ack(fixture.prepared().pool(), &independent_observer, second_pid).await?;
+        drop(independent_observer);
+        physical_local_original_fd_closed(&second_gate).await?;
+        require(physical_local_absent(&second_path) && physical_local_absent(&fixture.root.0.join("artifacts/staging").join(&second.artifact_id))
+            && cleanup_arm_local_object_fact(&first_path)? == first_object && cleanup_arm_local_database_facts(fixture.prepared().pool()).await? == second_armed,
+            "Local postIO rejection relabelled true effects or changed original pair/charge/fence/audit")?;
+        let absent = actual.observe_armed_explicit_saved_bytes_before(&latest, &second_intent,
+            Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("Local acknowledged postIO rejection invented poison: {e:?}"))?;
+        require(absent.state() == PhysicalState::DurableAbsent && cleanup_arm_local_database_facts(fixture.prepared().pool()).await? == second_armed,
+            "Local latest current observation did not independently prove limited absence without business writes")?;
+        physical_local_original_fd_closed(&second_gate).await?;
+        first_gate.check()?; second_gate.check()?;
+        drop(absent); drop(second_intent);
+        eprintln!("ARTIFACT_PHYSICAL_LOCAL_POSTIO original_query_pid={second_pid} actual_unlink_original_fd_nlink_zero=true original_window_rebound_after_started=true true_original_rollback_ack_and_driver_reuse=true actual_original_fd_closed=true original_io_effects_kept=true normal_old_witness=false new_current_same_store_observe_durable_absent=true charge_fence_audit_unchanged=true terminal_refund=false");
+        Ok::<(), String>(())
+    }.await;
+    drop(observer);
+    drop(protocol);
+    drop(actual);
+    let cleaned = fixture.finish().await;
+    if cleaned.is_ok() {
+        bundle.root.1 = true;
+    }
+    let fixture_absent = physical_local_absent(&fixture_path);
+    drop(bundle);
+    let bundle_absent = physical_local_absent(&bundle_path);
+    outcome
+        .and(cleaned)
+        .and(require(
+            fixture_absent && bundle_absent,
+            "Local original sidecar closure did not actually remove both owned roots",
+        ))
+        .expect("actual Local original Window physical cleanup and finite owned closure");
+    eprintln!(
+        "ARTIFACT_PHYSICAL_LOCAL_OWNED_TAIL original_sidecar_pid_gone=true original_worker_inode_fds_absent=true prepared_extra_original_arcs_dropped=true actual_application_root_absent=true actual_bundle_root_absent=true external_copies_untracked=true"
     );
 }
