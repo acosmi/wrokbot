@@ -378,6 +378,59 @@ async fn assert_old_oracles(pool: &DatabasePool) {
 
 #[tokio::test]
 #[ignore = "requires owned isolated PostgreSQL 17; explicit include-ignored only"]
+async fn native_0045_desktop_canary_preflight_accepts_fresh_and_upgrade_read_only() {
+    for upgrade in [false, true] {
+        harness::with_temp_database(
+            &harness::admin_config("canary45layout"),
+            "canary45layout",
+            |config| async move {
+                let pool = pool::connect(&config).await.unwrap();
+                let mut client = pool.get().await.unwrap();
+                if upgrade {
+                    baseline::apply(&client).await.unwrap();
+                    native::apply_through(&mut client, native::NATIVE_0044_VERSION)
+                        .await
+                        .unwrap();
+                    drop(client);
+                    assert_eq!(
+                        openbot_infra::db::desktop_vault_canary::verify_pre_upgrade_layout(&pool)
+                            .await
+                            .unwrap()
+                            .native_version(),
+                        native::NATIVE_0044_VERSION
+                    );
+                    client = pool.get().await.unwrap();
+                    native::apply(&mut client).await.unwrap();
+                } else {
+                    fresh::apply(&mut client).await.unwrap();
+                }
+                let before_ledger = ledger(&client).await;
+                let before_rows = business_rows(&client).await;
+                drop(client);
+                let layout = openbot_infra::db::desktop_vault_canary::verify_pre_upgrade_layout(
+                    &pool,
+                )
+                .await
+                .expect("actual native45 canary preflight must accept its unchanged public layout");
+                assert_eq!(layout.native_version(), native::NATIVE_0045_VERSION);
+                openbot_infra::db::desktop_vault_canary::verify_current_layout(&pool)
+                    .await
+                    .unwrap();
+                assert_old_oracles(&pool).await;
+                let client = pool.get().await.unwrap();
+                assert_eq!(ledger(&client).await, before_ledger);
+                assert_eq!(business_rows(&client).await, before_rows);
+                drop(client);
+                pool.close();
+                Ok(())
+            },
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires owned isolated PostgreSQL 17; explicit include-ignored only"]
 async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
     let expected: Value = serde_json::from_str(include_str!(
         "../../../fixtures/db/artifact-cleanup-fences-0045.json"

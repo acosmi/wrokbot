@@ -570,6 +570,8 @@ fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraErr
         native::NATIVE_0043_VERSION => PUBLIC_0040,
         //0044 adds only internal cleanup fence objects.
         native::NATIVE_0044_VERSION => PUBLIC_0040,
+        //0045 adds only the internal saved-receipt completion guard.
+        native::NATIVE_0045_VERSION => PUBLIC_0040,
         _ => {
             return Err(InfraError::repository_invariant(
                 "desktop_vault_native_schema_unregistered",
