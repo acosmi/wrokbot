@@ -349,6 +349,288 @@ struct LocalFixture {
     artifact: ArtifactRegistrationReceipt,
     postmaster_pid: u32,
 }
+
+// Registration10: an observation after the original P1 Save has already failed. This fixed
+// statement returns only booleans and explicit closed classes, never row values or source text.
+const ORIGINAL_P1_SAVE_FAILURE_FACTS_SQL: &str = r#"
+WITH d AS (
+ SELECT dataset_id FROM openbot_internal.artifact_dataset_bindings
+ WHERE deployment_id=$1 AND tenant_id=$2
+), o AS (
+ SELECT o.* FROM openbot_internal.artifact_save_operations o JOIN d USING(dataset_id)
+ WHERE o.deployment_id=$1 AND o.tenant_id=$2 AND o.request_id=$3 AND o.owner_actor_id=$4
+), r AS (
+ SELECT r.* FROM openbot_internal.artifact_records r JOIN o
+ USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+), p AS (
+ SELECT p.* FROM openbot_internal.artifact_saved_receipts p JOIN o
+ USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+), q AS (
+ SELECT q.* FROM openbot_internal.artifact_workspace_quotas q JOIN o
+ USING(deployment_id,tenant_id,dataset_id,workspace_kind,workspace_id)
+)
+SELECT jsonb_build_object(
+ 'operation_exists',EXISTS(SELECT 1 FROM o),
+ 'operation_state',coalesce((SELECT CASE WHEN state IN
+  ('admitted','io_started','available','failed_partial','unresolved','deleted','expired')
+  THEN state ELSE 'invalid' END FROM o),'missing'),
+ 'observation_phase',coalesce((SELECT CASE WHEN observation_phase IN
+  ('before_write','staging','installing','installed') THEN observation_phase
+  WHEN observation_phase IS NULL THEN 'null' ELSE 'invalid' END FROM o),'missing'),
+ 'actual_absence',coalesce((SELECT CASE WHEN actual_absent IS TRUE THEN 'true'
+  WHEN actual_absent IS FALSE THEN 'false' ELSE 'null' END FROM o),'missing'),
+ 'actual_location',coalesce((SELECT CASE WHEN actual_location IN ('staging','object')
+  THEN actual_location WHEN actual_location IS NULL THEN 'null' ELSE 'invalid' END FROM o),'missing'),
+ 'record_exists',EXISTS(SELECT 1 FROM r),
+ 'record_status',coalesce((SELECT CASE WHEN status IN
+  ('available','failed_partial','deleted','expired') THEN status ELSE 'invalid' END FROM r),'missing'),
+ 'record_identity_matches',EXISTS(SELECT 1 FROM r JOIN o
+  USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+  WHERE ROW(r.request_id,r.owner_actor_id,r.source_thread_id,r.source_run_id,r.source_message_id,
+   r.source_call_seq,r.source_attempt_seq) IS NOT DISTINCT FROM
+   ROW(o.request_id,o.owner_actor_id,o.source_thread_id,o.source_run_id,o.source_message_id,
+   o.source_call_seq,o.source_attempt_seq)),
+ 'positive_receipt_exists',EXISTS(SELECT 1 FROM p),
+ 'receipt_identity_matches',EXISTS(SELECT 1 FROM p JOIN o
+  USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+  WHERE ROW(p.request_id,p.owner_actor_id,p.source_thread_id,p.source_run_id,p.source_message_id,
+   p.source_call_seq,p.source_attempt_seq) IS NOT DISTINCT FROM
+   ROW(o.request_id,o.owner_actor_id,o.source_thread_id,o.source_run_id,o.source_message_id,
+   o.source_call_seq,o.source_attempt_seq)),
+ 'operation_matches_original_source',EXISTS(SELECT 1 FROM o WHERE source_thread_id=$6
+  AND source_run_id=$7 AND source_message_id=$8 AND source_call_seq IS NULL
+  AND source_attempt_seq IS NULL AND expected_sha256=$10),
+ 'expected_actual_charge_matches',EXISTS(SELECT 1 FROM o WHERE expected_bytes=charged_bytes
+  AND expected_bytes=actual_byte_length AND expected_sha256=actual_sha256),
+ 'record_actual_matches',EXISTS(SELECT 1 FROM r JOIN o
+  USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+  WHERE r.byte_length=o.actual_byte_length AND r.sha256=o.actual_sha256),
+ 'quota_exists',EXISTS(SELECT 1 FROM q),
+ 'quota_covers_original_charge',EXISTS(SELECT 1 FROM q JOIN o
+  USING(deployment_id,tenant_id,dataset_id,workspace_kind,workspace_id)
+  WHERE q.charged_bytes>=o.charged_bytes),
+ 'source_thread_exists',EXISTS(SELECT 1 FROM public.threads t WHERE t.thread_id=$6
+  AND t.deployment_id=$1 AND t.tenant_id=$2 AND t.status<>'deleted'),
+ 'source_run_owner_matches',EXISTS(SELECT 1 FROM public.runs rr WHERE rr.run_id=$7
+  AND rr.thread_id=$6 AND rr.actor_id=$4),
+ 'source_user_message_matches',EXISTS(SELECT 1 FROM public.messages m WHERE m.message_id=$8
+  AND m.thread_id=$6 AND m.run_id=$7 AND m.actor_id=$4 AND m.role='user'),
+ 'source_payload_matches',EXISTS(SELECT 1 FROM public.messages m WHERE m.message_id=$8
+  AND m.thread_id=$6 AND m.run_id=$7 AND m.actor_id=$4 AND m.role='user'
+  AND jsonb_typeof(m.content->'text')='string' AND m.content->>'text'=$9),
+ 'actor_exists',EXISTS(SELECT 1 FROM public.users u WHERE u.id=$4),
+ 'actor_generation_matches',EXISTS(SELECT 1 FROM public.users u WHERE u.id=$4
+  AND coalesce(u.auth_generation,0)=$5),
+ 'actor_role_valid',EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=$4
+  AND ur.role IN ('user','admin')),
+ 'actor_deny_clear',EXISTS(SELECT 1 FROM public.users u WHERE u.id=$4
+  AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)))
+)
+"#;
+
+async fn capture_original_p1_setup_failure_before(
+    prepared: &PreparedDesktopLocalRuntime,
+    original_auth: &openbot_contracts::auth::AuthContext,
+    original_save: &SaveRunMessageTextArtifact,
+    original_save_started: Instant,
+    deadline: Instant,
+) {
+    let original_window_unclosed_same_epoch = prepared
+        .protocol()
+        .windows
+        .try_read()
+        .ok()
+        .and_then(|windows| {
+            windows.get("main").map(|window| {
+                !window.closed.is_cancelled()
+                    && window.auth == *original_auth
+                    && window
+                        .auth
+                        .request_binding()
+                        .zip(original_auth.request_binding())
+                        .is_some_and(|(current, original)| {
+                            current.identity().same_binding(original.identity())
+                        })
+            })
+        })
+        .unwrap_or(false);
+    eprintln!(
+        "ARTIFACT_LOCAL_P1_SETUP_FACTS original_save_elapsed_ms={} window_unclosed_same_epoch={} window_fact_is_only_local_observation=true original_save_result_unchanged=true",
+        original_save_started.elapsed().as_millis(),
+        original_window_unclosed_same_epoch
+    );
+    let Ok(generation) = i64::try_from(original_auth.auth_generation().get()) else {
+        eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=original_generation_out_of_range");
+        return;
+    };
+    if Instant::now() >= deadline {
+        eprintln!(
+            "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=deadline_before_checkout no_connection_closure_claim=true"
+        );
+        return;
+    }
+    // Reserve part of this same total budget for original connection destruction, not a new
+    // query/retry budget. The failed Save's own deadline/result is never changed.
+    let query_deadline = deadline.min(Instant::now() + Duration::from_millis(1_500));
+    let query_at = tokio::time::Instant::from_std(query_deadline);
+    let client = match tokio::time::timeout_at(query_at, prepared.pool().get()).await {
+        Ok(Ok(client)) => client,
+        Ok(Err(_)) => {
+            eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=checkout_error");
+            return;
+        }
+        Err(_) => {
+            eprintln!(
+                "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=checkout_deadline no_checkout_closure_claim=true"
+            );
+            return;
+        }
+    };
+    let original_connection = client.observation();
+    // This acquired client cannot be returned by legacy Drop, including on query cancellation.
+    let client = openbot_infra::db::pool::PooledClient::take(client);
+    if Instant::now() >= query_deadline {
+        eprintln!(
+            "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=deadline_after_checkout no_query_started=true"
+        );
+    } else {
+        let facts = tokio::time::timeout_at(
+            query_at,
+            client.query_one(
+                ORIGINAL_P1_SAVE_FAILURE_FACTS_SQL,
+                &[
+                    &original_auth.deployment().as_str(),
+                    &original_auth.tenant().as_str(),
+                    &original_save.request_id,
+                    &original_auth.actor().as_str(),
+                    &generation,
+                    &original_save.source_thread_id.as_str(),
+                    &original_save.source_run_id.as_str(),
+                    &original_save.source_message_id.as_str(),
+                    &PAYLOAD,
+                    &original_save.expected_sha256,
+                ],
+            ),
+        )
+        .await;
+        match facts {
+            Ok(Ok(row)) => match row.try_get::<_, serde_json::Value>(0) {
+                Ok(facts) => eprintln!(
+                    "ARTIFACT_LOCAL_P1_SETUP_FACTS fixed_original_selector_facts={facts} ids_body_hash_path_omitted=true readonly_observation_not_original_commit_ack=true"
+                ),
+                Err(_) => eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=facts_decode_error"),
+            },
+            Ok(Err(error)) => {
+                let code = error
+                    .as_db_error()
+                    .map(|error| error.code().code())
+                    .unwrap_or("non_database");
+                eprintln!(
+                    "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=query_error sqlstate={code} pg_message_omitted=true"
+                );
+            }
+            Err(_) => eprintln!(
+                "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=query_deadline no_original_save_ack_claim=true"
+            ),
+        }
+    }
+    drop(client);
+    let destruction_observed = original_connection
+        .wait_for_destruction_before(deadline)
+        .await
+        .is_ok();
+    let snapshot = original_connection.snapshot();
+    eprintln!(
+        "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic_driver_destruction_observed={} original_connection_started={} original_connection_destroyed={} original_retirement_requested={} result_is_not_fixture_cleanup_ack=true",
+        destruction_observed,
+        snapshot.connection_started,
+        snapshot.connection_destroyed,
+        snapshot.retirement_requested
+    );
+}
+
+fn capture_original_p1_postmaster(root: &Path, deadline: Instant) -> Option<u32> {
+    let root_before = std::fs::symlink_metadata(root).ok()?;
+    if !root_before.is_dir()
+        || root_before.file_type().is_symlink()
+        || root_before.mode() & 0o7777 != 0o700
+    {
+        return None;
+    }
+    let mut selected = None;
+    let mut entries = 0_usize;
+    for entry in std::fs::read_dir(root).ok()? {
+        entries += 1;
+        if entries > 64 || Instant::now() >= deadline {
+            return None;
+        }
+        let path = entry.ok()?.path();
+        if !path.file_name()?.to_str()?.starts_with("postgresql-17-") {
+            continue;
+        }
+        let directory = std::fs::symlink_metadata(&path).ok()?;
+        if !directory.is_dir()
+            || directory.file_type().is_symlink()
+            || directory.uid() != root_before.uid()
+            || directory.mode() & 0o7777 != 0o700
+        {
+            return None;
+        }
+        let pid_path = path.join("postmaster.pid");
+        let before = std::fs::symlink_metadata(&pid_path).ok()?;
+        if !before.is_file()
+            || before.file_type().is_symlink()
+            || before.nlink() != 1
+            || before.uid() != root_before.uid()
+            || before.len() > 4_096
+        {
+            return None;
+        }
+        let file = std::fs::File::open(&pid_path).ok()?;
+        let descriptor = file.metadata().ok()?;
+        if !descriptor.is_file()
+            || descriptor.dev() != before.dev()
+            || descriptor.ino() != before.ino()
+            || descriptor.uid() != before.uid()
+            || descriptor.nlink() != 1
+            || descriptor.len() != before.len()
+        {
+            return None;
+        }
+        let mut text = String::new();
+        file.take(4_097).read_to_string(&mut text).ok()?;
+        let after = std::fs::symlink_metadata(&pid_path).ok()?;
+        if text.len() > 4_096
+            || after.file_type().is_symlink()
+            || !after.is_file()
+            || after.dev() != before.dev()
+            || after.ino() != before.ino()
+            || after.len() != before.len()
+            || after.uid() != before.uid()
+            || after.nlink() != 1
+            || Instant::now() >= deadline
+        {
+            return None;
+        }
+        let pid = text.lines().next()?.parse::<u32>().ok()?;
+        if !(2..=i32::MAX as u32).contains(&pid) || selected.replace(pid).is_some() {
+            return None;
+        }
+    }
+    let root_after = std::fs::symlink_metadata(root).ok()?;
+    if root_after.file_type().is_symlink()
+        || !root_after.is_dir()
+        || root_after.dev() != root_before.dev()
+        || root_after.ino() != root_before.ino()
+        || root_after.uid() != root_before.uid()
+        || root_after.mode() & 0o7777 != 0o700
+        || Instant::now() >= deadline
+    {
+        return None;
+    }
+    selected
+}
+
 impl LocalFixture {
     async fn new(bundle: &OwnedBundle, label: &str) -> Result<Self, String> {
         let mut root = OwnedRoot::new(label)?;
@@ -409,6 +691,7 @@ impl LocalFixture {
         } else {
             None
         };
+        let mut failed_p1_postmaster_pid = None;
         let populated = async {
             prepared
                 .protocol()
@@ -455,22 +738,35 @@ impl LocalFixture {
                 "actual Local Begin did not return its durable receipt",
             )?;
             let source = format!("{}:input", begin.run_id.as_str());
+            let original_save = SaveRunMessageTextArtifact {
+                request_id: uuid::Uuid::now_v7().to_string(),
+                source_thread_id: begin.thread_id,
+                source_run_id: begin.run_id,
+                source_message_id: source,
+                expected_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
+            };
+            let original_save_auth = auth.clone();
+            let original_save_started = Instant::now();
             let receipt = prepared
                 .application()
                 .execute(
                     auth,
-                    AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
-                        request_id: uuid::Uuid::now_v7().to_string(),
-                        source_thread_id: begin.thread_id,
-                        source_run_id: begin.run_id,
-                        source_message_id: source,
-                        expected_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
-                    }),
+                    AppCommand::SaveRunMessageTextArtifact(original_save.clone()),
                 )
                 .await;
             if let Some(diagnostic) = setup_diagnostic {
                 if let Err(error) = &receipt {
                     eprintln!("{diagnostic} phase=SaveRunMessageTextArtifact original_app_error={error}");
+                    if p1_setup_diagnostic {
+                        let diagnostic_deadline = Instant::now() + Duration::from_secs(2);
+                        failed_p1_postmaster_pid = capture_original_p1_postmaster(&root.0, diagnostic_deadline);
+                        match failed_p1_postmaster_pid {
+                            Some(pid) => eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS original_owned_postmaster_pid={pid} original_private_root_pidfile_bound=true root_path_omitted=true"),
+                            None => eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS original_private_root_pidfile_bound=false no_original_pg_termination_claim=true"),
+                        }
+                        capture_original_p1_setup_failure_before(&prepared, &original_save_auth,
+                            &original_save, original_save_started, diagnostic_deadline).await;
+                    }
                     let schema = openbot_infra::artifact_administration::verify_artifact_registration_schema(prepared.pool()).await;
                     eprintln!("{diagnostic} phase=post_original_Save_error legacy41_42={schema:?}");
                     if matches!(&schema, Err(openbot_application::ArtifactAdministrationError::Corrupt { field: "registration_schema" })) {
@@ -540,6 +836,23 @@ impl LocalFixture {
             }
             Err(error) => {
                 let cleaned = prepared.shutdown().await;
+                if p1_setup_diagnostic {
+                    match failed_p1_postmaster_pid {
+                        Some(pid) => match owned_postmaster_live(pid) {
+                            Ok(live) => eprintln!(
+                                "ARTIFACT_LOCAL_P1_SETUP_FACTS original_owned_postmaster_pid={pid} original_pid_gone_observed={} original_shutdown_ok={} original_save_error_preserved=true bundle_cleanup_not_inferred=true",
+                                !live,
+                                cleaned.is_ok()
+                            ),
+                            Err(_) => eprintln!(
+                                "ARTIFACT_LOCAL_P1_SETUP_FACTS original_pid_gone_observed=false pid_observation_failed=true original_save_error_preserved=true bundle_cleanup_not_inferred=true"
+                            ),
+                        },
+                        None => eprintln!(
+                            "ARTIFACT_LOCAL_P1_SETUP_FACTS original_pid_binding_missing=true original_save_error_preserved=true bundle_cleanup_not_inferred=true"
+                        ),
+                    }
+                }
                 if cleaned.is_ok() {
                     root.1 = true;
                 }

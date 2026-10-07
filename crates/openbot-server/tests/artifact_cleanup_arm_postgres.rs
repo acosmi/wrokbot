@@ -537,10 +537,15 @@ impl Fixture {
     async fn finish(mut self) -> Result<(), String> {
         self.resolver.close_request_bindings();
         let observations = self.pool.connection_observations();
+        // This is the original fixture's real stock admission shutdown, after
+        // every body assertion. Only the observations below prove destruction.
+        self.pool.close();
+        self.admin.close();
         let relay = self.relay.take();
         drop(self);
         let deadline = Instant::now() + Duration::from_secs(3);
-        for o in observations {
+        let observation_count = observations.len();
+        for (index, o) in observations.into_iter().enumerate() {
             let original = o.snapshot();
             let expected = if original.connection_started {
                 ConnectionDestruction::ConnectionDestroyed
@@ -549,11 +554,12 @@ impl Fixture {
             } else {
                 ConnectionDestruction::ConnectingOwnerDestroyedBeforeStart
             };
+            let destroyed = o.wait_for_destruction_before(deadline).await.map_err(|error| {
+                eprintln!("ARTIFACT_CLEANUP_ARM_FIXTURE_TAIL_ERROR index={index} count={observation_count} before={original:?} after={:?}", o.snapshot());
+                error.to_string()
+            })?;
             require(
-                o.wait_for_destruction_before(deadline)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    == expected,
+                destroyed == expected,
                 "original production connection owner did not close its actually started resource",
             )?;
         }
