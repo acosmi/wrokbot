@@ -1568,3 +1568,184 @@ async fn actual_prepared_local_public_reader_cached_first_cleanup_fence_recheck_
         .and(cleaned)
         .expect("genuine Prepared Local cached first cleanup-fence refusal and physical closure");
 }
+
+async fn cleanup_arm_local_database_facts(
+    pool: &openbot_infra::db::pool::DatabasePool,
+) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    let c = pool.get().await.map_err(|e| e.to_string())?;
+    let tables=c.query("SELECT n.nspname,c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','openbot_internal') AND c.relkind='r' ORDER BY n.nspname,c.relname",&[]).await.map_err(|e|e.to_string())?;
+    let mut facts = BTreeMap::new();
+    for row in tables {
+        let schema: String = row.get(0);
+        let name: String = row.get(1);
+        let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        let sql = format!(
+            "SELECT coalesce(jsonb_agg(jsonb_build_object('row',to_jsonb(t),'xmin',t.xmin::text,'ctid',t.ctid::text) ORDER BY to_jsonb(t)::text,t.ctid),'[]'::jsonb) FROM {}.{} t",
+            quote(&schema),
+            quote(&name)
+        );
+        facts.insert(
+            format!("{schema}.{name}"),
+            c.query_one(&sql, &[])
+                .await
+                .map_err(|e| e.to_string())?
+                .get(0),
+        );
+    }
+    Ok(facts)
+}
+fn cleanup_arm_local_only_tables_changed(
+    before: &BTreeMap<String, serde_json::Value>,
+    after: &BTreeMap<String, serde_json::Value>,
+    allowed: &[&str],
+) -> Result<(), String> {
+    require(
+        before.keys().eq(after.keys()),
+        "Local controller/arm changed ordinary table inventory",
+    )?;
+    for (table, value) in before {
+        if !allowed.contains(&table.as_str()) && after.get(table) != Some(value) {
+            return Err(format!(
+                "Local arm changed unexpected ordinary/physical table: {table}"
+            ));
+        }
+    }
+    Ok(())
+}
+fn cleanup_arm_local_object_fact(
+    path: &Path,
+) -> Result<(u64, u64, u32, u32, u64, u64, String), String> {
+    let m = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    require(
+        m.is_file() && m.mode() & 0o7777 == 0o400 && m.nlink() == 1,
+        "Local original artifact inode/type/mode changed",
+    )?;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    Ok((
+        m.dev(),
+        m.ino(),
+        m.uid(),
+        m.mode(),
+        m.nlink(),
+        m.len(),
+        format!("{:x}", Sha256::digest(&bytes)),
+    ))
+}
+async fn cleanup_arm_local_waiter(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    controller_pid: i32,
+) -> Result<(i32, i32), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let observer = pool.get().await.map_err(|e| e.to_string())?;
+        let observer_pid: i32 = observer
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .map_err(|e| e.to_string())?
+            .get(0);
+        let rows=observer.query("SELECT pid FROM pg_catalog.pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event_type='Lock' AND query LIKE '%artifact_workspace_quotas%' AND $1::integer=ANY(pg_catalog.pg_blocking_pids(pid))",&[&controller_pid]).await.map_err(|e|e.to_string())?;
+        if rows.len() == 1 {
+            let waiter: i32 = rows[0].get(0);
+            require(
+                waiter != controller_pid
+                    && waiter != observer_pid
+                    && controller_pid != observer_pid,
+                "Local original waiter/controller/observer PIDs were not distinct",
+            )?;
+            return Ok((waiter, observer_pid));
+        }
+        require(
+            Instant::now() < deadline,
+            "Local arm did not reach the actual owned quota PG lock",
+        )?;
+        drop(observer);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires genuine Prepared Local/Window, owned PostgreSQL bundle and real Save/arm"]
+async fn actual_local_original_window_arms_missing_source_and_rebound_window_is_refused() {
+    use openbot_infra::artifact_administration::ArtifactCleanupArmError as ArmError;
+    let mut bundle = OwnedBundle::materialize().expect("Root-owned exact PG bundle");
+    let fixture = LocalFixture::new(&bundle, "cleanup-arm-original-window")
+        .await
+        .expect("genuine Prepared Local setup");
+    let actual = fixture.prepared().artifact_administration.clone();
+    let protocol = fixture.prepared().protocol().clone();
+    let outcome=async {
+        let original_auth=protocol.windows.try_read().map_err(|_|"original Window registry unavailable")?.get("main").ok_or("original actual main Window missing")?.auth.clone();
+        let second=fixture.prepared().application().execute(original_auth.clone(),AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact{
+            request_id:uuid::Uuid::now_v7().to_string(),source_thread_id:fixture.artifact.source_thread_id.clone(),source_run_id:fixture.artifact.source_run_id.clone(),source_message_id:fixture.artifact.source_message_id.clone(),expected_sha256:format!("{:x}",Sha256::digest(PAYLOAD.as_bytes())),
+        })).await.map_err(|e|e.to_string())?;
+        let second=match second {AppReply::ArtifactRegistrationReceipt(r)=>r,_=>return Err("second genuine Local Save returned another reply".to_owned())};
+        require(second.artifact_id!=fixture.artifact.artifact_id&&second.operation_id!=fixture.artifact.operation_id,"Local refusal key reused the already armed original operation")?;
+        let path=fixture.root.0.join("artifacts/objects").join(&fixture.artifact.artifact_id);
+        let second_path=fixture.root.0.join("artifacts/objects").join(&second.artifact_id);
+        let first_object=cleanup_arm_local_object_fact(&path)?;let second_object=cleanup_arm_local_object_fact(&second_path)?;
+        let opened:ArtifactReadOpened=control(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await)?;
+        require(opened.artifact_id==fixture.artifact.artifact_id&&cleanup_owned_inode_fds(&path)?.len()==1,"original actual Local cached reader has no real original key/FD")?;
+        let before_source=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        let mut controller=fixture.prepared().pool().get().await.map_err(|e|e.to_string())?;
+        let tx=controller.transaction().await.map_err(|e|e.to_string())?;
+        let source_controller_pid:i32=tx.query_one("SELECT pg_backend_pid()",&[]).await.map_err(|e|e.to_string())?.get(0);
+        require(tx.execute("DELETE FROM public.messages WHERE message_id=$1",&[&fixture.artifact.source_message_id]).await.map_err(|e|e.to_string())?==1,"Local source controller did not hard-delete the original message")?;
+        tx.commit().await.map_err(|e|e.to_string())?;drop(controller);
+        let after_source=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        cleanup_arm_local_only_tables_changed(&before_source,&after_source,&["public.messages"])?;
+        let original_messages=before_source.get("public.messages").and_then(serde_json::Value::as_array).ok_or("original Local messages missing")?;
+        let current_messages=after_source.get("public.messages").and_then(serde_json::Value::as_array).ok_or("current Local messages missing")?;
+        let retained_messages:Vec<_>=original_messages.iter().filter(|v|v["row"]["message_id"].as_str()!=Some(fixture.artifact.source_message_id.as_str())).cloned().collect();
+        require(retained_messages.len()+1==original_messages.len()&&retained_messages==*current_messages,"Local source controller changed undeclared messages or physical row carriers")?;
+        require(before_source.get("public.messages")!=after_source.get("public.messages"),"Local source controller did not commit a real source row difference")?;
+        status(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await,StatusCode::NOT_FOUND)?;
+        require(matches!(fixture.prepared().application().execute(original_auth.clone(),AppCommand::GetArtifactMetadata(openbot_contracts::artifacts::GetArtifactMetadata{artifact_id:fixture.artifact.artifact_id.clone()})).await,Err(openbot_contracts::error::AppError::NotVisible)),"Local cleanup owner management reopened missing-source metadata")?;
+        let before_arm=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        let intent=actual.arm_explicit_saved_delete_before(&original_auth,&fixture.artifact.artifact_id,Instant::now()+Duration::from_secs(10)).await.map_err(|e|e.to_string())?;
+        let armed=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        cleanup_arm_local_only_tables_changed(&before_arm,&armed,&["openbot_internal.artifact_cleanup_fences","public.audit_events","public.audit_checkpoints"])?;
+        let old_audit=before_arm.get("public.audit_events").and_then(serde_json::Value::as_array).ok_or("Local original audit facts missing")?;
+        let new_audit=armed.get("public.audit_events").and_then(serde_json::Value::as_array).ok_or("Local current audit facts missing")?;
+        require(!old_audit.is_empty()&&new_audit.len()==old_audit.len()+1&&old_audit.iter().all(|v|new_audit.contains(v))&&before_arm.get("public.audit_checkpoints")==armed.get("public.audit_checkpoints"),"Local arm changed previous real Save audit/physical rows or checkpoint")?;
+        let c=fixture.prepared().pool().get().await.map_err(|e|e.to_string())?;
+        let original_dataset:String=c.query_one("SELECT dataset_id FROM openbot_internal.artifact_records WHERE deployment_id=$1 AND tenant_id=$2 AND operation_id=$3 AND artifact_id=$4",&[&original_auth.deployment().as_str(),&original_auth.tenant().as_str(),&fixture.artifact.operation_id,&fixture.artifact.artifact_id]).await.map_err(|e|e.to_string())?.get(0);
+        let fence=c.query("SELECT deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase FROM openbot_internal.artifact_cleanup_fences",&[]).await.map_err(|e|e.to_string())?;
+        require(fence.len()==1&&fence[0].get::<_,String>(0)==original_auth.deployment().as_str()&&fence[0].get::<_,String>(1)==original_auth.tenant().as_str()&&fence[0].get::<_,String>(2)==original_dataset&&fence[0].get::<_,String>(3)==fixture.artifact.operation_id&&fence[0].get::<_,String>(4)==fixture.artifact.artifact_id&&fence[0].get::<_,String>(5)=="deleted"&&fence[0].get::<_,String>(6)=="armed","Local arm did not preserve exact original namespace/pair and fixed intent")?;
+        let audit=c.query("SELECT actor_user_id,target_type,target_id,payload FROM public.audit_events WHERE event_type='artifact.cleanup_armed'",&[]).await.map_err(|e|e.to_string())?;
+        require(audit.len()==1&&audit[0].get::<_,Option<String>>(0).as_deref()==Some(original_auth.actor().as_str())&&audit[0].get::<_,String>(1)=="artifact"&&audit[0].get::<_,Option<String>>(2).as_deref()==Some(fixture.artifact.artifact_id.as_str())&&audit[0].get::<_,serde_json::Value>(3)==serde_json::json!({"artifact_id":fixture.artifact.artifact_id,"artifact_operation_id":fixture.artifact.operation_id}),"Local arm audit was missing, duplicated or changed fixed typed IDs")?;drop(c);
+        let barrier=actual.close_armed_artifact_reads(&intent).map_err(|e|e.to_string())?;
+        let ack=barrier.drain_before(Instant::now()+Duration::from_secs(4)).await.map_err(|e|format!("{e:?}"))?;
+        require(cleanup_owned_inode_fds(&path)?.is_empty()&&cleanup_arm_local_object_fact(&path)?==first_object,"Local finite armed close ACK lacked actual FD end or deleted original object")?;
+        status(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await,StatusCode::NOT_FOUND)?;
+        require(cleanup_arm_local_database_facts(fixture.prepared().pool()).await?==armed,"Local finite close or stopped reader wrote business rows")?;
+        drop(ack);drop(barrier);drop(intent);
+        // A second actual pair remains unfenced. Wait for its real original arm quota query,
+        // then replace the original window before releasing the controller's actual lock.
+        let mut controller=fixture.prepared().pool().get().await.map_err(|e|e.to_string())?;
+        let tx=controller.transaction().await.map_err(|e|e.to_string())?;
+        let controller_pid:i32=tx.query_one("SELECT pg_backend_pid()",&[]).await.map_err(|e|e.to_string())?.get(0);
+        tx.query_one("SELECT workspace_id FROM openbot_internal.artifact_workspace_quotas WHERE workspace_id=$1 FOR UPDATE",&[&second.source_thread_id.as_str()]).await.map_err(|e|e.to_string())?;
+        let worker_actual=actual.clone();let worker_auth=original_auth.clone();let artifact=second.artifact_id.clone();
+        let worker=tokio::spawn(async move {worker_actual.arm_explicit_saved_delete_before(&worker_auth,&artifact,Instant::now()+Duration::from_secs(10)).await});
+        let (waiter_pid,observer_pid)=cleanup_arm_local_waiter(fixture.prepared().pool(),controller_pid).await?;
+        protocol.unbind_window("main").map_err(|e|e.to_string())?;
+        protocol.bind_window("main",fixture.prepared().auth_context().clone(),None).map_err(|e|e.to_string())?;
+        let rebound=protocol.windows.try_read().map_err(|_|"new actual Window unavailable")?.get("main").ok_or("new actual Window missing")?.auth.clone();
+        require(rebound==original_auth&&!rebound.request_binding().unwrap().identity().same_binding(original_auth.request_binding().unwrap().identity()),"Local same-label rebind did not replace the original epoch while retaining six Auth facts")?;
+        tx.rollback().await.map_err(|e|e.to_string())?;drop(controller);
+        require(matches!(worker.await.map_err(|e|e.to_string())?,Err(ArmError::Host(openbot_contracts::request_binding::HostRequestBindingError::NotCurrent))),"actual quota waiter armed using the replaced original Window")?;
+        require(cleanup_arm_local_database_facts(fixture.prepared().pool()).await?==armed&&cleanup_arm_local_object_fact(&path)?==first_object&&cleanup_arm_local_object_fact(&second_path)?==second_object,"rebound-window refusal changed original pair/charge/fence/audit/bytes")?;
+        eprintln!("ARTIFACT_CLEANUP_ARM_LOCAL source_controller_pid={source_controller_pid} source_hard_delete_commit_ack=true original_window_arm_ack=true exact_arm_audit=true controlled_original_fd_absent=true original_object_unchanged=true waiter_pid={waiter_pid} controller_pid={controller_pid} observer_pid={observer_pid} actual_quota_lock=true window_replaced_before_unlock=true controller_rollback_ack=true old_request_refused=true physical_delete=false");
+        Ok::<_,String>(())
+    }.await;
+    drop(protocol);
+    drop(actual);
+    let cleaned = fixture.finish().await;
+    if cleaned.is_ok() {
+        bundle.root.1 = true;
+    }
+    drop(bundle);
+    outcome
+        .and(cleaned)
+        .expect("actual Local original Window cleanup arm and physical owned closure");
+}

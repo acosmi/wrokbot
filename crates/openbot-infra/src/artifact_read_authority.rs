@@ -13,9 +13,9 @@ use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, R
 use openbot_contracts::error::AppError;
 use openbot_contracts::ids::{DeploymentId, TenantId};
 use openbot_contracts::request_binding::{
-    ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadRecordFacts,
-    ArtifactReadTailWitness, BorrowedServerSessionEpoch, HostRequestBindingError,
-    HostRequestBindingIdentity, HostRequestBindingKind,
+    ArtifactCleanupHostTarget, ArtifactReadCurrentError, ArtifactReadCurrentTarget,
+    ArtifactReadRecordFacts, ArtifactReadTailWitness, BorrowedServerSessionEpoch,
+    HostRequestBindingError, HostRequestBindingIdentity, HostRequestBindingKind,
 };
 use openbot_domain::audit::hash::Sha256Digest;
 use openbot_domain::identity::roles::resolve_effective_role;
@@ -66,6 +66,33 @@ pub struct PostgresArtifactReadAuthority {
 }
 
 impl PostgresArtifactReadAuthority {
+    /// Match the actual enrolled administration authority and original request attachment.
+    /// This comparison supplies no current database authorization or cleanup grant.
+    #[must_use]
+    pub fn matches_cleanup_host_target(
+        &self,
+        target: &dyn ArtifactCleanupHostTarget,
+        auth: &AuthContext,
+    ) -> bool {
+        target.matches_authority(&self.identity)
+            && target.matches_auth(auth)
+            && self.administration.upgrade().is_some_and(|administration| {
+                administration.check_namespace(auth).is_ok()
+                    && administration
+                        .store
+                        .matches_registry_owner(&administration.registry)
+            })
+    }
+
+    // Only the real administration producer can borrow this original identity. No public
+    // identity getter, source snapshot, caller-supplied five-key or new Host lease is exposed.
+    pub(super) fn cleanup_host_target(&self, auth: &AuthContext) -> impl ArtifactCleanupHostTarget {
+        OriginalCleanupHostTarget {
+            identity: Arc::clone(&self.identity),
+            auth: auth.clone(),
+        }
+    }
+
     pub(super) fn read_store(
         &self,
     ) -> Result<Arc<DatasetBoundArtifactStore>, ArtifactReadCurrentError> {
@@ -1157,6 +1184,21 @@ impl ArtifactReadCurrentTarget for RequestedArtifactReadTarget {
     }
     fn verify_physical_current(&self) -> Result<(), ArtifactReadCurrentError> {
         Err(ArtifactReadCurrentError::Unavailable)
+    }
+}
+
+struct OriginalCleanupHostTarget {
+    identity: Arc<()>,
+    auth: AuthContext,
+}
+
+impl ArtifactCleanupHostTarget for OriginalCleanupHostTarget {
+    fn matches_authority(&self, identity: &Arc<()>) -> bool {
+        Arc::ptr_eq(&self.identity, identity)
+    }
+
+    fn matches_auth(&self, auth: &AuthContext) -> bool {
+        same_original_auth(&self.auth, auth)
     }
 }
 
