@@ -23,6 +23,7 @@ use openbot_contracts::artifact_read_protocol::{
     ArtifactReadAcknowledged, ArtifactReadClosed, ArtifactReadOpened,
 };
 use openbot_contracts::artifacts::{ArtifactRegistrationReceipt, SaveRunMessageTextArtifact};
+use openbot_contracts::auth::AuthContext;
 use openbot_contracts::command::{
     AppCommand, AppEvent, AppReply, BeginThreadRun, SubscriptionRequest, ThreadRunAnchor,
     ThreadRunEventKind,
@@ -31,8 +32,11 @@ use openbot_contracts::engine::ENGINE_RELEASE_EPOCH;
 use openbot_contracts::ids::{BotId, RunId, thread::ThreadIdentity};
 use openbot_domain::vault::SecretBytes;
 use openbot_infra::artifact_administration::{
-    ArtifactCleanupPhysicalError as PhysicalError, ArtifactCleanupPhysicalIoPhase as PhysicalPhase,
-    ArtifactCleanupPhysicalObserver, ArtifactCleanupPhysicalState as PhysicalState,
+    ArmedArtifactCleanupIntent, ArtifactCleanupPhysicalError as PhysicalError,
+    ArtifactCleanupPhysicalIoPhase as PhysicalPhase, ArtifactCleanupPhysicalObserver,
+    ArtifactCleanupPhysicalState as PhysicalState, ArtifactCleanupTerminalError as TerminalError,
+    ArtifactCleanupTerminalObserver, ArtifactCleanupTerminalPhase as TerminalPhase,
+    ArtifactCleanupTerminalState as TerminalState,
 };
 use openbot_infra::auth::single_user::desktop_local::CurrentOsUserAppDataRoot;
 use sha2::{Digest as _, Sha256};
@@ -2937,4 +2941,1121 @@ async fn actual_local_original_window_is_required_through_physical_cleanup_compl
     eprintln!(
         "ARTIFACT_PHYSICAL_LOCAL_OWNED_TAIL original_sidecar_pid_gone=true original_worker_inode_fds_absent=true prepared_extra_original_arcs_dropped=true actual_application_root_absent=true actual_bundle_root_absent=true external_copies_untracked=true"
     );
+}
+
+// R436 instrumentation controls actual original callbacks; labels alone prove neither ACK nor End.
+#[derive(Default)]
+struct TerminalLocalPhaseFacts {
+    seen: [usize; 4],
+    released: [bool; 4],
+    error: Option<String>,
+}
+struct TerminalLocalObserver {
+    artifact: uuid::Uuid,
+    deadline: Instant,
+    pause: [bool; 4],
+    facts: Mutex<TerminalLocalPhaseFacts>,
+    changed: Condvar,
+}
+impl TerminalLocalObserver {
+    fn new(artifact: &str, deadline: Instant, pause: [bool; 4]) -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Self {
+            artifact: uuid::Uuid::parse_str(artifact).map_err(|e| e.to_string())?,
+            deadline,
+            pause,
+            facts: Mutex::new(TerminalLocalPhaseFacts::default()),
+            changed: Condvar::new(),
+        }))
+    }
+    fn release(&self, index: usize) {
+        if let Ok(mut facts) = self.facts.lock() {
+            facts.released[index] = true;
+            self.changed.notify_all();
+        }
+    }
+    fn release_all(&self) {
+        for index in 0..4 {
+            self.release(index);
+        }
+    }
+    fn counts(&self) -> Result<[usize; 4], String> {
+        let facts = self
+            .facts
+            .lock()
+            .map_err(|_| "Local terminal phase mutex poisoned")?;
+        match &facts.error {
+            Some(error) => Err(error.clone()),
+            None => Ok(facts.seen),
+        }
+    }
+    async fn wait(&self, index: usize) -> Result<(), String> {
+        loop {
+            if self.counts()?[index] != 0 {
+                return Ok(());
+            }
+            require(
+                Instant::now() < self.deadline,
+                "Local original terminal cutpoint deadline elapsed",
+            )?;
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+}
+impl ArtifactCleanupTerminalObserver for TerminalLocalObserver {
+    fn on_phase(&self, phase: TerminalPhase, artifact: uuid::Uuid, original_leaf_fd: Option<i32>) {
+        let index = match phase {
+            TerminalPhase::AbsenceGuarded => 0,
+            TerminalPhase::BeforeCommit => 1,
+            TerminalPhase::AfterCommitAckBeforeWorkerEnd => 2,
+            TerminalPhase::WorkerEnded => 3,
+        };
+        let Ok(mut facts) = self.facts.lock() else {
+            return;
+        };
+        facts.seen[index] += 1;
+        if artifact != self.artifact || original_leaf_fd.is_some() || facts.seen[index] != 1 {
+            facts.error =
+                Some("Local already-absent terminal callback changed identity/FD/order".to_owned());
+        }
+        self.changed.notify_all();
+        while self.pause[index] && !facts.released[index] {
+            let remaining = self.deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                facts.error = Some(
+                    "Local actual terminal callback was not released inside original budget"
+                        .to_owned(),
+                );
+                break;
+            }
+            match self.changed.wait_timeout(facts, remaining) {
+                Ok((next, _)) => facts = next,
+                Err(_) => return,
+            }
+        }
+    }
+}
+struct TerminalLocalRelease(Arc<TerminalLocalObserver>);
+impl Drop for TerminalLocalRelease {
+    fn drop(&mut self) {
+        self.0.release_all();
+    }
+}
+
+fn terminal_local_row<'a>(
+    facts: &'a BTreeMap<String, serde_json::Value>,
+    table: &str,
+    saved: &ArtifactRegistrationReceipt,
+) -> Result<&'a serde_json::Value, String> {
+    let rows = facts
+        .get(table)
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Local terminal table facts missing")?;
+    let selected: Vec<_> = rows
+        .iter()
+        .filter(|value| {
+            value["row"]["artifact_id"].as_str() == Some(saved.artifact_id.as_str())
+                && value["row"]["operation_id"].as_str() == Some(saved.operation_id.as_str())
+        })
+        .collect();
+    require(
+        selected.len() == 1,
+        "Local terminal did not retain exactly one original pair row",
+    )?;
+    let selected: &'a serde_json::Value = selected[0];
+    Ok(&selected["row"])
+}
+fn terminal_local_expect_commit(
+    before: &BTreeMap<String, serde_json::Value>,
+    after: &BTreeMap<String, serde_json::Value>,
+    saved: &ArtifactRegistrationReceipt,
+    auth: &AuthContext,
+) -> Result<(), String> {
+    let changed = [
+        "openbot_internal.artifact_records",
+        "openbot_internal.artifact_save_operations",
+        "openbot_internal.artifact_workspace_quotas",
+        "openbot_internal.artifact_cleanup_fences",
+        "public.audit_events",
+        "public.audit_checkpoints",
+    ];
+    cleanup_arm_local_only_tables_changed(before, after, &changed)?;
+    let old_record = terminal_local_row(before, changed[0], saved)?;
+    let old_operation = terminal_local_row(before, changed[1], saved)?;
+    let record = terminal_local_row(after, changed[0], saved)?;
+    let operation = terminal_local_row(after, changed[1], saved)?;
+    let fence = terminal_local_row(after, changed[3], saved)?;
+    let receipt = terminal_local_row(after, "openbot_internal.artifact_saved_receipts", saved)?;
+    require(
+        old_record["status"] == "available"
+            && old_record["retention_class"] == "explicit_saved"
+            && old_operation["state"] == "available"
+            && record["status"] == "deleted"
+            && operation["state"] == "deleted"
+            && fence["terminal_status"] == "deleted"
+            && fence["phase"] == "completed",
+        "Local terminal did not transform the exact original available/armed pair",
+    )?;
+    for field in [
+        "deployment_id",
+        "tenant_id",
+        "dataset_id",
+        "operation_id",
+        "artifact_id",
+        "request_id",
+        "owner_actor_id",
+        "source_thread_id",
+        "source_run_id",
+        "source_message_id",
+        "source_call_seq",
+        "source_attempt_seq",
+    ] {
+        let expected = old_operation
+            .get(field)
+            .ok_or("Local original operation identity field missing")?;
+        require(
+            record.get(field) == Some(expected)
+                && operation.get(field) == Some(expected)
+                && receipt.get(field) == Some(expected)
+                && old_record.get(field) == Some(expected),
+            "Local terminal changed an original five-key/seven-identity or positive receipt",
+        )?;
+    }
+    require(
+        operation["request_id"] == saved.request_id
+            && operation["owner_actor_id"].as_str() == Some(auth.actor().as_str())
+            && operation["deployment_id"].as_str() == Some(auth.deployment().as_str())
+            && operation["tenant_id"].as_str() == Some(auth.tenant().as_str()),
+        "Local terminal did not preserve the actual original saved request/namespace/owner",
+    )?;
+    for field in [
+        "workspace_kind",
+        "workspace_id",
+        "media_type",
+        "byte_length",
+        "sha256",
+        "retention_class",
+        "saved_by",
+        "saved_at",
+    ] {
+        require(
+            record.get(field).is_some_and(serde_json::Value::is_null),
+            "Local terminal record8NULL was incomplete",
+        )?;
+    }
+    for field in [
+        "store_id",
+        "workspace_kind",
+        "workspace_id",
+        "expected_sha256",
+        "expected_bytes",
+        "charged_bytes",
+        "actual_absent",
+        "actual_byte_length",
+        "actual_sha256",
+        "actual_location",
+        "observation_phase",
+        "created_at",
+    ] {
+        require(
+            operation.get(field).is_some_and(serde_json::Value::is_null),
+            "Local terminal operation12NULL was incomplete",
+        )?;
+    }
+    let quota_table = "openbot_internal.artifact_workspace_quotas";
+    let quota_matches = |value: &&serde_json::Value| {
+        [
+            "deployment_id",
+            "tenant_id",
+            "dataset_id",
+            "workspace_kind",
+            "workspace_id",
+        ]
+        .iter()
+        .all(|field| value["row"].get(*field) == old_operation.get(*field))
+    };
+    let old_quotas = before[quota_table]
+        .as_array()
+        .ok_or("Local original quota facts missing")?;
+    let new_quotas = after[quota_table]
+        .as_array()
+        .ok_or("Local terminal quota facts missing")?;
+    let old_quota: Vec<_> = old_quotas.iter().filter(quota_matches).collect();
+    let new_quota: Vec<_> = new_quotas.iter().filter(quota_matches).collect();
+    require(
+        old_quota.len() == 1 && new_quota.len() == 1,
+        "Local terminal changed the exact quota identity",
+    )?;
+    let charge = old_operation["charged_bytes"]
+        .as_i64()
+        .ok_or("Local original operation charge missing")?;
+    let total = old_quota[0]["row"]["charged_bytes"]
+        .as_i64()
+        .ok_or("Local original aggregate missing")?;
+    require(
+        charge == i64::try_from(PAYLOAD.len()).map_err(|e| e.to_string())?
+            && new_quota[0]["row"]["charged_bytes"].as_i64() == total.checked_sub(charge),
+        "Local terminal did not refund exactly the original operation charge once",
+    )?;
+    for table in [changed[0], changed[1], changed[3]] {
+        let old_rows = before[table]
+            .as_array()
+            .ok_or("Local before pair inventory missing")?;
+        let new_rows = after[table]
+            .as_array()
+            .ok_or("Local after pair inventory missing")?;
+        let foreign = |value: &&serde_json::Value| {
+            value["row"]["artifact_id"].as_str() != Some(saved.artifact_id.as_str())
+        };
+        require(
+            old_rows.len() == new_rows.len()
+                && old_rows
+                    .iter()
+                    .filter(foreign)
+                    .eq(new_rows.iter().filter(foreign)),
+            "Local terminal changed another original artifact or its physical row carrier",
+        )?;
+    }
+    require(
+        old_quotas.len() == new_quotas.len()
+            && old_quotas
+                .iter()
+                .filter(|row| !quota_matches(row))
+                .eq(new_quotas.iter().filter(|row| !quota_matches(row))),
+        "Local terminal changed another workspace aggregate",
+    )?;
+    let old_audit = before["public.audit_events"]
+        .as_array()
+        .ok_or("Local original audit inventory missing")?;
+    let new_audit = after["public.audit_events"]
+        .as_array()
+        .ok_or("Local terminal audit inventory missing")?;
+    let appended: Vec<_> = new_audit
+        .iter()
+        .filter(|row| !old_audit.contains(row))
+        .collect();
+    require(
+        new_audit.len() == old_audit.len() + 1
+            && appended.len() == 1
+            && old_audit.iter().all(|row| new_audit.contains(row)),
+        "Local terminal duplicated final audit or rewrote old audit physical rows",
+    )?;
+    let event = &appended[0]["row"];
+    require(
+        event["event_type"] == "artifact.cleanup_completed"
+            && event["target_type"] == "artifact"
+            && event["actor_user_id"].as_str() == Some(auth.actor().as_str())
+            && event["target_id"] == saved.artifact_id
+            && event["payload"]
+                == serde_json::json!({"artifact_id":saved.artifact_id,"artifact_operation_id":saved.operation_id})
+            && event["id"]
+                .as_str()
+                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()),
+        "Local actual terminal audit changed original typed IDs/actor/target or invented an audit UUIDv7 restriction",
+    )?;
+    Ok(())
+}
+
+fn terminal_local_root_inodes(fixture: &LocalFixture) -> Result<Vec<(u64, u64)>, String> {
+    ["artifacts", "artifacts/objects", "artifacts/staging"]
+        .iter()
+        .map(|name| {
+            let metadata =
+                std::fs::symlink_metadata(fixture.root.0.join(name)).map_err(|e| e.to_string())?;
+            require(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "Local original root-child identity drifted",
+            )?;
+            Ok((metadata.dev(), metadata.ino()))
+        })
+        .collect()
+}
+fn terminal_local_root_fds(inodes: &[(u64, u64)]) -> Result<Vec<Vec<String>>, String> {
+    inodes
+        .iter()
+        .map(|(device, inode)| physical_local_inode_fds_for(*device, *inode))
+        .collect()
+}
+fn terminal_local_rebind(
+    fixture: &LocalFixture,
+    original: &AuthContext,
+) -> Result<AuthContext, String> {
+    let protocol = fixture.prepared().protocol();
+    require(
+        protocol.unbind_window("main").map_err(|e| e.to_string())?,
+        "Local terminal original Window was not unbound",
+    )?;
+    protocol
+        .bind_window("main", fixture.prepared().auth_context().clone(), None)
+        .map_err(|e| e.to_string())?;
+    let fresh = protocol
+        .windows
+        .try_read()
+        .map_err(|_| "Local terminal rebound registry unavailable")?
+        .get("main")
+        .ok_or("Local terminal rebound Window missing")?
+        .auth
+        .clone();
+    require(
+        fresh == *original
+            && !fresh
+                .request_binding()
+                .ok_or("Local terminal new binding missing")?
+                .identity()
+                .same_binding(
+                    original
+                        .request_binding()
+                        .ok_or("Local terminal old binding missing")?
+                        .identity(),
+                ),
+        "Local terminal same-label rebind reused old epoch or changed six Auth facts",
+    )?;
+    Ok(fresh)
+}
+async fn terminal_local_query_pid(
+    observer: &openbot_infra::db::pool::PooledClient,
+    marker: &str,
+    deadline: Instant,
+) -> Result<i32, String> {
+    let pattern = format!("%{marker}%");
+    loop {
+        let rows = observer.query("SELECT pg_backend_pid() AS observer_pid,pid FROM pg_catalog.pg_stat_activity \
+            WHERE datname=current_database() AND state='idle in transaction' AND xact_start IS NOT NULL AND query LIKE $1",
+            &[&pattern]).await.map_err(|e| e.to_string())?;
+        if rows.len() == 1 {
+            let pid: i32 = rows[0].get("pid");
+            require(
+                pid != rows[0].get::<_, i32>("observer_pid"),
+                "Local terminal substituted observer for original producer",
+            )?;
+            return Ok(pid);
+        }
+        require(
+            rows.is_empty() && Instant::now() < deadline,
+            "Local exact original terminal/query PID was absent or ambiguous",
+        )?;
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+async fn terminal_local_server_disposition(
+    observer: &openbot_infra::db::pool::PooledClient,
+    pid: i32,
+    disposition: &str,
+) -> Result<(), String> {
+    let row = observer
+        .query_opt(
+            "SELECT state,xact_start IS NULL AS no_transaction,query \
+        FROM pg_catalog.pg_stat_activity WHERE pid=$1 AND pid<>pg_backend_pid()",
+            &[&pid],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("Local original terminal backend disappeared")?;
+    require(
+        row.get::<_, Option<String>>("state").as_deref() == Some("idle")
+            && row.get::<_, bool>("no_transaction")
+            && row
+                .get::<_, String>("query")
+                .trim()
+                .eq_ignore_ascii_case(disposition),
+        "Local original terminal did not actually finish its own expected transaction",
+    )?;
+    // Server disposition alone does not prove that the original driver received its ACK.
+    Ok(())
+}
+async fn terminal_local_original_ack(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    observer: &openbot_infra::db::pool::PooledClient,
+    pid: i32,
+    disposition: &str,
+) -> Result<(), String> {
+    terminal_local_server_disposition(observer, pid, disposition).await?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut leases = Vec::new();
+    let mut original_reused = false;
+    for _ in 0..16 {
+        let client = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), pool.get())
+            .await
+            .map_err(|_| "Local original terminal ACK/driver reuse budget elapsed")?
+            .map_err(|e| e.to_string())?;
+        let actual: i32 = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            client.query_one("SELECT pg_backend_pid()", &[]),
+        )
+        .await
+        .map_err(|_| "Local original terminal reuse command expired")?
+        .map_err(|e| e.to_string())?
+        .get(0);
+        if actual == pid {
+            require(
+                client.observation().snapshot().connection_started,
+                "Local original terminal driver never started",
+            )?;
+            original_reused = true;
+        }
+        leases.push(client);
+        if original_reused {
+            break;
+        }
+    }
+    drop(leases);
+    require(
+        original_reused,
+        "Local terminal original guarded connection did not really ACK and become reusable",
+    )
+}
+
+async fn terminal_local_commit(
+    fixture: &LocalFixture,
+    saved: &ArtifactRegistrationReceipt,
+    auth: &AuthContext,
+    intent: &Arc<ArmedArtifactCleanupIntent>,
+    rebind_after_ack: bool,
+) -> Result<AuthContext, String> {
+    let before = cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+    let roots = terminal_local_root_inodes(fixture)?;
+    let root_fds = terminal_local_root_fds(&roots)?;
+    let observer = fixture
+        .prepared()
+        .pool()
+        .get()
+        .await
+        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let gate =
+        TerminalLocalObserver::new(&saved.artifact_id, deadline, [false, true, true, false])?;
+    let release = TerminalLocalRelease(gate.clone());
+    let administration = fixture.prepared().artifact_administration.clone();
+    let original_auth = auth.clone();
+    let original_intent = intent.clone();
+    let recorder = gate.clone();
+    let task = tokio::spawn(async move {
+        administration
+            .finalize_armed_explicit_saved_before_with_observer(
+                &original_auth,
+                &original_intent,
+                deadline,
+                Some(recorder),
+            )
+            .await
+    });
+    let controlled = async {
+        gate.wait(1).await?;
+        let pid = terminal_local_query_pid(
+            &observer,
+            "artifact_cleanup_terminal_current_joint",
+            deadline,
+        )
+        .await?;
+        gate.release(1);
+        gate.wait(2).await?;
+        terminal_local_server_disposition(&observer, pid, "COMMIT").await?;
+        require(
+            gate.counts()?[0] == 1 && gate.counts()?[3] == 0,
+            "Local worker falsely ended before original real COMMIT and fact cutpoint",
+        )?;
+        let current = if rebind_after_ack {
+            terminal_local_rebind(fixture, auth)?
+        } else {
+            auth.clone()
+        };
+        Ok::<_, String>((pid, current))
+    }
+    .await;
+    gate.release_all();
+    let result = task.await.map_err(|e| e.to_string())?;
+    drop(release);
+    let (pid, current) = controlled?;
+    if rebind_after_ack {
+        require(
+            matches!(
+                result,
+                Err(TerminalError::Host(
+                    openbot_contracts::request_binding::HostRequestBindingError::NotCurrent
+                ))
+            ),
+            "Local acknowledged terminal rebind published old authority or relabelled known COMMIT",
+        )?;
+    } else {
+        let observation = result.map_err(|e| format!("{e:?}"))?;
+        require(
+            observation.state() == TerminalState::Committed,
+            "Local terminal did not publish its actual committed state",
+        )?;
+        drop(observation);
+    }
+    require(
+        Instant::now() < deadline && gate.counts()? == [1, 1, 1, 1],
+        "Local terminal original budget or actual worker cutpoint sequence failed",
+    )?;
+    terminal_local_original_ack(fixture.prepared().pool(), &observer, pid, "COMMIT").await?;
+    drop(observer);
+    let after = cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+    terminal_local_expect_commit(&before, &after, saved, auth)?;
+    require(
+        terminal_local_root_fds(&roots)? == root_fds
+            && physical_local_absent(
+                &fixture
+                    .root
+                    .0
+                    .join("artifacts/objects")
+                    .join(&saved.artifact_id),
+            )
+            && physical_local_absent(
+                &fixture
+                    .root
+                    .0
+                    .join("artifacts/staging")
+                    .join(&saved.artifact_id),
+            ),
+        "Local terminal retained temporary directory FDs or lost actual guarded absence",
+    )?;
+    eprintln!(
+        "ARTIFACT_TERMINAL_LOCAL_COMMIT original_query_pid={pid} original_server_commit=true original_driver_ack_reused=true before_worker_end=true actual_temporary_root_fd_inventory_restored=true rebind_after_ack={rebind_after_ack} known_effects_retained=true original_run_identity_and_positive_receipt_kept=true"
+    );
+    Ok(current)
+}
+
+async fn terminal_local_completed_without_quota(
+    fixture: &LocalFixture,
+    saved: &ArtifactRegistrationReceipt,
+    auth: &AuthContext,
+    intent: &Arc<ArmedArtifactCleanupIntent>,
+    live: &BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let before = cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+    let original = terminal_local_row(live, "openbot_internal.artifact_save_operations", saved)?;
+    let key: Vec<_> = [
+        "deployment_id",
+        "tenant_id",
+        "dataset_id",
+        "workspace_kind",
+        "workspace_id",
+    ]
+    .iter()
+    .map(|field| {
+        original[*field]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or("Local original quota key missing")
+    })
+    .collect::<Result<_, _>>()?;
+    let mut quota_client = fixture
+        .prepared()
+        .pool()
+        .get()
+        .await
+        .map_err(|e| e.to_string())?;
+    let quota = quota_client
+        .transaction()
+        .await
+        .map_err(|e| e.to_string())?;
+    quota.query_one("SELECT charged_bytes FROM openbot_internal.artifact_workspace_quotas \
+        WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND workspace_kind=$4 AND workspace_id=$5 FOR UPDATE",
+        &[&key[0], &key[1], &key[2], &key[3], &key[4]]).await.map_err(|e| e.to_string())?;
+    let mut operation_client = fixture
+        .prepared()
+        .pool()
+        .get()
+        .await
+        .map_err(|e| e.to_string())?;
+    let operation = operation_client
+        .transaction()
+        .await
+        .map_err(|e| e.to_string())?;
+    let blocker: i32 = operation
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|e| e.to_string())?
+        .get(0);
+    operation
+        .query_one(
+            "SELECT operation_id FROM openbot_internal.artifact_save_operations \
+        WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND operation_id=$4 FOR UPDATE",
+            &[&key[0], &key[1], &key[2], &saved.operation_id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let observer = fixture
+        .prepared()
+        .pool()
+        .get()
+        .await
+        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let phases = TerminalLocalObserver::new(&saved.artifact_id, deadline, [false; 4])?;
+    let administration = fixture.prepared().artifact_administration.clone();
+    let original_auth = auth.clone();
+    let original_intent = intent.clone();
+    let recorder = phases.clone();
+    let mut task = tokio::spawn(async move {
+        administration
+            .finalize_armed_explicit_saved_before_with_observer(
+                &original_auth,
+                &original_intent,
+                deadline,
+                Some(recorder),
+            )
+            .await
+    });
+    let waited = async {
+        loop {
+            let rows = observer
+                .query(
+                    "SELECT pid FROM pg_catalog.pg_stat_activity WHERE datname=current_database() \
+                AND wait_event_type='Lock' AND $1=ANY(pg_catalog.pg_blocking_pids(pid)) \
+                AND query LIKE '%artifact_save_operations%' AND query LIKE '%FOR UPDATE%'",
+                    &[&blocker],
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            if rows.len() == 1 {
+                return Ok::<i32, String>(rows[0].get(0));
+            }
+            require(
+                rows.is_empty() && Instant::now() < deadline,
+                "Local completed operation waiter absent or ambiguous",
+            )?;
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+    .await;
+    let operation_released = operation.rollback().await.map_err(|e| e.to_string());
+    let timed = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
+    let quota_released = quota.rollback().await.map_err(|e| e.to_string());
+    let (result, before_quota_release) = match timed {
+        Ok(joined) => (joined.map_err(|e| e.to_string())?, true),
+        Err(_) => (task.await.map_err(|e| e.to_string())?, false),
+    };
+    operation_released?;
+    quota_released?;
+    let pid = waited?;
+    require(
+        before_quota_release && Instant::now() < deadline,
+        "Local healthy completed decoder joined/accessed locked original quota or renewed the budget",
+    )?;
+    let observation = result.map_err(|e| format!("{e:?}"))?;
+    require(
+        observation.state() == TerminalState::AlreadyCompleted && phases.counts()? == [0; 4],
+        "Local completed retry created a worker/IO/commit instead of its own read observation",
+    )?;
+    drop(observation);
+    terminal_local_original_ack(fixture.prepared().pool(), &observer, pid, "ROLLBACK").await?;
+    drop(observer);
+    drop(operation_client);
+    drop(quota_client);
+    require(
+        cleanup_arm_local_database_facts(fixture.prepared().pool()).await? == before,
+        "Local completed retry refunded or inserted audit or repaired the original facts",
+    )?;
+    eprintln!(
+        "ARTIFACT_TERMINAL_LOCAL_COMPLETED original_query_pid={pid} actual_operation_waiter=true original_quota_controller_held_through_result=true own_original_rollback_ack_and_driver_reuse=true worker_phases_zero=true business_and_physical_rows_unchanged=true no_recharge_or_second_refund=true"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned genuine Prepared Local and original R436 transaction/worker resources"]
+async fn actual_prepared_local_terminal_commits_once_and_window_retry_has_no_io() {
+    let mut bundle = OwnedBundle::materialize().expect("Root-owned exact Local PostgreSQL bundle");
+    let bundle_path = bundle.root.0.clone();
+    // Reuse the original P1 durable terminal/foreground-inactive precondition, never retry Save.
+    let fixture = LocalFixture::new(&bundle, "p1-window-chunk")
+        .await
+        .expect("genuine Local terminal setup");
+    let fixture_path = fixture.root.0.clone();
+    let roots = terminal_local_root_inodes(&fixture).expect("original Local root-child inodes");
+    let outcome = async {
+        let actual = fixture.prepared().artifact_administration.clone();
+        let auth = fixture
+            .prepared()
+            .protocol()
+            .windows
+            .try_read()
+            .map_err(|_| "Local terminal Window registry unavailable")?
+            .get("main")
+            .ok_or("Local terminal original Window missing")?
+            .auth
+            .clone();
+        let intent = Arc::new(
+            actual
+                .arm_explicit_saved_delete_before(
+                    &auth,
+                    &fixture.artifact.artifact_id,
+                    Instant::now() + Duration::from_secs(5),
+                )
+                .await
+                .map_err(|e| format!("{e:?}"))?,
+        );
+        let live = cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        let absent = actual
+            .remove_armed_explicit_saved_bytes_before(
+                &auth,
+                &intent,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| format!("{e:?}"))?;
+        require(
+            absent.state() == PhysicalState::DurableAbsent
+                && cleanup_arm_local_database_facts(fixture.prepared().pool()).await? == live,
+            "Local original physical producer failed absence or prematurely terminalized/refunded",
+        )?;
+        drop(absent);
+        let current =
+            terminal_local_commit(&fixture, &fixture.artifact, &auth, &intent, false).await?;
+        terminal_local_completed_without_quota(
+            &fixture,
+            &fixture.artifact,
+            &current,
+            &intent,
+            &live,
+        )
+        .await?;
+        status(
+            bridge(
+                fixture.prepared().protocol(),
+                "main",
+                open_request(&fixture.artifact.artifact_id)?,
+            )
+            .await,
+            StatusCode::GONE,
+        )?;
+        drop(intent);
+        drop(actual);
+        Ok::<(), String>(())
+    }
+    .await;
+    let cleaned = fixture.finish().await;
+    if cleaned.is_ok() {
+        bundle.root.1 = true;
+    }
+    let fixture_absent = physical_local_absent(&fixture_path);
+    drop(bundle);
+    let original_fds_closed = terminal_local_root_fds(&roots).and_then(|fds| {
+        require(
+            fixture_absent && physical_local_absent(&bundle_path) && fds.iter().all(Vec::is_empty),
+            "Local terminal original worker/Store/sidecar/root resources did not actually close",
+        )
+    });
+    outcome
+        .and(cleaned)
+        .and(original_fds_closed)
+        .expect("actual Prepared Local terminal once/healthy completed and original owned closure");
+}
+
+async fn terminal_local_carrier_then_physical(
+    fixture: &LocalFixture,
+    saved: &ArtifactRegistrationReceipt,
+    auth: &AuthContext,
+    copy_tail: bool,
+) -> Result<
+    (
+        Arc<ArmedArtifactCleanupIntent>,
+        BTreeMap<String, serde_json::Value>,
+    ),
+    String,
+> {
+    use tracing::instrument::WithSubscriber as _;
+    let actual = fixture.prepared().artifact_administration.clone();
+    let protocol = fixture.prepared().protocol().clone();
+    let path = fixture
+        .root
+        .0
+        .join("artifacts/objects")
+        .join(&saved.artifact_id);
+    let original_object = cleanup_arm_local_object_fact(&path)?;
+    let phases = Arc::new(CleanupCachedIoPhases::default());
+    let dispatch = tracing::Dispatch::new(CleanupCachedPhaseSubscriber(phases.clone()));
+    let opened: ArtifactReadOpened = control(
+        bridge(&protocol, "main", open_request(&saved.artifact_id)?)
+            .with_subscriber(dispatch.clone())
+            .await,
+    )?;
+    let prepared = protocol
+        .prepare_public_artifact_read_response("main", next_request(&opened.handle_id, 0)?)
+        .with_subscriber(dispatch)
+        .await;
+    let original_counts = phases.actual_counts();
+    require(
+        original_counts.0 == 1 && original_counts.1 >= 2,
+        "Local terminal carrier fixture did not perform its real IO and final joint observation",
+    )?;
+    // The original transport block is already prepared. Arm cannot remove that allocation.
+    let intent = Arc::new(
+        actual
+            .arm_explicit_saved_delete_before(
+                auth,
+                &saved.artifact_id,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| format!("{e:?}"))?,
+    );
+    let armed = cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+    let gate = CarrierGate::new();
+    let release = ReleaseCarrierGate(gate.clone());
+    let observer = fixture
+        .prepared()
+        .pool()
+        .get()
+        .await
+        .map_err(|e| e.to_string())?;
+    let worker_protocol = protocol.clone();
+    let worker_gate = gate.clone();
+    let carrier = tokio::task::spawn_blocking(move || {
+        if copy_tail {
+            tracing::subscriber::with_default(CopyTailSubscriber(worker_gate), || {
+                worker_protocol
+                    .finish_public_artifact_read_response("main", prepared, |response| response)
+            })
+        } else {
+            worker_protocol.finish_public_artifact_read_response("main", prepared, |response| {
+                worker_gate.hold_actual_thread();
+                response
+            })
+        }
+    });
+    let entered = gate.await_entered().await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let worker_actual = actual.clone();
+    let worker_auth = auth.clone();
+    let worker_intent = intent.clone();
+    let mut physical = tokio::spawn(async move {
+        worker_actual
+            .remove_armed_explicit_saved_bytes_before(&worker_auth, &worker_intent, deadline)
+            .await
+    });
+    let mut early_physical = None;
+    let controlled = async {
+        entered?;
+        let pid =
+            terminal_local_query_pid(&observer, "artifact_cleanup_arm_current_joint", deadline)
+                .await?;
+        if let Ok(joined) = tokio::time::timeout(Duration::from_millis(30), &mut physical).await {
+            // Preserve an unexpected real early result and never poll a consumed JoinHandle twice.
+            early_physical = Some(joined);
+            return Err(
+                "Local original physical producer ignored a held actual copy/responder owner"
+                    .to_owned(),
+            );
+        }
+        require(
+            cleanup_owned_inode_fds(&path)?.len() == 1
+                && cleanup_arm_local_object_fact(&path)? == original_object,
+            "Local held original carrier lost its live FD or physical cleanup unlinked early",
+        )?;
+        Ok::<_, String>(pid)
+    }
+    .await;
+    gate.release();
+    let response = carrier.await.map_err(|e| e.to_string());
+    drop(release);
+    let result = match early_physical {
+        Some(joined) => joined.map_err(|e| e.to_string()),
+        None => physical.await.map_err(|e| e.to_string()),
+    };
+    let response = response?;
+    let result = result?;
+    let pid = controlled?;
+    require(
+        !gate.timed_out.load(Ordering::SeqCst) && Instant::now() < deadline,
+        "Local carrier released only through timeout or physical cleanup renewed its original deadline",
+    )?;
+    let absent = result.map_err(|e| format!("{e:?}"))?;
+    require(
+        absent.state() == PhysicalState::DurableAbsent,
+        "Local released carrier did not allow genuine original absence",
+    )?;
+    drop(absent);
+    physical_local_original_rollback_ack(fixture.prepared().pool(), &observer, pid).await?;
+    drop(observer);
+    if copy_tail {
+        status(response, StatusCode::SERVICE_UNAVAILABLE)?;
+    } else {
+        data(&response, &opened.handle_id, 0, false)?;
+        require(
+            response.body().as_slice() == PAYLOAD.as_bytes(),
+            "Local actual responder callback changed original bytes",
+        )?;
+        // This response Vec is already external; its Drop is not an erasure or resource ACK.
+        drop(response);
+    }
+    require(
+        physical_local_inode_fds(&original_object)?.is_empty()
+            && physical_local_absent(&path)
+            && physical_local_absent(
+                &fixture
+                    .root
+                    .0
+                    .join("artifacts/staging")
+                    .join(&saved.artifact_id),
+            )
+            && phases.actual_counts() == original_counts
+            && cleanup_arm_local_database_facts(fixture.prepared().pool()).await? == armed,
+        "Local physical completion lacked original carrier/FD end or changed armed business facts",
+    )?;
+    eprintln!(
+        "ARTIFACT_TERMINAL_LOCAL_CARRIER copy_tail={copy_tail} original_query_pid={pid} actual_prepared_carrier_held=true real_original_fd_retained=true physical_no_unlink_while_held=true release_inside_same_original_budget=true actual_callback_joined=true original_physical_rollback_ack_driver_reused=true original_inode_fds_absent=true real_guarded_absence=true terminal_not_started_before_drain=true returned_external_vec_untracked=true"
+    );
+    drop(protocol);
+    drop(actual);
+    Ok((intent, armed))
+}
+
+async fn terminal_local_precommit_rebind(
+    fixture: &LocalFixture,
+    saved: &ArtifactRegistrationReceipt,
+    auth: &AuthContext,
+    intent: &Arc<ArmedArtifactCleanupIntent>,
+) -> Result<AuthContext, String> {
+    let before = cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+    let observer = fixture
+        .prepared()
+        .pool()
+        .get()
+        .await
+        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let gate =
+        TerminalLocalObserver::new(&saved.artifact_id, deadline, [false, true, false, false])?;
+    let release = TerminalLocalRelease(gate.clone());
+    let actual = fixture.prepared().artifact_administration.clone();
+    let original_auth = auth.clone();
+    let original_intent = intent.clone();
+    let recorder = gate.clone();
+    let task = tokio::spawn(async move {
+        actual
+            .finalize_armed_explicit_saved_before_with_observer(
+                &original_auth,
+                &original_intent,
+                deadline,
+                Some(recorder),
+            )
+            .await
+    });
+    let controlled = async {
+        gate.wait(1).await?;
+        let pid = terminal_local_query_pid(
+            &observer,
+            "artifact_cleanup_terminal_current_joint",
+            deadline,
+        )
+        .await?;
+        let fresh = terminal_local_rebind(fixture, auth)?;
+        Ok::<_, String>((pid, fresh))
+    }
+    .await;
+    gate.release_all();
+    let result = task.await.map_err(|e| e.to_string())?;
+    drop(release);
+    let (pid, fresh) = controlled?;
+    require(
+        matches!(
+            result,
+            Err(TerminalError::Host(
+                openbot_contracts::request_binding::HostRequestBindingError::NotCurrent
+            ))
+        ) && Instant::now() < deadline
+            && gate.counts()? == [1, 1, 0, 1],
+        "Local BeforeCommit rebind committed or hid its acknowledged original Host refusal",
+    )?;
+    terminal_local_original_ack(fixture.prepared().pool(), &observer, pid, "ROLLBACK").await?;
+    drop(observer);
+    require(
+        cleanup_arm_local_database_facts(fixture.prepared().pool()).await? == before,
+        "Local precommit original rollback left staged refund/pair/audit mutations",
+    )?;
+    eprintln!(
+        "ARTIFACT_TERMINAL_LOCAL_PRECOMMIT original_query_pid={pid} real_window_replaced_before_commit_permission=true original_rollback_ack_driver_reused=true staged_mutations_atomic_rollback=true worker_resources_ended=true no_poison_repair=true"
+    );
+    Ok(fresh)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires genuine Local copy/responder carriers, original Window epochs and true terminal ACK controls"]
+async fn actual_prepared_local_terminal_revoke_and_rebind_keep_truth_and_store_scope() {
+    let mut bundle = OwnedBundle::materialize().expect("Root-owned exact Local PostgreSQL bundle");
+    let bundle_path = bundle.root.0.clone();
+    let fixture = LocalFixture::new(&bundle, "p1-window-operation")
+        .await
+        .expect("genuine Local terminal/window setup");
+    let fixture_path = fixture.root.0.clone();
+    let roots = terminal_local_root_inodes(&fixture).expect("original Local root-child inodes");
+    let outcome = async {
+        let actual = fixture.prepared().artifact_administration.clone();
+        let mut auth = fixture
+            .prepared()
+            .protocol()
+            .windows
+            .try_read()
+            .map_err(|_| "Local terminal original Window unavailable")?
+            .get("main")
+            .ok_or("Local terminal actual main missing")?
+            .auth
+            .clone();
+        let second = fixture
+            .prepared()
+            .application()
+            .execute(
+                auth.clone(),
+                AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
+                    request_id: uuid::Uuid::now_v7().to_string(),
+                    source_thread_id: fixture.artifact.source_thread_id.clone(),
+                    source_run_id: fixture.artifact.source_run_id.clone(),
+                    source_message_id: fixture.artifact.source_message_id.clone(),
+                    expected_sha256: format!("{:x}", Sha256::digest(PAYLOAD.as_bytes())),
+                }),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let second = match second {
+            AppReply::ArtifactRegistrationReceipt(saved) => saved,
+            _ => return Err(
+                "Local terminal responder leg did not genuinely Save its original second artifact"
+                    .to_owned(),
+            ),
+        };
+        require(
+            second.artifact_id != fixture.artifact.artifact_id
+                && second.operation_id != fixture.artifact.operation_id,
+            "Local terminal two carrier legs reused another object's identity",
+        )?;
+        for (saved, copy_tail) in [(&fixture.artifact, true), (&second, false)] {
+            require(
+                Arc::ptr_eq(&actual, &fixture.prepared().artifact_administration),
+                "Local terminal recovery replaced the original Administration/Store",
+            )?;
+            let (intent, live) =
+                terminal_local_carrier_then_physical(&fixture, saved, &auth, copy_tail).await?;
+            if copy_tail {
+                auth = terminal_local_precommit_rebind(&fixture, saved, &auth, &intent).await?;
+                // The prior refusal had its own genuine rollback ACK; this fresh original Store
+                // invocation is new authority, not repair of an unknown or expired query.
+                auth = terminal_local_commit(&fixture, saved, &auth, &intent, false).await?;
+            } else {
+                // Actual normal COMMIT/fact is already observed while the worker still holds IO.
+                // Rebind here must withhold old authority while preserving real committed truth.
+                auth = terminal_local_commit(&fixture, saved, &auth, &intent, true).await?;
+            }
+            terminal_local_completed_without_quota(&fixture, saved, &auth, &intent, &live).await?;
+            drop(intent);
+        }
+        drop(actual);
+        Ok::<(), String>(())
+    }
+    .await;
+    let cleaned = fixture.finish().await;
+    if cleaned.is_ok() {
+        bundle.root.1 = true;
+    }
+    let fixture_absent = physical_local_absent(&fixture_path);
+    drop(bundle);
+    let original_fds_closed = terminal_local_root_fds(&roots).and_then(|fds| {
+        require(
+            fixture_absent && physical_local_absent(&bundle_path) && fds.iter().all(Vec::is_empty),
+            "Local carrier/terminal original Store/sidecar/root resources did not actually close",
+        )
+    });
+    outcome.and(cleaned).and(original_fds_closed)
+        .expect("actual Local terminal carrier holds/window rebind/known ACK fact and original owned closure");
 }
