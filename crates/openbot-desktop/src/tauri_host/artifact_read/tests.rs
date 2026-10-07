@@ -1495,8 +1495,6 @@ WHERE a.datname=current_database()
     Err("actual final joint statement/controller Lock wait was not observed".to_owned())
 }
 
-
-
 // Controlled 0044 rows are consumer inputs only. These observations never assert deletion,
 // directory sync, refund, cleanup authorization or a producer receipt.
 const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
@@ -1517,9 +1515,12 @@ const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
 async fn cleanup_public_read_facts_on(
     client: &tokio_postgres::Client,
 ) -> Result<serde_json::Value, String> {
-    client.query_one(CLEANUP_PUBLIC_READ_FACTS, &[]).await
+    client
+        .query_one(CLEANUP_PUBLIC_READ_FACTS, &[])
+        .await
         .map_err(|error| error.to_string())?
-        .try_get(0).map_err(|error| error.to_string())
+        .try_get(0)
+        .map_err(|error| error.to_string())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1679,7 +1680,9 @@ async fn actual_local_worker_ack_then_final_cleanup_fence_wait_observes_armed_co
 }
 
 // Read only this Rust process's bounded f/device/inode inventory. No path fields or peer PIDs.
-fn cleanup_owned_inode_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+fn cleanup_owned_inode_fds(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<u32>, String> {
     use std::io::Read as _;
     use std::os::unix::fs::MetadataExt as _;
     use std::process::{Command, Stdio};
