@@ -107,7 +107,9 @@ impl PreparedArtifactRead {
             .ok_or_else(host_unavailable)?;
         if !matches!(
             binding.kind(),
-            HostRequestBindingKind::ServerSession | HostRequestBindingKind::DesktopWindow
+            HostRequestBindingKind::ServerSession
+                | HostRequestBindingKind::ServerSingleUserOwner
+                | HostRequestBindingKind::DesktopWindow
         ) {
             return Err(host_unavailable());
         }
@@ -260,7 +262,9 @@ impl PublicArtifactReadRegistry {
         let binding = auth.request_binding().ok_or_else(host_unavailable)?;
         if !matches!(
             binding.kind(),
-            HostRequestBindingKind::ServerSession | HostRequestBindingKind::DesktopWindow
+            HostRequestBindingKind::ServerSession
+                | HostRequestBindingKind::ServerSingleUserOwner
+                | HostRequestBindingKind::DesktopWindow
         ) {
             return Err(host_unavailable());
         }

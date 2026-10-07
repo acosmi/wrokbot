@@ -139,7 +139,7 @@ async fn observe_inner(
             i64::try_from(auth.auth_generation().get()).map_err(|_| host_not_current())?;
         let session_id = match &host {
             CurrentHost::Session { epoch, .. } => Some(epoch.lookup_id()),
-            CurrentHost::Desktop(_) => None,
+            CurrentHost::SingleUser(_) | CurrentHost::Desktop(_) => None,
         };
         remaining(deadline)?;
         tracing::trace!(

@@ -4,6 +4,8 @@
 use std::sync::OnceLock;
 
 pub(super) const LOCK_ACTOR: &str = "SELECT id FROM public.users WHERE id=$1 FOR SHARE";
+pub(super) const LOCK_SESSION: &str = "SELECT id FROM public.sessions \
+    WHERE id=$1 AND user_id=$2 FOR SHARE NOWAIT";
 pub(super) const LOCK_BOT: &str = "SELECT id FROM public.agents WHERE id=$1 FOR SHARE NOWAIT";
 pub(super) const LOCK_PROFILE: &str =
     "SELECT agent_id FROM public.agent_profiles WHERE agent_id=$1 FOR SHARE NOWAIT";

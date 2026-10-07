@@ -132,7 +132,10 @@ pub(crate) async fn verify_artifact_read_schema_on(
 ) -> Result<(), ArtifactAdministrationError> {
     crate::artifact_registry::verify_artifact_registry_schema_on(client)
         .await
-        .map_err(|_| corrupt("registry_schema"))?;
+        .map_err(|error| match error {
+            crate::artifact_registry::ArtifactRegistryError::Unavailable => unavailable(),
+            _ => corrupt("registry_schema"),
+        })?;
     let expected: Value = serde_json::from_str(REGISTERED_REGISTRATION_SCHEMA)
         .map_err(|_| corrupt("registration_oracle"))?;
     if capture_artifact_registration_schema_on(client).await? != expected {
@@ -213,6 +216,17 @@ pub(super) struct PublicReadRecordFailure {
     pub(super) rollback_unproven: bool,
 }
 impl PublicReadRecordFailure {
+    pub(super) fn schema(error: ArtifactAdministrationError, deadline: std::time::Instant) -> Self {
+        // A completed catalog mismatch precedes BEGIN and has no pending transaction ACK.
+        // Connection/query failures retain their Unavailable type through every schema layer.
+        if matches!(error, ArtifactAdministrationError::Corrupt { .. })
+            && std::time::Instant::now() < deadline
+        {
+            Self::observed(error)
+        } else {
+            Self::unproven(error)
+        }
+    }
     fn observed(error: ArtifactAdministrationError) -> Self {
         Self {
             error,
@@ -351,15 +365,15 @@ impl PostgresArtifactAdministration {
             .await
             .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?
             .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?;
-            // Every schema future belongs to this same guarded owner. Any unacknowledged exit
-            // permanently retires it; returning an error does not invent a resource destruction ACK.
+            // Completed schema mismatches before BEGIN finish this query reservation. Unknown
+            // or cancelled observations still retire the owner and leave the Store unproven.
             tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline.min(std::time::Instant::now() + PG_PHASE)),
                 verify_artifact_read_schema_on(client.as_client()),
             )
             .await
             .map_err(|_| PublicReadRecordFailure::unproven(unavailable()))?
-            .map_err(PublicReadRecordFailure::unproven)?;
+            .map_err(|error| PublicReadRecordFailure::schema(error, deadline))?;
             check_budget()?;
             let original_transaction = client
                 .begin_read_committed_read_only()

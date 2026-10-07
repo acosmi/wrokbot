@@ -63,7 +63,9 @@ pub(super) async fn prepare(
         })?;
     if !matches!(
         binding.kind(),
-        HostRequestBindingKind::ServerSession | HostRequestBindingKind::DesktopWindow
+        HostRequestBindingKind::ServerSession
+            | HostRequestBindingKind::ServerSingleUserOwner
+            | HostRequestBindingKind::DesktopWindow
     ) {
         return Err(AppError::DependencyUnavailable {
             dependency: "host_request_binding",

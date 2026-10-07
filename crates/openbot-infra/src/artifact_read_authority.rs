@@ -36,6 +36,9 @@ use crate::artifact_store::{
 use crate::auth::single_user::desktop_local::{
     DESKTOP_LOCAL_ACTOR_ID, DESKTOP_LOCAL_EMAIL, DesktopLocalAuthority,
 };
+use crate::auth::single_user::{
+    SINGLE_USER_ACTOR_ID, SINGLE_USER_EMAIL, VerifiedSingleUserPrincipal,
+};
 
 #[path = "artifact_read_authority/public_read_prepare.rs"]
 pub(super) mod public_read_prepare;
@@ -343,6 +346,21 @@ impl PostgresArtifactReadAuthority {
         .await
     }
 
+    /// Reobserve the real canonical Server owner and source in the same original guarded query.
+    pub async fn observe_server_single_user(
+        &self,
+        auth: &AuthContext,
+        target: &dyn ArtifactReadCurrentTarget,
+        principal: &VerifiedSingleUserPrincipal,
+        deadline: Instant,
+    ) -> Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError> {
+        if principal.auth_context() != auth || !principal.matches_artifact_read_authority(self) {
+            return Err(host_not_current());
+        }
+        self.observe(auth, target, CurrentHost::SingleUser(principal), deadline)
+            .await
+    }
+
     /// Require actual Desktop canary adoption and current original installation/row facts.
     pub async fn observe_desktop_local(
         &self,
@@ -430,7 +448,9 @@ impl PostgresArtifactReadAuthority {
             .ok_or_else(|| AppError::from(host_unavailable()))?;
         if !matches!(
             original.kind(),
-            HostRequestBindingKind::ServerSession | HostRequestBindingKind::DesktopWindow
+            HostRequestBindingKind::ServerSession
+                | HostRequestBindingKind::ServerSingleUserOwner
+                | HostRequestBindingKind::DesktopWindow
         ) {
             return Err(host_unavailable().into());
         }
@@ -816,13 +836,19 @@ impl PostgresArtifactReadAuthority {
         .map_err(|_| host_unavailable())?;
         // All native/public/registration/fence schema queries run before BEGIN on this same
         // original guarded owner. Any cancellation or unacknowledged exit retires that owner.
-        tokio::time::timeout_at(
+        let schema = tokio::time::timeout_at(
             tokio::time::Instant::from_std(deadline.min(Instant::now() + super::PG_PHASE)),
             super::verify_artifact_read_schema_on(client.as_client()),
         )
         .await
-        .map_err(|_| host_unavailable())?
         .map_err(|_| host_unavailable())?;
+        if let Err(error) = schema {
+            let failure = super::PublicReadRecordFailure::schema(error, deadline);
+            if !failure.rollback_unproven {
+                rollback_guard.acknowledged();
+            }
+            return Err(host_unavailable());
+        }
         rollback_guard.transaction_started();
         remaining(deadline)?;
         let original_transaction = client
@@ -844,7 +870,10 @@ impl PostgresArtifactReadAuthority {
             let run: Option<String> = seed.as_ref().map(|row| super::value(row, "source_run_id")).transpose().map_err(source_error)?;
             let generation = i64::try_from(auth.auth_generation().get()).map_err(|_| host_not_current())?;
             let physical = administration.store.physical_binding();
-            let session_id = match &host { CurrentHost::Session { epoch, .. } => Some(epoch.lookup_id()), CurrentHost::Desktop(_) => None };
+            let session_id = match &host {
+                CurrentHost::Session { epoch, .. } => Some(epoch.lookup_id()),
+                CurrentHost::SingleUser(_) | CurrentHost::Desktop(_) => None,
+            };
             #[cfg(test)]
             {
                 let gate = self.final_query_gate.lock().map_err(|_| host_unavailable())?.take();
@@ -942,6 +971,7 @@ enum CurrentHost<'a> {
         epoch: BorrowedServerSessionEpoch<'a>,
         lifetime: SessionLifetimePolicy,
     },
+    SingleUser(&'a VerifiedSingleUserPrincipal),
     Desktop(&'a DesktopLocalAuthority),
 }
 
@@ -1383,6 +1413,22 @@ fn decode_host(
                 return Err(host_not_current());
             }
             Some((created, updated, expires, *lifetime))
+        }
+        CurrentHost::SingleUser(principal) => {
+            if !auth.is_single_user()
+                || auth.actor().as_str() != SINGLE_USER_ACTOR_ID
+                || field::<Option<String>>(row, "read_host_email")?.as_deref()
+                    != Some(SINGLE_USER_EMAIL)
+                || roles.as_slice() != ["admin"]
+                || auth.request_binding().is_none_or(|value| {
+                    value.kind() != HostRequestBindingKind::ServerSingleUserOwner
+                })
+                || principal.auth_context() != auth
+                || !principal.matches_pool_scope(administration.registry.pool())
+            {
+                return Err(host_not_current());
+            }
+            None
         }
         CurrentHost::Desktop(installation) => {
             if !auth.is_single_user()
