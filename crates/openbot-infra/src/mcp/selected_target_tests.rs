@@ -368,14 +368,14 @@ impl OwnedServer {
                                 });
                             let redirect =
                                 redirected_response.lock().expect("redirect mutex").clone();
-                            if let Some((from, to)) = redirect {
-                                if target == from {
-                                    return (
-                                        StatusCode::TEMPORARY_REDIRECT,
-                                        [(http::header::LOCATION, to)],
-                                    )
-                                        .into_response();
-                                }
+                            if let Some((from, to)) = redirect
+                                && target == from
+                            {
+                                return (
+                                    StatusCode::TEMPORARY_REDIRECT,
+                                    [(http::header::LOCATION, to)],
+                                )
+                                    .into_response();
                             }
                             if raw_response.load(Ordering::Acquire) {
                                 return if parts.method == http::Method::GET {

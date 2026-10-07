@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use openbot_application::artifact_read_protocol::ArtifactReadEntryStop;
 use openbot_domain::artifact::ArtifactQuotaPolicy;
@@ -19,6 +20,7 @@ use crate::artifact_administration::ObservedArtifactReadRecord;
 pub(crate) use crate::artifact_bytes::ArtifactByteStorageLocation;
 use crate::artifact_bytes::{
     ArtifactBlob, ArtifactBlobReader, ArtifactByteError, ArtifactByteProbe, ArtifactByteStore,
+    ArtifactProbePhase,
 };
 use crate::artifact_read_lifecycle::ReadOperationState;
 use crate::artifact_registry::ArtifactDatasetRegistry;
@@ -447,6 +449,56 @@ impl DatasetBoundArtifactStore {
             return Err(ArtifactStoreError::BindingMismatch);
         }
         Ok(())
+    }
+
+    /// Inspect only this original Store's bytes on an owned blocking worker. An ordinary probe
+    /// is no permission, deletion receipt or barrier acknowledgement, even when all IO succeeds.
+    #[expect(
+        dead_code,
+        reason = "private guarded byte inspection foundation; producer integration is a separate task"
+    )]
+    pub(crate) fn probe_actual_guarded_before(
+        &self,
+        id: Uuid,
+        original_deadline: Instant,
+        stop: &mut impl FnMut(ArtifactProbePhase) -> bool,
+    ) -> ArtifactByteProbe {
+        if Instant::now() >= original_deadline {
+            return ArtifactByteProbe::Indeterminate;
+        }
+        let Ok(_guard) = self.io.try_lock() else {
+            return ArtifactByteProbe::Indeterminate;
+        };
+        if Instant::now() >= original_deadline
+            || self.check_current().is_err()
+            || Instant::now() >= original_deadline
+        {
+            return ArtifactByteProbe::Indeterminate;
+        }
+        let mut guarded_stop = |phase| {
+            if Instant::now() >= original_deadline || self.check_current().is_err() {
+                return true;
+            }
+            if Instant::now() >= original_deadline || stop(phase) {
+                return true;
+            }
+            Instant::now() >= original_deadline
+                || self.check_current().is_err()
+                || Instant::now() >= original_deadline
+        };
+        let observation =
+            self.bytes
+                .probe_actual_guarded_before(id, original_deadline, &mut guarded_stop);
+        if matches!(observation, ArtifactByteProbe::Indeterminate) {
+            return observation;
+        }
+        if Instant::now() >= original_deadline
+            || self.check_current().is_err()
+            || Instant::now() >= original_deadline
+        {
+            return ArtifactByteProbe::Indeterminate;
+        }
+        observation
     }
 
     pub(crate) fn enroll_read(

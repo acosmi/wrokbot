@@ -1,13 +1,17 @@
 //! Private owned-FS preparation checks. The PG immutable binding and actor/source authority are
 //! exercised separately; preparing a syntactically valid marker does not establish either.
 
+use std::collections::BTreeSet;
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::Write as _;
+use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _, symlink,
 };
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use super::{
@@ -453,4 +457,350 @@ fn trusted_installation_refuses_an_existing_nonprivate_child_without_changing_mo
         Err(ArtifactStoreError::UnsafeRoot)
     ));
     assert_eq!(fs::metadata(child).unwrap().mode() & 0o7777, 0o755);
+}
+
+fn guarded_root_owned_inode_fds(identities: &[(u64, u64)]) -> BTreeSet<(u64, u64, u32)> {
+    let sample = || {
+        #[cfg(target_os = "linux")]
+        {
+            let mut found = BTreeSet::new();
+            for entry in fs::read_dir("/proc/self/fd").unwrap() {
+                let entry = entry.unwrap();
+                let Ok(fd) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                    continue;
+                };
+                let Ok(metadata) = fs::metadata(entry.path()) else {
+                    continue;
+                };
+                if identities.contains(&(metadata.dev(), metadata.ino())) {
+                    found.insert((metadata.dev(), metadata.ino(), fd));
+                }
+            }
+            found
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use std::io::Read as _;
+            use std::process::{Command, Stdio};
+            let pid = std::process::id();
+            let mut child = Command::new("/usr/sbin/lsof")
+                .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("own-PID FD observation unavailable (Unproven)");
+            let child_pid = child.id();
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let output = std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+            });
+            let errors = std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let status = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Ok(None) | Err(_) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break None;
+                    }
+                }
+            };
+            // Join both original pipe owners before interpreting either result or panicking.
+            let output = output.join();
+            let errors = errors.join();
+            let output = output.unwrap().unwrap();
+            let errors = errors.unwrap().unwrap();
+            assert!(
+                status
+                    .as_ref()
+                    .is_some_and(std::process::ExitStatus::success)
+            );
+            assert!(output.len() <= 65_536 && output.ends_with(b"\n"));
+            assert!(
+                errors.is_empty(),
+                "own-PID FD observation stderr (Unproven)"
+            );
+            let text = std::str::from_utf8(&output).unwrap();
+            let mut own_pid = false;
+            let (mut fd, mut device, mut inode) = (None, None, None);
+            let mut found = BTreeSet::new();
+            for line in text.lines().chain(std::iter::once("f")) {
+                let (kind, value) = line.split_at_checked(1).unwrap();
+                match kind {
+                    "p" => {
+                        assert_eq!(value.parse::<u32>().unwrap(), pid);
+                        own_pid = true;
+                    }
+                    "f" => {
+                        if let Some(&(original_device, original_inode)) =
+                            identities
+                                .iter()
+                                .find(|&&(original_device, original_inode)| {
+                                    device == Some(original_device & u64::from(u32::MAX))
+                                        && inode == Some(original_inode)
+                                })
+                        {
+                            found.insert((original_device, original_inode, fd.unwrap()));
+                        }
+                        fd = value.parse::<u32>().ok();
+                        device = None;
+                        inode = None;
+                    }
+                    "D" => {
+                        device = Some(if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16).unwrap()
+                        } else {
+                            value.parse::<u64>().unwrap()
+                        });
+                    }
+                    "i" => inode = Some(value.parse::<u64>().unwrap()),
+                    _ => panic!("own-PID FD observation unknown field (Unproven)"),
+                }
+            }
+            assert!(own_pid, "own-PID FD observation missing PID (Unproven)");
+            eprintln!(
+                "ARTIFACT_GUARDED_FD_ORACLE child_pid={child_pid} natural_zero=true reaped=true pipe_workers_joined=true matching_fds={}",
+                found.len()
+            );
+            found
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            panic!("actual owned FD oracle unsupported (Unproven)")
+        }
+    };
+    let first = sample();
+    let second = sample();
+    assert_eq!(first, second, "owned original inode FD inventory unstable");
+    first
+}
+
+fn guarded_prepared_root_is_current(prepared: &super::PreparedRoot) -> bool {
+    ArtifactRootPhysicalBinding::observe(&prepared.root) == Ok(prepared.physical.clone())
+        && read_marker(&prepared.root) == Ok(Some(prepared.marker_bytes.clone()))
+}
+
+// Genuine PreparedRoot/kernel and ByteStore on the original root. No PG-installed Store,
+// actor/Host witness or DatasetBoundArtifactStore is constructed or certified here.
+#[test]
+fn prepared_root_kernel_marker_and_bound_byte_directory_currentness_are_rechecked() {
+    for leg in [
+        "current",
+        "marker-bytes",
+        "marker-mode",
+        "marker-link",
+        "marker-symlink",
+        "root-mode",
+        "fixed-child",
+    ] {
+        let owned = OwnedRoot::new();
+        let prepared = prepare_root(owned.open(), namespace()).unwrap();
+        assert!(guarded_prepared_root_is_current(&prepared));
+        let original_root = prepared.root.metadata().unwrap();
+        let root_identity = (original_root.dev(), original_root.ino());
+        let root_fd = u32::try_from(prepared.root.as_raw_fd()).unwrap();
+        assert!(matches!(
+            prepare_root(owned.open(), namespace()),
+            Err(ArtifactStoreError::Busy)
+        ));
+        let byte_root = prepared.root.try_clone().unwrap();
+        let byte_root_fd = u32::try_from(byte_root.as_raw_fd()).unwrap();
+        let bytes =
+            crate::artifact_bytes::ArtifactByteStore::bind_private_root(byte_root, 4096).unwrap();
+        assert_ne!(root_fd, byte_root_fd);
+        let id = Uuid::now_v7();
+        let actual = b"real prepared-root byte object";
+        let path = owned.root.join("objects").join(id.to_string());
+        actual_file(&path, actual, 0o400);
+        let tuple = |path: &Path| {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            (metadata.dev(), metadata.ino())
+        };
+        let leaf_identity = tuple(&path);
+        let mut identities = vec![
+            root_identity,
+            tuple(&owned.root.join("objects")),
+            tuple(&owned.root.join("staging")),
+            tuple(&owned.marker_path()),
+            leaf_identity,
+        ];
+        let initial_fds = guarded_root_owned_inode_fds(&identities);
+        assert_eq!(initial_fds.len(), 4);
+        assert!(initial_fds.contains(&(root_identity.0, root_identity.1, root_fd)));
+        assert!(initial_fds.contains(&(root_identity.0, root_identity.1, byte_root_fd)));
+        let backup = owned.container.join("original-marker");
+        let target = owned.container.join("owned-marker-target");
+        let mut leaf_seen = false;
+        let mut changed = false;
+        let result = bytes.probe_actual_guarded_before(
+            id,
+            Instant::now() + Duration::from_secs(30),
+            &mut |phase| {
+                if phase == crate::artifact_bytes::ArtifactProbePhase::AfterHashSegment
+                    && !leaf_seen
+                {
+                    assert_eq!(guarded_root_owned_inode_fds(&[leaf_identity]).len(), 1);
+                    leaf_seen = true;
+                }
+                if phase == crate::artifact_bytes::ArtifactProbePhase::AfterHashSegment
+                    && leg != "current"
+                    && !changed
+                {
+                    match leg {
+                        "marker-bytes" => {
+                            let changed_marker = StoreMarker {
+                                schema: prepared.marker.schema,
+                                deployment_id: prepared.marker.deployment_id.clone(),
+                                tenant_id: prepared.marker.tenant_id.clone(),
+                                dataset_id: prepared.marker.dataset_id.clone(),
+                                store_id: Uuid::now_v7().to_string(),
+                            };
+                            fs::set_permissions(owned.marker_path(), Permissions::from_mode(0o600))
+                                .unwrap();
+                            let mut file = OpenOptions::new()
+                                .write(true)
+                                .truncate(true)
+                                .open(owned.marker_path())
+                                .unwrap();
+                            file.write_all(&serde_json::to_vec(&changed_marker).unwrap())
+                                .unwrap();
+                            file.sync_all().unwrap();
+                            fs::set_permissions(owned.marker_path(), Permissions::from_mode(0o400))
+                                .unwrap();
+                            file.sync_all().unwrap();
+                        }
+                        "marker-mode" => {
+                            fs::set_permissions(owned.marker_path(), Permissions::from_mode(0o600))
+                                .unwrap();
+                        }
+                        "marker-link" => {
+                            fs::hard_link(owned.marker_path(), &backup).unwrap();
+                            assert_eq!(fs::metadata(owned.marker_path()).unwrap().nlink(), 2);
+                        }
+                        "marker-symlink" => {
+                            fs::rename(owned.marker_path(), &backup).unwrap();
+                            actual_file(&target, &prepared.marker_bytes, 0o400);
+                            identities.push(tuple(&target));
+                            symlink(&target, owned.marker_path()).unwrap();
+                        }
+                        "root-mode" => {
+                            fs::set_permissions(&owned.root, Permissions::from_mode(0o755))
+                                .unwrap();
+                        }
+                        "fixed-child" => {
+                            let objects = owned.root.join("objects");
+                            fs::rename(&objects, owned.root.join("retired-objects")).unwrap();
+                            DirBuilder::new().mode(0o700).create(&objects).unwrap();
+                            identities.push(tuple(&objects));
+                        }
+                        _ => unreachable!(),
+                    }
+                    changed = true;
+                }
+                // This real private physical predicate can only refuse. It is not a Host
+                // observation or proof that the PG-installed Store wrapper ran in this test.
+                !guarded_prepared_root_is_current(&prepared)
+            },
+        );
+        assert!(leaf_seen);
+        if leg == "current" {
+            match result {
+                crate::artifact_bytes::ArtifactByteProbe::Retained {
+                    location,
+                    byte_length,
+                    sha256,
+                } => {
+                    assert_eq!(
+                        location,
+                        crate::artifact_bytes::ArtifactByteStorageLocation::Object
+                    );
+                    assert_eq!(byte_length, actual.len() as u64);
+                    assert_eq!(sha256, <[u8; 32]>::from(Sha256::digest(actual)));
+                }
+                _ => panic!("actual prepared-root stable bytes were not retained"),
+            }
+            let absent_id = Uuid::now_v7();
+            assert!(matches!(
+                bytes.probe_actual_guarded_before(
+                    absent_id,
+                    Instant::now() + Duration::from_secs(30),
+                    &mut |_| !guarded_prepared_root_is_current(&prepared)
+                ),
+                crate::artifact_bytes::ArtifactByteProbe::Absent
+            ));
+            assert_eq!(
+                fs::read(owned.marker_path()).unwrap(),
+                prepared.marker_bytes
+            );
+        } else {
+            assert!(
+                changed
+                    && matches!(
+                        result,
+                        crate::artifact_bytes::ArtifactByteProbe::Indeterminate
+                    )
+            );
+        }
+        let original_leaf = if leg == "fixed-child" {
+            owned.root.join("retired-objects").join(id.to_string())
+        } else {
+            path
+        };
+        assert_eq!(fs::read(original_leaf).unwrap(), actual);
+        if leg == "root-mode" {
+            fs::set_permissions(&owned.root, Permissions::from_mode(0o700)).unwrap();
+        }
+        // A syntactically matching marker on another real root cannot match this physical tuple.
+        if leg == "current" {
+            let copied = OwnedRoot::new();
+            actual_file(&copied.marker_path(), &prepared.marker_bytes, 0o400);
+            let other = prepare_root(copied.open(), namespace()).unwrap();
+            assert_eq!(other.marker_bytes, prepared.marker_bytes);
+            assert_ne!(other.physical, prepared.physical);
+            let other_identity = tuple(&copied.root);
+            assert_eq!(guarded_root_owned_inode_fds(&[other_identity]).len(), 1);
+            drop(other);
+            assert!(guarded_root_owned_inode_fds(&[other_identity]).is_empty());
+            let copied_container = copied.container.clone();
+            drop(copied);
+            assert!(matches!(fs::symlink_metadata(copied_container),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound));
+        }
+        assert_eq!(
+            guarded_root_owned_inode_fds(&identities),
+            initial_fds,
+            "probe kept an original leaf/marker or temporary reopened child FD"
+        );
+        drop(bytes);
+        assert_eq!(
+            guarded_root_owned_inode_fds(&identities),
+            BTreeSet::from([(root_identity.0, root_identity.1, root_fd)])
+        );
+        drop(prepared);
+        assert!(guarded_root_owned_inode_fds(&identities).is_empty());
+        let reacquired = owned.open();
+        reacquired
+            .try_lock()
+            .expect("original root kernel owner did not actually end");
+        reacquired.unlock().unwrap();
+        drop(reacquired);
+        assert!(guarded_root_owned_inode_fds(&identities).is_empty());
+        let container = owned.container.clone();
+        drop(owned);
+        assert!(matches!(fs::symlink_metadata(container),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound));
+        eprintln!(
+            "ARTIFACT_GUARDED_PREPARED_ROOT_TAIL leg={leg} actual_leaf_fd_seen=true byte_store_fds_absent=true original_root_fd_absent=true kernel_reacquired_and_unlocked=true scratch_removed=true"
+        );
+    }
 }
