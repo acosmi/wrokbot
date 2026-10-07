@@ -953,6 +953,15 @@ struct Operation {
     phase: SavePhase,
 }
 
+impl Operation {
+    fn packet_matches_source(&self) -> bool {
+        self.packet.source_thread_id == self.source.thread
+            && self.packet.source_run_id == self.source.run
+            && self.packet.source_message_id == self.source.message
+            && self.packet.expected_sha256 == self.source.sha256
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum MetadataState {
     #[default]
@@ -971,6 +980,9 @@ struct ActionState {
     next_action: u64,
     checking: Option<(u64, UserSource)>,
     operation: Option<Operation>,
+    // Local response ownership only; these values are not Server auth/window tokens.
+    receipt_read_generation: u64,
+    receipt_read: Option<(u64, Operation)>,
     actor: Option<ActorObservation>,
     scope_generation: u64,
     auth_read_generation: u64,
@@ -1333,6 +1345,7 @@ impl ActionState {
             self.actor = next.and(actor);
             self.handoff = None;
             self.checking = None;
+            self.receipt_read = None;
             self.hide_metadata();
             if let Some(operation) = self.operation.as_mut()
                 && operation.phase == SavePhase::Saving
@@ -1349,6 +1362,13 @@ impl ActionState {
     }
 
     fn close_route(&mut self, mount: u64) {
+        if self
+            .receipt_read
+            .as_ref()
+            .is_some_and(|(_, operation)| operation.source.mount == mount)
+        {
+            self.receipt_read = None;
+        }
         if self.auth_probe.is_some_and(|(_, owner)| owner == mount) {
             self.auth_probe = None;
         }
@@ -1452,6 +1472,67 @@ impl ActionState {
         self.read_generation = self.read_generation.saturating_add(1);
         self.metadata = MetadataState::Idle;
         self.metadata_mount = None;
+    }
+
+    fn may_read_receipt(&self, operation: &Operation) -> bool {
+        operation.phase == SavePhase::Unknown
+            && operation.packet_matches_source()
+            && self.scope_current(&operation.source)
+            && self.operation.as_ref() == Some(operation)
+            && self.checking.is_none()
+            && self.receipt_read.is_none()
+    }
+
+    fn start_receipt_read(&mut self, operation: &Operation) -> Option<u64> {
+        if !self.may_read_receipt(operation) {
+            return None;
+        }
+        self.receipt_read_generation = self.receipt_read_generation.checked_add(1)?;
+        self.receipt_read = Some((self.receipt_read_generation, operation.clone()));
+        Some(self.receipt_read_generation)
+    }
+
+    fn finish_receipt_read(
+        &mut self,
+        operation: &Operation,
+        generation: u64,
+        receipt: Option<ArtifactRegistrationReceipt>,
+    ) {
+        if self.receipt_read.as_ref() != Some(&(generation, operation.clone())) {
+            return;
+        }
+        self.receipt_read = None;
+        if !self.scope_current(&operation.source)
+            || self.operation.as_ref() != Some(operation)
+            || operation.phase != SavePhase::Unknown
+            || !operation.packet_matches_source()
+        {
+            return;
+        }
+        let Some(receipt) = receipt.filter(|receipt| {
+            crate::api::artifacts::receipt_matches(
+                receipt,
+                &operation.packet,
+                &operation.source.actor.actor,
+            )
+        }) else {
+            return; // Missing/refused/invalid is still the same Unknown, never NotSubmitted.
+        };
+        if let Some(current) = self.operation.as_mut() {
+            current.phase = SavePhase::Registered(receipt);
+        }
+        // This confirms only original registration. Metadata remains a separate explicit read.
+        self.hide_metadata();
+    }
+
+    fn cancel_receipt_read(&mut self, generation: u64) {
+        if self
+            .receipt_read
+            .as_ref()
+            .is_some_and(|(current, _)| *current == generation)
+        {
+            self.receipt_read = None;
+        }
     }
 
     fn start_read(&mut self, token: u64, mount: u64) -> Option<u64> {
@@ -1671,6 +1752,20 @@ impl ArtifactActions {
         observer.selection_current(source) && self.state.with(|state| state.may_check(source))
     }
 
+    fn may_check_receipt(self, observer: ArtifactSourceObserver, operation: &Operation) -> bool {
+        observer.selection_current(&operation.source)
+            && self.state.with(|state| state.may_read_receipt(operation))
+    }
+
+    fn receipt_reading(self, operation: &Operation) -> bool {
+        self.state.with(|state| {
+            state
+                .receipt_read
+                .as_ref()
+                .is_some_and(|(_, current)| current == operation)
+        })
+    }
+
     fn read_disabled(self, mount: u64) -> bool {
         self.state.with(|state| {
             state.metadata_mount == Some(mount)
@@ -1761,6 +1856,73 @@ impl ArtifactActions {
         });
         #[cfg(not(target_arch = "wasm32"))]
         let _ = check;
+    }
+
+    fn check_receipt(self, observer: ArtifactSourceObserver, operation: Operation) {
+        if !self.may_check_receipt(observer, &operation) {
+            return;
+        }
+        let generation = self
+            .state
+            .try_update(|state| state.start_receipt_read(&operation))
+            .flatten();
+        let Some(generation) = generation else {
+            return;
+        };
+        let ticket = ReceiptReadTicket {
+            actions: self,
+            operation: operation.clone(),
+            generation,
+        };
+        #[cfg(target_arch = "wasm32")]
+        observer.with_owner(move || {
+            leptos::task::spawn_local_scoped_with_cancellation(async move {
+                let current = observer.refresh_actor().await;
+                if current.as_ref().ok() != Some(&operation.source.actor)
+                    || !observer.selection_current(&operation.source)
+                {
+                    return;
+                }
+                let Ok(snapshot) =
+                    crate::api::load_thread_conversation(&operation.source.thread).await
+                else {
+                    return;
+                };
+                if !observer.selection_current(&operation.source)
+                    || !source_matches_snapshot(&operation.source, &snapshot)
+                {
+                    return;
+                }
+                let result = crate::api::artifacts::save_receipt(
+                    &operation.packet,
+                    &operation.source.actor.actor,
+                )
+                .await;
+                let Ok(receipt) = result else {
+                    ticket.finish(None);
+                    return;
+                };
+                let current = observer.refresh_actor().await;
+                if current.as_ref().ok() != Some(&operation.source.actor)
+                    || !observer.selection_current(&operation.source)
+                {
+                    return;
+                }
+                let Ok(snapshot) =
+                    crate::api::load_thread_conversation(&operation.source.thread).await
+                else {
+                    return;
+                };
+                if !observer.selection_current(&operation.source)
+                    || !source_matches_snapshot(&operation.source, &snapshot)
+                {
+                    return;
+                }
+                ticket.finish(Some(receipt));
+            });
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = ticket;
     }
 
     fn read(self, observer: ArtifactSourceObserver, operation: Operation) {
@@ -1871,6 +2033,28 @@ impl Drop for SaveTicket {
     }
 }
 
+struct ReceiptReadTicket {
+    actions: ArtifactActions,
+    operation: Operation,
+    generation: u64,
+}
+
+impl ReceiptReadTicket {
+    fn finish(&self, receipt: Option<ArtifactRegistrationReceipt>) {
+        self.actions.state.try_update(|state| {
+            state.finish_receipt_read(&self.operation, self.generation, receipt);
+        });
+    }
+}
+
+impl Drop for ReceiptReadTicket {
+    fn drop(&mut self) {
+        self.actions
+            .state
+            .try_update(|state| state.cancel_receipt_read(self.generation));
+    }
+}
+
 struct ReadTicket {
     actions: ArtifactActions,
     token: u64,
@@ -1933,6 +2117,21 @@ pub(crate) fn ArtifactMessageActions(
             actions.read(source, operation);
         }
     };
+    let check_receipt = move |_| {
+        if let Some(operation) = operation.get_untracked() {
+            actions.check_receipt(source, operation);
+        }
+    };
+    let receipt_disabled = Signal::derive(move || {
+        operation
+            .get()
+            .is_none_or(|operation| !actions.may_check_receipt(source, &operation))
+    });
+    let receipt_reading = Signal::derive(move || {
+        operation
+            .get()
+            .is_some_and(|operation| actions.receipt_reading(&operation))
+    });
     let phase = Memo::new(move |_| operation.get().map(|op| op.phase));
     view! {
         <div data-artifact-message-actions="">
@@ -1947,6 +2146,14 @@ pub(crate) fn ArtifactMessageActions(
             </Show>
             <Show when=move || phase.get() == Some(SavePhase::NotSubmitted)>
                 <span class="ob-alert" role="status">{move || t!(i18n, artifacts.not_submitted)}</span>
+            </Show>
+            <Show when=move || phase.get() == Some(SavePhase::Unknown)>
+                <Button variant=ButtonVariant::Ghost size=ButtonSize::Small disabled=receipt_disabled on_activate=check_receipt>
+                    {move || t!(i18n, artifacts.check_result)}
+                </Button>
+                <Show when=move || receipt_reading.get()>
+                    <span role="status">{move || t!(i18n, artifacts.checking_result)}</span>
+                </Show>
             </Show>
             <Show when=move || phase.get().is_some_and(|phase| matches!(phase, SavePhase::Registered(_)))>
                 <section class="ob-tool-card" aria-label=move || crate::i18n::t_string!(i18n, artifacts.title).to_owned()>
@@ -2249,6 +2456,168 @@ mod tests {
         let mut original = intent();
         original.message = "x".repeat(MAX_THREAD_MESSAGE_BYTES + 1);
         assert!(SourceJoin::new(1, 1, 1, read.source.actor, &original).is_none());
+    }
+
+    fn unknown_operation(state: &mut ActionState) -> Operation {
+        let operation = operation(state, read().source);
+        state.settle(&operation, SavePhase::Unknown);
+        state.operation.as_ref().unwrap().clone()
+    }
+
+    #[test]
+    fn explicit_receipt_read_keeps_unknown_until_exact_positive_and_never_resaves() {
+        let mut state = ActionState::default();
+        let original = unknown_operation(&mut state);
+        let generation = state.start_receipt_read(&original).unwrap();
+        assert_eq!(state.operation.as_ref(), Some(&original));
+        assert!(state.start_receipt_read(&original).is_none());
+        assert!(state.check(original.source.clone()).is_none());
+        assert!(
+            state
+                .start_read(original.token, original.source.mount)
+                .is_none()
+        );
+        state.finish_receipt_read(&original, generation, Some(receipt(&original)));
+        let current = state.operation.as_ref().unwrap();
+        assert_eq!(current.packet, original.packet);
+        assert_eq!(current.source, original.source);
+        assert_eq!(current.phase, SavePhase::Registered(receipt(&original)));
+        assert_eq!(state.metadata, MetadataState::Idle);
+        assert!(state.metadata_mount.is_none());
+        assert!(state.check(original.source.clone()).is_none());
+        assert!(state.start_receipt_read(&original).is_none());
+    }
+
+    #[test]
+    fn receipt_read_absence_timeout_and_cancel_preserve_original_unknown_and_locator() {
+        for cancelled in [false, true] {
+            let mut state = ActionState::default();
+            let original = unknown_operation(&mut state);
+            let generation = state.start_receipt_read(&original).unwrap();
+            if cancelled {
+                state.cancel_receipt_read(generation);
+            } else {
+                state.finish_receipt_read(&original, generation, None);
+            }
+            assert_eq!(state.operation.as_ref(), Some(&original));
+            assert!(state.receipt_read.is_none());
+            assert!(state.check(original.source.clone()).is_none());
+            assert!(
+                state
+                    .start_read(original.token, original.source.mount)
+                    .is_none()
+            );
+            assert!(state.start_receipt_read(&original).is_some());
+        }
+    }
+
+    #[test]
+    fn late_receipt_cannot_cross_route_close_or_replace_a_newer_explicit_read() {
+        let mut state = ActionState::default();
+        let original = unknown_operation(&mut state);
+        let old = state.start_receipt_read(&original).unwrap();
+        state.close_route(original.source.mount);
+        state.finish_receipt_read(&original, old, Some(receipt(&original)));
+        assert_eq!(state.operation.as_ref(), Some(&original));
+        let current = state.start_receipt_read(&original).unwrap();
+        state.finish_receipt_read(&original, old, Some(receipt(&original)));
+        assert_eq!(state.receipt_read, Some((current, original.clone())));
+        assert_eq!(state.operation.as_ref(), Some(&original));
+        state.finish_receipt_read(&original, current, Some(receipt(&original)));
+        assert!(matches!(
+            state.operation.as_ref().unwrap().phase,
+            SavePhase::Registered(_)
+        ));
+    }
+
+    #[test]
+    fn actor_scope_change_during_receipt_get_cannot_promote_original_unknown() {
+        let mut state = ActionState::default();
+        let original = unknown_operation(&mut state);
+        let generation = state.start_receipt_read(&original).unwrap();
+        let probe = state.start_actor_probe(original.source.mount).unwrap();
+        let mut other = original.source.actor.clone();
+        other.actor = ActorId::new("other");
+        assert!(state.finish_actor_probe(probe, original.source.mount, Some(other)));
+        state.finish_receipt_read(&original, generation, Some(receipt(&original)));
+        assert_eq!(state.operation.as_ref(), Some(&original));
+        let probe = state.start_actor_probe(original.source.mount).unwrap();
+        assert!(state.finish_actor_probe(
+            probe,
+            original.source.mount,
+            Some(original.source.actor.clone())
+        ));
+        assert!(state.start_receipt_read(&original).is_none());
+        assert_eq!(state.operation.as_ref(), Some(&original));
+    }
+
+    #[test]
+    fn receipt_read_rejects_corrupted_original_packet_and_every_foreign_positive_identity() {
+        for change in 0..4 {
+            let mut state = ActionState::default();
+            let mut original = unknown_operation(&mut state);
+            match change {
+                0 => original.packet.source_thread_id = ThreadId::new("other"),
+                1 => original.packet.source_run_id = RunId::new("other"),
+                2 => original.packet.source_message_id = "other".into(),
+                _ => original.packet.expected_sha256 = "0".repeat(64),
+            }
+            state.operation = Some(original.clone());
+            assert!(state.start_receipt_read(&original).is_none());
+        }
+        for change in 0..9 {
+            let mut state = ActionState::default();
+            let original = unknown_operation(&mut state);
+            let generation = state.start_receipt_read(&original).unwrap();
+            let mut foreign = receipt(&original);
+            match change {
+                0 => foreign.operation_id = "not-uuid".into(),
+                1 => foreign.artifact_id = "not-uuid".into(),
+                2 => foreign.request_id = "019a7778-abcd-7abc-8abc-0123456789af".into(),
+                3 => foreign.owner_actor_id = ActorId::new("other"),
+                4 => foreign.source_thread_id = ThreadId::new("other"),
+                5 => foreign.source_run_id = RunId::new("other"),
+                6 => foreign.source_message_id = "other".into(),
+                7 => foreign.source_call_seq = Some(1),
+                _ => foreign.source_attempt_seq = Some(1),
+            }
+            state.finish_receipt_read(&original, generation, Some(foreign));
+            assert_eq!(state.operation.as_ref(), Some(&original));
+            assert!(state.receipt_read.is_none());
+            assert!(state.check(original.source.clone()).is_none());
+        }
+    }
+
+    #[test]
+    fn receipt_check_requires_original_view_epoch_mount_thread_and_live_owner() {
+        let root = Owner::new();
+        let (actions, route, observer) = direct_replay_observer(&root);
+        let source = read().source;
+        observer.state.update(|state| {
+            state.eligible = Some(source.clone());
+            state.epoch = source.epoch;
+        });
+        actions.state.update(|state| {
+            let saving = operation(state, source.clone());
+            state.settle(&saving, SavePhase::Unknown);
+        });
+        let original = actions.state.with(|state| state.operation.clone()).unwrap();
+        assert!(actions.may_check_receipt(observer, &original));
+        observer.state.update(|state| state.epoch += 1);
+        assert!(!actions.may_check_receipt(observer, &original));
+        observer.state.update(|state| state.epoch = source.epoch);
+        observer.thread.set(Some(ThreadId::new("other")));
+        assert!(!actions.may_check_receipt(observer, &original));
+        observer.thread.set(Some(source.thread.clone()));
+        let mut remounted = original.clone();
+        remounted.source.mount += 1;
+        assert!(!actions.may_check_receipt(observer, &remounted));
+        route.dispose();
+        assert!(!actions.may_check_receipt(observer, &original));
+        assert_eq!(
+            actions.state.with(|state| state.operation.clone()),
+            Some(original)
+        );
     }
 
     #[test]
