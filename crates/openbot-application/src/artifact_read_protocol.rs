@@ -50,9 +50,20 @@ pub trait ArtifactReadOperationCompletion: Send + Sync {
     async fn drain_before(&self, deadline: Instant) -> Result<(), AppError>;
 }
 
+/// A trusted stop request for the same original public Entry, without a completion claim.
+pub trait ArtifactReadEntryStop: Send + Sync {
+    /// Request the original Entry's existing cleanup without reporting a resource ACK.
+    fn request_stop(&self);
+}
+
 /// Rust-only enrollment of the real producer before its first preparation await or IO.
 /// The runtime can then supervise true cleanup even if the preparation waiter disappears.
 pub trait ArtifactReadPreparationObserver: Send + Sync {
+    /// Optional original Entry stop port. A missing port does not prove resource release.
+    fn original_entry_stop(&self) -> Option<Arc<dyn ArtifactReadEntryStop>> {
+        None
+    }
+
     /// Register only the completion port of the same actual original operation.
     fn enrolled(
         &self,
@@ -845,7 +856,21 @@ impl Entry {
     }
 }
 struct EntryObserver(Arc<Entry>);
+struct OriginalEntryStop(Weak<Entry>);
+
+impl ArtifactReadEntryStop for OriginalEntryStop {
+    fn request_stop(&self) {
+        if let Some(entry) = self.0.upgrade() {
+            entry.stop();
+        }
+    }
+}
+
 impl ArtifactReadPreparationObserver for EntryObserver {
+    fn original_entry_stop(&self) -> Option<Arc<dyn ArtifactReadEntryStop>> {
+        Some(Arc::new(OriginalEntryStop(Arc::downgrade(&self.0))))
+    }
+
     fn enrolled(
         &self,
         completion: Arc<dyn ArtifactReadOperationCompletion>,

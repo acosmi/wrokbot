@@ -1,11 +1,13 @@
 //! Actual finite read inventory. Bare legacy Vec lifetime is expressly excluded.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use openbot_application::artifact_read_protocol::ArtifactReadOperationCompletion;
+use openbot_application::artifact_read_protocol::{
+    ArtifactReadEntryStop, ArtifactReadOperationCompletion,
+};
 use openbot_application::{ArtifactReadOperation, CurrentArtifactReadBlock};
 use openbot_contracts::artifact_read::{ArtifactReadAllocationLease, PendingArtifactReadBuffer};
 use openbot_contracts::auth::AuthContext;
@@ -17,7 +19,11 @@ use tokio::sync::Notify;
 use tracing::instrument::WithSubscriber;
 
 use super::artifact_read_authority::PostgresArtifactReadAuthority;
-use crate::artifact_store::StoreBoundArtifactReader;
+use crate::artifact_administration::ObservedArtifactReadRecord;
+use crate::artifact_store::{
+    DatasetBoundArtifactStore, StoreBoundArtifactReader, StoreReadEnrollment, StoreReadJobLease,
+    StoreReadQueryLease,
+};
 
 pub struct ArtifactReadLifecycle {
     gate: Mutex<Vec<Weak<ReadOperationState>>>,
@@ -101,6 +107,7 @@ impl ArtifactReadLifecycle {
         gate.push(Arc::downgrade(state));
         Ok(())
     }
+    #[cfg(test)]
     pub(super) fn admit(
         self: &Arc<Self>,
         operation_stopped: &AtomicBool,
@@ -119,9 +126,10 @@ impl ArtifactReadLifecycle {
         Ok(JobPermit {
             lifecycle: Arc::clone(self),
             operation: None,
+            shared: None,
         })
     }
-    fn admit_operation(
+    pub(super) fn admit_operation(
         self: &Arc<Self>,
         operation: &Arc<ReadOperationState>,
     ) -> Result<JobPermit, ArtifactReadCurrentError> {
@@ -132,12 +140,19 @@ impl ArtifactReadLifecycle {
         if operation.is_stopped() {
             return Err(ArtifactReadCurrentError::Unavailable);
         }
+        let shared = operation
+            .shared
+            .get()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?
+            .begin_job()
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
         // Both inventories become visible before close can inspect the same admission gate.
         self.jobs.fetch_add(1, Ordering::SeqCst);
         operation.jobs.fetch_add(1, Ordering::SeqCst);
         Ok(JobPermit {
             lifecycle: Arc::clone(self),
             operation: Some(Arc::clone(operation)),
+            shared: Some(shared),
         })
     }
     pub(super) fn resource(self: &Arc<Self>) -> PhysicalResourceLease {
@@ -197,12 +212,15 @@ pub(super) struct JobPermit {
     lifecycle: Arc<ArtifactReadLifecycle>,
     // Kept outside State.data: no State -> resource -> State ownership cycle.
     operation: Option<Arc<ReadOperationState>>,
+    shared: Option<StoreReadJobLease>,
 }
 impl Drop for JobPermit {
     fn drop(&mut self) {
         if let Some(operation) = &self.operation {
             operation.jobs.fetch_sub(1, Ordering::SeqCst);
+            operation.notify_shared_changed();
         }
+        drop(self.shared.take());
         self.lifecycle.jobs.fetch_sub(1, Ordering::SeqCst);
         self.lifecycle.changed.notify_waiters();
     }
@@ -239,7 +257,7 @@ pub(super) struct ReadOperationData {
     pub(super) position: u64,
     pub(super) eof: bool,
 }
-pub(super) struct ReadOperationState {
+pub(crate) struct ReadOperationState {
     pub(super) authority: Arc<PostgresArtifactReadAuthority>,
     pub(super) lifecycle: Arc<ArtifactReadLifecycle>,
     pub(super) auth: AuthContext,
@@ -249,6 +267,8 @@ pub(super) struct ReadOperationState {
     pub(super) original_deadline: Option<Instant>,
     closure_unproven: AtomicBool,
     jobs: AtomicUsize,
+    allocations: AtomicUsize,
+    shared: OnceLock<StoreReadEnrollment>,
     #[cfg(test)]
     pub(super) public_prepare_probe:
         Mutex<Option<Arc<super::artifact_read_authority::public_read_prepare::PublicPrepareProbe>>>,
@@ -283,9 +303,100 @@ impl ReadOperationState {
             original_deadline,
             closure_unproven: AtomicBool::new(false),
             jobs: AtomicUsize::new(0),
+            allocations: AtomicUsize::new(0),
+            shared: OnceLock::new(),
             #[cfg(test)]
             public_prepare_probe: Mutex::new(None),
         })
+    }
+
+    /// Register the same physical Store and original Entry port before any preparation await.
+    /// The data lock only serializes this one-time metadata enrollment, never IO or callbacks.
+    pub(super) fn enroll_store(
+        self: &Arc<Self>,
+        store: Arc<DatasetBoundArtifactStore>,
+        entry_stop: Option<Arc<dyn ArtifactReadEntryStop>>,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        let data = self
+            .data
+            .try_lock()
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        if self.shared.get().is_some() || data.phase != ReadPhase::Idle {
+            return Err(ArtifactReadCurrentError::Unavailable);
+        }
+        let enrollment = store
+            .enroll_read(self, &self.artifact_id, entry_stop)
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        self.shared
+            .set(enrollment)
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        Ok(())
+    }
+
+    pub(super) fn bind_observed_record(
+        &self,
+        record: &ObservedArtifactReadRecord,
+    ) -> Result<(), ArtifactReadCurrentError> {
+        self.shared
+            .get()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?
+            .bind_observed_record(record)
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)
+    }
+
+    /// Only physical workers use this check. No-body host/source classification may still run.
+    pub(super) fn body_is_admitted(&self) -> Result<(), ArtifactReadCurrentError> {
+        self.shared
+            .get()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?
+            .body_is_admitted()
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)
+    }
+
+    pub(super) fn begin_query(
+        self: &Arc<Self>,
+    ) -> Result<ReadQueryReservation, ArtifactReadCurrentError> {
+        let lease = self
+            .shared
+            .get()
+            .ok_or(ArtifactReadCurrentError::Unavailable)?
+            .begin_query()
+            .map_err(|_| ArtifactReadCurrentError::Unavailable)?;
+        Ok(ReadQueryReservation {
+            state: Arc::clone(self),
+            lease: Some(lease),
+        })
+    }
+
+    fn notify_shared_changed(&self) {
+        if let Some(shared) = self.shared.get() {
+            shared.notify_changed();
+        }
+    }
+
+    /// A finite proof from real operation owners, not the old instance-wide ACK/count alone.
+    pub(crate) fn shared_inventory_drained(&self) -> Result<bool, ArtifactReadDrainError> {
+        if self.closure_unproven.load(Ordering::SeqCst)
+            || self.lifecycle.unavailable.load(Ordering::SeqCst)
+        {
+            return Err(ArtifactReadDrainError::Unavailable);
+        }
+        let data = match self.data.try_lock() {
+            Ok(data) => data,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(ArtifactReadDrainError::Unavailable);
+            }
+        };
+        // Legacy raw Vec has no allocation-release receipt. Its coupled target/FD and actual
+        // worker are separately retained; only the new leased path uses these phase witnesses.
+        let phase_closed = self.original_deadline.is_none() || data.phase == ReadPhase::Terminal;
+        Ok(self.stopped.load(Ordering::SeqCst)
+            && self.jobs.load(Ordering::SeqCst) == 0
+            && self.allocations.load(Ordering::SeqCst) == 0
+            && data.reader.is_none()
+            && data.resource.is_none()
+            && phase_closed)
     }
     pub(super) fn begin(&self) -> Result<(), ArtifactReadCurrentError> {
         let mut data = self
@@ -305,6 +416,10 @@ impl ReadOperationState {
             || self
                 .original_deadline
                 .is_some_and(|deadline| Instant::now() >= deadline)
+            || self
+                .shared
+                .get()
+                .is_some_and(StoreReadEnrollment::original_admission_closed)
     }
     pub(super) fn check_current(&self) -> Result<(), ArtifactReadCurrentError> {
         if self.is_stopped() {
@@ -314,11 +429,12 @@ impl ReadOperationState {
         }
     }
     pub(super) fn mark_closure_unproven(&self) {
-        if self.original_deadline.is_some() {
-            self.closure_unproven.store(true, Ordering::SeqCst);
-            self.stopped.store(true, Ordering::SeqCst);
-            self.lifecycle.changed.notify_waiters();
+        self.closure_unproven.store(true, Ordering::SeqCst);
+        self.stopped.store(true, Ordering::SeqCst);
+        if let Some(shared) = self.shared.get() {
+            shared.mark_unproven();
         }
+        self.lifecycle.changed.notify_waiters();
     }
     pub(super) fn joint_deadline(&self) -> Result<Instant, ArtifactReadCurrentError> {
         self.check_current()?;
@@ -372,11 +488,19 @@ impl ReadOperationState {
             && data.reader.is_none()
             && data.resource.is_none())
     }
-    pub(super) fn close(&self) {
+    pub(crate) fn close(&self) {
+        if self
+            .shared
+            .get()
+            .is_some_and(StoreReadEnrollment::mark_waiter_cancellation)
+        {
+            self.closure_unproven.store(true, Ordering::SeqCst);
+        }
         self.stopped.store(true, Ordering::SeqCst);
         if self.original_deadline.is_some() {
             self.try_close_idle();
             self.lifecycle.changed.notify_waiters();
+            self.notify_shared_changed();
             return;
         }
         // This private data lock never crosses body IO or await; its physical tail is bounded
@@ -395,6 +519,7 @@ impl ReadOperationState {
             }
         }
         self.lifecycle.changed.notify_waiters();
+        self.notify_shared_changed();
     }
     pub(super) fn finish_failed(&self) {
         self.stopped.store(true, Ordering::SeqCst);
@@ -406,6 +531,29 @@ impl ReadOperationState {
             self.lifecycle.unavailable.store(true, Ordering::SeqCst);
         }
         self.lifecycle.changed.notify_waiters();
+        self.notify_shared_changed();
+    }
+}
+
+/// The same original schema/PG future. Only a real original rollback ACK may consume it.
+pub(super) struct ReadQueryReservation {
+    state: Arc<ReadOperationState>,
+    lease: Option<StoreReadQueryLease>,
+}
+impl ReadQueryReservation {
+    pub(super) fn complete(mut self) {
+        if let Some(lease) = self.lease.take() {
+            lease.complete();
+        }
+    }
+}
+impl Drop for ReadQueryReservation {
+    fn drop(&mut self) {
+        if self.lease.is_some() {
+            // This persists on the original Store/key even with no public total deadline.
+            self.state.mark_closure_unproven();
+        }
+        drop(self.lease.take());
     }
 }
 
@@ -452,6 +600,9 @@ impl Drop for ReadOperationState {
             drop(data.resource.take());
         } else {
             self.lifecycle.unavailable.store(true, Ordering::SeqCst);
+            if let Some(shared) = self.shared.get() {
+                shared.mark_unproven();
+            }
         }
     }
 }
@@ -461,6 +612,7 @@ pub(super) struct AllocationLease {
 }
 impl AllocationLease {
     pub(super) fn new(state: Arc<ReadOperationState>) -> Self {
+        state.allocations.fetch_add(1, Ordering::SeqCst);
         Self {
             state,
             handed_off: AtomicBool::new(false),
@@ -500,6 +652,9 @@ impl Drop for AllocationLease {
                 .store(true, Ordering::SeqCst);
         }
         self.state.lifecycle.changed.notify_waiters();
+        // Existing pending/leased RAII wipes and ends the full allocation before this Drop.
+        self.state.allocations.fetch_sub(1, Ordering::SeqCst);
+        self.state.notify_shared_changed();
     }
 }
 pub(super) struct PendingReadOwnership {
@@ -544,12 +699,34 @@ impl ArtifactReadOperation for LifecycleReadOperation {
             self.state.close();
             return Err(AppError::Unauthenticated);
         }
-        let job = if self.state.original_deadline.is_some() {
-            self.state.lifecycle.admit_operation(&self.state)?
-        } else {
-            self.state.lifecycle.admit(&self.state.stopped)?
+        let job = match self.state.lifecycle.admit_operation(&self.state) {
+            Ok(job) => job,
+            Err(error) => {
+                if self.state.body_is_admitted().is_err() {
+                    self.state
+                        .authority
+                        .classify_requested_refusal(&self.state)
+                        .await?;
+                }
+                return Err(error.into());
+            }
         };
-        self.state.begin()?;
+        // Freeze this original phase/overall deadline while the admitted State is still idle.
+        let receive_deadline = if self.state.original_deadline.is_some() {
+            Some(self.state.joint_deadline()?)
+        } else {
+            None
+        };
+        if let Err(error) = self.state.begin() {
+            drop(job);
+            if self.state.body_is_admitted().is_err() {
+                self.state
+                    .authority
+                    .classify_requested_refusal(&self.state)
+                    .await?;
+            }
+            return Err(error.into());
+        }
         let state = Arc::clone(&self.state);
         let dispatcher = tracing::dispatcher::get_default(Clone::clone);
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -569,8 +746,7 @@ impl ArtifactReadOperation for LifecycleReadOperation {
             state: Arc::clone(&self.state),
             completed: false,
         };
-        let result = if self.state.original_deadline.is_some() {
-            let deadline = self.state.joint_deadline()?;
+        let result = if let Some(deadline) = receive_deadline {
             tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), receiver)
                 .await
                 .map_err(|_| operation_unavailable())?
@@ -578,8 +754,15 @@ impl ArtifactReadOperation for LifecycleReadOperation {
         } else {
             receiver.await.map_err(|_| operation_unavailable())?
         };
-        if self.state.original_deadline.is_some() {
-            self.state.check_current()?;
+        if let Some(deadline) = receive_deadline {
+            if Instant::now() >= deadline {
+                return Err(operation_unavailable());
+            }
+            // finish_failed stops this original owner before sending its classified error.
+            // Only successful data may use stopped/body-admission state as an additional tail.
+            if result.is_ok() {
+                self.state.check_current()?;
+            }
         }
         attempt.completed = true;
         result

@@ -98,6 +98,8 @@ impl AuditEventType {
     pub const MEMORY_EFFECT_COMMITTED: Self = Self("memory.effect_committed");
     /// One artifact registration and its content-free receipt committed together.
     pub const ARTIFACT_SAVED: Self = Self("artifact.saved");
+    /// The current original saved owner durably armed one cleanup intent.
+    pub const ARTIFACT_CLEANUP_ARMED: Self = Self("artifact.cleanup_armed");
     /// Explicit remember tool finished with a definite non-success outcome.
     pub const MEMORY_REMEMBER_FAILED: Self = Self("memory.remember_failed");
     /// Human proof-of-intent request became durable.
@@ -168,7 +170,7 @@ impl fmt::Display for AuditEventType {
     }
 }
 
-/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt/artifact 22 项。
+/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt/artifact 23 项。
 ///
 /// 顺序也照抄上游，方便逐行对拍。
 pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
@@ -192,6 +194,7 @@ pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
     AuditEventType("memory.remember_succeeded"),
     AuditEventType("memory.effect_committed"),
     AuditEventType("artifact.saved"),
+    AuditEventType("artifact.cleanup_armed"),
     AuditEventType("memory.remember_failed"),
     AuditEventType("tool.approval_requested"),
     AuditEventType("tool.approval_granted"),
@@ -311,10 +314,10 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn catalog_is_upstream_fifty_seven_plus_twenty_two_new_and_has_no_duplicates() {
-        assert_eq!(AUDIT_EVENT_TYPES.len(), 79);
+    fn catalog_is_upstream_fifty_seven_plus_twenty_three_new_and_has_no_duplicates() {
+        assert_eq!(AUDIT_EVENT_TYPES.len(), 80);
         let unique: BTreeSet<&str> = AUDIT_EVENT_TYPES.iter().map(|t| t.0).collect();
-        assert_eq!(unique.len(), 79, "目录里有重复的事件类型");
+        assert_eq!(unique.len(), 80, "目录里有重复的事件类型");
     }
 
     #[test]
@@ -344,6 +347,7 @@ mod tests {
             AuditEventType::MEMORY_REMEMBER_SUCCEEDED,
             AuditEventType::MEMORY_EFFECT_COMMITTED,
             AuditEventType::ARTIFACT_SAVED,
+            AuditEventType::ARTIFACT_CLEANUP_ARMED,
             AuditEventType::MEMORY_REMEMBER_FAILED,
             AuditEventType::COMPONENT_HUMAN_REQUESTED,
             AuditEventType::COMPONENT_HUMAN_ANSWERED,

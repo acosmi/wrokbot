@@ -238,6 +238,62 @@ mod tests;
 
 #[cfg(feature = "desktop-local-runtime")]
 impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAuthority {
+    fn borrow_artifact_cleanup_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn openbot_contracts::request_binding::ArtifactCleanupHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<
+        openbot_contracts::request_binding::ArtifactCleanupHostObservation<'a>,
+        openbot_contracts::HostRequestBindingError,
+    > {
+        use openbot_contracts::request_binding::{
+            ArtifactCleanupHostObservation, HostRequestBindingError, HostRequestBindingKind,
+        };
+        let installation = self.installation.auth_context();
+        if !auth.is_single_user()
+            || auth.deployment() != installation.deployment()
+            || auth.tenant() != installation.tenant()
+            || auth.actor() != installation.actor()
+            || auth.roles() != installation.roles()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let authority = self
+            .artifact_read_authority
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !authority.matches_pool_scope(
+            &self.pool,
+            installation.deployment(),
+            installation.tenant(),
+        ) || !authority.matches_cleanup_host_target(target, auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if binding.kind() != HostRequestBindingKind::DesktopWindow {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let factory = LocalArtifactCleanupTail {
+            authority: std::sync::Arc::downgrade(&authority),
+            pool: self.pool.clone(),
+            installation: self.installation.clone(),
+            original: auth.clone(),
+        };
+        openbot_contracts::request_binding::ArtifactCleanupHostTailWitness::verify_current(
+            &factory, auth, deadline,
+        )?;
+        ArtifactCleanupHostObservation::from_trusted_host(
+            HostRequestBindingKind::DesktopWindow,
+            binding.identity().clone(),
+            None,
+            Box::new(factory),
+        )
+    }
     fn borrow_remember_preference_host_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -500,6 +556,78 @@ impl openbot_contracts::request_binding::RememberPreferenceHostTailWitness
             .ok_or(HostRequestBindingError::NotCurrent)?;
         let installation = self.installation.auth_context();
         if !repository.matches_pool_scope(
+            &self.pool,
+            installation.deployment(),
+            installation.tenant(),
+        ) {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "desktop-local-runtime")]
+#[derive(Clone)]
+struct LocalArtifactCleanupTail {
+    authority:
+        std::sync::Weak<openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority>,
+    pool: openbot_infra::db::pool::DatabasePool,
+    installation: openbot_infra::auth::single_user::desktop_local::DesktopLocalAuthority,
+    original: AuthContext,
+}
+#[cfg(feature = "desktop-local-runtime")]
+impl openbot_contracts::request_binding::ArtifactCleanupHostTailFactory
+    for LocalArtifactCleanupTail
+{
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<openbot_contracts::request_binding::ArtifactCleanupSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<
+        Box<dyn openbot_contracts::request_binding::ArtifactCleanupHostTailWitness>,
+        openbot_contracts::HostRequestBindingError,
+    > {
+        if session.is_some() {
+            return Err(openbot_contracts::HostRequestBindingError::NotCurrent);
+        }
+        openbot_contracts::request_binding::ArtifactCleanupHostTailWitness::verify_current(
+            self, auth, deadline,
+        )?;
+        Ok(Box::new(self.clone()))
+    }
+}
+#[cfg(feature = "desktop-local-runtime")]
+impl openbot_contracts::request_binding::ArtifactCleanupHostTailWitness
+    for LocalArtifactCleanupTail
+{
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), openbot_contracts::HostRequestBindingError> {
+        use openbot_contracts::request_binding::{HostRequestBindingError, HostRequestBindingKind};
+        if auth != &self.original
+            || !self
+                .original
+                .request_binding()
+                .zip(auth.request_binding())
+                .is_some_and(|(a, b)| {
+                    a.identity().same_binding(b.identity())
+                        && b.kind() == HostRequestBindingKind::DesktopWindow
+                })
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let authority = self
+            .authority
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let installation = self.installation.auth_context();
+        if !authority.matches_pool_scope(
             &self.pool,
             installation.deployment(),
             installation.tenant(),

@@ -63,9 +63,11 @@ use openbot_contracts::reconciliation::{
 };
 use openbot_contracts::remote_interrupt::{RemoteInterruptAnswer, RemoteInterruptResolved};
 use openbot_contracts::request_binding::{
-    ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadTailWitness,
-    HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingIdentity,
-    HostRequestBindingKind, RememberPreferenceHostObservation, RememberPreferenceHostTailFactory,
+    ArtifactCleanupHostObservation, ArtifactCleanupHostTailFactory, ArtifactCleanupHostTailWitness,
+    ArtifactCleanupHostTarget, ArtifactCleanupSessionFacts, ArtifactReadCurrentError,
+    ArtifactReadCurrentTarget, ArtifactReadTailWitness, HostRequestBindingError,
+    HostRequestBindingGuard, HostRequestBindingIdentity, HostRequestBindingKind,
+    RememberPreferenceHostObservation, RememberPreferenceHostTailFactory,
     RememberPreferenceHostTailWitness, RememberPreferenceHostTarget,
     RememberPreferenceSessionFacts, RequestBindingIssuer, RequestBindingOwnerLease,
     RequestBindingOwnerObservation, SourceRunArtifactIdsCurrentCheck,
@@ -419,7 +421,7 @@ struct WindowRequestBindingGuard {
     upstream: Option<VerifiedHostRequestBinding>,
 }
 impl WindowRequestBindingGuard {
-    fn remember_preference_tail_source(&self) -> Self {
+    fn repository_tail_source(&self) -> Self {
         Self {
             registry: self.registry.clone(),
             owner: self.owner.clone(),
@@ -463,6 +465,54 @@ impl WindowRequestBindingGuard {
     }
 }
 impl HostRequestBindingGuard for WindowRequestBindingGuard {
+    fn borrow_artifact_cleanup_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn ArtifactCleanupHostTarget,
+        deadline: Instant,
+    ) -> Result<ArtifactCleanupHostObservation<'a>, HostRequestBindingError> {
+        self.check_window(auth)?;
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if !self
+            .issuer
+            .matches_desktop_window_epoch(binding.identity(), &self.label, self.id)
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        // The enrolled real Local source lends its actual artifact attachment. Its async
+        // current guard and an upstream Remote binding do not authorize this operation.
+        let source = self
+            .source
+            .as_ref()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let inner = source.borrow_artifact_cleanup_host_before(auth, target, deadline)?;
+        self.check_window(auth)?;
+        if inner.kind() != HostRequestBindingKind::DesktopWindow
+            || !inner.identity().same_binding(binding.identity())
+            || inner.server_session_epoch().is_some()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        ArtifactCleanupHostObservation::from_trusted_host(
+            HostRequestBindingKind::DesktopWindow,
+            binding.identity().clone(),
+            None,
+            Box::new(WindowArtifactCleanupTailFactory {
+                window: self.repository_tail_source(),
+                original: binding.identity().clone(),
+                inner,
+            }),
+        )
+    }
+
     fn borrow_remember_preference_host_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -504,7 +554,7 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
             binding.identity().clone(),
             None,
             Box::new(WindowRememberPreferenceTailFactory {
-                window: self.remember_preference_tail_source(),
+                window: self.repository_tail_source(),
                 original: binding.identity().clone(),
                 inner,
             }),
@@ -742,6 +792,73 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
 
 /// The actual window observation wraps the enrolled Local producer's synchronous tail.
 /// No host lease, database transaction or fresh time budget is created here.
+struct WindowArtifactCleanupTailFactory<'a> {
+    window: WindowRequestBindingGuard,
+    original: HostRequestBindingIdentity,
+    inner: ArtifactCleanupHostObservation<'a>,
+}
+impl ArtifactCleanupHostTailFactory for WindowArtifactCleanupTailFactory<'_> {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<ArtifactCleanupSessionFacts>,
+        deadline: Instant,
+    ) -> Result<Box<dyn ArtifactCleanupHostTailWitness>, HostRequestBindingError> {
+        self.window.check_window(auth)?;
+        if !auth
+            .request_binding()
+            .is_some_and(|binding| self.original.same_binding(binding.identity()))
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let inner = self.inner.witness(auth, session, deadline)?;
+        let witness = WindowArtifactCleanupTail {
+            window: self.window.repository_tail_source(),
+            original: self.original.clone(),
+            inner,
+        };
+        witness.verify_current(auth, deadline)?;
+        Ok(Box::new(witness))
+    }
+}
+
+struct WindowArtifactCleanupTail {
+    window: WindowRequestBindingGuard,
+    original: HostRequestBindingIdentity,
+    inner: Box<dyn ArtifactCleanupHostTailWitness>,
+}
+impl ArtifactCleanupHostTailWitness for WindowArtifactCleanupTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        self.window.check_window(auth)?;
+        if !auth.request_binding().is_some_and(|binding| {
+            self.original.same_binding(binding.identity())
+                && self.window.issuer.matches_desktop_window_epoch(
+                    binding.identity(),
+                    &self.window.label,
+                    self.window.id,
+                )
+        }) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        self.inner.verify_current(auth, deadline)?;
+        self.window.check_window(auth)?;
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        Ok(())
+    }
+}
+
 struct WindowRememberPreferenceTailFactory<'a> {
     window: WindowRequestBindingGuard,
     original: HostRequestBindingIdentity,
@@ -766,7 +883,7 @@ impl RememberPreferenceHostTailFactory for WindowRememberPreferenceTailFactory<'
         }
         let inner = self.inner.witness(auth, session, deadline)?;
         let witness = WindowRememberPreferenceTail {
-            window: self.window.remember_preference_tail_source(),
+            window: self.window.repository_tail_source(),
             original: self.original.clone(),
             inner,
         };

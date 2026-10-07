@@ -32,7 +32,8 @@ use uuid::Uuid;
 use crate::artifact_bytes::ArtifactBlob;
 use crate::artifact_registry::{ARTIFACT_REGISTRY_SCHEMA_SQL, ArtifactDatasetRegistry};
 use crate::artifact_store::{
-    ArtifactByteObservationState, DatasetBoundArtifactStore, VerifiedArtifactByteObservation,
+    ArtifactByteObservationState, ArtifactReadControlledBarrier, ArtifactStoreError,
+    DatasetBoundArtifactStore, VerifiedArtifactByteObservation,
 };
 use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 use crate::thread_directory::reconciliation_visibility::VISIBLE_RUN;
@@ -41,6 +42,10 @@ use crate::thread_directory::reconciliation_visibility::VISIBLE_RUN;
 pub mod artifact_read_authority;
 #[path = "artifact_read_lifecycle.rs"]
 pub mod artifact_read_lifecycle;
+
+#[path = "artifact_administration/cleanup_arm.rs"]
+mod cleanup_arm;
+pub use cleanup_arm::{ArmedArtifactCleanupIntent, ArtifactCleanupArmError};
 
 const WAIT: Duration = Duration::from_secs(5);
 const PG_PHASE: Duration = Duration::from_secs(30);
@@ -176,6 +181,20 @@ impl core::fmt::Debug for ObservedArtifactReadRecord {
 }
 
 impl ObservedArtifactReadRecord {
+    pub(crate) fn read_cleanup_key(&self) -> Result<ArtifactCleanupFenceKey, ArtifactStoreError> {
+        if !self.matches_store(&self.store) {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        ArtifactCleanupFenceKey::from_stored(
+            self.auth_snapshot.deployment().clone(),
+            self.auth_snapshot.tenant().clone(),
+            self.store.read_dataset_id(),
+            &self.source_snapshot.operation_id,
+            &self.source_snapshot.artifact_id,
+        )
+        .map_err(|_| ArtifactStoreError::BindingMismatch)
+    }
+
     pub(crate) fn matches_store(&self, store: &Arc<DatasetBoundArtifactStore>) -> bool {
         Arc::ptr_eq(&self.store, store)
             && self.source_snapshot.artifact_id == self.blob.id().to_string()
@@ -209,6 +228,30 @@ impl PublicReadRecordFailure {
 }
 
 impl PostgresArtifactAdministration {
+    /// Permanently close only this original Store's controlled read inventory.
+    /// This trusted Rust port grants no delete permission or physical cleanup proof.
+    ///
+    /// # Errors
+    /// Refuses a foreign or malformed original snapshot and unavailable shared inventory.
+    pub fn close_observed_artifact_reads(
+        self: &Arc<Self>,
+        record: &ObservedArtifactReadRecord,
+    ) -> Result<ArtifactReadControlledBarrier, ArtifactStoreError> {
+        if !record.matches_store(&self.store) || !self.store.matches_registry_owner(&self.registry)
+        {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        let key = record.read_cleanup_key()?;
+        let binding = self.registry.binding();
+        if key.deployment_id().as_str() != binding.deployment_id()
+            || key.tenant_id().as_str() != binding.tenant_id()
+            || key.dataset_id() != binding.dataset_id()
+        {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        self.store.close_artifact_reads(key)
+    }
+
     /// Compose actual current owners; a second Pool or caller-created transaction is not accepted.
     pub fn new(
         registry: Arc<ArtifactDatasetRegistry>,

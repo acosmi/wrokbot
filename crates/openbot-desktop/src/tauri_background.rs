@@ -996,6 +996,9 @@ pub(crate) struct PreparedDesktopLocalRuntime {
     application: Arc<dyn openbot_application::ApplicationService>,
     #[cfg(test)]
     pool: openbot_infra::db::pool::DatabasePool,
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+    pub(crate) artifact_administration:
+        Arc<openbot_infra::artifact_administration::PostgresArtifactAdministration>,
 }
 
 #[cfg(test)]
@@ -1733,6 +1736,8 @@ pub(crate) async fn prepare_desktop_local_runtime(
     };
     #[cfg(test)]
     let application = Arc::clone(&assembly.application);
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+    let artifact_administration_for_tests = Arc::clone(&artifact_administration);
     let owner: Box<dyn RuntimeShutdownOwner> = Box::new(DesktopLocalBackgroundOwner {
         lifecycle: Arc::clone(&lifecycle),
         transport,
@@ -1751,6 +1756,8 @@ pub(crate) async fn prepare_desktop_local_runtime(
         confirmation,
         #[cfg(test)]
         application,
+        #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+        artifact_administration: artifact_administration_for_tests,
         #[cfg(test)]
         pool: test_pool,
     })

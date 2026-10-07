@@ -31,6 +31,109 @@ pub enum HostRequestBindingError {
     Unavailable,
 }
 
+/// Dedicated cleanup invocation; neither selectors nor implementing this port grant authority.
+pub trait ArtifactCleanupHostTarget: Send + Sync {
+    /// Compare the actual enrolled artifact authority, independently of its namespace.
+    fn matches_authority(&self, authority: &Arc<()>) -> bool;
+    /// Compare all original Auth facts and the original attached request binding.
+    fn matches_auth(&self, auth: &AuthContext) -> bool;
+}
+
+/// Session timing facts decoded by the arm transaction's own fresh current statement.
+#[derive(Clone, Copy)]
+pub struct ArtifactCleanupSessionFacts {
+    /// Original immutable creation time read from the session row.
+    pub created_at: OffsetDateTime,
+    /// Current idle activity time, read without touching the session.
+    pub updated_at: OffsetDateTime,
+    /// Current expiry time read from the session row.
+    pub expires_at: OffsetDateTime,
+    /// Wall clock observed when the current row was decoded.
+    pub observed_wall: OffsetDateTime,
+    /// Monotonic clock observed when the current row was decoded.
+    pub observed_monotonic: std::time::Instant,
+}
+
+/// Synchronous original-host tail; it owns no lease and opens no database connection.
+pub trait ArtifactCleanupHostTailWitness: Send + Sync {
+    /// Recheck the original issuer, owner, window and clock within the original deadline.
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError>;
+}
+
+/// A real producer lends its own lifetime policy; arbitrary implementations are not enrollment.
+pub trait ArtifactCleanupHostTailFactory: Send + Sync {
+    /// Produce a synchronous tail from this same statement's actual session timing facts.
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<ArtifactCleanupSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn ArtifactCleanupHostTailWitness>, HostRequestBindingError>;
+}
+
+/// Borrowed original host input for one cleanup transaction; no Serde or secret Debug.
+pub struct ArtifactCleanupHostObservation<'a> {
+    kind: HostRequestBindingKind,
+    identity: HostRequestBindingIdentity,
+    epoch: Option<BorrowedServerSessionEpoch<'a>>,
+    factory: Box<dyn ArtifactCleanupHostTailFactory + 'a>,
+}
+impl<'a> ArtifactCleanupHostObservation<'a> {
+    /// Trusted Rust constructor; the caller must independently check actual enrollment.
+    #[doc(hidden)]
+    pub fn from_trusted_host(
+        kind: HostRequestBindingKind,
+        identity: HostRequestBindingIdentity,
+        epoch: Option<BorrowedServerSessionEpoch<'a>>,
+        factory: Box<dyn ArtifactCleanupHostTailFactory + 'a>,
+    ) -> Result<Self, HostRequestBindingError> {
+        if kind != identity.kind {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        match (&identity.epoch, &epoch) {
+            (Epoch::Session(original), Some(borrowed)) if original == borrowed.epoch => {}
+            (Epoch::SingleUser | Epoch::Window { .. }, None) => {}
+            _ => return Err(HostRequestBindingError::NotCurrent),
+        }
+        Ok(Self {
+            kind,
+            identity,
+            epoch,
+            factory,
+        })
+    }
+    /// Closed host kind, without a current permission grant.
+    #[must_use]
+    pub const fn kind(&self) -> HostRequestBindingKind {
+        self.kind
+    }
+    /// Original attachment, checked against the concrete enrolled artifact authority.
+    #[must_use]
+    pub const fn identity(&self) -> &HostRequestBindingIdentity {
+        &self.identity
+    }
+    /// Reborrow the original issuer-owned epoch, without minting or exposing its token.
+    #[must_use]
+    pub fn server_session_epoch(&self) -> Option<BorrowedServerSessionEpoch<'_>> {
+        self.epoch
+            .as_ref()
+            .map(|epoch| BorrowedServerSessionEpoch { epoch: epoch.epoch })
+    }
+    /// Construct the original host tail after the same arm transaction decoded a fresh row.
+    pub fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<ArtifactCleanupSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn ArtifactCleanupHostTailWitness>, HostRequestBindingError> {
+        self.factory.witness(auth, session, deadline)
+    }
+}
+
 /// Original internal repository invocation; implementing this port grants no authority.
 pub trait RememberPreferenceHostTarget: Send + Sync {
     /// Compare the concrete enrolled repository instance, independently of its namespace.
@@ -188,6 +291,15 @@ pub type ArtifactSaveReceiptCurrentCheck<'a> =
 
 /// 受信 Rust host 的当前验证 port；任意 Rust 实现不自动取得可信身份。
 pub trait HostRequestBindingGuard: Send + Sync {
+    /// Borrow the original enrolled cleanup host without I/O; unsupported hosts refuse.
+    fn borrow_artifact_cleanup_host_before<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+        _target: &'a dyn ArtifactCleanupHostTarget,
+        _deadline: std::time::Instant,
+    ) -> Result<ArtifactCleanupHostObservation<'a>, HostRequestBindingError> {
+        Err(HostRequestBindingError::Unavailable)
+    }
     /// Borrow original host input for an enrolled repository's own transaction, without I/O.
     fn borrow_remember_preference_host_before<'a>(
         &'a self,
@@ -461,6 +573,24 @@ pub struct VerifiedHostRequestBinding {
     guard: Arc<dyn HostRequestBindingGuard>,
 }
 impl VerifiedHostRequestBinding {
+    /// Pure attachment bookends around the dedicated real cleanup producer delegation.
+    pub fn borrow_artifact_cleanup_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn ArtifactCleanupHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<ArtifactCleanupHostObservation<'a>, HostRequestBindingError> {
+        self.check_repository_host_attachment(auth, deadline)?;
+        let observation = self
+            .guard
+            .borrow_artifact_cleanup_host_before(auth, target, deadline)?;
+        self.check_repository_host_attachment(auth, deadline)?;
+        if observation.kind() != self.kind() || !self.identity.same_binding(observation.identity())
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        Ok(observation)
+    }
     /// Pure attachment checks and real producer delegation; this opens no database transaction.
     pub fn borrow_remember_preference_host_before<'a>(
         &'a self,
@@ -468,18 +598,18 @@ impl VerifiedHostRequestBinding {
         target: &'a dyn RememberPreferenceHostTarget,
         deadline: std::time::Instant,
     ) -> Result<RememberPreferenceHostObservation<'a>, HostRequestBindingError> {
-        self.check_remember_preference_attachment(auth, deadline)?;
+        self.check_repository_host_attachment(auth, deadline)?;
         let observation = self
             .guard
             .borrow_remember_preference_host_before(auth, target, deadline)?;
-        self.check_remember_preference_attachment(auth, deadline)?;
+        self.check_repository_host_attachment(auth, deadline)?;
         if observation.kind() != self.kind() || !self.identity.same_binding(observation.identity())
         {
             return Err(HostRequestBindingError::NotCurrent);
         }
         Ok(observation)
     }
-    fn check_remember_preference_attachment(
+    fn check_repository_host_attachment(
         &self,
         auth: &AuthContext,
         deadline: std::time::Instant,
@@ -877,6 +1007,37 @@ impl VerifiedHostRequestBinding {
         self.check_source_run_artifact_ids_attachment(auth, deadline)?;
         witness.verify_current(auth, deadline)?;
         self.check_source_run_artifact_ids_attachment(auth, deadline)
+    }
+    /// Observe the original host/source for a control check without requiring a physical body.
+    /// The concrete guarded joint port retains every original unacknowledged query fact.
+    pub async fn verify_artifact_read_control_current_before(
+        &self,
+        auth: &AuthContext,
+        target: &dyn ArtifactReadCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError> {
+        self.check_artifact_read_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        let outcome = self
+            .guard
+            .verify_artifact_read_current_before(auth, target, deadline)
+            .await;
+        self.check_artifact_read_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        let witness = outcome?;
+        self.verify_artifact_read_control_tail(auth, witness.as_ref(), deadline)?;
+        Ok(Box::new(OriginalArtifactReadTail {
+            original: self.clone(),
+            witness,
+        }))
     }
     /// 执行实际原宿主与成果来源的最后联合观察；返回封闭同步见证而不是正文。
     pub async fn verify_artifact_read_current_before(

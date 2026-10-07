@@ -355,6 +355,11 @@ struct CleanupOriginalObserver {
     original: Arc<Observer>,
 }
 impl ArtifactReadPreparationObserver for CleanupOriginalObserver {
+    fn original_entry_stop(
+        &self,
+    ) -> Option<Arc<dyn openbot_application::artifact_read_protocol::ArtifactReadEntryStop>> {
+        self.downstream.original_entry_stop()
+    }
     fn enrolled(
         &self,
         completion: Arc<dyn ArtifactReadOperationCompletion>,
@@ -527,6 +532,221 @@ async fn public_prepare_cleanup_fence_refusal_keeps_original_io_accounting() {
             Ok(())
         }).await;
     }
+}
+
+#[cfg(target_os = "macos")]
+fn shared_prepare_owned_fds(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<u32>, String> {
+    use std::io::Read as _;
+    use std::os::unix::fs::MetadataExt as _;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        metadata.is_file() && metadata.nlink() == 1,
+        "owned FD oracle requires original regular inode",
+    )?;
+    let device = metadata.dev() & u64::from(u32::MAX);
+    let inode = metadata.ino();
+    let sample = || -> Result<std::collections::BTreeSet<u32>, String> {
+        let pid = std::process::id();
+        let mut child = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "own-PID lsof is unavailable (Unproven)".to_owned())?;
+        let stdout = child.stdout.take().ok_or("lsof stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("lsof stderr unavailable")?;
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let errors = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output.join();
+                let _ = errors.join();
+                return Err("own-PID lsof exceeded original five seconds (Unproven)".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let output = output
+            .join()
+            .map_err(|_| "lsof output worker panicked")?
+            .map_err(|error| error.to_string())?;
+        let errors = errors
+            .join()
+            .map_err(|_| "lsof error worker panicked")?
+            .map_err(|error| error.to_string())?;
+        require(
+            status.success()
+                && output.len() <= 65_536
+                && errors.len() <= 8_192
+                && output.ends_with(b"\n"),
+            "lsof incomplete/failed/truncated (Unproven)",
+        )?;
+        let text = std::str::from_utf8(&output).map_err(|_| "lsof output invalid (Unproven)")?;
+        let mut self_pid = false;
+        let mut fd = None;
+        let mut dev = None;
+        let mut ino = None;
+        let mut found = std::collections::BTreeSet::new();
+        for line in text.lines().chain(std::iter::once("f")) {
+            let (kind, value) = line
+                .split_at_checked(1)
+                .ok_or("lsof empty field (Unproven)")?;
+            match kind {
+                "p" => {
+                    require(
+                        value.parse::<u32>().ok() == Some(pid),
+                        "lsof observed another PID",
+                    )?;
+                    self_pid = true;
+                }
+                "f" => {
+                    if dev == Some(device) && ino == Some(inode) {
+                        found.insert(
+                            fd.ok_or("original inode has an ambiguous nonnumeric FD (Unproven)")?,
+                        );
+                    }
+                    fd = value.parse::<u32>().ok();
+                    dev = None;
+                    ino = None;
+                }
+                "D" => {
+                    dev = Some(
+                        if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16)
+                        } else {
+                            value.parse::<u64>()
+                        }
+                        .map_err(|_| "lsof device invalid (Unproven)")?,
+                    );
+                }
+                "i" => {
+                    ino = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "lsof inode invalid (Unproven)")?,
+                    );
+                }
+                _ => return Err("lsof unexpected field (Unproven)".to_owned()),
+            }
+        }
+        require(self_pid, "lsof self-PID field missing (Unproven)")?;
+        Ok(found)
+    };
+    let first = sample()?;
+    let second = sample()?;
+    require(
+        first == second,
+        "own original FD inventory was unstable (Unproven)",
+    )?;
+    Ok(first)
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL; actual Application cached first, weak Entry stop and original allocation"]
+async fn shared_read_barrier_stops_cached_first_without_another_request() {
+    use openbot_application::ApplicationService as _;
+    use openbot_contracts::artifact_read_protocol::{OpenArtifactRead, ReadArtifactReadBlock};
+    use openbot_contracts::command::{AppCommand, AppReply};
+    let tag = "shared-cached-first-stop";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        let mut f = Fixture::new(config).await?;
+        let saved = f.save().await?;
+        let record = f.administration.observe_read_record(&f.auth, &saved.artifact_id).await.map_err(|error| error.to_string())?;
+        let path = f.root.path.join("objects").join(&saved.artifact_id);
+        require(shared_prepare_owned_fds(&path)?.is_empty(), "cached-first original inode began with a live reader")?;
+        let probe = PublicPrepareProbe::new();
+        f.install_probe(probe.clone())?;
+        let original = Arc::new(Observer::default());
+        let application = openbot_application::OpenBotApplication::new(
+            crate::repo::channels::ChannelRepo::new(f.pool.clone()),
+        ).with_artifacts(Arc::new(CleanupObservedAdministration {
+            actual: f.administration.clone(), original: original.clone(),
+        }));
+        let reply = application.execute(f.auth.clone(), AppCommand::OpenArtifactRead(OpenArtifactRead {
+            artifact_id: saved.artifact_id.clone(),
+        })).await.map_err(|error| error.to_string())?;
+        let opened = match &reply {
+            AppReply::ArtifactReadOpened(opened) => opened.clone(),
+            _ => return Err("real shared Open returned another control".to_owned()),
+        };
+        let control = application.take_artifact_read_control_delivery(f.auth.clone(), reply).map_err(|error| error.to_string())?;
+        control.verify_current_tail(&f.auth).map_err(|error| error.to_string())?;
+        drop(control);
+        let state = Fixture::state(&probe)?;
+        let completion = original.actual()?;
+        Fixture::wait_collector_tail(&state).await?;
+        let outcome = async {
+            let before = cleanup_prepare_facts(&f).await?;
+            let sha_segments = probe.sha_segments.load(Ordering::SeqCst);
+            let prefix = probe.prefix.lock().map_err(|_| "original prefix probe poisoned")?.clone();
+            require(sha_segments == f.source.len().div_ceil(64 * 1024) && prefix.as_ref().is_some_and(|value|
+                *value == (4 * 1024 * 1024, 4 * 1024 * 1024, Sha256Digest::of(&f.source.as_bytes()[..4 * 1024 * 1024]).to_hex())),
+                "cached first did not perform exactly its original full SHA and prefix")?;
+            {
+                let data = state.data.lock().map_err(|_| "original cached State poisoned")?;
+                require(data.phase == ReadPhase::Pending && data.reader.is_some() && data.resource.is_some() && state.actual_jobs() == 0,
+                    "Open did not retain the original cached first allocation and reader")?;
+            }
+            let original_fds = shared_prepare_owned_fds(&path)?;
+            require(original_fds.len() == 1, "actual cached first did not retain exactly its original FD")?;
+            let barrier = f.administration.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+            // No Next, explicit Close, completion.close or lifecycle.close runs before this ACK.
+            let ack = barrier.drain_before(Instant::now() + Duration::from_secs(3)).await.map_err(|error| format!("{error:?}"))?;
+            require(shared_prepare_owned_fds(&path)?.is_empty(), "weak Entry stop did not actually close the cached original FD")?;
+            {
+                let data = state.data.lock().map_err(|_| "closed original State poisoned")?;
+                require(data.phase == ReadPhase::Terminal && data.reader.is_none() && data.resource.is_none() && state.actual_jobs() == 0,
+                    "shared cached ACK did not follow actual original owner release")?;
+            }
+            require(probe.sha_segments.load(Ordering::SeqCst) == sha_segments
+                && *probe.prefix.lock().map_err(|_| "original prefix probe poisoned")? == prefix,
+                "proactive shared stop reopened, rehashed or reread cached bytes")?;
+            require(before == cleanup_prepare_facts(&f).await? && path.is_file(),
+                "shared cached stop changed business/fence facts or deleted the object")?;
+            // Only after actual proactive drain, exercise the old locator refusal.
+            let input = ReadArtifactReadBlock { handle_id: opened.handle_id.clone(), sequence: 0 };
+            require(application.execute(f.auth.clone(), AppCommand::ReadArtifactReadBlock(input.clone())).await.is_err()
+                && application.take_artifact_read_delivery(f.auth.clone(), input).is_err(),
+                "the stopped cached first still yielded a body")?;
+            drop(ack); drop(barrier);
+            eprintln!("ARTIFACT_SHARED_CACHED no_next_before_ack=true weak_entry_stop=true original_allocation_drop=true original_fd_absent=true original_sha_prefix_unchanged=true object_retained=true core_guard_only=true");
+            Ok::<_, String>(())
+        }.await;
+        let closed = application.close_public_artifact_reads();
+        completion.close();
+        let completed = completion.drain_before(Instant::now() + Duration::from_secs(3)).await;
+        let lifecycle = f.authority.read_lifecycle(); lifecycle.close();
+        let drained = lifecycle.drain_before(Instant::now() + Duration::from_secs(3)).await;
+        drop(application); drop(original); drop(completion); drop(state); drop(probe); drop(record);
+        let observations = f.pool.connection_observations(); f.pool.close();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        for original in observations {
+            require(original.wait_for_destruction_before(deadline).await.map_err(|error| error.to_string())?
+                == pool::ConnectionDestruction::ConnectionDestroyed,
+                "cached-first original connection did not actually destruct")?;
+        }
+        outcome?; closed.map_err(|error| error.to_string())?; completed.map_err(|error| error.to_string())?;
+        drained.map_err(|error| format!("{error:?}"))?;
+        f.root.allow_cleanup_after_actual_completions();
+        Ok(())
+    }).await;
 }
 
 fn lifetime() -> SessionLifetimePolicy {

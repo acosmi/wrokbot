@@ -53,6 +53,126 @@ const OWNER: &str = "read-owner";
 const OTHER: &str = "read-other";
 const EXACT: &str = "  PRIVATE_READ_SOURCE_CANARY\n成果 café 🦀\t  ";
 
+#[cfg(target_os = "macos")]
+fn shared_pg_owned_fds(path: &std::path::Path) -> Result<std::collections::BTreeSet<u32>, String> {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        metadata.is_file() && metadata.nlink() == 1,
+        "owned FD oracle requires original regular inode",
+    )?;
+    let device = metadata.dev() & u64::from(u32::MAX);
+    let inode = metadata.ino();
+    let sample = || -> Result<std::collections::BTreeSet<u32>, String> {
+        let pid = std::process::id();
+        let mut child = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "own-PID lsof is unavailable (Unproven)".to_owned())?;
+        let stdout = child.stdout.take().ok_or("lsof stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("lsof stderr unavailable")?;
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let errors = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output.join();
+                let _ = errors.join();
+                return Err("own-PID lsof exceeded original five seconds (Unproven)".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let output = output
+            .join()
+            .map_err(|_| "lsof output worker panicked")?
+            .map_err(|error| error.to_string())?;
+        let errors = errors
+            .join()
+            .map_err(|_| "lsof error worker panicked")?
+            .map_err(|error| error.to_string())?;
+        require(
+            status.success()
+                && output.len() <= 65_536
+                && errors.len() <= 8_192
+                && output.ends_with(b"\n"),
+            "lsof incomplete/failed/truncated (Unproven)",
+        )?;
+        let text = std::str::from_utf8(&output).map_err(|_| "lsof output invalid (Unproven)")?;
+        let mut self_pid = false;
+        let mut fd = None;
+        let mut dev = None;
+        let mut ino = None;
+        let mut found = std::collections::BTreeSet::new();
+        for line in text.lines().chain(std::iter::once("f")) {
+            let (kind, value) = line
+                .split_at_checked(1)
+                .ok_or("lsof empty field (Unproven)")?;
+            match kind {
+                "p" => {
+                    require(
+                        value.parse::<u32>().ok() == Some(pid),
+                        "lsof observed another PID",
+                    )?;
+                    self_pid = true;
+                }
+                "f" => {
+                    if dev == Some(device) && ino == Some(inode) {
+                        found.insert(
+                            fd.ok_or("original inode has an ambiguous nonnumeric FD (Unproven)")?,
+                        );
+                    }
+                    fd = value.parse::<u32>().ok();
+                    dev = None;
+                    ino = None;
+                }
+                "D" => {
+                    dev = Some(
+                        if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16)
+                        } else {
+                            value.parse::<u64>()
+                        }
+                        .map_err(|_| "lsof device invalid (Unproven)")?,
+                    );
+                }
+                "i" => {
+                    ino = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "lsof inode invalid (Unproven)")?,
+                    );
+                }
+                _ => return Err("lsof unexpected field (Unproven)".to_owned()),
+            }
+        }
+        require(self_pid, "lsof self-PID field missing (Unproven)")?;
+        Ok(found)
+    };
+    let first = sample()?;
+    let second = sample()?;
+    require(
+        first == second,
+        "own original FD inventory was unstable (Unproven)",
+    )?;
+    Ok(first)
+}
+
 // Controlled fences below are database inputs to the actual reader. They do not constitute
 // cleanup authorization, physical deletion, directory sync, refund or producer acceptance.
 const CLEANUP_CONSUMER_FACTS: &str = "SELECT jsonb_build_object( \
@@ -712,6 +832,840 @@ async fn reader_cleanup_schema_original_deadline_wait_does_not_become_reusable()
     .await;
 }
 
+// These counters observe actual producer traces. PG waiting and ACK are proved separately
+// by the exact original connection, Lock/PID, controller and selected backend ROLLBACK frame.
+#[derive(Default)]
+struct SharedPgReadPhases {
+    io: AtomicUsize,
+    joint: AtomicUsize,
+    segments: AtomicUsize,
+}
+impl SharedPgReadPhases {
+    fn counts(&self) -> (usize, usize, usize) {
+        (
+            self.io.load(Ordering::SeqCst),
+            self.joint.load(Ordering::SeqCst),
+            self.segments.load(Ordering::SeqCst),
+        )
+    }
+}
+struct SharedPgPhaseVisitor {
+    io: bool,
+    joint: bool,
+    segment: bool,
+}
+impl tracing::field::Visit for SharedPgPhaseVisitor {
+    fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        match (field.name(), value) {
+            ("artifact_read_phase", "actual_io_completed_before_joint") => self.io = true,
+            ("artifact_read_phase", "joint_statement_ready") => self.joint = true,
+            ("artifact_read_lifecycle_phase", "physical_segment_completed_before_more_io") => {
+                self.segment = true
+            }
+            _ => {}
+        }
+    }
+}
+struct SharedPgPhaseSubscriber(Arc<SharedPgReadPhases>);
+impl tracing::Subscriber for SharedPgPhaseSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut visitor = SharedPgPhaseVisitor {
+            io: false,
+            joint: false,
+            segment: false,
+        };
+        event.record(&mut visitor);
+        if visitor.io {
+            self.0.io.fetch_add(1, Ordering::SeqCst);
+        }
+        if visitor.joint {
+            self.0.joint.fetch_add(1, Ordering::SeqCst);
+        }
+        if visitor.segment {
+            self.0.segments.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+async fn shared_pg_original_probe(
+    f: &Fixture,
+    controller_pid: i32,
+    observer_pid: i32,
+) -> Result<
+    (
+        Vec<pool::PooledClient>,
+        pool::PooledClient,
+        i32,
+        pool::ConnectionObservation,
+    ),
+    String,
+> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut held = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+        let mut held = Vec::new();
+        for _ in 0..8 {
+            held.push(f.pool.get().await.map_err(|error| error.to_string())?);
+        }
+        Ok::<_, String>(held)
+    })
+    .await
+    .map_err(|_| "shared original max8 checkout did not finish")??;
+    let mut pids = std::collections::BTreeSet::new();
+    for client in &held {
+        let pid: i32 = client
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .map_err(|error| error.to_string())?
+            .get(0);
+        pids.insert(pid);
+    }
+    require(
+        pids.len() == 8
+            && !pids.contains(&controller_pid)
+            && !pids.contains(&observer_pid)
+            && controller_pid != observer_pid
+            && f.pool.status().available == 0
+            && f.pool.connection_observations().len() == 8,
+        "shared original reader leases and independent controllers were not exclusive actual owners",
+    )?;
+    let probe = held.pop().ok_or("original eighth shared probe missing")?;
+    let pid = probe
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    let observation = probe.observation();
+    require(
+        observation.snapshot().connection_started && !observation.snapshot().retirement_requested,
+        "shared original probe did not retain a started original connection",
+    )?;
+    // Reuse the registered Task016 exact-probe disconnect control; no production setting.
+    probe
+        .batch_execute("SET client_connection_check_interval='10ms'")
+        .await
+        .map_err(|error| error.to_string())?;
+    let actual: String = probe
+        .query_one(
+            "SELECT current_setting('client_connection_check_interval')",
+            &[],
+        )
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    require(
+        actual == "10ms",
+        "shared original probe disconnect control was not actually set",
+    )?;
+    Ok((held, probe, pid, observation))
+}
+
+async fn shared_pg_final_lock(
+    observer: &tokio_postgres::Client,
+    controller_pid: i32,
+    original_pid: i32,
+    deadline: Instant,
+) -> Result<(), String> {
+    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+        loop {
+            let rows = observer.query(
+                "SELECT a.pid FROM pg_catalog.pg_stat_activity a WHERE a.datname=current_database() \
+                 AND a.state='active' AND a.wait_event_type='Lock' AND a.pid<>pg_backend_pid() \
+                 AND $1=ANY(pg_catalog.pg_blocking_pids(a.pid)) \
+                 AND a.query LIKE '/* artifact_current_host_joint_read_after_io */ %'", &[&controller_pid],
+            ).await.map_err(|error| error.to_string())?;
+            if !rows.is_empty() {
+                require(rows.len() == 1 && rows[0].get::<_, i32>(0) == original_pid,
+                    "actual shared final Lock/PID did not uniquely belong to the original held connection")?;
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }).await.map_err(|_| "actual shared final statement Lock/PID was not observed".to_owned())?
+}
+
+async fn shared_pg_destroy_pool(pool: &Pool) -> Result<(), String> {
+    let observations = pool.connection_observations();
+    pool.close();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    for original in observations {
+        require(
+            original
+                .wait_for_destruction_before(deadline)
+                .await
+                .map_err(|error| error.to_string())?
+                == pool::ConnectionDestruction::ConnectionDestroyed,
+            "shared PG original connection did not actually destruct",
+        )?;
+    }
+    Ok(())
+}
+
+async fn shared_pg_other_key_remains_readable(f: &Fixture, id: &str) -> Result<(), String> {
+    let auth = f.auth();
+    let bytes = f
+        .administration
+        .read_host_bound_chunk(&auth, id)
+        .await
+        .map_err(|error| error.to_string())?
+        .handoff(&auth)
+        .map_err(|error| error.to_string())?;
+    require(
+        bytes == EXACT.as_bytes(),
+        "original unproved key polluted a different actual Save",
+    )?;
+    drop(bytes); // This already transferred legacy Vec is outside controlled allocation scope.
+    Ok(())
+}
+
+async fn shared_pg_closed_read_is_denied(
+    f: &Fixture,
+    id: &str,
+    phases: &Arc<SharedPgReadPhases>,
+) -> Result<(), String> {
+    let before = phases.counts();
+    let dispatch = tracing::Dispatch::new(SharedPgPhaseSubscriber(phases.clone()));
+    let denied = f
+        .administration
+        .read_host_bound_chunk(&f.auth(), id)
+        .with_subscriber(dispatch)
+        .await
+        .is_err();
+    require(
+        denied && phases.counts().0 == before.0 && phases.counts().2 == before.2,
+        "closed original shared key delivered bytes or admitted another actual body IO",
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SharedPgFinalLeg {
+    ReleasedAck,
+    DroppedAck,
+    OriginalDeadline,
+}
+
+#[cfg(target_os = "macos")]
+async fn shared_pg_final_leg(config: DatabaseConfig, leg: SharedPgFinalLeg) -> Result<(), String> {
+    let external = pool::connect(&config.clone().with_max_pool_size(2))
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut proxy = RollbackAckProxy::start(config.host.clone(), config.port).await?;
+    let mut proxied = config;
+    proxied.host = "127.0.0.1".to_owned();
+    proxied.port = proxy.port;
+    let f = Fixture::new(proxied, false).await?;
+    let saved = f.save().await?;
+    let saved_b = f.save().await?;
+    require(
+        saved.artifact_id != saved_b.artifact_id && saved.operation_id != saved_b.operation_id,
+        "shared PG other key was not a different actual Save",
+    )?;
+    let record = f
+        .observe(&saved.artifact_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let path = f.root.0.join("objects").join(&saved.artifact_id);
+    let mut controller = external.get().await.map_err(|error| error.to_string())?;
+    let observer = external.get().await.map_err(|error| error.to_string())?;
+    let controller_pid: i32 = controller
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    let observer_pid: i32 = observer
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    let before = cleanup_consumer_facts_on(&observer).await?;
+    let (held, probe, original_pid, original_observation) =
+        shared_pg_original_probe(&f, controller_pid, observer_pid).await?;
+    drop(probe); // With seven original leases held, only this exact connection can serve the read.
+    let phases = Arc::new(SharedPgReadPhases::default());
+    let dispatch = tracing::Dispatch::new(SharedPgPhaseSubscriber(phases.clone()));
+    let (reached, reached_rx) = tokio::sync::oneshot::channel();
+    let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
+    *f.administration
+        .read_authority()
+        .final_query_gate
+        .lock()
+        .map_err(|_| "shared final gate poisoned")? = Some((reached, proceed_rx));
+    let administration = f.administration.clone();
+    let auth = f.auth();
+    let id = saved.artifact_id.clone();
+    let mut task = Some(tokio::spawn(
+        async move { administration.read_host_bound_chunk(&auth, &id).await }
+            .with_subscriber(dispatch),
+    ));
+    let mut proceed = Some(proceed);
+    let mut transaction = Some(
+        controller
+            .transaction()
+            .await
+            .map_err(|error| error.to_string())?,
+    );
+    let mut held_ack = None;
+    let attempted = async {
+        tokio::time::timeout(Duration::from_secs(2), reached_rx).await.map_err(|_| "shared original after-IO gate timed out")?
+            .map_err(|_| "shared original after-IO gate closed")?;
+        let phases_after_io = phases.counts();
+        require(phases_after_io.0 == 1 && phases_after_io.2 == 0 && shared_pg_owned_fds(&path)?.len() == 1,
+            "shared final fixture did not complete its actual original IO/full allocation and retain the FD")?;
+        transaction.as_ref().unwrap().batch_execute("SET LOCAL lock_timeout='1s'; LOCK TABLE public.sessions IN ACCESS EXCLUSIVE MODE")
+            .await.map_err(|error| error.to_string())?;
+        match leg {
+            SharedPgFinalLeg::ReleasedAck => held_ack = Some(proxy.hold(1).await?),
+            SharedPgFinalLeg::DroppedAck => proxy.remaining.store(1, Ordering::SeqCst),
+            SharedPgFinalLeg::OriginalDeadline => {}
+        }
+        let original_phase_started = Instant::now();
+        proceed.take().unwrap().send(()).map_err(|_| "shared original final gate release closed")?;
+        shared_pg_final_lock(&observer, controller_pid, original_pid, Instant::now() + Duration::from_secs(2)).await?;
+        require(!task.as_ref().unwrap().is_finished(), "original final read ended before its actual Lock proof")?;
+        let barrier = f.administration.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+        require(matches!(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await,
+            Err(crate::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)),
+            "shared close did not keep the actual original final PG/FD owner accounted")?;
+        shared_pg_final_lock(&observer, controller_pid, original_pid, Instant::now() + Duration::from_millis(250)).await?;
+        if !matches!(leg, SharedPgFinalLeg::OriginalDeadline) {
+            require(original_phase_started.elapsed() < Duration::from_secs(3), "controlled release exceeded the original final five-second budget")?;
+            tokio::time::timeout(Duration::from_secs(2), transaction.take().unwrap().commit()).await
+                .map_err(|_| "actual shared final controller COMMIT ACK timed out")?.map_err(|error| error.to_string())?;
+            if let Some(ack) = held_ack.as_mut() {
+                ack.wait().await?;
+                require(proxy.held.load(Ordering::SeqCst) == 1 && proxy.dropped.load(Ordering::SeqCst) == 0
+                    && !task.as_ref().unwrap().is_finished(),
+                    "selected actual original ROLLBACK CommandComplete was not held")?;
+                require(matches!(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await,
+                    Err(crate::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)),
+                    "controller COMMIT or backend-side rollback substituted for the original client ACK")?;
+                require(original_phase_started.elapsed() < Duration::from_secs(3),
+                    "original ACK release renewed or exceeded the original read phase")?;
+                held_ack.take().unwrap().release()?;
+            }
+        }
+        let result = tokio::time::timeout(Duration::from_secs(7), task.as_mut().unwrap()).await
+            .map_err(|_| "original shared final reader did not finish within its unchanged phase")?
+            .map_err(|error| error.to_string())?;
+        drop(task.take());
+        require(result.is_err(), "permanently closed shared key released a final body")?;
+        drop(result);
+        if matches!(leg, SharedPgFinalLeg::ReleasedAck) {
+            let ack = barrier.drain_before(Instant::now() + Duration::from_secs(3)).await.map_err(|error| format!("{error:?}"))?;
+            require(!original_observation.snapshot().retirement_requested,
+                "positive actual rollback ACK was replaced with original connection retirement")?;
+            require(shared_pg_owned_fds(&path)?.is_empty(), "positive shared ACK retained the original FD/full allocation")?;
+            drop(ack);
+        } else {
+            if matches!(leg, SharedPgFinalLeg::DroppedAck) {
+                require(proxy.dropped.load(Ordering::SeqCst) == 1 && proxy.held.load(Ordering::SeqCst) == 0,
+                    "unacknowledged case did not actually drop the selected original backend ROLLBACK frame")?;
+            } else {
+                require(original_phase_started.elapsed() >= Duration::from_secs(4),
+                    "original five-second final deadline was silently replaced with an early rejection")?;
+            }
+            let cleanup_deadline = Instant::now() + Duration::from_secs(3);
+            require(original_observation.wait_for_destruction_before(cleanup_deadline).await.map_err(|error| error.to_string())?
+                == pool::ConnectionDestruction::ConnectionDestroyed && original_observation.snapshot().retirement_requested,
+                "original unacknowledged final connection did not actually retire")?;
+            wait_original_cleanup_backend_gone(&observer, original_pid, cleanup_deadline).await?;
+            require(matches!(barrier.drain_before(Instant::now() + Duration::from_millis(100)).await,
+                Err(crate::artifact_read_lifecycle::ArtifactReadDrainError::Unavailable)),
+                "later original driver/backend destruction cleared permanent final unproven")?;
+            require(shared_pg_owned_fds(&path)?.is_empty(), "unproved final query left an actual original FD after all actual jobs ended")?;
+            if let Some(tx) = transaction.take() {
+                tokio::time::timeout(Duration::from_secs(2), tx.rollback()).await
+                    .map_err(|_| "actual shared final controller ROLLBACK ACK timed out")?.map_err(|error| error.to_string())?;
+            }
+        }
+        require(phases.counts().0 == phases_after_io.0 && phases.counts().2 == phases_after_io.2 && path.is_file(),
+            "final shared PG drain reread/rehashed the original body or deleted the object")?;
+        drop(barrier);
+        eprintln!("ARTIFACT_SHARED_PG leg={leg:?} original_pid={original_pid} controller_pid={controller_pid} observer_pid={observer_pid} actual_final_lock=true original_io=true legacy_total_deadline=None original_fd_absent=true deletion=false");
+        Ok::<_, String>(())
+    }.await;
+    // Cleanup is distinct from any original operation success or rollback proof.
+    drop(held_ack.take());
+    drop(proceed.take());
+    if let Some(mut original) = task.take() {
+        original.abort();
+        let _ = (&mut original).await;
+    }
+    let rollback = if let Some(tx) = transaction.take() {
+        tokio::time::timeout(Duration::from_secs(2), tx.rollback())
+            .await
+            .map_err(|_| "shared final cleanup controller ACK timed out".to_owned())
+            .and_then(|result| result.map_err(|error| error.to_string()))
+    } else {
+        Ok(())
+    };
+    drop(transaction);
+    drop(held);
+    let denied = if attempted.is_ok() {
+        shared_pg_closed_read_is_denied(&f, &saved.artifact_id, &phases).await
+    } else {
+        Ok(())
+    };
+    let other = if attempted.is_ok() {
+        shared_pg_other_key_remains_readable(&f, &saved_b.artifact_id).await
+    } else {
+        Ok(())
+    };
+    let still_closed = if attempted.is_ok() {
+        let barrier = f
+            .administration
+            .close_observed_artifact_reads(&record)
+            .map_err(|error| error.to_string())?;
+        if matches!(leg, SharedPgFinalLeg::ReleasedAck) {
+            barrier
+                .drain_before(Instant::now() + Duration::from_secs(3))
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("{error:?}"))
+        } else {
+            require(
+                matches!(
+                    barrier
+                        .drain_before(Instant::now() + Duration::from_millis(100))
+                        .await,
+                    Err(crate::artifact_read_lifecycle::ArtifactReadDrainError::Unavailable)
+                ),
+                "another actual client/key or a fresh drain budget cleared original final poison",
+            )
+        }
+    } else {
+        Ok(())
+    };
+    let after = cleanup_consumer_facts_on(&observer).await;
+    f.administration.read_authority().read_lifecycle().close();
+    let closed = shared_pg_destroy_pool(&f.pool).await;
+    drop(observer);
+    drop(controller);
+    let external_closed = shared_pg_destroy_pool(&external).await;
+    proxy.task.abort();
+    let _ = (&mut proxy.task).await;
+    drop(proxy);
+    attempted?;
+    rollback?;
+    denied?;
+    other?;
+    still_closed?;
+    require(
+        before == after?,
+        "actual shared final query changed original business/charge/receipt/fence/audit facts",
+    )?;
+    closed?;
+    external_closed
+}
+
+#[cfg(target_os = "macos")]
+async fn shared_pg_initial_cancel_leg(config: DatabaseConfig) -> Result<(), String> {
+    let external = pool::connect(&config.clone().with_max_pool_size(2))
+        .await
+        .map_err(|error| error.to_string())?;
+    let f = Fixture::new(config, false).await?;
+    let saved = f.save().await?;
+    let saved_b = f.save().await?;
+    let record = f
+        .observe(&saved.artifact_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let path = f.root.0.join("objects").join(&saved.artifact_id);
+    let mut controller = external.get().await.map_err(|error| error.to_string())?;
+    let observer = external.get().await.map_err(|error| error.to_string())?;
+    let controller_pid = controller
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    let observer_pid = observer
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    let before = cleanup_consumer_facts_on(&observer).await?;
+    let (held, probe, original_pid, original_observation) =
+        shared_pg_original_probe(&f, controller_pid, observer_pid).await?;
+    let mut transaction = Some(
+        controller
+            .transaction()
+            .await
+            .map_err(|error| error.to_string())?,
+    );
+    transaction.as_ref().unwrap().batch_execute("SET LOCAL lock_timeout='1s'; LOCK TABLE openbot_internal.schema_migrations IN ACCESS EXCLUSIVE MODE")
+        .await.map_err(|error| error.to_string())?;
+    drop(probe);
+    let authority = f.administration.read_authority();
+    // Call the actual original producer with precisely its legacy State/job enrollment. This
+    // cancels that producer future, rather than only detaching a caller from its spawned job.
+    let state = ReadOperationState::new(authority.clone(), f.auth(), saved.artifact_id.clone());
+    require(
+        state.original_deadline.is_none(),
+        "initial legacy fixture silently acquired a public total deadline",
+    )?;
+    state
+        .enroll_store(f.store.clone(), None)
+        .map_err(|error| format!("{error:?}"))?;
+    authority
+        .lifecycle
+        .register(&state)
+        .map_err(|error| format!("{error:?}"))?;
+    let job = authority
+        .lifecycle
+        .admit_operation(&state)
+        .map_err(|error| format!("{error:?}"))?;
+    state.begin().map_err(|error| format!("{error:?}"))?;
+    let phases = Arc::new(SharedPgReadPhases::default());
+    let dispatch = tracing::Dispatch::new(SharedPgPhaseSubscriber(phases.clone()));
+    let original_state = state.clone();
+    let original_authority = authority.clone();
+    let mut task = Some(tokio::spawn(async move {
+        let _original_job = job;
+        original_authority
+            .read_first_chunk_collected(&original_state, dispatch)
+            .await
+    }));
+    let attempted = async {
+        wait_original_cleanup_schema_lock(&observer, controller_pid, original_pid, Instant::now() + Duration::from_secs(2)).await?;
+        require(!task.as_ref().unwrap().is_finished() && phases.counts() == (0, 0, 0)
+            && shared_pg_owned_fds(&path)?.is_empty(), "original initial schema query was replaced with body IO or an already-finished future")?;
+        let barrier = f.administration.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+        require(matches!(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await,
+            Err(crate::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)),
+            "shared initial pre-record reservation disappeared while its actual original query waited")?;
+        task.as_ref().unwrap().abort();
+        let cancelled = tokio::time::timeout(Duration::from_secs(2), task.as_mut().unwrap()).await.map_err(|_| "actual original initial producer cancel did not reap")?;
+        drop(task.take());
+        require(matches!(cancelled, Err(error) if error.is_cancelled()), "initial original producer was not actually reaped as cancelled")?;
+        let cleanup_deadline = Instant::now() + Duration::from_secs(3);
+        require(original_observation.wait_for_destruction_before(cleanup_deadline).await.map_err(|error| error.to_string())?
+            == pool::ConnectionDestruction::ConnectionDestroyed && original_observation.snapshot().retirement_requested,
+            "initial cancelled original connection did not actually retire")?;
+        wait_original_cleanup_backend_gone(&observer, original_pid, cleanup_deadline).await?;
+        require(transaction.is_some() && phases.counts() == (0, 0, 0) && shared_pg_owned_fds(&path)?.is_empty(),
+            "initial original proof released its lock, renewed IO or replaced actual destruction with counter zero")?;
+        require(matches!(barrier.drain_before(Instant::now() + Duration::from_millis(100)).await,
+            Err(crate::artifact_read_lifecycle::ArtifactReadDrainError::Unavailable)),
+            "initial cancellation before a minted record yielded ACK after actual backend destruction")?;
+        tokio::time::timeout(Duration::from_secs(2), transaction.take().unwrap().rollback()).await
+            .map_err(|_| "actual shared initial controller ROLLBACK ACK timed out")?.map_err(|error| error.to_string())?;
+        drop(barrier);
+        eprintln!("ARTIFACT_SHARED_PG leg=initial_cancel original_pid={original_pid} controller_pid={controller_pid} observer_pid={observer_pid} actual_schema_lock=true original_producer_cancel_reaped=true original_connection_destroyed=true original_backend_gone=true legacy_total_deadline=None permanent_unproven=true original_io=false");
+        Ok::<_, String>(())
+    }.await;
+    if let Some(mut original) = task.take() {
+        original.abort();
+        let _ = (&mut original).await;
+    }
+    let rollback = if let Some(tx) = transaction.take() {
+        tokio::time::timeout(Duration::from_secs(2), tx.rollback())
+            .await
+            .map_err(|_| "shared initial cleanup controller ACK timed out".to_owned())
+            .and_then(|result| result.map_err(|error| error.to_string()))
+    } else {
+        Ok(())
+    };
+    drop(transaction);
+    drop(held);
+    let denied = if attempted.is_ok() {
+        shared_pg_closed_read_is_denied(&f, &saved.artifact_id, &phases).await
+    } else {
+        Ok(())
+    };
+    let other = if attempted.is_ok() {
+        shared_pg_other_key_remains_readable(&f, &saved_b.artifact_id).await
+    } else {
+        Ok(())
+    };
+    let still_unproven = if attempted.is_ok() {
+        let barrier = f
+            .administration
+            .close_observed_artifact_reads(&record)
+            .map_err(|error| error.to_string())?;
+        require(
+            matches!(
+                barrier
+                    .drain_before(Instant::now() + Duration::from_millis(100))
+                    .await,
+                Err(crate::artifact_read_lifecycle::ArtifactReadDrainError::Unavailable)
+            ),
+            "new client or fresh wait budget cleared the original initial cancellation",
+        )
+    } else {
+        Ok(())
+    };
+    let after = cleanup_consumer_facts_on(&observer).await;
+    state.close();
+    drop(state);
+    drop(authority);
+    f.administration.read_authority().read_lifecycle().close();
+    let closed = shared_pg_destroy_pool(&f.pool).await;
+    drop(observer);
+    drop(controller);
+    let external_closed = shared_pg_destroy_pool(&external).await;
+    attempted?;
+    rollback?;
+    denied?;
+    other?;
+    still_unproven?;
+    require(
+        before == after? && path.is_file(),
+        "initial cancelled producer changed original business facts or deleted the object",
+    )?;
+    closed?;
+    external_closed
+}
+
+#[cfg(target_os = "macos")]
+async fn shared_pg_control_tail_leg(config: DatabaseConfig) -> Result<(), String> {
+    use openbot_application::ApplicationService as _;
+    use openbot_contracts::artifact_read_protocol::{
+        AcknowledgeArtifactReadBlock, CloseArtifactRead, OpenArtifactRead, ReadArtifactReadBlock,
+    };
+    use openbot_contracts::command::{AppCommand, AppReply};
+    let external = pool::connect(&config.clone().with_max_pool_size(2))
+        .await
+        .map_err(|error| error.to_string())?;
+    let f = Fixture::new(config, false).await?;
+    let saved = f.save().await?;
+    let record = f
+        .observe(&saved.artifact_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let path = f.root.0.join("objects").join(&saved.artifact_id);
+    let mut controller = external.get().await.map_err(|error| error.to_string())?;
+    let observer = external.get().await.map_err(|error| error.to_string())?;
+    let controller_pid = controller
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    let observer_pid = observer
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    let before = cleanup_consumer_facts_on(&observer).await?;
+    let (held, probe, original_pid, original_observation) =
+        shared_pg_original_probe(&f, controller_pid, observer_pid).await?;
+    drop(probe);
+    let auth = f.auth();
+    let application = Arc::new(
+        openbot_application::OpenBotApplication::new(crate::repo::channels::ChannelRepo::new(
+            f.pool.clone(),
+        ))
+        .with_artifacts(f.administration.clone()),
+    );
+    let phases = Arc::new(SharedPgReadPhases::default());
+    let dispatch = tracing::Dispatch::new(SharedPgPhaseSubscriber(phases.clone()));
+    let reply = application
+        .execute(
+            auth.clone(),
+            AppCommand::OpenArtifactRead(OpenArtifactRead {
+                artifact_id: saved.artifact_id.clone(),
+            }),
+        )
+        .with_subscriber(dispatch.clone())
+        .await
+        .map_err(|error| format!("control_tail_phase=open_execute original_error={error}"))?;
+    let opened = match &reply {
+        AppReply::ArtifactReadOpened(value) => value.clone(),
+        _ => return Err("real control-tail Open returned another reply".to_owned()),
+    };
+    let control = application
+        .take_artifact_read_control_delivery(auth.clone(), reply)
+        .map_err(|error| format!("control_tail_phase=open_take_control original_error={error}"))?;
+    control
+        .verify_current_tail(&auth)
+        .map_err(|error| format!("control_tail_phase=open_verify_tail original_error={error}"))?;
+    drop(control);
+    let input = ReadArtifactReadBlock {
+        handle_id: opened.handle_id.clone(),
+        sequence: 0,
+    };
+    application
+        .execute(
+            auth.clone(),
+            AppCommand::ReadArtifactReadBlock(input.clone()),
+        )
+        .with_subscriber(dispatch.clone())
+        .await
+        .map_err(|error| format!("control_tail_phase=next_execute original_error={error}"))?;
+    let delivery = application
+        .take_artifact_read_delivery(auth.clone(), input)
+        .map_err(|error| format!("control_tail_phase=next_take_delivery original_error={error}"))?;
+    let block = delivery
+        .handoff(&auth)
+        .map_err(|error| format!("control_tail_phase=next_handoff original_error={error}"))?
+        .ok_or("actual nonempty control-tail transport block missing")?;
+    require(
+        block.as_ref() == EXACT.as_bytes(),
+        "real control-tail preparation handed off another body",
+    )?;
+    drop(block);
+    let reply = application
+        .execute(
+            auth.clone(),
+            AppCommand::AcknowledgeArtifactReadBlock(AcknowledgeArtifactReadBlock {
+                handle_id: opened.handle_id.clone(),
+                sequence: 0,
+            }),
+        )
+        .with_subscriber(dispatch.clone())
+        .await
+        .map_err(|error| format!("control_tail_phase=ack_execute original_error={error}"))?;
+    require(
+        matches!(&reply, AppReply::ArtifactReadAcknowledged(_)),
+        "original normal ACK did not end its real registry/transport allocation",
+    )?;
+    let control = application
+        .take_artifact_read_control_delivery(auth.clone(), reply)
+        .map_err(|error| format!("control_tail_phase=ack_take_control original_error={error}"))?;
+    control
+        .verify_current_tail(&auth)
+        .map_err(|error| format!("control_tail_phase=ack_verify_tail original_error={error}"))?;
+    drop(control);
+    let counts = phases.counts();
+    require(
+        counts.0 == 1 && counts.2 == 0 && shared_pg_owned_fds(&path)?.len() == 1,
+        "control-tail fixture did not retain its original idle reader after real normal data ACK",
+    )?;
+    let (reached, reached_rx) = tokio::sync::oneshot::channel();
+    let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
+    *f.administration
+        .read_authority()
+        .final_query_gate
+        .lock()
+        .map_err(|_| "control-tail final gate poisoned")? = Some((reached, proceed_rx));
+    let original_application = application.clone();
+    let original_auth = auth.clone();
+    let id = opened.handle_id.clone();
+    let mut task = Some(tokio::spawn(
+        async move {
+            original_application
+                .execute(
+                    original_auth,
+                    AppCommand::CloseArtifactRead(CloseArtifactRead { handle_id: id }),
+                )
+                .await
+        }
+        .with_subscriber(dispatch),
+    ));
+    let mut proceed = Some(proceed);
+    let mut transaction = Some(
+        controller
+            .transaction()
+            .await
+            .map_err(|error| error.to_string())?,
+    );
+    let attempted = async {
+        tokio::time::timeout(Duration::from_secs(2), reached_rx).await.map_err(|_| "actual Close control-tail final gate timed out")?
+            .map_err(|_| "actual Close control-tail final gate closed")?;
+        transaction.as_ref().unwrap().batch_execute("SET LOCAL lock_timeout='1s'; LOCK TABLE public.sessions IN ACCESS EXCLUSIVE MODE")
+            .await.map_err(|error| error.to_string())?;
+        let original_phase_started = Instant::now();
+        proceed.take().unwrap().send(()).map_err(|_| "actual Close control-tail gate release closed")?;
+        shared_pg_final_lock(&observer, controller_pid, original_pid, Instant::now() + Duration::from_secs(2)).await?;
+        let barrier = f.administration.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+        // Actual normal ACK already dropped the entire registry allocation. Shared close now
+        // closes its original idle FD; only the real no-byte control query remains in flight.
+        require(shared_pg_owned_fds(&path)?.is_empty() && !task.as_ref().unwrap().is_finished(),
+            "no-carrier Close control tail did not release its actual FD while its original PG query waited")?;
+        require(matches!(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await,
+            Err(crate::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)),
+            "zero data-carrier/FD owners substituted for the real Close control-tail PG ACK")?;
+        shared_pg_final_lock(&observer, controller_pid, original_pid, Instant::now() + Duration::from_millis(250)).await?;
+        require(original_phase_started.elapsed() < Duration::from_secs(3), "Close control-tail release exceeded its original five-second budget")?;
+        tokio::time::timeout(Duration::from_secs(2), transaction.take().unwrap().commit()).await
+            .map_err(|_| "actual Close control-tail controller COMMIT ACK timed out")?.map_err(|error| error.to_string())?;
+        let result = tokio::time::timeout(Duration::from_secs(3), task.as_mut().unwrap()).await
+            .map_err(|_| "actual original Close control query did not finish after release")?.map_err(|error| error.to_string())?;
+        drop(task.take());
+        require(result.is_err(), "shared permanent stop accepted a late Close control success")?;
+        drop(result);
+        let ack = barrier.drain_before(Instant::now() + Duration::from_secs(3)).await.map_err(|error| format!("{error:?}"))?;
+        require(!original_observation.snapshot().retirement_requested && shared_pg_owned_fds(&path)?.is_empty(),
+            "normal control-tail rollback ACK was replaced with retirement or left the original FD")?;
+        require(phases.counts().0 == counts.0 && phases.counts().2 == counts.2 && path.is_file(),
+            "real no-byte control query reran body IO or deleted the original artifact")?;
+        drop(ack); drop(barrier);
+        eprintln!("ARTIFACT_SHARED_PG leg=actual_close_control_tail original_pid={original_pid} controller_pid={controller_pid} observer_pid={observer_pid} actual_final_lock=true no_data_carrier=true original_fd_absent_while_waiting=true wait_no_ack=true controller_commit_ack=true original_rollback_ack=true controlled_ack=true");
+        Ok::<_, String>(())
+    }.await;
+    drop(proceed.take());
+    if let Some(mut original) = task.take() {
+        original.abort();
+        let _ = (&mut original).await;
+    }
+    let rollback = if let Some(tx) = transaction.take() {
+        tokio::time::timeout(Duration::from_secs(2), tx.rollback())
+            .await
+            .map_err(|_| "control-tail cleanup controller ACK timed out".to_owned())
+            .and_then(|result| result.map_err(|error| error.to_string()))
+    } else {
+        Ok(())
+    };
+    drop(transaction);
+    let stopped = application
+        .close_public_artifact_reads()
+        .map_err(|error| error.to_string());
+    drop(application);
+    drop(auth);
+    drop(held);
+    let after = cleanup_consumer_facts_on(&observer).await;
+    f.administration.read_authority().read_lifecycle().close();
+    let closed = shared_pg_destroy_pool(&f.pool).await;
+    drop(observer);
+    drop(controller);
+    let external_closed = shared_pg_destroy_pool(&external).await;
+    attempted?;
+    rollback?;
+    stopped?;
+    require(
+        before == after?,
+        "actual Close control-tail shared wait changed original business/charge/receipt/fence/audit facts",
+    )?;
+    closed?;
+    external_closed
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires owned PostgreSQL; original query Lock/PID/ROLLBACK ACK and permanent exact-key unproven"]
+async fn shared_read_barrier_final_pg_wait_requires_original_rollback_ack() {
+    for leg in [
+        SharedPgFinalLeg::ReleasedAck,
+        SharedPgFinalLeg::DroppedAck,
+        SharedPgFinalLeg::OriginalDeadline,
+    ] {
+        let tag = "shared-original-final-pg";
+        harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+            shared_pg_final_leg(config, leg).await
+        })
+        .await;
+    }
+    let tag = "shared-original-initial-cancel";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        shared_pg_initial_cancel_leg(config).await
+    })
+    .await;
+    let tag = "shared-original-control-tail";
+    harness::with_temp_database(&harness::admin_config(tag), tag, |config| async move {
+        shared_pg_control_tail_leg(config).await
+    })
+    .await;
+}
+
 fn require(ok: bool, message: &'static str) -> Result<(), String> {
     if ok { Ok(()) } else { Err(message.to_owned()) }
 }
@@ -1115,6 +2069,82 @@ struct CoreSessionGuard {
     lifetime: SessionLifetimePolicy,
 }
 impl HostRequestBindingGuard for CoreSessionGuard {
+    fn verify_current_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        deadline: Instant,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostRequestBindingError>> + Send + 'a>> {
+        Box::pin(async move {
+            deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(HostRequestBindingError::Unavailable)?;
+            let authority = self
+                .authority
+                .upgrade()
+                .ok_or(HostRequestBindingError::Unavailable)?;
+            let administration = authority
+                .administration
+                .upgrade()
+                .ok_or(HostRequestBindingError::Unavailable)?;
+            let binding = auth
+                .request_binding()
+                .ok_or(HostRequestBindingError::Missing)?;
+            let epoch = self
+                .issuer
+                .borrow_server_session_epoch(binding.identity())?;
+            let mut client = administration
+                .registry
+                .pool()
+                .get_guarded(deadline)
+                .await
+                .map_err(|_| HostRequestBindingError::Unavailable)?;
+            let original_transaction = client
+                .begin_read_committed_read_only()
+                .await
+                .map_err(|_| HostRequestBindingError::Unavailable)?;
+            let outcome = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                async {
+                    let tx = original_transaction.as_transaction();
+                    let remaining = deadline
+                        .checked_duration_since(Instant::now())
+                        .filter(|remaining| !remaining.is_zero())
+                        .ok_or(HostRequestBindingError::Unavailable)?;
+                    let millis = remaining.as_millis().clamp(1, 5000);
+                    tx.batch_execute(&format!("SET LOCAL statement_timeout='{millis}ms'; SET LOCAL lock_timeout='{millis}ms'"))
+                        .await.map_err(|_| HostRequestBindingError::Unavailable)?;
+                    let row = tx.query_one(
+                        "SELECT u.id AS read_host_user,u.auth_generation AS read_host_generation, \
+                          u.email AS read_host_email,EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)) AS read_host_revoked, \
+                          ARRAY(SELECT role::text FROM public.user_roles WHERE user_id=u.id ORDER BY role::text) AS read_host_roles, \
+                          s.id AS read_session_id,s.user_id AS read_session_user,s.token AS read_session_token, \
+                          s.created_at AS read_session_created,s.updated_at AS read_session_updated,s.expires_at AS read_session_expires,s.auth_generation AS read_session_generation \
+                         FROM (SELECT 1) a LEFT JOIN public.users u ON u.id=$1 LEFT JOIN public.sessions s ON s.id=$2 AND s.user_id=u.id",
+                        &[&auth.actor().as_str(), &epoch.lookup_id()],
+                    ).await.map_err(|_| HostRequestBindingError::Unavailable)?;
+                    decode_host(&administration, auth, &row, &CurrentHost::Session { epoch, lifetime: self.lifetime })
+                        .map_err(|error| match error {
+                            ArtifactReadCurrentError::Host(error) => error,
+                            _ => HostRequestBindingError::Unavailable,
+                        })
+                },
+            ).await.map_err(|_| HostRequestBindingError::Unavailable);
+            // Only the actual original ACK can reuse this lease. Cancellation or any
+            // unacknowledged exit retires the original guarded client under its deadline.
+            original_transaction
+                .rollback()
+                .await
+                .map_err(|_| HostRequestBindingError::Unavailable)?;
+            let witness = outcome??;
+            witness
+                .verify_current(auth, deadline)
+                .map_err(|error| match error {
+                    ArtifactReadCurrentError::Host(error) => error,
+                    _ => HostRequestBindingError::Unavailable,
+                })
+        })
+    }
     fn verify_current<'a>(
         &'a self,
         auth: &'a AuthContext,

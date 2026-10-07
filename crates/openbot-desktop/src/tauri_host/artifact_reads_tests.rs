@@ -38,7 +38,7 @@ use std::sync::{
     Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PAYLOAD: &str = "genuine Local public artifact text";
 
@@ -349,6 +349,288 @@ struct LocalFixture {
     artifact: ArtifactRegistrationReceipt,
     postmaster_pid: u32,
 }
+
+// Registration10: an observation after the original P1 Save has already failed. This fixed
+// statement returns only booleans and explicit closed classes, never row values or source text.
+const ORIGINAL_P1_SAVE_FAILURE_FACTS_SQL: &str = r#"
+WITH d AS (
+ SELECT dataset_id FROM openbot_internal.artifact_dataset_bindings
+ WHERE deployment_id=$1 AND tenant_id=$2
+), o AS (
+ SELECT o.* FROM openbot_internal.artifact_save_operations o JOIN d USING(dataset_id)
+ WHERE o.deployment_id=$1 AND o.tenant_id=$2 AND o.request_id=$3 AND o.owner_actor_id=$4
+), r AS (
+ SELECT r.* FROM openbot_internal.artifact_records r JOIN o
+ USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+), p AS (
+ SELECT p.* FROM openbot_internal.artifact_saved_receipts p JOIN o
+ USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+), q AS (
+ SELECT q.* FROM openbot_internal.artifact_workspace_quotas q JOIN o
+ USING(deployment_id,tenant_id,dataset_id,workspace_kind,workspace_id)
+)
+SELECT jsonb_build_object(
+ 'operation_exists',EXISTS(SELECT 1 FROM o),
+ 'operation_state',coalesce((SELECT CASE WHEN state IN
+  ('admitted','io_started','available','failed_partial','unresolved','deleted','expired')
+  THEN state ELSE 'invalid' END FROM o),'missing'),
+ 'observation_phase',coalesce((SELECT CASE WHEN observation_phase IN
+  ('before_write','staging','installing','installed') THEN observation_phase
+  WHEN observation_phase IS NULL THEN 'null' ELSE 'invalid' END FROM o),'missing'),
+ 'actual_absence',coalesce((SELECT CASE WHEN actual_absent IS TRUE THEN 'true'
+  WHEN actual_absent IS FALSE THEN 'false' ELSE 'null' END FROM o),'missing'),
+ 'actual_location',coalesce((SELECT CASE WHEN actual_location IN ('staging','object')
+  THEN actual_location WHEN actual_location IS NULL THEN 'null' ELSE 'invalid' END FROM o),'missing'),
+ 'record_exists',EXISTS(SELECT 1 FROM r),
+ 'record_status',coalesce((SELECT CASE WHEN status IN
+  ('available','failed_partial','deleted','expired') THEN status ELSE 'invalid' END FROM r),'missing'),
+ 'record_identity_matches',EXISTS(SELECT 1 FROM r JOIN o
+  USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+  WHERE ROW(r.request_id,r.owner_actor_id,r.source_thread_id,r.source_run_id,r.source_message_id,
+   r.source_call_seq,r.source_attempt_seq) IS NOT DISTINCT FROM
+   ROW(o.request_id,o.owner_actor_id,o.source_thread_id,o.source_run_id,o.source_message_id,
+   o.source_call_seq,o.source_attempt_seq)),
+ 'positive_receipt_exists',EXISTS(SELECT 1 FROM p),
+ 'receipt_identity_matches',EXISTS(SELECT 1 FROM p JOIN o
+  USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+  WHERE ROW(p.request_id,p.owner_actor_id,p.source_thread_id,p.source_run_id,p.source_message_id,
+   p.source_call_seq,p.source_attempt_seq) IS NOT DISTINCT FROM
+   ROW(o.request_id,o.owner_actor_id,o.source_thread_id,o.source_run_id,o.source_message_id,
+   o.source_call_seq,o.source_attempt_seq)),
+ 'operation_matches_original_source',EXISTS(SELECT 1 FROM o WHERE source_thread_id=$6
+  AND source_run_id=$7 AND source_message_id=$8 AND source_call_seq IS NULL
+  AND source_attempt_seq IS NULL AND expected_sha256=$10),
+ 'expected_actual_charge_matches',EXISTS(SELECT 1 FROM o WHERE expected_bytes=charged_bytes
+  AND expected_bytes=actual_byte_length AND expected_sha256=actual_sha256),
+ 'record_actual_matches',EXISTS(SELECT 1 FROM r JOIN o
+  USING(deployment_id,tenant_id,dataset_id,operation_id,artifact_id)
+  WHERE r.byte_length=o.actual_byte_length AND r.sha256=o.actual_sha256),
+ 'quota_exists',EXISTS(SELECT 1 FROM q),
+ 'quota_covers_original_charge',EXISTS(SELECT 1 FROM q JOIN o
+  USING(deployment_id,tenant_id,dataset_id,workspace_kind,workspace_id)
+  WHERE q.charged_bytes>=o.charged_bytes),
+ 'source_thread_exists',EXISTS(SELECT 1 FROM public.threads t WHERE t.thread_id=$6
+  AND t.deployment_id=$1 AND t.tenant_id=$2 AND t.status<>'deleted'),
+ 'source_run_owner_matches',EXISTS(SELECT 1 FROM public.runs rr WHERE rr.run_id=$7
+  AND rr.thread_id=$6 AND rr.actor_id=$4),
+ 'source_user_message_matches',EXISTS(SELECT 1 FROM public.messages m WHERE m.message_id=$8
+  AND m.thread_id=$6 AND m.run_id=$7 AND m.actor_id=$4 AND m.role='user'),
+ 'source_payload_matches',EXISTS(SELECT 1 FROM public.messages m WHERE m.message_id=$8
+  AND m.thread_id=$6 AND m.run_id=$7 AND m.actor_id=$4 AND m.role='user'
+  AND jsonb_typeof(m.content->'text')='string' AND m.content->>'text'=$9),
+ 'actor_exists',EXISTS(SELECT 1 FROM public.users u WHERE u.id=$4),
+ 'actor_generation_matches',EXISTS(SELECT 1 FROM public.users u WHERE u.id=$4
+  AND coalesce(u.auth_generation,0)=$5),
+ 'actor_role_valid',EXISTS(SELECT 1 FROM public.user_roles ur WHERE ur.user_id=$4
+  AND ur.role IN ('user','admin')),
+ 'actor_deny_clear',EXISTS(SELECT 1 FROM public.users u WHERE u.id=$4
+  AND NOT EXISTS(SELECT 1 FROM public.revoked_access ra WHERE ra.email=lower(u.email)))
+)
+"#;
+
+async fn capture_original_p1_setup_failure_before(
+    prepared: &PreparedDesktopLocalRuntime,
+    original_auth: &openbot_contracts::auth::AuthContext,
+    original_save: &SaveRunMessageTextArtifact,
+    original_save_started: Instant,
+    deadline: Instant,
+) {
+    let original_window_unclosed_same_epoch = prepared
+        .protocol()
+        .windows
+        .try_read()
+        .ok()
+        .and_then(|windows| {
+            windows.get("main").map(|window| {
+                !window.closed.is_cancelled()
+                    && window.auth == *original_auth
+                    && window
+                        .auth
+                        .request_binding()
+                        .zip(original_auth.request_binding())
+                        .is_some_and(|(current, original)| {
+                            current.identity().same_binding(original.identity())
+                        })
+            })
+        })
+        .unwrap_or(false);
+    eprintln!(
+        "ARTIFACT_LOCAL_P1_SETUP_FACTS original_save_elapsed_ms={} window_unclosed_same_epoch={} window_fact_is_only_local_observation=true original_save_result_unchanged=true",
+        original_save_started.elapsed().as_millis(),
+        original_window_unclosed_same_epoch
+    );
+    let Ok(generation) = i64::try_from(original_auth.auth_generation().get()) else {
+        eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=original_generation_out_of_range");
+        return;
+    };
+    if Instant::now() >= deadline {
+        eprintln!(
+            "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=deadline_before_checkout no_connection_closure_claim=true"
+        );
+        return;
+    }
+    // Reserve part of this same total budget for original connection destruction, not a new
+    // query/retry budget. The failed Save's own deadline/result is never changed.
+    let query_deadline = deadline.min(Instant::now() + Duration::from_millis(1_500));
+    let query_at = tokio::time::Instant::from_std(query_deadline);
+    let client = match tokio::time::timeout_at(query_at, prepared.pool().get()).await {
+        Ok(Ok(client)) => client,
+        Ok(Err(_)) => {
+            eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=checkout_error");
+            return;
+        }
+        Err(_) => {
+            eprintln!(
+                "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=checkout_deadline no_checkout_closure_claim=true"
+            );
+            return;
+        }
+    };
+    let original_connection = client.observation();
+    // This acquired client cannot be returned by legacy Drop, including on query cancellation.
+    let client = openbot_infra::db::pool::PooledClient::take(client);
+    if Instant::now() >= query_deadline {
+        eprintln!(
+            "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=deadline_after_checkout no_query_started=true"
+        );
+    } else {
+        let facts = tokio::time::timeout_at(
+            query_at,
+            client.query_one(
+                ORIGINAL_P1_SAVE_FAILURE_FACTS_SQL,
+                &[
+                    &original_auth.deployment().as_str(),
+                    &original_auth.tenant().as_str(),
+                    &original_save.request_id,
+                    &original_auth.actor().as_str(),
+                    &generation,
+                    &original_save.source_thread_id.as_str(),
+                    &original_save.source_run_id.as_str(),
+                    &original_save.source_message_id.as_str(),
+                    &PAYLOAD,
+                    &original_save.expected_sha256,
+                ],
+            ),
+        )
+        .await;
+        match facts {
+            Ok(Ok(row)) => match row.try_get::<_, serde_json::Value>(0) {
+                Ok(facts) => eprintln!(
+                    "ARTIFACT_LOCAL_P1_SETUP_FACTS fixed_original_selector_facts={facts} ids_body_hash_path_omitted=true readonly_observation_not_original_commit_ack=true"
+                ),
+                Err(_) => eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=facts_decode_error"),
+            },
+            Ok(Err(error)) => {
+                let code = error
+                    .as_db_error()
+                    .map(|error| error.code().code())
+                    .unwrap_or("non_database");
+                eprintln!(
+                    "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=query_error sqlstate={code} pg_message_omitted=true"
+                );
+            }
+            Err(_) => eprintln!(
+                "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic=query_deadline no_original_save_ack_claim=true"
+            ),
+        }
+    }
+    drop(client);
+    let destruction_observed = original_connection
+        .wait_for_destruction_before(deadline)
+        .await
+        .is_ok();
+    let snapshot = original_connection.snapshot();
+    eprintln!(
+        "ARTIFACT_LOCAL_P1_SETUP_FACTS diagnostic_driver_destruction_observed={} original_connection_started={} original_connection_destroyed={} original_retirement_requested={} result_is_not_fixture_cleanup_ack=true",
+        destruction_observed,
+        snapshot.connection_started,
+        snapshot.connection_destroyed,
+        snapshot.retirement_requested
+    );
+}
+
+fn capture_original_p1_postmaster(root: &Path, deadline: Instant) -> Option<u32> {
+    let root_before = std::fs::symlink_metadata(root).ok()?;
+    if !root_before.is_dir()
+        || root_before.file_type().is_symlink()
+        || root_before.mode() & 0o7777 != 0o700
+    {
+        return None;
+    }
+    let mut selected = None;
+    let mut entries = 0_usize;
+    for entry in std::fs::read_dir(root).ok()? {
+        entries += 1;
+        if entries > 64 || Instant::now() >= deadline {
+            return None;
+        }
+        let path = entry.ok()?.path();
+        if !path.file_name()?.to_str()?.starts_with("postgresql-17-") {
+            continue;
+        }
+        let directory = std::fs::symlink_metadata(&path).ok()?;
+        if !directory.is_dir()
+            || directory.file_type().is_symlink()
+            || directory.uid() != root_before.uid()
+            || directory.mode() & 0o7777 != 0o700
+        {
+            return None;
+        }
+        let pid_path = path.join("postmaster.pid");
+        let before = std::fs::symlink_metadata(&pid_path).ok()?;
+        if !before.is_file()
+            || before.file_type().is_symlink()
+            || before.nlink() != 1
+            || before.uid() != root_before.uid()
+            || before.len() > 4_096
+        {
+            return None;
+        }
+        let file = std::fs::File::open(&pid_path).ok()?;
+        let descriptor = file.metadata().ok()?;
+        if !descriptor.is_file()
+            || descriptor.dev() != before.dev()
+            || descriptor.ino() != before.ino()
+            || descriptor.uid() != before.uid()
+            || descriptor.nlink() != 1
+            || descriptor.len() != before.len()
+        {
+            return None;
+        }
+        let mut text = String::new();
+        file.take(4_097).read_to_string(&mut text).ok()?;
+        let after = std::fs::symlink_metadata(&pid_path).ok()?;
+        if text.len() > 4_096
+            || after.file_type().is_symlink()
+            || !after.is_file()
+            || after.dev() != before.dev()
+            || after.ino() != before.ino()
+            || after.len() != before.len()
+            || after.uid() != before.uid()
+            || after.nlink() != 1
+            || Instant::now() >= deadline
+        {
+            return None;
+        }
+        let pid = text.lines().next()?.parse::<u32>().ok()?;
+        if !(2..=i32::MAX as u32).contains(&pid) || selected.replace(pid).is_some() {
+            return None;
+        }
+    }
+    let root_after = std::fs::symlink_metadata(root).ok()?;
+    if root_after.file_type().is_symlink()
+        || !root_after.is_dir()
+        || root_after.dev() != root_before.dev()
+        || root_after.ino() != root_before.ino()
+        || root_after.uid() != root_before.uid()
+        || root_after.mode() & 0o7777 != 0o700
+        || Instant::now() >= deadline
+    {
+        return None;
+    }
+    selected
+}
+
 impl LocalFixture {
     async fn new(bundle: &OwnedBundle, label: &str) -> Result<Self, String> {
         let mut root = OwnedRoot::new(label)?;
@@ -401,11 +683,25 @@ impl LocalFixture {
         )
         .await
         .map_err(|error| error.to_string())?;
+        let p1_setup_diagnostic = matches!(label, "p1-window-chunk" | "p1-window-operation");
+        let setup_diagnostic = if p1_setup_diagnostic {
+            Some("ARTIFACT_LOCAL_P1_SETUP_DIAGNOSTIC")
+        } else if label == "public-read-cached-cleanup" {
+            Some("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC")
+        } else {
+            None
+        };
+        let mut failed_p1_postmaster_pid = None;
         let populated = async {
             prepared
                 .protocol()
                 .bind_window("main", prepared.auth_context().clone(), None)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| {
+                    if p1_setup_diagnostic {
+                        eprintln!("ARTIFACT_LOCAL_P1_SETUP_DIAGNOSTIC phase=bind_window original_app_error={error}");
+                    }
+                    error.to_string()
+                })?;
             let auth = prepared
                 .protocol()
                 .windows
@@ -432,8 +728,8 @@ impl LocalFixture {
                         .execute(auth.clone(), AppCommand::BeginThreadRun(begin.clone()))
                         .await
                         .map_err(|error| {
-                            if label == "public-read-cached-cleanup" {
-                                eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=BeginThreadRun original_app_error={error}");
+                            if let Some(diagnostic) = setup_diagnostic {
+                                eprintln!("{diagnostic} phase=BeginThreadRun original_app_error={error}");
                             }
                             error.to_string()
                         })?,
@@ -442,24 +738,37 @@ impl LocalFixture {
                 "actual Local Begin did not return its durable receipt",
             )?;
             let source = format!("{}:input", begin.run_id.as_str());
+            let original_save = SaveRunMessageTextArtifact {
+                request_id: uuid::Uuid::now_v7().to_string(),
+                source_thread_id: begin.thread_id,
+                source_run_id: begin.run_id,
+                source_message_id: source,
+                expected_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
+            };
+            let original_save_auth = auth.clone();
+            let original_save_started = Instant::now();
             let receipt = prepared
                 .application()
                 .execute(
                     auth,
-                    AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
-                        request_id: uuid::Uuid::now_v7().to_string(),
-                        source_thread_id: begin.thread_id,
-                        source_run_id: begin.run_id,
-                        source_message_id: source,
-                        expected_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
-                    }),
+                    AppCommand::SaveRunMessageTextArtifact(original_save.clone()),
                 )
                 .await;
-            if label == "public-read-cached-cleanup" {
+            if let Some(diagnostic) = setup_diagnostic {
                 if let Err(error) = &receipt {
-                    eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=SaveRunMessageTextArtifact original_app_error={error}");
+                    eprintln!("{diagnostic} phase=SaveRunMessageTextArtifact original_app_error={error}");
+                    if p1_setup_diagnostic {
+                        let diagnostic_deadline = Instant::now() + Duration::from_secs(2);
+                        failed_p1_postmaster_pid = capture_original_p1_postmaster(&root.0, diagnostic_deadline);
+                        match failed_p1_postmaster_pid {
+                            Some(pid) => eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS original_owned_postmaster_pid={pid} original_private_root_pidfile_bound=true root_path_omitted=true"),
+                            None => eprintln!("ARTIFACT_LOCAL_P1_SETUP_FACTS original_private_root_pidfile_bound=false no_original_pg_termination_claim=true"),
+                        }
+                        capture_original_p1_setup_failure_before(&prepared, &original_save_auth,
+                            &original_save, original_save_started, diagnostic_deadline).await;
+                    }
                     let schema = openbot_infra::artifact_administration::verify_artifact_registration_schema(prepared.pool()).await;
-                    eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=post_original_Save_error legacy41_42={schema:?}");
+                    eprintln!("{diagnostic} phase=post_original_Save_error legacy41_42={schema:?}");
                     if matches!(&schema, Err(openbot_application::ArtifactAdministrationError::Corrupt { field: "registration_schema" })) {
                         let expected = serde_json::from_str::<serde_json::Value>(include_str!("../../../../fixtures/db/artifact-registration-0042.json"));
                         let actual = openbot_infra::artifact_administration::capture_artifact_registration_schema(prepared.pool()).await;
@@ -467,10 +776,10 @@ impl LocalFixture {
                             (Ok(expected), Ok(actual)) => {
                                 let mut paths = Vec::new();
                                 cleanup_cached_schema_difference_paths(&expected, &actual, "", &mut paths);
-                                eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC legacy42_difference_paths={paths:?} path_limit=16 values_omitted=true");
+                                eprintln!("{diagnostic} legacy42_difference_paths={paths:?} path_limit=16 values_omitted=true");
                             }
-                            (Err(_), _) => eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC fixed_original_oracle_decode_failed=true"),
-                            (_, Err(error)) => eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC legacy42_capture_error={error:?}"),
+                            (Err(_), _) => eprintln!("{diagnostic} fixed_original_oracle_decode_failed=true"),
+                            (_, Err(error)) => eprintln!("{diagnostic} legacy42_capture_error={error:?}"),
                         }
                     }
                 }
@@ -527,6 +836,23 @@ impl LocalFixture {
             }
             Err(error) => {
                 let cleaned = prepared.shutdown().await;
+                if p1_setup_diagnostic {
+                    match failed_p1_postmaster_pid {
+                        Some(pid) => match owned_postmaster_live(pid) {
+                            Ok(live) => eprintln!(
+                                "ARTIFACT_LOCAL_P1_SETUP_FACTS original_owned_postmaster_pid={pid} original_pid_gone_observed={} original_shutdown_ok={} original_save_error_preserved=true bundle_cleanup_not_inferred=true",
+                                !live,
+                                cleaned.is_ok()
+                            ),
+                            Err(_) => eprintln!(
+                                "ARTIFACT_LOCAL_P1_SETUP_FACTS original_pid_gone_observed=false pid_observation_failed=true original_save_error_preserved=true bundle_cleanup_not_inferred=true"
+                            ),
+                        },
+                        None => eprintln!(
+                            "ARTIFACT_LOCAL_P1_SETUP_FACTS original_pid_binding_missing=true original_save_error_preserved=true bundle_cleanup_not_inferred=true"
+                        ),
+                    }
+                }
                 if cleaned.is_ok() {
                     root.1 = true;
                 }
@@ -1064,6 +1390,123 @@ async fn actual_prepared_local_public_reader_close_isolated_original_resources()
 
 // Controlled 0044 rows are consumer inputs only. These observations never assert deletion,
 // directory sync, refund, cleanup authorization or a producer receipt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires genuine owned Prepared Local and actual shared copy/responder owners"]
+async fn shared_read_barrier_waits_for_desktop_copy_and_responder_tail() {
+    use tracing::instrument::WithSubscriber as _;
+    let mut bundle = OwnedBundle::materialize().expect("Root-owned exact PG bundle");
+    let fixture = LocalFixture::new(&bundle, "shared-local-copy-responder")
+        .await
+        .expect("genuine owned Prepared Local setup");
+    let actual = fixture.prepared().artifact_administration.clone();
+    let protocol = fixture.prepared().protocol().clone();
+    let outcome = async {
+        let auth = {
+            protocol.windows.try_read().map_err(|_| "actual original window registry unavailable")?
+                .get("main").ok_or("actual original main Window missing")?.auth.clone()
+        };
+        // Both keys are materialized by the real already-assembled Local Application/Save.
+        let saved_b = fixture.prepared().application().execute(auth.clone(),
+            AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
+                request_id: uuid::Uuid::now_v7().to_string(),
+                source_thread_id: fixture.artifact.source_thread_id.clone(),
+                source_run_id: fixture.artifact.source_run_id.clone(),
+                source_message_id: fixture.artifact.source_message_id.clone(),
+                expected_sha256: format!("{:x}", Sha256::digest(PAYLOAD.as_bytes())),
+            }),
+        ).await.map_err(|error| error.to_string())?;
+        let saved_b = match saved_b {
+            AppReply::ArtifactRegistrationReceipt(saved) => saved,
+            _ => return Err("second actual Local Save returned another receipt".to_owned()),
+        };
+        require(saved_b.artifact_id != fixture.artifact.artifact_id && saved_b.operation_id != fixture.artifact.operation_id,
+            "Local responder leg did not use a different actual saved key")?;
+        for (saved, copy_tail) in [(&fixture.artifact, true), (&saved_b, false)] {
+            let record = actual.observe_read_record(&auth, &saved.artifact_id).await.map_err(|error| error.to_string())?;
+            let path = fixture.root.0.join("artifacts/objects").join(&saved.artifact_id);
+            require(cleanup_owned_inode_fds(&path)?.is_empty(), "Local key began with an unexpected reader FD")?;
+            let phases = Arc::new(CleanupCachedIoPhases::default());
+            let dispatch = tracing::Dispatch::new(CleanupCachedPhaseSubscriber(phases.clone()));
+            let opened: ArtifactReadOpened = control(bridge(&protocol, "main", open_request(&saved.artifact_id)?)
+                .with_subscriber(dispatch.clone()).await)?;
+            let prepared = protocol.prepare_public_artifact_read_response("main", next_request(&opened.handle_id, 0)?)
+                .with_subscriber(dispatch).await;
+            let io_before = phases.io.load(Ordering::SeqCst);
+            let joint_before = phases.joint.load(Ordering::SeqCst);
+            let segments_before = phases.segments.load(Ordering::SeqCst);
+            require(io_before == 1 && joint_before >= 2,
+                "real Local preparation/cached refresh did not complete its original IO and final joint query")?;
+            let client = fixture.prepared().pool().get().await.map_err(|error| error.to_string())?;
+            let before = cleanup_public_read_facts_on(&client).await?;
+            drop(client);
+            let gate = CarrierGate::new();
+            let release = ReleaseCarrierGate(gate.clone());
+            let worker_protocol = protocol.clone();
+            let worker_gate = gate.clone();
+            let worker = tokio::task::spawn_blocking(move || {
+                if copy_tail {
+                    tracing::subscriber::with_default(CopyTailSubscriber(worker_gate), || {
+                        worker_protocol.finish_public_artifact_read_response("main", prepared, |response| response)
+                    })
+                } else {
+                    worker_protocol.finish_public_artifact_read_response("main", prepared, |response| {
+                        // Keep the actual original transport allocation until the real callback returns.
+                        worker_gate.hold_actual_thread();
+                        response
+                    })
+                }
+            });
+            let observed = async {
+                gate.await_entered().await?;
+                require(cleanup_owned_inode_fds(&path)?.len() == 1, "held actual Local copy/responder did not retain its original FD")?;
+                let barrier = actual.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+                require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err(),
+                    "shared Local close ACKed before the original actual copy/responder owner ended")?;
+                require(cleanup_owned_inode_fds(&path)?.len() == 1, "shared close dropped a still-used Local FD")?;
+                Ok::<_, String>(barrier)
+            }.await;
+            gate.release();
+            let response = worker.await.map_err(|error| error.to_string())?;
+            drop(release);
+            let barrier = observed?;
+            require(!gate.timed_out.load(Ordering::SeqCst), "actual Local owner ended only because its gate timed out")?;
+            let ack = barrier.drain_before(Instant::now() + Duration::from_secs(4)).await.map_err(|error| format!("{error:?}"))?;
+            require(cleanup_owned_inode_fds(&path)?.is_empty() && path.is_file(),
+                "actual Local original block ended without FD closure or deleted the object")?;
+            if copy_tail {
+                status(response, StatusCode::SERVICE_UNAVAILABLE)?;
+            } else {
+                data(&response, &opened.handle_id, 0, false)?;
+                require(response.body().as_slice() == PAYLOAD.as_bytes(),
+                    "controlled Local ACK falsely claimed returned response Vec destruction")?;
+                drop(response);
+            }
+            require(phases.io.load(Ordering::SeqCst) == io_before
+                && phases.joint.load(Ordering::SeqCst) == joint_before
+                && phases.segments.load(Ordering::SeqCst) == segments_before,
+                "shared synchronous Local copy/responder was mistaken for another IO or PG wait")?;
+            let client = fixture.prepared().pool().get().await.map_err(|error| error.to_string())?;
+            let after = cleanup_public_read_facts_on(&client).await?;
+            drop(client);
+            require(before == after, "shared Local close mutated original business/charge/receipt/fence/audit/identity facts")?;
+            drop(ack); drop(barrier); drop(record);
+            eprintln!("ARTIFACT_SHARED_LOCAL copy_tail={copy_tail} actual_owner_held_no_ack=true real_callback_joined=true original_fd_absent=true controlled_ack=true io_joint_unchanged=true pg_wait=false returned_response_lifetime=UNTRACKED");
+        }
+        Ok::<_, String>(())
+    }.await;
+    // Retire every extra test owner before the actual runtime shutdown/PID proof.
+    drop(protocol);
+    drop(actual);
+    let cleaned = fixture.finish().await;
+    if cleaned.is_ok() {
+        bundle.root.1 = true;
+    }
+    drop(bundle);
+    outcome
+        .and(cleaned)
+        .expect("actual shared Local copy/responder owners and original physical closure");
+}
+
 const CLEANUP_PUBLIC_READ_FACTS: &str = "SELECT jsonb_build_object( \
  'bindings',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY to_jsonb(b)::text),'[]') FROM openbot_internal.artifact_dataset_bindings b), \
  'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
@@ -1450,4 +1893,423 @@ async fn actual_prepared_local_public_reader_cached_first_cleanup_fence_recheck_
     outcome
         .and(cleaned)
         .expect("genuine Prepared Local cached first cleanup-fence refusal and physical closure");
+}
+
+async fn cleanup_arm_local_database_facts(
+    pool: &openbot_infra::db::pool::DatabasePool,
+) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    let c = pool.get().await.map_err(|e| e.to_string())?;
+    let tables=c.query("SELECT n.nspname,c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','openbot_internal') AND c.relkind='r' ORDER BY n.nspname,c.relname",&[]).await.map_err(|e|e.to_string())?;
+    let mut facts = BTreeMap::new();
+    for row in tables {
+        let schema: String = row.get(0);
+        let name: String = row.get(1);
+        let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        let sql = format!(
+            "SELECT coalesce(jsonb_agg(jsonb_build_object('row',to_jsonb(t),'xmin',t.xmin::text,'ctid',t.ctid::text) ORDER BY to_jsonb(t)::text,t.ctid),'[]'::jsonb) FROM {}.{} t",
+            quote(&schema),
+            quote(&name)
+        );
+        facts.insert(
+            format!("{schema}.{name}"),
+            c.query_one(&sql, &[])
+                .await
+                .map_err(|e| e.to_string())?
+                .get(0),
+        );
+    }
+    Ok(facts)
+}
+fn cleanup_arm_local_only_tables_changed(
+    before: &BTreeMap<String, serde_json::Value>,
+    after: &BTreeMap<String, serde_json::Value>,
+    allowed: &[&str],
+) -> Result<(), String> {
+    require(
+        before.keys().eq(after.keys()),
+        "Local controller/arm changed ordinary table inventory",
+    )?;
+    for (table, value) in before {
+        if !allowed.contains(&table.as_str()) && after.get(table) != Some(value) {
+            return Err(format!(
+                "Local arm changed unexpected ordinary/physical table: {table}"
+            ));
+        }
+    }
+    Ok(())
+}
+fn cleanup_arm_local_object_fact(
+    path: &Path,
+) -> Result<(u64, u64, u32, u32, u64, u64, String), String> {
+    let m = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    require(
+        m.is_file() && m.mode() & 0o7777 == 0o400 && m.nlink() == 1,
+        "Local original artifact inode/type/mode changed",
+    )?;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    Ok((
+        m.dev(),
+        m.ino(),
+        m.uid(),
+        m.mode(),
+        m.nlink(),
+        m.len(),
+        format!("{:x}", Sha256::digest(&bytes)),
+    ))
+}
+async fn cleanup_arm_local_waiter(
+    pool: &openbot_infra::db::pool::DatabasePool,
+    controller_pid: i32,
+) -> Result<(i32, i32), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let observer = pool.get().await.map_err(|e| e.to_string())?;
+        let observer_pid: i32 = observer
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .map_err(|e| e.to_string())?
+            .get(0);
+        let rows=observer.query("SELECT pid FROM pg_catalog.pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event_type='Lock' AND query LIKE '%artifact_workspace_quotas%' AND $1::integer=ANY(pg_catalog.pg_blocking_pids(pid))",&[&controller_pid]).await.map_err(|e|e.to_string())?;
+        if rows.len() == 1 {
+            let waiter: i32 = rows[0].get(0);
+            require(
+                waiter != controller_pid
+                    && waiter != observer_pid
+                    && controller_pid != observer_pid,
+                "Local original waiter/controller/observer PIDs were not distinct",
+            )?;
+            return Ok((waiter, observer_pid));
+        }
+        require(
+            Instant::now() < deadline,
+            "Local arm did not reach the actual owned quota PG lock",
+        )?;
+        drop(observer);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires genuine Prepared Local/Window, owned PostgreSQL bundle and real Save/arm"]
+async fn actual_local_original_window_arms_missing_source_and_rebound_window_is_refused() {
+    use openbot_infra::artifact_administration::ArtifactCleanupArmError as ArmError;
+    let missing_source_status = |response: Response<Vec<u8>>, phase: &'static str| {
+        let actual_status = response.status().as_u16();
+        eprintln!(
+            "ARTIFACT_CLEANUP_ARM_LOCAL_REFUSAL phase={phase} expected_status=404 actual_status={actual_status} response_body_omitted=true"
+        );
+        status(response, StatusCode::NOT_FOUND).map_err(|error| {
+            format!("{error}: phase={phase} expected_status=404 actual_status={actual_status}")
+        })
+    };
+    let mut bundle = OwnedBundle::materialize().expect("Root-owned exact PG bundle");
+    let fixture = LocalFixture::new(&bundle, "cleanup-arm-original-window")
+        .await
+        .expect("genuine Prepared Local setup");
+    let actual = fixture.prepared().artifact_administration.clone();
+    let protocol = fixture.prepared().protocol().clone();
+    let outcome=async {
+        let original_auth=protocol.windows.try_read().map_err(|_|"original Window registry unavailable")?.get("main").ok_or("original actual main Window missing")?.auth.clone();
+        let second=fixture.prepared().application().execute(original_auth.clone(),AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact{
+            request_id:uuid::Uuid::now_v7().to_string(),source_thread_id:fixture.artifact.source_thread_id.clone(),source_run_id:fixture.artifact.source_run_id.clone(),source_message_id:fixture.artifact.source_message_id.clone(),expected_sha256:format!("{:x}",Sha256::digest(PAYLOAD.as_bytes())),
+        })).await.map_err(|e|e.to_string())?;
+        let second=match second {AppReply::ArtifactRegistrationReceipt(r)=>r,_=>return Err("second genuine Local Save returned another reply".to_owned())};
+        require(second.artifact_id!=fixture.artifact.artifact_id&&second.operation_id!=fixture.artifact.operation_id,"Local refusal key reused the already armed original operation")?;
+        let path=fixture.root.0.join("artifacts/objects").join(&fixture.artifact.artifact_id);
+        let second_path=fixture.root.0.join("artifacts/objects").join(&second.artifact_id);
+        let first_object=cleanup_arm_local_object_fact(&path)?;let second_object=cleanup_arm_local_object_fact(&second_path)?;
+        let opened:ArtifactReadOpened=control(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await)?;
+        require(opened.artifact_id==fixture.artifact.artifact_id&&cleanup_owned_inode_fds(&path)?.len()==1,"original actual Local cached reader has no real original key/FD")?;
+        let before_source=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        let mut controller=fixture.prepared().pool().get().await.map_err(|e|e.to_string())?;
+        let tx=controller.transaction().await.map_err(|e|e.to_string())?;
+        let source_controller_pid:i32=tx.query_one("SELECT pg_backend_pid()",&[]).await.map_err(|e|e.to_string())?.get(0);
+        require(tx.execute("DELETE FROM public.messages WHERE message_id=$1",&[&fixture.artifact.source_message_id]).await.map_err(|e|e.to_string())?==1,"Local source controller did not hard-delete the original message")?;
+        tx.commit().await.map_err(|e|e.to_string())?;drop(controller);
+        let after_source=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        cleanup_arm_local_only_tables_changed(&before_source,&after_source,&["public.messages"])?;
+        let original_messages=before_source.get("public.messages").and_then(serde_json::Value::as_array).ok_or("original Local messages missing")?;
+        let current_messages=after_source.get("public.messages").and_then(serde_json::Value::as_array).ok_or("current Local messages missing")?;
+        let retained_messages:Vec<_>=original_messages.iter().filter(|v|v["row"]["message_id"].as_str()!=Some(fixture.artifact.source_message_id.as_str())).cloned().collect();
+        require(retained_messages.len()+1==original_messages.len()&&retained_messages==*current_messages,"Local source controller changed undeclared messages or physical row carriers")?;
+        require(before_source.get("public.messages")!=after_source.get("public.messages"),"Local source controller did not commit a real source row difference")?;
+        missing_source_status(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await,"source_hard_delete_commit_ack_before_arm")?;
+        require(matches!(fixture.prepared().application().execute(original_auth.clone(),AppCommand::GetArtifactMetadata(openbot_contracts::artifacts::GetArtifactMetadata{artifact_id:fixture.artifact.artifact_id.clone()})).await,Err(openbot_contracts::error::AppError::NotVisible)),"Local cleanup owner management reopened missing-source metadata")?;
+        let before_arm=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        let intent=actual.arm_explicit_saved_delete_before(&original_auth,&fixture.artifact.artifact_id,Instant::now()+Duration::from_secs(10)).await.map_err(|e|e.to_string())?;
+        let armed=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
+        cleanup_arm_local_only_tables_changed(&before_arm,&armed,&["openbot_internal.artifact_cleanup_fences","public.audit_events","public.audit_checkpoints"])?;
+        let old_audit=before_arm.get("public.audit_events").and_then(serde_json::Value::as_array).ok_or("Local original audit facts missing")?;
+        let new_audit=armed.get("public.audit_events").and_then(serde_json::Value::as_array).ok_or("Local current audit facts missing")?;
+        require(!old_audit.is_empty()&&new_audit.len()==old_audit.len()+1&&old_audit.iter().all(|v|new_audit.contains(v))&&before_arm.get("public.audit_checkpoints")==armed.get("public.audit_checkpoints"),"Local arm changed previous real Save audit/physical rows or checkpoint")?;
+        let c=fixture.prepared().pool().get().await.map_err(|e|e.to_string())?;
+        let original_dataset:String=c.query_one("SELECT dataset_id FROM openbot_internal.artifact_records WHERE deployment_id=$1 AND tenant_id=$2 AND operation_id=$3 AND artifact_id=$4",&[&original_auth.deployment().as_str(),&original_auth.tenant().as_str(),&fixture.artifact.operation_id,&fixture.artifact.artifact_id]).await.map_err(|e|e.to_string())?.get(0);
+        let fence=c.query("SELECT deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase FROM openbot_internal.artifact_cleanup_fences",&[]).await.map_err(|e|e.to_string())?;
+        require(fence.len()==1&&fence[0].get::<_,String>(0)==original_auth.deployment().as_str()&&fence[0].get::<_,String>(1)==original_auth.tenant().as_str()&&fence[0].get::<_,String>(2)==original_dataset&&fence[0].get::<_,String>(3)==fixture.artifact.operation_id&&fence[0].get::<_,String>(4)==fixture.artifact.artifact_id&&fence[0].get::<_,String>(5)=="deleted"&&fence[0].get::<_,String>(6)=="armed","Local arm did not preserve exact original namespace/pair and fixed intent")?;
+        let audit=c.query("SELECT actor_user_id,target_type,target_id,payload FROM public.audit_events WHERE event_type='artifact.cleanup_armed'",&[]).await.map_err(|e|e.to_string())?;
+        require(audit.len()==1&&audit[0].get::<_,Option<String>>(0).as_deref()==Some(original_auth.actor().as_str())&&audit[0].get::<_,String>(1)=="artifact"&&audit[0].get::<_,Option<String>>(2).as_deref()==Some(fixture.artifact.artifact_id.as_str())&&audit[0].get::<_,serde_json::Value>(3)==serde_json::json!({"artifact_id":fixture.artifact.artifact_id,"artifact_operation_id":fixture.artifact.operation_id}),"Local arm audit was missing, duplicated or changed fixed typed IDs")?;drop(c);
+        let barrier=actual.close_armed_artifact_reads(&intent).map_err(|e|e.to_string())?;
+        let ack=barrier.drain_before(Instant::now()+Duration::from_secs(4)).await.map_err(|e|format!("{e:?}"))?;
+        require(cleanup_owned_inode_fds(&path)?.is_empty()&&cleanup_arm_local_object_fact(&path)?==first_object,"Local finite armed close ACK lacked actual FD end or deleted original object")?;
+        missing_source_status(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await,"armed_close_ack_original_source_missing")?;
+        require(cleanup_arm_local_database_facts(fixture.prepared().pool()).await?==armed,"Local finite close or stopped reader wrote business rows")?;
+        drop(ack);drop(barrier);drop(intent);
+        // A second actual pair remains unfenced. Wait for its real original arm quota query,
+        // then replace the original window before releasing the controller's actual lock.
+        let mut controller=fixture.prepared().pool().get().await.map_err(|e|e.to_string())?;
+        let tx=controller.transaction().await.map_err(|e|e.to_string())?;
+        let controller_pid:i32=tx.query_one("SELECT pg_backend_pid()",&[]).await.map_err(|e|e.to_string())?.get(0);
+        tx.query_one("SELECT workspace_id FROM openbot_internal.artifact_workspace_quotas WHERE workspace_id=$1 FOR UPDATE",&[&second.source_thread_id.as_str()]).await.map_err(|e|e.to_string())?;
+        let worker_actual=actual.clone();let worker_auth=original_auth.clone();let artifact=second.artifact_id.clone();
+        let worker=tokio::spawn(async move {worker_actual.arm_explicit_saved_delete_before(&worker_auth,&artifact,Instant::now()+Duration::from_secs(10)).await});
+        let (waiter_pid,observer_pid)=cleanup_arm_local_waiter(fixture.prepared().pool(),controller_pid).await?;
+        protocol.unbind_window("main").map_err(|e|e.to_string())?;
+        protocol.bind_window("main",fixture.prepared().auth_context().clone(),None).map_err(|e|e.to_string())?;
+        let rebound=protocol.windows.try_read().map_err(|_|"new actual Window unavailable")?.get("main").ok_or("new actual Window missing")?.auth.clone();
+        require(rebound==original_auth&&!rebound.request_binding().unwrap().identity().same_binding(original_auth.request_binding().unwrap().identity()),"Local same-label rebind did not replace the original epoch while retaining six Auth facts")?;
+        tx.rollback().await.map_err(|e|e.to_string())?;drop(controller);
+        require(matches!(worker.await.map_err(|e|e.to_string())?,Err(ArmError::Host(openbot_contracts::request_binding::HostRequestBindingError::NotCurrent))),"actual quota waiter armed using the replaced original Window")?;
+        require(cleanup_arm_local_database_facts(fixture.prepared().pool()).await?==armed&&cleanup_arm_local_object_fact(&path)?==first_object&&cleanup_arm_local_object_fact(&second_path)?==second_object,"rebound-window refusal changed original pair/charge/fence/audit/bytes")?;
+        eprintln!("ARTIFACT_CLEANUP_ARM_LOCAL source_controller_pid={source_controller_pid} source_hard_delete_commit_ack=true original_window_arm_ack=true exact_arm_audit=true controlled_original_fd_absent=true original_object_unchanged=true waiter_pid={waiter_pid} controller_pid={controller_pid} observer_pid={observer_pid} actual_quota_lock=true window_replaced_before_unlock=true controller_rollback_ack=true old_request_refused=true physical_delete=false");
+        Ok::<_,String>(())
+    }.await;
+    drop(protocol);
+    drop(actual);
+    let cleaned = fixture.finish().await;
+    if cleaned.is_ok() {
+        bundle.root.1 = true;
+    }
+    drop(bundle);
+    outcome
+        .and(cleaned)
+        .expect("actual Local original Window cleanup arm and physical owned closure");
+}
+
+async fn original_window_revocation_read_leg(
+    fixture: &LocalFixture,
+    operation_path: bool,
+) -> Result<(), String> {
+    let phase = if operation_path { "operation" } else { "chunk" };
+    let prepared = fixture.prepared();
+    let actual = Arc::clone(&prepared.artifact_administration);
+    let protocol = Arc::clone(prepared.protocol());
+    let original_auth = protocol
+        .windows
+        .try_read()
+        .map_err(|_| "P1 original Window registry unavailable")?
+        .get("main")
+        .ok_or("P1 original main Window missing")?
+        .auth
+        .clone();
+    let path = fixture
+        .root
+        .0
+        .join("artifacts/objects")
+        .join(&fixture.artifact.artifact_id);
+    let original_object = cleanup_arm_local_object_fact(&path)?;
+    let before = cleanup_arm_local_database_facts(prepared.pool()).await?;
+    require(
+        protocol
+            .unbind_window("main")
+            .map_err(|error| error.to_string())?,
+        "P1 original actual Window was not revoked",
+    )?;
+    protocol
+        .bind_window("main", prepared.auth_context().clone(), None)
+        .map_err(|error| error.to_string())?;
+    let fresh = protocol
+        .windows
+        .try_read()
+        .map_err(|_| "P1 rebound Window registry unavailable")?
+        .get("main")
+        .ok_or("P1 rebound actual Window missing")?
+        .auth
+        .clone();
+    require(
+        fresh == original_auth
+            && !fresh
+                .request_binding()
+                .ok_or("P1 new Window binding missing")?
+                .identity()
+                .same_binding(
+                    original_auth
+                        .request_binding()
+                        .ok_or("P1 old Window binding missing")?
+                        .identity(),
+                ),
+        "P1 real same-label Window rebind changed six Auth facts or reused the old epoch",
+    )?;
+    require(
+        cleanup_arm_local_database_facts(prepared.pool()).await? == before,
+        "P1 Window revocation/rebind wrote business rows",
+    )?;
+
+    // unbind_window stops only previously registered original States. Creating this
+    // operation after revoke makes the genuine old-epoch Host port reject it instead.
+    let old_error = if operation_path {
+        let mut operation = prepared
+            .application()
+            .open_current_artifact_read(original_auth.clone(), fixture.artifact.artifact_id.clone())
+            .await
+            .map_err(|error| format!("P1 old Window operation construction: {error}"))?;
+        let result = operation.next_block(&original_auth).await;
+        drop(operation);
+        result.err()
+    } else {
+        prepared
+            .application()
+            .read_current_artifact_chunk(
+                original_auth.clone(),
+                fixture.artifact.artifact_id.clone(),
+            )
+            .await
+            .err()
+    };
+    require(
+        matches!(
+            old_error,
+            Some(openbot_contracts::error::AppError::Unauthenticated)
+        ),
+        "P1 revoked original Window did not preserve its actual Host refusal",
+    )?;
+    require(
+        cleanup_arm_local_database_facts(prepared.pool()).await? == before
+            && cleanup_arm_local_object_fact(&path)? == original_object,
+        "P1 old Window refusal changed business rows or original object",
+    )?;
+    fresh
+        .request_binding()
+        .ok_or("P1 new actual Window missing")?
+        .verify_current_before(&fresh, Instant::now() + Duration::from_secs(5))
+        .await
+        .map_err(|error| format!("P1 rebound genuine Window was not current: {error:?}"))?;
+    require(
+        Arc::ptr_eq(&actual, &prepared.artifact_administration),
+        "P1 Local recovery replaced the original Administration/Store",
+    )?;
+
+    if !operation_path {
+        let chunk = prepared
+            .application()
+            .read_current_artifact_chunk(fresh.clone(), fixture.artifact.artifact_id.clone())
+            .await
+            .map_err(|error| format!("P1 rebound same-Store chunk remained refused: {error}"))?;
+        require(
+            cleanup_owned_inode_fds(&path)?.len() == 1,
+            "P1 real Local legacy chunk did not retain its original target FD before handoff",
+        )?;
+        let bytes = chunk.handoff(&fresh).map_err(|error| error.to_string())?;
+        require(
+            bytes == PAYLOAD.as_bytes(),
+            "P1 rebound Window chunk changed actual saved bytes",
+        )?;
+        // This external legacy Vec has no finite allocation-release receipt.
+        drop(bytes);
+        require(
+            cleanup_owned_inode_fds(&path)?.is_empty(),
+            "P1 original Local legacy target FD did not close after its synchronous handoff",
+        )?;
+    }
+    let mut operation = prepared
+        .application()
+        .open_current_artifact_read(fresh.clone(), fixture.artifact.artifact_id.clone())
+        .await
+        .map_err(|error| format!("P1 rebound same-Store operation remained refused: {error}"))?;
+    let pending = operation
+        .next_block(&fresh)
+        .await
+        .map_err(|error| format!("P1 rebound same-Store block remained refused: {error}"))?;
+    require(
+        pending.prefix_length().map_err(|error| error.to_string())? == PAYLOAD.len(),
+        "P1 rebound Window did not materialize its genuine full leased allocation",
+    )?;
+    let frame = pending
+        .handoff_frame(&fresh)
+        .map_err(|error| error.to_string())?;
+    require(
+        frame.as_bytes() == PAYLOAD.as_bytes(),
+        "P1 rebound Window leased frame changed saved bytes",
+    )?;
+    let held_fds = cleanup_owned_inode_fds(&path)?;
+    require(
+        held_fds.len() == 1,
+        "P1 rebound Window did not own exactly its original object FD",
+    )?;
+    let record = actual
+        .observe_read_record(&fresh, &fixture.artifact.artifact_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let barrier = actual
+        .close_observed_artifact_reads(&record)
+        .map_err(|error| error.to_string())?;
+    require(
+        matches!(
+            barrier
+                .drain_before(Instant::now() + Duration::from_millis(25))
+                .await,
+            Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)
+        ),
+        "P1 rebound inventory ACKed a held real allocation or stayed poisoned",
+    )?;
+    drop(operation);
+    require(
+        matches!(
+            barrier
+                .drain_before(Instant::now() + Duration::from_millis(25))
+                .await,
+            Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)
+        ) && cleanup_owned_inode_fds(&path)? == held_fds,
+        "P1 Local operation Drop substituted for the original last allocation owner",
+    )?;
+    drop(frame);
+    let ack = barrier
+        .drain_before(Instant::now() + Duration::from_secs(3))
+        .await
+        .map_err(|error| {
+            format!("P1 same original Local Store failed its finite drain: {error:?}")
+        })?;
+    require(
+        cleanup_owned_inode_fds(&path)?.is_empty()
+            && cleanup_arm_local_object_fact(&path)? == original_object
+            && cleanup_arm_local_database_facts(prepared.pool()).await? == before,
+        "P1 rebound original allocation/FD closure changed rows or retained its actual FD",
+    )?;
+    drop(ack);
+    drop(barrier);
+    eprintln!(
+        "ARTIFACT_READ_P1_LOCAL leg={phase} original_window_revoked=true distinct_rebound_epoch=true old_actual_host_refused=true new_true_window_current=true same_original_store_pair=true new_actual_bytes=true held_allocation_no_ack=true last_original_owner_dropped=true original_fd_absent=true finite_controlled_ack=true physical_delete=false legacy_returned_vec_lifetime=UNTRACKED"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires genuine Prepared Local, revoked/rebound original Window and owned PostgreSQL"]
+async fn revoked_original_window_epoch_does_not_poison_rebound_same_store_artifact_reads_and_drain()
+{
+    let mut failures = Vec::new();
+    for operation_path in [false, true] {
+        let tag = if operation_path {
+            "p1-window-operation"
+        } else {
+            "p1-window-chunk"
+        };
+        let mut bundle = OwnedBundle::materialize().expect("P1 exact owned PostgreSQL bundle");
+        let fixture = LocalFixture::new(&bundle, tag)
+            .await
+            .expect("P1 genuine Prepared Local setup");
+        let outcome = original_window_revocation_read_leg(&fixture, operation_path).await;
+        let cleaned = fixture.finish().await;
+        if cleaned.is_ok() {
+            bundle.root.1 = true;
+        }
+        drop(bundle);
+        if let Err(error) = outcome.and(cleaned) {
+            eprintln!("ARTIFACT_READ_P1_LOCAL leg={tag} actual_result=FAILED");
+            failures.push(format!("{tag}: {error}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "genuine old/new Window read and finite drain regressions: {failures:?}"
+    );
 }
