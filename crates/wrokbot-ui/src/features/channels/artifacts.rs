@@ -2612,7 +2612,7 @@ mod tests {
         let mut remounted = original.clone();
         remounted.source.mount += 1;
         assert!(!actions.may_check_receipt(observer, &remounted));
-        route.dispose();
+        drop(route);
         assert!(!actions.may_check_receipt(observer, &original));
         assert_eq!(
             actions.state.with(|state| state.operation.clone()),
