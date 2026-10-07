@@ -142,10 +142,10 @@ fn append_audit_page(current: &mut Vec<AuditEventView>, page: &AuditPage) -> Res
 #[component]
 fn AuditRow(event: AuditEventView) -> impl IntoView {
     let i18n = use_i18n();
-    let actor = event.actor_user_id.as_ref().map_or_else(
-        || t_string!(i18n, admin.audit_system).to_owned(),
-        |actor| actor.as_str().to_owned(),
-    );
+    let actor = event
+        .actor_user_id
+        .as_ref()
+        .map(|actor| actor.as_str().to_owned());
     let target = event.target_id.as_ref().map_or_else(
         || event.target_type.clone(),
         |target| format!("{} / {target}", event.target_type),
@@ -163,7 +163,7 @@ fn AuditRow(event: AuditEventView) -> impl IntoView {
                 <time datetime=datetime>{timestamp}</time>
             </div>
             <dl class="ob-audit-facts">
-                <div><dt>{move || t!(i18n, admin.audit_actor)}</dt><dd>{actor}</dd></div>
+                <div><dt>{move || t!(i18n, admin.audit_actor)}</dt><dd>{move || actor.clone().unwrap_or_else(|| t_string!(i18n, admin.audit_system).to_owned())}</dd></div>
                 <div><dt>{move || t!(i18n, admin.audit_target)}</dt><dd>{target}</dd></div>
             </dl>
             <details>
