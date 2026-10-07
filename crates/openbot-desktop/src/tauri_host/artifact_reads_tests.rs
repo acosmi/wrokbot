@@ -2948,6 +2948,8 @@ async fn actual_local_original_window_is_required_through_physical_cleanup_compl
 struct TerminalLocalPhaseFacts {
     seen: [usize; 4],
     released: [bool; 4],
+    controller_stage: &'static str,
+    controller_pid: Option<i32>,
     error: Option<String>,
 }
 struct TerminalLocalObserver {
@@ -2978,6 +2980,28 @@ impl TerminalLocalObserver {
             self.release(index);
         }
     }
+    fn controller_stage(&self, stage: &'static str, pid: Option<i32>) {
+        if let Ok(mut facts) = self.facts.lock() {
+            facts.controller_stage = stage;
+            if pid.is_some() {
+                facts.controller_pid = pid;
+            }
+        }
+    }
+    fn diagnostic(&self) -> String {
+        match self.facts.lock() {
+            Ok(facts) => format!(
+                "seen={:?} released={:?} controller_stage={} original_query_pid={:?} deadline_expired={} overdue={:?}",
+                facts.seen,
+                facts.released,
+                facts.controller_stage,
+                facts.controller_pid,
+                Instant::now() >= self.deadline,
+                Instant::now().saturating_duration_since(self.deadline),
+            ),
+            Err(_) => "Local terminal phase mutex poisoned".to_owned(),
+        }
+    }
     fn counts(&self) -> Result<[usize; 4], String> {
         let facts = self
             .facts
@@ -2991,12 +3015,20 @@ impl TerminalLocalObserver {
     async fn wait(&self, index: usize) -> Result<(), String> {
         loop {
             if self.counts()?[index] != 0 {
+                if Instant::now() >= self.deadline {
+                    return Err(format!(
+                        "Local terminal phase observed after original deadline index={index} {}",
+                        self.diagnostic(),
+                    ));
+                }
                 return Ok(());
             }
-            require(
-                Instant::now() < self.deadline,
-                "Local original terminal cutpoint deadline elapsed",
-            )?;
+            if Instant::now() >= self.deadline {
+                return Err(format!(
+                    "Local original terminal cutpoint deadline elapsed index={index} {}",
+                    self.diagnostic(),
+                ));
+            }
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
     }
@@ -3018,19 +3050,33 @@ impl ArtifactCleanupTerminalObserver for TerminalLocalObserver {
                 Some("Local already-absent terminal callback changed identity/FD/order".to_owned());
         }
         self.changed.notify_all();
-        while self.pause[index] && !facts.released[index] {
-            let remaining = self.deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                facts.error = Some(
-                    "Local actual terminal callback was not released inside original budget"
-                        .to_owned(),
-                );
-                break;
-            }
-            match self.changed.wait_timeout(facts, remaining) {
-                Ok((next, _)) => facts = next,
-                Err(_) => return,
-            }
+        drop(facts);
+        if self.pause[index] {
+            // These two test fixtures use multi_thread(2). Hand the executor core over while
+            // this synchronous callback waits for its genuine asynchronous controller.
+            tokio::task::block_in_place(|| {
+                let Ok(mut facts) = self.facts.lock() else {
+                    return;
+                };
+                while !facts.released[index] {
+                    let remaining = self.deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        facts.error = Some(format!(
+                            "Local actual terminal callback was not released inside original budget index={index} phase={phase:?} seen={:?} released={:?} controller_stage={} original_query_pid={:?} overdue={:?}",
+                            facts.seen,
+                            facts.released,
+                            facts.controller_stage,
+                            facts.controller_pid,
+                            Instant::now().saturating_duration_since(self.deadline),
+                        ));
+                        break;
+                    }
+                    match self.changed.wait_timeout(facts, remaining) {
+                        Ok((next, _)) => facts = next,
+                        Err(_) => return,
+                    }
+                }
+            });
         }
     }
 }
@@ -3327,12 +3373,23 @@ async fn terminal_local_query_pid(
                 pid != rows[0].get::<_, i32>("observer_pid"),
                 "Local terminal substituted observer for original producer",
             )?;
+            eprintln!(
+                "ARTIFACT_TERMINAL_LOCAL_QUERY_PID marker={marker} matching_rows={} original_pid={pid} observer_pid={} before_original_deadline={}",
+                rows.len(),
+                rows[0].get::<_, i32>("observer_pid"),
+                Instant::now() < deadline,
+            );
             return Ok(pid);
         }
-        require(
-            rows.is_empty() && Instant::now() < deadline,
-            "Local exact original terminal/query PID was absent or ambiguous",
-        )?;
+        if !rows.is_empty() || Instant::now() >= deadline {
+            let actual_pids: Vec<i32> = rows.iter().map(|row| row.get("pid")).collect();
+            return Err(format!(
+                "Local exact original terminal/query PID was absent or ambiguous marker={marker} matching_rows={} actual_pids={actual_pids:?} deadline_expired={} overdue={:?}",
+                rows.len(),
+                Instant::now() >= deadline,
+                Instant::now().saturating_duration_since(deadline),
+            ));
+        }
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
 }
@@ -3439,21 +3496,27 @@ async fn terminal_local_commit(
             .await
     });
     let controlled = async {
+        gate.controller_stage("commit_wait_before_commit", None);
         gate.wait(1).await?;
+        gate.controller_stage("commit_query_original_pid", None);
         let pid = terminal_local_query_pid(
             &observer,
             "artifact_cleanup_terminal_current_joint",
             deadline,
         )
         .await?;
+        gate.controller_stage("commit_release_before_commit", Some(pid));
         gate.release(1);
+        gate.controller_stage("commit_wait_after_ack", Some(pid));
         gate.wait(2).await?;
+        gate.controller_stage("commit_observe_original_server_disposition", Some(pid));
         terminal_local_server_disposition(&observer, pid, "COMMIT").await?;
         require(
             gate.counts()?[0] == 1 && gate.counts()?[3] == 0,
             "Local worker falsely ended before original real COMMIT and fact cutpoint",
         )?;
         let current = if rebind_after_ack {
+            gate.controller_stage("commit_rebind_actual_window_after_ack", Some(pid));
             terminal_local_rebind(fixture, auth)?
         } else {
             auth.clone()
@@ -3461,6 +3524,12 @@ async fn terminal_local_commit(
         Ok::<_, String>((pid, current))
     }
     .await;
+    eprintln!(
+        "ARTIFACT_TERMINAL_LOCAL_CONTROLLER kind=commit rebind_after_ack={rebind_after_ack} controlled_ok={} controlled_error={:?} {}",
+        controlled.is_ok(),
+        controlled.as_ref().err(),
+        gate.diagnostic(),
+    );
     gate.release_all();
     let result = task.await.map_err(|e| e.to_string())?;
     drop(release);
@@ -3934,17 +4003,26 @@ async fn terminal_local_precommit_rebind(
             .await
     });
     let controlled = async {
+        gate.controller_stage("precommit_rebind_wait_before_commit", None);
         gate.wait(1).await?;
+        gate.controller_stage("precommit_rebind_query_original_pid", None);
         let pid = terminal_local_query_pid(
             &observer,
             "artifact_cleanup_terminal_current_joint",
             deadline,
         )
         .await?;
+        gate.controller_stage("precommit_rebind_actual_window", Some(pid));
         let fresh = terminal_local_rebind(fixture, auth)?;
         Ok::<_, String>((pid, fresh))
     }
     .await;
+    eprintln!(
+        "ARTIFACT_TERMINAL_LOCAL_CONTROLLER kind=precommit_rebind controlled_ok={} controlled_error={:?} {}",
+        controlled.is_ok(),
+        controlled.as_ref().err(),
+        gate.diagnostic(),
+    );
     gate.release_all();
     let result = task.await.map_err(|e| e.to_string())?;
     drop(release);
