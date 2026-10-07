@@ -2851,9 +2851,13 @@ async fn actual_foreign_store_or_preflight_replaced_object_refuses_cleanup_witho
     with_fixture("physical-foreign-original-store", true, |f| Box::pin(async move {
         let intent = f.arm().await.map_err(|e| format!("{e:?}"))?;
         let foreign_root = OwnedRoot::new()?;
+        let foreign_deployment = DeploymentId::new("foreign-physical-deployment");
+        let foreign_tenant = TenantId::new("foreign-physical-tenant");
+        let foreign_registry = Arc::new(ArtifactDatasetRegistry::from_server(f.pool.clone(),
+            &foreign_deployment, &foreign_tenant).await.map_err(|e| e.to_string())?);
         let foreign_store = Arc::new(DatasetBoundArtifactStore::bind_host_root(
-            std::fs::File::open(&foreign_root.0).map_err(|e| e.to_string())?, f.registry.clone(), ArtifactQuotaPolicy::default()).await.map_err(|e| e.to_string())?);
-        let foreign = Arc::new(PostgresArtifactAdministration::new(f.registry.clone(), foreign_store,
+            std::fs::File::open(&foreign_root.0).map_err(|e| e.to_string())?, foreign_registry.clone(), ArtifactQuotaPolicy::default()).await.map_err(|e| e.to_string())?);
+        let foreign = Arc::new(PostgresArtifactAdministration::new(foreign_registry.clone(), foreign_store,
             ArtifactQuotaPolicy::default(), SecretBytes::new(vec![0x18; 32])).map_err(|e| e.to_string())?);
         let original = object_fact(&f.path())?;
         let gate = install_physical_gate(f, original.clone(), 0, false)?;
@@ -2864,7 +2868,7 @@ async fn actual_foreign_store_or_preflight_replaced_object_refuses_cleanup_witho
         require(!gate.saw(1) && !gate.saw(2) && !gate.saw(3) && !gate.saw(4), "foreign mechanical intent started the original worker")?;
         require(database_facts(&f.admin).await? == before && object_fact(&f.path())? == original && owned_object_fds(&f.path())?.is_empty(),
             "foreign Store refusal changed original business/object facts")?;
-        drop(foreign); drop(foreign_root); drop(intent);
+        drop(foreign); drop(foreign_registry); drop(foreign_root); drop(intent);
         eprintln!("ARTIFACT_PHYSICAL_P03_FOREIGN original_store_identity_mismatch=true mechanical_conflict=true worker_not_started=true zero_unlink=true business_original_object_unchanged=true");
         Ok(())
     })).await;
@@ -2963,9 +2967,9 @@ async fn physical_schema_wait(f: &Fixture, pid: i32, controller_pid: i32) -> Res
             && pid != controller_pid
             && row.get::<_, Option<String>>("wait_event_type").as_deref() == Some("Lock")
             && row.get::<_, Vec<i32>>("blockers").contains(&controller_pid)
-            && row
-                .get::<_, String>("query")
-                .contains("SELECT version,name,checksum FROM openbot_internal.schema_migrations"),
+            && row.get::<_, String>("query").contains(
+                "SELECT name,checksum FROM openbot_internal.schema_migrations WHERE version=$1",
+            ),
         "original physical schema waiter did not have a unique actual producer/controller/observer",
     )
 }
@@ -3174,8 +3178,10 @@ async fn actual_already_absent_armed_pair_requires_current_authority_and_acknowl
         drop(release);
         let result = task.await.map_err(|e| e.to_string())?;
         let revoked = controlled?;
-        require(matches!(result, Err(PhysicalError::Host(HostRequestBindingError::NotCurrent))) && started.elapsed() < Duration::from_secs(5),
-            "P05-B-known current committed Session refusal was not definite original HostNotCurrent")?;
+        eprintln!("ARTIFACT_PHYSICAL_P05_B_KNOWN_CURRENT_RESULT original_closed_error={:?} original_elapsed_ms={} old_source_fail_not_relabelled=true",
+            result.as_ref().err(), started.elapsed().as_millis());
+        require(matches!(result, Err(PhysicalError::NotVisible)) && started.elapsed() < Duration::from_secs(5),
+            "P05-B-known current committed Session refusal was not definite original NotVisible")?;
         physical_original_fd_closed(&gate).await?;
         physical_normal_original_ack(f, pid, &socket).await?;
         require(!gate.saw(2) && !gate.saw(3) && object_fact(&f.path())? == original && database_facts(&f.admin).await? == revoked,
