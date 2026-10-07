@@ -1758,3 +1758,232 @@ async fn actual_local_original_window_arms_missing_source_and_rebound_window_is_
         .and(cleaned)
         .expect("actual Local original Window cleanup arm and physical owned closure");
 }
+
+async fn original_window_revocation_read_leg(
+    fixture: &LocalFixture,
+    operation_path: bool,
+) -> Result<(), String> {
+    let phase = if operation_path { "operation" } else { "chunk" };
+    let prepared = fixture.prepared();
+    let actual = Arc::clone(&prepared.artifact_administration);
+    let protocol = Arc::clone(prepared.protocol());
+    let original_auth = protocol
+        .windows
+        .try_read()
+        .map_err(|_| "P1 original Window registry unavailable")?
+        .get("main")
+        .ok_or("P1 original main Window missing")?
+        .auth
+        .clone();
+    let path = fixture
+        .root
+        .0
+        .join("artifacts/objects")
+        .join(&fixture.artifact.artifact_id);
+    let original_object = cleanup_arm_local_object_fact(&path)?;
+    let before = cleanup_arm_local_database_facts(prepared.pool()).await?;
+    require(
+        protocol
+            .unbind_window("main")
+            .map_err(|error| error.to_string())?,
+        "P1 original actual Window was not revoked",
+    )?;
+    protocol
+        .bind_window("main", prepared.auth_context().clone(), None)
+        .map_err(|error| error.to_string())?;
+    let fresh = protocol
+        .windows
+        .try_read()
+        .map_err(|_| "P1 rebound Window registry unavailable")?
+        .get("main")
+        .ok_or("P1 rebound actual Window missing")?
+        .auth
+        .clone();
+    require(
+        fresh == original_auth
+            && !fresh
+                .request_binding()
+                .ok_or("P1 new Window binding missing")?
+                .identity()
+                .same_binding(
+                    original_auth
+                        .request_binding()
+                        .ok_or("P1 old Window binding missing")?
+                        .identity(),
+                ),
+        "P1 real same-label Window rebind changed six Auth facts or reused the old epoch",
+    )?;
+    require(
+        cleanup_arm_local_database_facts(prepared.pool()).await? == before,
+        "P1 Window revocation/rebind wrote business rows",
+    )?;
+
+    // unbind_window stops only previously registered original States. Creating this
+    // operation after revoke makes the genuine old-epoch Host port reject it instead.
+    let old_error = if operation_path {
+        let mut operation = prepared
+            .application()
+            .open_current_artifact_read(original_auth.clone(), fixture.artifact.artifact_id.clone())
+            .await
+            .map_err(|error| format!("P1 old Window operation construction: {error}"))?;
+        let result = operation.next_block(&original_auth).await;
+        drop(operation);
+        result.err()
+    } else {
+        prepared
+            .application()
+            .read_current_artifact_chunk(
+                original_auth.clone(),
+                fixture.artifact.artifact_id.clone(),
+            )
+            .await
+            .err()
+    };
+    require(
+        matches!(
+            old_error,
+            Some(openbot_contracts::error::AppError::Unauthenticated)
+        ),
+        "P1 revoked original Window did not preserve its actual Host refusal",
+    )?;
+    require(
+        cleanup_arm_local_database_facts(prepared.pool()).await? == before
+            && cleanup_arm_local_object_fact(&path)? == original_object,
+        "P1 old Window refusal changed business rows or original object",
+    )?;
+    fresh
+        .request_binding()
+        .ok_or("P1 new actual Window missing")?
+        .verify_current_before(&fresh, Instant::now() + Duration::from_secs(5))
+        .await
+        .map_err(|error| format!("P1 rebound genuine Window was not current: {error:?}"))?;
+    require(
+        Arc::ptr_eq(&actual, &prepared.artifact_administration),
+        "P1 Local recovery replaced the original Administration/Store",
+    )?;
+
+    if !operation_path {
+        let chunk = prepared
+            .application()
+            .read_current_artifact_chunk(fresh.clone(), fixture.artifact.artifact_id.clone())
+            .await
+            .map_err(|error| format!("P1 rebound same-Store chunk remained refused: {error}"))?;
+        require(
+            cleanup_owned_inode_fds(&path)?.len() == 1,
+            "P1 real Local legacy chunk did not retain its original target FD before handoff",
+        )?;
+        let bytes = chunk.handoff(&fresh).map_err(|error| error.to_string())?;
+        require(
+            bytes == PAYLOAD.as_bytes(),
+            "P1 rebound Window chunk changed actual saved bytes",
+        )?;
+        // This external legacy Vec has no finite allocation-release receipt.
+        drop(bytes);
+        require(
+            cleanup_owned_inode_fds(&path)?.is_empty(),
+            "P1 original Local legacy target FD did not close after its synchronous handoff",
+        )?;
+    }
+    let mut operation = prepared
+        .application()
+        .open_current_artifact_read(fresh.clone(), fixture.artifact.artifact_id.clone())
+        .await
+        .map_err(|error| format!("P1 rebound same-Store operation remained refused: {error}"))?;
+    let pending = operation
+        .next_block(&fresh)
+        .await
+        .map_err(|error| format!("P1 rebound same-Store block remained refused: {error}"))?;
+    require(
+        pending.prefix_length().map_err(|error| error.to_string())? == PAYLOAD.len(),
+        "P1 rebound Window did not materialize its genuine full leased allocation",
+    )?;
+    let frame = pending
+        .handoff_frame(&fresh)
+        .map_err(|error| error.to_string())?;
+    require(
+        frame.as_bytes() == PAYLOAD.as_bytes(),
+        "P1 rebound Window leased frame changed saved bytes",
+    )?;
+    let held_fds = cleanup_owned_inode_fds(&path)?;
+    require(
+        held_fds.len() == 1,
+        "P1 rebound Window did not own exactly its original object FD",
+    )?;
+    let record = actual
+        .observe_read_record(&fresh, &fixture.artifact.artifact_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let barrier = actual
+        .close_observed_artifact_reads(&record)
+        .map_err(|error| error.to_string())?;
+    require(
+        matches!(
+            barrier
+                .drain_before(Instant::now() + Duration::from_millis(25))
+                .await,
+            Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)
+        ),
+        "P1 rebound inventory ACKed a held real allocation or stayed poisoned",
+    )?;
+    drop(operation);
+    require(
+        matches!(
+            barrier
+                .drain_before(Instant::now() + Duration::from_millis(25))
+                .await,
+            Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)
+        ) && cleanup_owned_inode_fds(&path)? == held_fds,
+        "P1 Local operation Drop substituted for the original last allocation owner",
+    )?;
+    drop(frame);
+    let ack = barrier
+        .drain_before(Instant::now() + Duration::from_secs(3))
+        .await
+        .map_err(|error| {
+            format!("P1 same original Local Store failed its finite drain: {error:?}")
+        })?;
+    require(
+        cleanup_owned_inode_fds(&path)?.is_empty()
+            && cleanup_arm_local_object_fact(&path)? == original_object
+            && cleanup_arm_local_database_facts(prepared.pool()).await? == before,
+        "P1 rebound original allocation/FD closure changed rows or retained its actual FD",
+    )?;
+    drop(ack);
+    drop(barrier);
+    eprintln!(
+        "ARTIFACT_READ_P1_LOCAL leg={phase} original_window_revoked=true distinct_rebound_epoch=true old_actual_host_refused=true new_true_window_current=true same_original_store_pair=true new_actual_bytes=true held_allocation_no_ack=true last_original_owner_dropped=true original_fd_absent=true finite_controlled_ack=true physical_delete=false legacy_returned_vec_lifetime=UNTRACKED"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires genuine Prepared Local, revoked/rebound original Window and owned PostgreSQL"]
+async fn revoked_original_window_epoch_does_not_poison_rebound_same_store_artifact_reads_and_drain()
+{
+    let mut failures = Vec::new();
+    for operation_path in [false, true] {
+        let tag = if operation_path {
+            "p1-window-operation"
+        } else {
+            "p1-window-chunk"
+        };
+        let mut bundle = OwnedBundle::materialize().expect("P1 exact owned PostgreSQL bundle");
+        let fixture = LocalFixture::new(&bundle, tag)
+            .await
+            .expect("P1 genuine Prepared Local setup");
+        let outcome = original_window_revocation_read_leg(&fixture, operation_path).await;
+        let cleaned = fixture.finish().await;
+        if cleaned.is_ok() {
+            bundle.root.1 = true;
+        }
+        drop(bundle);
+        if let Err(error) = outcome.and(cleaned) {
+            eprintln!("ARTIFACT_READ_P1_LOCAL leg={tag} actual_result=FAILED");
+            failures.push(format!("{tag}: {error}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "genuine old/new Window read and finite drain regressions: {failures:?}"
+    );
+}

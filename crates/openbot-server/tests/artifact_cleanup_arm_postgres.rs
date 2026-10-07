@@ -8,6 +8,7 @@ mod harness {
 
 use http::Request;
 use openbot_application::{ApplicationService, BeginThreadRunRequest, ThreadDirectory};
+use openbot_contracts::artifact_read_protocol::OpenArtifactRead;
 use openbot_contracts::artifacts::{ArtifactRegistrationReceipt, SaveRunMessageTextArtifact};
 use openbot_contracts::auth::{AuthContext, AuthGeneration};
 use openbot_contracts::command::{AppCommand, AppReply, BeginThreadRun, ThreadRunAnchor};
@@ -1252,6 +1253,403 @@ async fn current_saved_owner_arms_after_source_hard_delete_and_read_stays_404() 
         drop(ack);drop(barrier);drop(intent);
         eprintln!("ARTIFACT_CLEANUP_ARM_ORIGINAL_OWNER source_message_absent=true saved_owner_current=true original_commit_ack=true exact_arm_audit=true original_leased_allocation_materialized=true held_allocation_no_ack=true operation_drop_no_ack=true last_allocation_owner_dropped=true original_fd_drop_ack=true object_unchanged=true physical_delete=false");
         Ok(())
+    })).await;
+}
+
+async fn original_session_revocation_read_leg(
+    f: &Fixture,
+    operation_path: bool,
+) -> Result<(), String> {
+    let phase = if operation_path { "operation" } else { "chunk" };
+    let original_object = object_fact(&f.path())?;
+    let before = database_facts(&f.admin).await?;
+    let (original_pid, _original_connection, socket) = f.original().await?;
+    clear_transaction_facts(&socket);
+    let mut controller = f.admin.get().await.map_err(|error| error.to_string())?;
+    let transaction = controller
+        .transaction()
+        .await
+        .map_err(|error| error.to_string())?;
+    let controller_pid: i32 = transaction
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    require(
+        transaction
+            .execute("DELETE FROM public.sessions WHERE id=$1", &[&A_ID])
+            .await
+            .map_err(|error| error.to_string())?
+            == 1,
+        "P1 controller did not revoke exactly the actual original Session",
+    )?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
+    drop(controller);
+    let revoked = database_facts(&f.admin).await?;
+    only_tables_changed(&before, &revoked, &["public.sessions"])?;
+    let old_sessions = before["public.sessions"]
+        .as_array()
+        .ok_or("P1 original sessions missing")?;
+    let retained: Vec<_> = old_sessions
+        .iter()
+        .filter(|row| row["row"]["id"].as_str() != Some(A_ID))
+        .cloned()
+        .collect();
+    require(
+        retained.len() + 1 == old_sessions.len()
+            && revoked["public.sessions"].as_array() == Some(&retained),
+        "P1 Session revoke changed another session or physical row carrier",
+    )?;
+
+    // Construct this actual operation after revocation so the real preliminary Host
+    // port, rather than a preceding close_binding stop, produces the refusal.
+    let old_error = if operation_path {
+        let mut operation = f
+            .application
+            .open_current_artifact_read(f.auth.clone(), f.receipt.artifact_id.clone())
+            .await
+            .map_err(|error| format!("P1 old operation construction: {error}"))?;
+        let result = operation.next_block(&f.auth).await;
+        drop(operation);
+        result.err()
+    } else {
+        f.application
+            .read_current_artifact_chunk(f.auth.clone(), f.receipt.artifact_id.clone())
+            .await
+            .err()
+    };
+    require(
+        matches!(old_error, Some(AppError::Unauthenticated)),
+        "P1 revoked original Session did not preserve its actual Host refusal",
+    )?;
+    let rollback = Hold::Rollback as u8;
+    require(
+        socket.server_ack.load(Ordering::SeqCst) & rollback != 0
+            && socket.forwarded_ack.load(Ordering::SeqCst) & rollback != 0
+            && socket.withheld.load(Ordering::SeqCst) == 0,
+        "P1 known Session refusal lacked the original forwarded ROLLBACK ACK",
+    )?;
+    require(
+        database_facts(&f.admin).await? == revoked && object_fact(&f.path())? == original_object,
+        "P1 old Session refusal changed original business rows or object",
+    )?;
+
+    let fresh = resolve(f.resolver.as_ref(), COOKIE_B).await?;
+    require(
+        fresh == f.auth
+            && !fresh
+                .request_binding()
+                .ok_or("P1 new Session binding missing")?
+                .identity()
+                .same_binding(
+                    f.auth
+                        .request_binding()
+                        .ok_or("P1 old Session binding missing")?
+                        .identity(),
+                ),
+        "P1 new real Session changed six Auth facts or reused the revoked Session identity",
+    )?;
+    fresh
+        .request_binding()
+        .ok_or("P1 fresh Session missing")?
+        .verify_current_before(&fresh, Instant::now() + Duration::from_secs(5))
+        .await
+        .map_err(|error| format!("P1 new real Session was not current: {error:?}"))?;
+    let after_auth = database_facts(&f.admin).await?;
+    only_tables_changed(&revoked, &after_auth, &["public.sessions"])?;
+    let mut expected_sessions = revoked["public.sessions"]
+        .as_array()
+        .ok_or("P1 revoked sessions missing")?
+        .clone();
+    let fresh_sessions = after_auth["public.sessions"]
+        .as_array()
+        .ok_or("P1 fresh sessions missing")?;
+    require(
+        expected_sessions.len() == fresh_sessions.len(),
+        "P1 new authentication changed the Session inventory",
+    )?;
+    for (old, new) in expected_sessions.iter_mut().zip(fresh_sessions) {
+        if old["row"]["id"].as_str() == Some("cleanup-session-b") {
+            old["row"]["updated_at"] = new["row"]["updated_at"].clone();
+            old["xmin"] = new["xmin"].clone();
+            old["ctid"] = new["ctid"].clone();
+        }
+    }
+    require(
+        expected_sessions == *fresh_sessions,
+        "P1 new Session authentication changed fields beyond its original idle clock",
+    )?;
+
+    // Exercise the same original first-chunk path with the new valid Host. A raw
+    // returned Vec is outside the finite allocation ACK and is never used as its proof.
+    if !operation_path {
+        let chunk = f
+            .application
+            .read_current_artifact_chunk(fresh.clone(), f.receipt.artifact_id.clone())
+            .await
+            .map_err(|error| format!("P1 fresh same-Store chunk remained refused: {error}"))?;
+        require(
+            owned_object_fds(&f.path())?.len() == 1,
+            "P1 real legacy chunk did not retain its original target FD before handoff",
+        )?;
+        let bytes = chunk.handoff(&fresh).map_err(|error| error.to_string())?;
+        require(
+            bytes == TEXT.as_bytes(),
+            "P1 new Session chunk changed original saved bytes",
+        )?;
+        drop(bytes);
+        require(
+            owned_object_fds(&f.path())?.is_empty(),
+            "P1 original legacy target FD did not close after its synchronous handoff",
+        )?;
+    }
+    let mut operation = f
+        .application
+        .open_current_artifact_read(fresh.clone(), f.receipt.artifact_id.clone())
+        .await
+        .map_err(|error| format!("P1 fresh same-Store operation remained refused: {error}"))?;
+    let pending = operation
+        .next_block(&fresh)
+        .await
+        .map_err(|error| format!("P1 fresh same-Store block remained refused: {error}"))?;
+    require(
+        pending.prefix_length().map_err(|error| error.to_string())? == TEXT.len(),
+        "P1 new Session did not materialize the genuine full leased allocation",
+    )?;
+    let frame = pending
+        .handoff_frame(&fresh)
+        .map_err(|error| error.to_string())?;
+    require(
+        frame.as_bytes() == TEXT.as_bytes(),
+        "P1 new Session leased frame changed original saved bytes",
+    )?;
+    let held_fds = owned_object_fds(&f.path())?;
+    require(
+        held_fds.len() == 1,
+        "P1 new real Session did not own exactly its original object FD",
+    )?;
+    let record = f
+        .actual
+        .observe_read_record(&fresh, &f.receipt.artifact_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let barrier = f
+        .actual
+        .close_observed_artifact_reads(&record)
+        .map_err(|error| error.to_string())?;
+    require(
+        matches!(
+            barrier
+                .drain_before(Instant::now() + Duration::from_millis(25))
+                .await,
+            Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)
+        ),
+        "P1 fresh Session inventory ACKed a held real allocation or stayed poisoned",
+    )?;
+    drop(operation);
+    require(
+        matches!(
+            barrier
+                .drain_before(Instant::now() + Duration::from_millis(25))
+                .await,
+            Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)
+        ) && owned_object_fds(&f.path())? == held_fds,
+        "P1 operation Drop substituted for the original last allocation owner",
+    )?;
+    drop(frame);
+    let ack = barrier
+        .drain_before(Instant::now() + Duration::from_secs(3))
+        .await
+        .map_err(|error| {
+            format!("P1 same original Store failed its real finite drain: {error:?}")
+        })?;
+    require(
+        owned_object_fds(&f.path())?.is_empty()
+            && object_fact(&f.path())? == original_object
+            && database_facts(&f.admin).await? == after_auth,
+        "P1 actual frame/FD closure changed original business facts or retained its FD",
+    )?;
+    drop(ack);
+    drop(barrier);
+    eprintln!(
+        "ARTIFACT_READ_P1_SESSION leg={phase} original_pid={original_pid} revoke_controller_pid={controller_pid} original_session_delete_commit_ack=true original_read_unauthenticated=true original_rollback_ack_forwarded=true new_real_session_current=true same_store_same_pair=true new_actual_bytes=true held_allocation_no_ack=true last_original_owner_dropped=true original_fd_absent=true finite_controlled_ack=true physical_delete=false legacy_returned_vec_lifetime=UNTRACKED"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires actual isolated PostgreSQL, original Session revocation and same owned Store"]
+async fn revoked_original_server_session_does_not_poison_new_same_store_artifact_reads_and_drain() {
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    for operation_path in [false, true] {
+        let tag = if operation_path {
+            "p1_session_operation"
+        } else {
+            "p1_session_chunk"
+        };
+        let failures = Arc::clone(&failures);
+        with_fixture(tag, true, move |fixture| {
+            Box::pin(async move {
+                let outcome = original_session_revocation_read_leg(fixture, operation_path).await;
+                if let Err(error) = outcome {
+                    eprintln!("ARTIFACT_READ_P1_SESSION leg={tag} actual_result=FAILED");
+                    failures
+                        .lock()
+                        .map_err(|_| "P1 failure aggregation poisoned")?
+                        .push(format!("{tag}: {error}"));
+                }
+                // Preserve both real sub-leg failures while letting the original fixture
+                // close before the final single libtest result is asserted below.
+                Ok(())
+            })
+        })
+        .await;
+    }
+    let failures = failures.lock().expect("P1 original failure records");
+    assert!(
+        failures.is_empty(),
+        "genuine old/new Session read and finite drain regressions: {failures:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires actual original guarded read, withheld ROLLBACK ACK and same owned Store"]
+async fn lost_original_guarded_read_rollback_ack_keeps_same_store_unproven_after_owner_revocation()
+{
+    with_fixture("p1-original-read-rollback-unknown", true, |f| Box::pin(async move {
+        // This genuine original record supplies only the existing finite close key.
+        // It neither replaces the Store nor proves deletion or a public read grant.
+        let original_record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await
+            .map_err(|error| error.to_string())?;
+        let original_object = object_fact(&f.path())?;
+        let before = database_facts(&f.admin).await?;
+        let (original_pid, original_connection, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let relay = f.relay.as_ref().ok_or("P1 original guarded read relay missing")?;
+        let mut controller = f.admin.get().await.map_err(|error| error.to_string())?;
+        let transaction = controller.transaction().await.map_err(|error| error.to_string())?;
+        let controller_pid: i32 = transaction.query_one("SELECT pg_backend_pid()", &[]).await
+            .map_err(|error| error.to_string())?.get(0);
+        transaction.batch_execute("LOCK TABLE openbot_internal.artifact_cleanup_fences IN ACCESS EXCLUSIVE MODE").await
+            .map_err(|error| error.to_string())?;
+        let application = Arc::clone(&f.application);
+        let original_auth = f.auth.clone();
+        let artifact_id = f.receipt.artifact_id.clone();
+        let started = Instant::now();
+        let worker = tokio::spawn(async move {
+            application.execute(original_auth, AppCommand::OpenArtifactRead(OpenArtifactRead { artifact_id })).await
+        });
+        let controlled = async {
+            let wait_deadline = Instant::now() + Duration::from_secs(2);
+            let observer_pid = loop {
+                let observer = f.admin.get().await.map_err(|error| error.to_string())?;
+                let row = observer.query_opt(
+                    "SELECT pg_catalog.pg_backend_pid() AS observer_pid,query,wait_event_type,pg_catalog.pg_blocking_pids(pid) AS blockers FROM pg_catalog.pg_stat_activity WHERE pid=$1",
+                    &[&original_pid],
+                ).await.map_err(|error| error.to_string())?;
+                if let Some(row) = row {
+                    let query: String = row.get("query");
+                    let wait_type: Option<String> = row.get("wait_event_type");
+                    let blockers: Vec<i32> = row.get("blockers");
+                    if wait_type.as_deref() == Some("Lock")
+                        && blockers.contains(&controller_pid)
+                        && query.contains("artifact_private_read_record_snapshot")
+                        && query.contains("FROM visible_run r JOIN openbot_internal.artifact_records a")
+                        && query.contains("LEFT JOIN openbot_internal.artifact_cleanup_fences c")
+                    {
+                        let observer_pid: i32 = row.get("observer_pid");
+                        require(original_pid != controller_pid && observer_pid != original_pid && observer_pid != controller_pid,
+                            "P1 source query producer/controller/observer were not distinct actual backends")?;
+                        break observer_pid;
+                    }
+                }
+                require(Instant::now() < wait_deadline,
+                    "P1 original guarded read never reached the complete source snapshot at its actual controller lock")?;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            // Preliminary Host and schema queries are already past. Withhold only the
+            // ensuing original guarded read's ROLLBACK, after the proven source wait.
+            clear_transaction_facts(&socket);
+            relay.arm(Hold::Rollback);
+            transaction.rollback().await.map_err(|error| error.to_string())?;
+            wait_fact(|| socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8,
+                Instant::now() + Duration::from_secs(2),
+                "P1 actual original guarded read ROLLBACK did not reach its upstream ACK").await?;
+            require(socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+                && socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+                && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+                && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+                "P1 read uncertainty was not its actual original upstream ROLLBACK ACK withheld from the driver")?;
+            Ok::<i32, String>(observer_pid)
+        }.await;
+        drop(controller);
+        // Reap the original task even when a control assertion fails. A requested stop
+        // on that failure path is never a substitute for the evidence below.
+        if controlled.is_err() {
+            let _ = f.application.close_public_artifact_reads();
+        }
+        let original_outcome = worker.await.map_err(|error| error.to_string())?;
+        let observer_pid = controlled?;
+        require(matches!(original_outcome, Err(AppError::DependencyUnavailable { .. })),
+            "P1 missing original read ROLLBACK ACK returned a byte/control grant or definite Host refusal")?;
+        original_five_seconds(started)?;
+        retired_original(f, original_pid, &original_connection, &socket).await?;
+        require(socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+            "P1 original held read ACK was later forwarded or credited after retirement")?;
+        require(database_facts(&f.admin).await? == before && object_fact(&f.path())? == original_object
+            && owned_object_fds(&f.path())?.is_empty(),
+            "P1 original uncertain read changed business/object facts or opened an unowned object FD")?;
+
+        // Revoke the actual old issuer only after its original connection has truly
+        // retired. Install a fresh real resolver on the SAME Administration/Store.
+        f.resolver.close_request_bindings();
+        let fresh_resolver = PostgresSessionAuthResolver::new(f.pool.clone(), SESSION_KEY, default_session_lifetime(),
+            DeploymentId::new(DEPLOYMENT), TenantId::new(TENANT)).map_err(|error| error.to_string())?;
+        fresh_resolver.install_artifact_read_authority(&f.actual.read_authority())
+            .map_err(|_| "P1 new genuine Session issuer enrollment failed")?;
+        let recovery = async {
+            let fresh = resolve(&fresh_resolver, COOKIE_B).await?;
+            require(fresh == f.auth && !fresh.request_binding().ok_or("P1 recovery Session binding missing")?.identity()
+                .same_binding(f.auth.request_binding().ok_or("P1 original Session binding missing")?.identity()),
+                "P1 uncertain read recovery reused the closed owner or changed six Auth facts")?;
+            fresh.request_binding().ok_or("P1 new valid Session missing")?.verify_current_before(&fresh,
+                Instant::now() + Duration::from_secs(5)).await
+                .map_err(|error| format!("P1 new actual Session was not valid independently of Store poison: {error:?}"))?;
+            let after_auth = database_facts(&f.admin).await?;
+            only_tables_changed(&before, &after_auth, &["public.sessions"])?;
+            let mut expected_sessions = before["public.sessions"].as_array().ok_or("P1 original session facts missing")?.clone();
+            let fresh_sessions = after_auth["public.sessions"].as_array().ok_or("P1 recovery session facts missing")?;
+            require(expected_sessions.len() == fresh_sessions.len(), "P1 recovery changed original Session inventory")?;
+            for (old, new) in expected_sessions.iter_mut().zip(fresh_sessions) {
+                if old["row"]["id"].as_str() == Some("cleanup-session-b") {
+                    old["row"]["updated_at"] = new["row"]["updated_at"].clone();
+                    old["xmin"] = new["xmin"].clone();
+                    old["ctid"] = new["ctid"].clone();
+                }
+            }
+            require(expected_sessions == *fresh_sessions,
+                "P1 recovery changed fields beyond the named new Session idle observation")?;
+            let refused = f.application.read_current_artifact_chunk(fresh.clone(), f.receipt.artifact_id.clone()).await;
+            require(matches!(refused, Err(AppError::DependencyUnavailable { .. })),
+                "P1 valid new owner erased original read uncertainty or gained actual bytes")?;
+            let barrier = f.actual.close_observed_artifact_reads(&original_record).map_err(|error| error.to_string())?;
+            require(matches!(barrier.drain_before(Instant::now() + Duration::from_secs(3)).await,
+                Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Unavailable)),
+                "P1 new Host or original driver retirement fabricated a finite Store drain ACK")?;
+            require(database_facts(&f.admin).await? == after_auth && object_fact(&f.path())? == original_object
+                && owned_object_fds(&f.path())?.is_empty(),
+                "P1 permanent uncertain refusal wrote producer rows, changed object or retained its FD")?;
+            drop(barrier);
+            eprintln!("ARTIFACT_READ_P1_ROLLBACK_UNKNOWN original_producer_pid={original_pid} controller_pid={controller_pid} observer_pid={observer_pid} complete_original_source_query_lock_wait=true controller_rollback_ack=true original_upstream_read_rollback_ack=true original_forwarded_read_rollback_ack=false original_five_second_error=true original_driver_destroyed=true corresponding_frontend_eof=true original_backend_gone=true original_owner_closed_after_retirement=true new_true_owner_valid=true same_original_store_pair=true byte_grant=false finite_store_ack=false business_object_unchanged=true held_ack_released=false physical_delete=false");
+            Ok::<(), String>(())
+        }.await;
+        fresh_resolver.close_request_bindings();
+        recovery
     })).await;
 }
 
