@@ -4031,10 +4031,10 @@ async fn actual_terminal_slot_excludes_same_key_and_preserves_independent_keys()
             ).await, Err(TerminalError::ReadsUnproven)), "G124 same-key terminal duplicate entered another original query")?;
             require(matches!(f.actual.remove_armed_explicit_saved_bytes_before(
                 &f.auth, &intent, deadline,
-            ).await, Err(PhysicalError::ReadsUnproven)), "G124 physical cross-mode invocation bypassed the same active slot")?;
+            ).await, Err(PhysicalError::PhysicalUnproven)), "G124 physical cross-mode invocation bypassed the same active slot")?;
             require(matches!(f.actual.observe_armed_explicit_saved_bytes_before(
                 &f.auth, &intent, deadline,
-            ).await, Err(PhysicalError::ReadsUnproven)), "G124 observe cross-mode invocation bypassed the same active slot")?;
+            ).await, Err(PhysicalError::PhysicalUnproven)), "G124 observe cross-mode invocation bypassed the same active slot")?;
             require(object_fact(&second_path)? == second_original && database_facts(&f.admin).await? == before,
                 "G124 refused duplicates changed another artifact or published uncommitted original rows")?;
             Ok::<(), String>(())
@@ -4104,7 +4104,6 @@ async fn actual_terminal_original_quota_wait_uses_latest_aggregate_once() {
                 &[&fresh_total, &f.receipt.source_thread_id.as_str()],
             ).await.map_err(|e| e.to_string())? == 1, "G124 controller did not change its one original quota row")?;
             transaction.commit().await.map_err(|e| e.to_string())?;
-            drop(controller);
             wait_fact(|| gate.seen(), Instant::now() + Duration::from_secs(2),
                 "G124 terminal did not resume from the genuine original quota wait").await?;
             let fresh = database_facts(&f.admin).await?;
@@ -4116,6 +4115,7 @@ async fn actual_terminal_original_quota_wait_uses_latest_aggregate_once() {
                 "G124 nominal controller aggregate was not actually visible after its real COMMIT")?;
             Ok::<_, String>((fresh, fresh_total, controlled_extra))
         }.await;
+        drop(controller);
         drop(release);
         let outcome = task.await.map_err(|e| e.to_string())?;
         let (fresh, fresh_total, controlled_extra) = controlled?;
