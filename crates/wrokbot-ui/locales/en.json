@@ -1188,6 +1188,8 @@
   },
   "artifacts": {
     "save": "Save as artifact",
+    "check_result": "Check save result",
+    "checking_result": "Checking the original save. Please wait…",
     "source_unavailable": "Saving requires a newly confirmed message in this conversation.",
     "saving": "Saving. Please wait…",
     "not_submitted": "The save was not sent. You can try this message again.",

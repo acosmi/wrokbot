@@ -1188,6 +1188,8 @@
   },
   "artifacts": {
     "save": "保存为成果",
+    "check_result": "检查保存结果",
+    "checking_result": "正在核对原保存结果，请稍候…",
     "source_unavailable": "仅可保存当前对话中新确认的消息。",
     "saving": "正在保存，请稍候…",
     "not_submitted": "此次保存未发送，可以重试保存同一条消息。",

@@ -26,6 +26,12 @@ pub(crate) enum SaveError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReceiptReadError {
+    // A refused, absent, cancelled or timed-out observation is never NotSubmitted.
+    Unconfirmed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MetadataError {
     Unauthorized,
     Forbidden,
@@ -48,7 +54,7 @@ fn valid_packet(input: &SaveRunMessageTextArtifact, actor: &ActorId) -> bool {
         && is_valid_artifact_sha256(&input.expected_sha256)
 }
 
-fn receipt_matches(
+pub(crate) fn receipt_matches(
     receipt: &ArtifactRegistrationReceipt,
     input: &SaveRunMessageTextArtifact,
     actor: &ActorId,
@@ -105,6 +111,141 @@ fn decode_save(
         return Err(SaveError::Unknown(ApiError::InvalidResponse));
     }
     Ok(receipt)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn decode_save_receipt(
+    status: u16,
+    no_store: bool,
+    body: &str,
+    input: &SaveRunMessageTextArtifact,
+    actor: &ActorId,
+) -> Result<ArtifactRegistrationReceipt, ReceiptReadError> {
+    // Same closed positive receipt as Save; no status is a negative commit proof.
+    decode_save(status, no_store, body, input, actor).map_err(|_| ReceiptReadError::Unconfirmed)
+}
+
+fn save_receipt_path(
+    input: &SaveRunMessageTextArtifact,
+    actor: &ActorId,
+) -> Result<String, ReceiptReadError> {
+    if !valid_packet(input, actor) {
+        return Err(ReceiptReadError::Unconfirmed);
+    }
+    Ok(format!("/api/artifacts/save-requests/{}", input.request_id))
+}
+
+#[cfg(target_arch = "wasm32")]
+struct ReceiptWaitGuard {
+    window: web_sys::Window,
+    timer: i32,
+    _callback: wasm_bindgen::closure::Closure<dyn FnMut()>,
+    controller: wasm_bindgen::JsValue,
+    abort: js_sys::Function,
+    abort_pending: bool,
+    deadline_resolve: js_sys::Function,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for ReceiptWaitGuard {
+    fn drop(&mut self) {
+        self.window.clear_timeout_with_handle(self.timer);
+        // Release the losing deadline future on success and owner cancellation as well.
+        let _ = self
+            .deadline_resolve
+            .call0(&wasm_bindgen::JsValue::UNDEFINED);
+        if self.abort_pending {
+            let _ = self.abort.call0(&self.controller);
+        }
+    }
+}
+
+/// Explicit read of the original request. Never POST, replay, mint or replace a locator.
+pub(crate) async fn save_receipt(
+    input: &SaveRunMessageTextArtifact,
+    actor: &ActorId,
+) -> Result<ArtifactRegistrationReceipt, ReceiptReadError> {
+    let path = save_receipt_path(input, actor)?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        use futures_util::future::{Either, select};
+        use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+
+        use super::request::Request;
+
+        let unconfirmed = |_| ReceiptReadError::Unconfirmed;
+        let constructor = js_sys::Reflect::get(&js_sys::global(), &"AbortController".into())
+            .map_err(unconfirmed)?
+            .dyn_into::<js_sys::Function>()
+            .map_err(unconfirmed)?;
+        let controller: JsValue = js_sys::Reflect::construct(&constructor, &js_sys::Array::new())
+            .map_err(unconfirmed)?
+            .into();
+        let signal = js_sys::Reflect::get(&controller, &"signal".into()).map_err(unconfirmed)?;
+        let abort = js_sys::Reflect::get(&controller, &"abort".into())
+            .map_err(unconfirmed)?
+            .dyn_into::<js_sys::Function>()
+            .map_err(unconfirmed)?;
+        let window = web_sys::window().ok_or(ReceiptReadError::Unconfirmed)?;
+        let mut timer = None;
+        let mut callback = None;
+        let mut deadline_resolve = None;
+        let deadline = js_sys::Promise::new(&mut |resolve, _| {
+            deadline_resolve = Some(resolve.clone());
+            let ready = Closure::wrap(Box::new(move || {
+                let _ = resolve.call0(&JsValue::UNDEFINED);
+            }) as Box<dyn FnMut()>);
+            timer = window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    ready.as_ref().unchecked_ref(),
+                    15_000,
+                )
+                .ok();
+            callback = Some(ready);
+        });
+        let mut guard = ReceiptWaitGuard {
+            window,
+            timer: timer.ok_or(ReceiptReadError::Unconfirmed)?,
+            _callback: callback.ok_or(ReceiptReadError::Unconfirmed)?,
+            controller,
+            abort,
+            abort_pending: true,
+            deadline_resolve: deadline_resolve.ok_or(ReceiptReadError::Unconfirmed)?,
+        };
+        let body_finished = std::cell::Cell::new(false);
+        let read = Box::pin(async {
+            // Shared SameOrigin/NoStore/redirect-error builder, empty body and query.
+            let response =
+                Request::send(Request::get(&path).abort_signal(Some(signal.unchecked_ref())))
+                    .await
+                    .map_err(|_| ReceiptReadError::Unconfirmed)?;
+            let status = response.status();
+            if status != 200 {
+                return Err(ReceiptReadError::Unconfirmed);
+            }
+            let no_store = has_no_store(&response);
+            let text = response
+                .text()
+                .await
+                .map_err(|_| ReceiptReadError::Unconfirmed)?;
+            body_finished.set(true);
+            let body = zeroize::Zeroizing::new(text);
+            decode_save_receipt(status, no_store, &body, input, actor)
+        });
+        let timeout = Box::pin(wasm_bindgen_futures::JsFuture::from(deadline));
+        match select(read, timeout).await {
+            Either::Left((result, _)) => {
+                guard.abort_pending = !body_finished.get();
+                result
+            }
+            Either::Right(_) => Err(ReceiptReadError::Unconfirmed),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = path;
+        Err(ReceiptReadError::Unconfirmed)
+    }
 }
 
 fn metadata_matches(
@@ -354,6 +495,92 @@ mod tests {
             ));
         }
         assert!(decode_save(200, false, &body, &input, &ActorId::new("actor")).is_err());
+    }
+
+    #[test]
+    fn save_receipt_get_has_original_locator_only_and_refusals_stay_unconfirmed() {
+        let input = packet();
+        let actor = ActorId::new("actor");
+        assert_eq!(
+            save_receipt_path(&input, &actor).unwrap(),
+            format!("/api/artifacts/save-requests/{REQUEST}")
+        );
+        let body = serde_json::to_string(&receipt()).unwrap();
+        assert_eq!(
+            decode_save_receipt(200, true, &body, &input, &actor),
+            Ok(receipt())
+        );
+        for status in [201, 202, 204, 400, 401, 403, 404, 409, 410, 500, 503] {
+            assert_eq!(
+                decode_save_receipt(status, true, &body, &input, &actor),
+                Err(ReceiptReadError::Unconfirmed),
+                "{status}"
+            );
+        }
+        for request in [
+            REQUEST.to_uppercase(),
+            format!("{REQUEST}?actor=other"),
+            format!("{REQUEST}/receipt"),
+            "".into(),
+        ] {
+            let mut bad = input.clone();
+            bad.request_id = request;
+            assert_eq!(
+                save_receipt_path(&bad, &actor),
+                Err(ReceiptReadError::Unconfirmed)
+            );
+        }
+    }
+
+    #[test]
+    fn save_receipt_get_does_not_trust_foreign_extra_missing_or_cacheable_receipts() {
+        let input = packet();
+        let actor = ActorId::new("actor");
+        let good = serde_json::to_value(receipt()).unwrap();
+        for field in [
+            "operationId",
+            "artifactId",
+            "requestId",
+            "ownerActorId",
+            "sourceThreadId",
+            "sourceRunId",
+            "sourceMessageId",
+            "sourceCallSeq",
+            "sourceAttemptSeq",
+            "authGeneration",
+            "windowBinding",
+            "expectedSha256",
+        ] {
+            let mut bad = good.clone();
+            bad[field] = if field.ends_with("Seq") {
+                serde_json::json!(1)
+            } else {
+                serde_json::json!("foreign")
+            };
+            assert_eq!(
+                decode_save_receipt(200, true, &bad.to_string(), &input, &actor),
+                Err(ReceiptReadError::Unconfirmed),
+                "{field}"
+            );
+        }
+        for field in ["sourceCallSeq", "sourceAttemptSeq"] {
+            let mut bad = good.clone();
+            bad.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                decode_save_receipt(200, true, &bad.to_string(), &input, &actor),
+                Err(ReceiptReadError::Unconfirmed)
+            );
+        }
+        for (no_store, body) in [
+            (false, good.to_string()),
+            (true, " ".repeat(MAX_METADATA_RESPONSE_BYTES + 1)),
+            (true, "{}".into()),
+        ] {
+            assert_eq!(
+                decode_save_receipt(200, no_store, &body, &input, &actor),
+                Err(ReceiptReadError::Unconfirmed)
+            );
+        }
     }
 
     #[test]
