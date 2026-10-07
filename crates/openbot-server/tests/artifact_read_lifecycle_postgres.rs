@@ -869,3 +869,155 @@ async fn legacy_first_chunk_workers_are_in_same_root_drain_inventory() {
         eprintln!("ARTIFACT_LIFECYCLE_LEGACY fact=new_original_lease held_no_ack=true actual_drop_drain_ack=true"); Ok(())
     }).await;
 }
+
+async fn shared_lifecycle_business_facts(fixture: &Fixture) -> Result<serde_json::Value, String> {
+    fixture.pool.get().await.map_err(|error| error.to_string())?.query_one(
+        "SELECT jsonb_build_object( \
+         'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text),'[]') FROM openbot_internal.artifact_save_operations o), \
+         'records',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_records r), \
+         'receipts',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]') FROM openbot_internal.artifact_saved_receipts r), \
+         'workspace',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_workspace_quotas q), \
+         'runquota',(SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY to_jsonb(q)::text),'[]') FROM openbot_internal.artifact_run_quotas q), \
+         'fences',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY to_jsonb(c)::text),'[]') FROM openbot_internal.artifact_cleanup_fences c), \
+         'audit',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY id),'[]') FROM public.audit_events a))", &[],
+    ).await.map_err(|error| error.to_string())?.try_get(0).map_err(|error| error.to_string())
+}
+
+async fn shared_lifecycle_record(
+    fixture: &Fixture,
+) -> Result<openbot_infra::artifact_administration::ObservedArtifactReadRecord, String> {
+    let auth = fixture
+        .resolver
+        .resolve(&parts(COOKIE_A)?)
+        .await
+        .map_err(|error| error.to_string())?;
+    fixture
+        .actual
+        .observe_read_record(&auth, &fixture.receipt.artifact_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn finish_shared_lifecycle_fixture(fixture: &Fixture) -> Result<(), String> {
+    let lifecycle = fixture.actual.read_authority().read_lifecycle();
+    lifecycle.close();
+    lifecycle
+        .drain_before(Instant::now() + Duration::from_secs(5))
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    let observations = fixture.pool.connection_observations();
+    fixture.pool.close();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    for original in observations {
+        require(
+            original
+                .wait_for_destruction_before(deadline)
+                .await
+                .map_err(|error| error.to_string())?
+                == pool::ConnectionDestruction::ConnectionDestroyed,
+            "shared lifecycle original connection did not actually destruct",
+        )?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned PostgreSQL; shared original worker/FD inventory, not deletion"]
+async fn shared_read_barrier_cancellation_keeps_actual_worker_and_fd_accounted() {
+    with_fixture("shared-worker-cancel", 256 * 1024, |fixture| async move {
+        let record = shared_lifecycle_record(&fixture).await?;
+        let before = shared_lifecycle_business_facts(&fixture).await?;
+        let mut operation = fixture.state.open_current_artifact_read(&parts(COOKIE_A)?, fixture.receipt.artifact_id.clone())
+            .await.map_err(|error| error.to_string())?;
+        let path = fixture.root.0.join("objects").join(&fixture.receipt.artifact_id);
+        let gate = ReadGate::new(GatePhase::PartialIo);
+        let release = ReleaseReadGate(gate.clone());
+        let subscriber = tracing::Dispatch::new(ReadSubscriber(gate.clone()));
+        let task = tokio::spawn(async move { operation.next_block().await }.with_subscriber(subscriber));
+        let observed = async {
+            await_gate(&gate).await?;
+            let original_fds = owned_file_fds(&path)?;
+            require(original_fds.len() == 1, "shared original worker did not hold exactly its original FD")?;
+            let barrier = fixture.actual.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+            require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err(),
+                "shared close ACKed while the original actual worker held its FD")?;
+            task.abort();
+            require(owned_file_fds(&path)? == original_fds,
+                "consumer abort replaced or closed a held original worker FD")?;
+            Ok::<_, String>(barrier)
+        }.await;
+        task.abort();
+        // Reap the actual consumer while the real blocking worker is still held.
+        let joined = task.await;
+        let while_reaped = owned_file_fds(&path);
+        gate.release();
+        drop(release);
+        let barrier = observed?;
+        require(joined.is_err_and(|error| error.is_cancelled()), "original shared consumer was not actually reaped as cancelled")?;
+        require(while_reaped?.len() == 1, "reaping the consumer falsely proved its original blocking worker ended")?;
+        let ack = barrier.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|error| format!("{error:?}"))?;
+        require(!gate.timed_out.load(Ordering::SeqCst) && owned_file_fds(&path)?.is_empty(),
+            "shared worker ended only by timeout or retained its actual original FD")?;
+        let reopened = fixture.state.read_current_artifact_chunk(&parts(COOKIE_A)?, fixture.receipt.artifact_id.clone())
+            .with_subscriber(tracing::Dispatch::new(ReadSubscriber(gate.clone()))).await;
+        require(reopened.is_err() && gate.partial_events.load(Ordering::SeqCst) == 1,
+            "closed shared key admitted another actual body worker")?;
+        require(before == shared_lifecycle_business_facts(&fixture).await?,
+            "shared cancellation changed original business/charge/receipt/fence/audit facts")?;
+        require(path.is_file(), "shared drain was mistaken for actual object deletion")?;
+        drop(ack); drop(barrier); drop(record);
+        finish_shared_lifecycle_fixture(&fixture).await?;
+        eprintln!("ARTIFACT_SHARED_WORKER consumer_cancel_reaped=true held_original_fd=true actual_worker_end=true original_fd_absent=true controlled_ack=true deletion=false auth_idle_touch=allowed");
+        Ok(())
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned PostgreSQL; actual raw Vec and leased allocation have different scopes"]
+async fn shared_read_barrier_legacy_and_leased_allocations_have_distinct_scope() {
+    with_fixture("shared-legacy-vec", 256 * 1024, |fixture| async move {
+        let record = shared_lifecycle_record(&fixture).await?;
+        let before = shared_lifecycle_business_facts(&fixture).await?;
+        let bytes = fixture.state.read_current_artifact_chunk(&parts(COOKIE_A)?, fixture.receipt.artifact_id.clone())
+            .await.map_err(|error| error.to_string())?;
+        let barrier = fixture.actual.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+        let ack = barrier.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|error| format!("{error:?}"))?;
+        require(bytes == fixture.payload.as_bytes(), "controlled ACK was incorrectly treated as destruction of transferred raw Vec")?;
+        require(owned_file_fds(&fixture.root.0.join("objects").join(&fixture.receipt.artifact_id))?.is_empty(),
+            "legacy raw Vec transfer retained its original physical FD")?;
+        let old = fixture.actual.read_authority().read_lifecycle(); old.close();
+        require(old.drain_before(Instant::now() + Duration::from_secs(3)).await.is_ok(),
+            "legacy limited inventory oracle changed")?;
+        require(before == shared_lifecycle_business_facts(&fixture).await?, "raw Vec shared close changed original business facts")?;
+        drop(bytes); drop(ack); drop(barrier); drop(record);
+        finish_shared_lifecycle_fixture(&fixture).await?;
+        eprintln!("ARTIFACT_SHARED_ALLOCATION fact=legacy_raw_vec external_lifetime=UNTRACKED bytes_still_valid_at_controlled_ack=true deletion_authorized=false");
+        Ok(())
+    }).await;
+    with_fixture("shared-original-lease", 256 * 1024, |fixture| async move {
+        let record = shared_lifecycle_record(&fixture).await?;
+        let before = shared_lifecycle_business_facts(&fixture).await?;
+        let mut operation = fixture.state.open_current_artifact_read(&parts(COOKIE_A)?, fixture.receipt.artifact_id.clone())
+            .await.map_err(|error| error.to_string())?;
+        let block = operation.next_block().await.map_err(|error| error.to_string())?.ok_or("original leased block missing")?;
+        require(block.as_bytes() == fixture.payload.as_bytes(), "original leased allocation prefix differs")?;
+        let path = fixture.root.0.join("objects").join(&fixture.receipt.artifact_id);
+        let original_fds = owned_file_fds(&path)?;
+        require(original_fds.len() == 1, "original leased block did not retain its actual FD")?;
+        let barrier = fixture.actual.close_observed_artifact_reads(&record).map_err(|error| error.to_string())?;
+        require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err()
+            && owned_file_fds(&path)? == original_fds,
+            "shared ACK escaped a held full original leased allocation")?;
+        drop(operation);
+        require(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await.is_err(),
+            "operation Drop substituted for the actual last allocation owner")?;
+        drop(block);
+        let ack = barrier.drain_before(Instant::now() + Duration::from_secs(5)).await.map_err(|error| format!("{error:?}"))?;
+        require(owned_file_fds(&path)?.is_empty() && path.is_file(), "leased resource end was not actual FD closure with object retained")?;
+        require(before == shared_lifecycle_business_facts(&fixture).await?, "leased shared close changed original business facts")?;
+        drop(ack); drop(barrier); drop(record);
+        finish_shared_lifecycle_fixture(&fixture).await?;
+        eprintln!("ARTIFACT_SHARED_ALLOCATION fact=original_lease held_no_ack=true operation_drop_no_ack=true last_allocation_owner_dropped=true original_fd_absent=true controlled_ack=true");
+        Ok(())
+    }).await;
+}

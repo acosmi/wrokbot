@@ -75,6 +75,7 @@ pub(super) async fn prepare(
         artifact_id.to_owned(),
         Some(original_deadline),
     );
+    state.enroll_store(authority.read_store()?, observer.original_entry_stop())?;
     let completion: Arc<dyn ArtifactReadOperationCompletion> = Arc::new(OperationCompletion {
         state: Arc::clone(&state),
     });
