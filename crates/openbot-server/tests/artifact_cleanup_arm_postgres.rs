@@ -587,6 +587,10 @@ struct SocketFacts {
     forwarded_ack: AtomicU8,
     withheld: AtomicU8,
     release_original_ack: AtomicU8,
+    hold_next_begin_after_forwarded_rollback: AtomicBool,
+    forwarded_host_rollback_before_source_begin: AtomicBool,
+    post_schema_source_begin_held: AtomicBool,
+    post_schema_source_begin_forwarded: AtomicBool,
 }
 #[derive(Default)]
 struct RelayState {
@@ -838,12 +842,45 @@ async fn relay_original(
                 {
                     holding = selected as u8;
                     backend_facts.withheld.store(holding, Ordering::SeqCst);
+                    if selected as u8 == Hold::Begin as u8
+                        && backend_facts
+                            .forwarded_host_rollback_before_source_begin
+                            .load(Ordering::SeqCst)
+                    {
+                        backend_facts
+                            .post_schema_source_begin_held
+                            .store(true, Ordering::SeqCst);
+                    }
                 }
             }
             if holding == 0 {
                 frontend_write.write_all(&packet).await?;
                 if bit != 0 {
                     backend_facts.forwarded_ack.fetch_or(bit, Ordering::SeqCst);
+                    if bit == ROLLBACK_BIT
+                        && backend_facts
+                            .hold_next_begin_after_forwarded_rollback
+                            .swap(false, Ordering::SeqCst)
+                    {
+                        // This same original ACK was actually written. Arm the following
+                        // BEGIN before forwarding ReadyForQuery lets the caller continue.
+                        backend_state
+                            .hold
+                            .compare_exchange(
+                                0,
+                                Hold::Begin as u8,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .map_err(|_| {
+                                std::io::Error::other(
+                                    "original source BEGIN gate collided with another hold",
+                                )
+                            })?;
+                        backend_facts
+                            .forwarded_host_rollback_before_source_begin
+                            .store(true, Ordering::SeqCst);
+                    }
                 }
             } else {
                 let ready = packet[0] == b'Z';
@@ -858,9 +895,20 @@ async fn relay_original(
                     for original in original_held_packets.drain(..) {
                         frontend_write.write_all(&original).await?;
                         if original[0] == b'C' {
+                            let original_bit = command_bit(&original[5..]);
                             backend_facts
                                 .forwarded_ack
-                                .fetch_or(command_bit(&original[5..]), Ordering::SeqCst);
+                                .fetch_or(original_bit, Ordering::SeqCst);
+                            if original_bit == BEGIN_BIT
+                                && holding == Hold::Begin as u8
+                                && backend_facts
+                                    .post_schema_source_begin_held
+                                    .load(Ordering::SeqCst)
+                            {
+                                backend_facts
+                                    .post_schema_source_begin_forwarded
+                                    .store(true, Ordering::SeqCst);
+                            }
                         }
                     }
                     backend_facts
@@ -1533,8 +1581,7 @@ async fn lost_original_guarded_read_rollback_ack_keeps_same_store_unproven_after
         let transaction = controller.transaction().await.map_err(|error| error.to_string())?;
         let controller_pid: i32 = transaction.query_one("SELECT pg_backend_pid()", &[]).await
             .map_err(|error| error.to_string())?.get(0);
-        transaction.batch_execute("LOCK TABLE openbot_internal.artifact_cleanup_fences IN ACCESS EXCLUSIVE MODE").await
-            .map_err(|error| error.to_string())?;
+        socket.hold_next_begin_after_forwarded_rollback.store(true, Ordering::SeqCst);
         let application = Arc::clone(&f.application);
         let original_auth = f.auth.clone();
         let artifact_id = f.receipt.artifact_id.clone();
@@ -1543,6 +1590,36 @@ async fn lost_original_guarded_read_rollback_ack_keeps_same_store_unproven_after
             application.execute(original_auth, AppCommand::OpenArtifactRead(OpenArtifactRead { artifact_id })).await
         });
         let controlled = async {
+            wait_fact(|| socket.withheld.load(Ordering::SeqCst) == Hold::Begin as u8
+                && socket.forwarded_host_rollback_before_source_begin.load(Ordering::SeqCst)
+                && socket.post_schema_source_begin_held.load(Ordering::SeqCst),
+                Instant::now() + Duration::from_secs(2),
+                "P1 original source BEGIN ACK was not held after the actual forwarded Host ROLLBACK").await?;
+            require(socket.pid.load(Ordering::SeqCst) == original_pid
+                && !socket.post_schema_source_begin_forwarded.load(Ordering::SeqCst),
+                "P1 source BEGIN hold changed original producer or had already forwarded its ACK")?;
+            let observer = f.admin.get().await.map_err(|error| error.to_string())?;
+            let row = observer.query_one(
+                "SELECT pg_catalog.pg_backend_pid() AS observer_pid,state,query,xact_start IS NOT NULL AS actual_transaction FROM pg_catalog.pg_stat_activity WHERE pid=$1",
+                &[&original_pid],
+            ).await.map_err(|error| error.to_string())?;
+            let begin_observer_pid: i32 = row.get("observer_pid");
+            let begin_query: String = row.get("query");
+            require(begin_observer_pid != original_pid && begin_observer_pid != controller_pid && original_pid != controller_pid
+                && row.get::<_, Option<String>>("state").as_deref() == Some("idle in transaction")
+                && row.get::<_, bool>("actual_transaction")
+                && (begin_query.trim_start().starts_with("BEGIN") || begin_query.trim_start().starts_with("START TRANSACTION"))
+                && begin_query.contains("READ COMMITTED") && begin_query.contains("READ ONLY"),
+                "P1 held post-schema source BEGIN was not the original read-only transaction with distinct observer/controller")?;
+            drop(observer);
+            // The original source schema is now complete; its actual BEGIN ACK remains
+            // withheld so no source table query can preempt this genuine controller lock.
+            transaction.batch_execute("LOCK TABLE openbot_internal.artifact_cleanup_fences IN ACCESS EXCLUSIVE MODE").await
+                .map_err(|error| error.to_string())?;
+            relay.release_original_ack(&socket, Hold::Begin)?;
+            wait_fact(|| socket.post_schema_source_begin_forwarded.load(Ordering::SeqCst),
+                Instant::now() + Duration::from_secs(2),
+                "P1 did not release exactly the held original post-schema source BEGIN ACK").await?;
             let wait_deadline = Instant::now() + Duration::from_secs(2);
             let observer_pid = loop {
                 let observer = f.admin.get().await.map_err(|error| error.to_string())?;
@@ -1645,7 +1722,7 @@ async fn lost_original_guarded_read_rollback_ack_keeps_same_store_unproven_after
                 && owned_object_fds(&f.path())?.is_empty(),
                 "P1 permanent uncertain refusal wrote producer rows, changed object or retained its FD")?;
             drop(barrier);
-            eprintln!("ARTIFACT_READ_P1_ROLLBACK_UNKNOWN original_producer_pid={original_pid} controller_pid={controller_pid} observer_pid={observer_pid} complete_original_source_query_lock_wait=true controller_rollback_ack=true original_upstream_read_rollback_ack=true original_forwarded_read_rollback_ack=false original_five_second_error=true original_driver_destroyed=true corresponding_frontend_eof=true original_backend_gone=true original_owner_closed_after_retirement=true new_true_owner_valid=true same_original_store_pair=true byte_grant=false finite_store_ack=false business_object_unchanged=true held_ack_released=false physical_delete=false");
+            eprintln!("ARTIFACT_READ_P1_ROLLBACK_UNKNOWN original_producer_pid={original_pid} controller_pid={controller_pid} observer_pid={observer_pid} actual_host_rollback_forwarded_before_source_begin=true actual_post_schema_source_begin_held_and_released=true complete_original_source_query_lock_wait=true controller_rollback_ack=true original_upstream_read_rollback_ack=true original_forwarded_read_rollback_ack=false original_five_second_error=true original_driver_destroyed=true corresponding_frontend_eof=true original_backend_gone=true original_owner_closed_after_retirement=true new_true_owner_valid=true same_original_store_pair=true byte_grant=false finite_store_ack=false business_object_unchanged=true held_read_rollback_ack_released=false physical_delete=false");
             Ok::<(), String>(())
         }.await;
         fresh_resolver.close_request_bindings();

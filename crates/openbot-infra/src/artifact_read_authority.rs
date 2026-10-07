@@ -435,16 +435,26 @@ impl PostgresArtifactReadAuthority {
             return Err(host_unavailable().into());
         }
         // The initial check only protects expensive physical work; it is never the final proof.
+        let phase = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        let deadline = state
+            .original_deadline
+            .map_or(phase, |value| value.min(phase));
+        let target = RequestedArtifactReadTarget {
+            id: state.artifact_id.clone(),
+            auth: auth.clone(),
+            identity: Arc::clone(&self.identity),
+            state: Some(Arc::downgrade(state)),
+        };
         let query = state.begin_query()?;
-        let host = original.verify_current(auth).await;
-        if host.is_ok() {
-            query.complete();
-        } else {
-            // An owner/window tail can replace an unacknowledged PG failure with 401.
-            // The merged error port exposes no positive ACK for any such failure.
-            state.mark_closure_unproven();
-        }
-        host.map_err(|error| AppError::from(ArtifactReadCurrentError::Host(error)))?;
+        let host = original
+            .verify_artifact_read_control_current_before(auth, &target, deadline)
+            .await;
+        // A normal control-port result has no original resource or a genuine joint ACK.
+        // Its independent original guard already keeps every unacknowledged exit poisoned.
+        query.complete();
+        drop(host?);
         let administration = self
             .administration
             .upgrade()
@@ -541,24 +551,25 @@ impl PostgresArtifactReadAuthority {
             .request_binding()
             .ok_or_else(|| AppError::from(host_unavailable()))?;
         let host_deadline = if state.original_deadline.is_some() {
-            Some(state.joint_deadline()?)
+            state.joint_deadline()?
         } else {
-            None
+            Instant::now()
+                .checked_add(Duration::from_secs(5))
+                .ok_or(ArtifactReadCurrentError::Unavailable)?
+        };
+        let target = RequestedArtifactReadTarget {
+            id: state.artifact_id.clone(),
+            auth: auth.clone(),
+            identity: Arc::clone(&self.identity),
+            state: Some(Arc::downgrade(state)),
         };
         let query = state.begin_query()?;
-        let host = if let Some(deadline) = host_deadline {
-            original.verify_current_before(auth, deadline).await
-        } else {
-            original.verify_current(auth).await
-        };
-        if host.is_ok() {
-            query.complete();
-        } else {
-            // Preserve host classification, but do not infer original rollback from an
-            // error which a later owner/window check may have reclassified as 401.
-            state.mark_closure_unproven();
-        }
-        host.map_err(|error| AppError::from(ArtifactReadCurrentError::Host(error)))?;
+        let host = original
+            .verify_artifact_read_control_current_before(auth, &target, host_deadline)
+            .await;
+        // Completing this outer reservation never clears the concrete joint guard's poison.
+        query.complete();
+        drop(host?);
         if state.body_is_admitted().is_err() {
             self.classify_requested_refusal(state).await?;
             return Err(ArtifactReadCurrentError::Unavailable.into());

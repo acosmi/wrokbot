@@ -711,6 +711,12 @@ impl ArtifactReadOperation for LifecycleReadOperation {
                 return Err(error.into());
             }
         };
+        // Freeze this original phase/overall deadline while the admitted State is still idle.
+        let receive_deadline = if self.state.original_deadline.is_some() {
+            Some(self.state.joint_deadline()?)
+        } else {
+            None
+        };
         if let Err(error) = self.state.begin() {
             drop(job);
             if self.state.body_is_admitted().is_err() {
@@ -740,8 +746,7 @@ impl ArtifactReadOperation for LifecycleReadOperation {
             state: Arc::clone(&self.state),
             completed: false,
         };
-        let result = if self.state.original_deadline.is_some() {
-            let deadline = self.state.joint_deadline()?;
+        let result = if let Some(deadline) = receive_deadline {
             tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), receiver)
                 .await
                 .map_err(|_| operation_unavailable())?
@@ -749,8 +754,15 @@ impl ArtifactReadOperation for LifecycleReadOperation {
         } else {
             receiver.await.map_err(|_| operation_unavailable())?
         };
-        if self.state.original_deadline.is_some() {
-            self.state.check_current()?;
+        if let Some(deadline) = receive_deadline {
+            if Instant::now() >= deadline {
+                return Err(operation_unavailable());
+            }
+            // finish_failed stops this original owner before sending its classified error.
+            // Only successful data may use stopped/body-admission state as an additional tail.
+            if result.is_ok() {
+                self.state.check_current()?;
+            }
         }
         attempt.completed = true;
         result

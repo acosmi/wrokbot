@@ -1008,6 +1008,37 @@ impl VerifiedHostRequestBinding {
         witness.verify_current(auth, deadline)?;
         self.check_source_run_artifact_ids_attachment(auth, deadline)
     }
+    /// Observe the original host/source for a control check without requiring a physical body.
+    /// The concrete guarded joint port retains every original unacknowledged query fact.
+    pub async fn verify_artifact_read_control_current_before(
+        &self,
+        auth: &AuthContext,
+        target: &dyn ArtifactReadCurrentTarget,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn ArtifactReadTailWitness>, ArtifactReadCurrentError> {
+        self.check_artifact_read_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        let outcome = self
+            .guard
+            .verify_artifact_read_current_before(auth, target, deadline)
+            .await;
+        self.check_artifact_read_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(ArtifactReadCurrentError::Host(
+                HostRequestBindingError::NotCurrent,
+            ));
+        }
+        let witness = outcome?;
+        self.verify_artifact_read_control_tail(auth, witness.as_ref(), deadline)?;
+        Ok(Box::new(OriginalArtifactReadTail {
+            original: self.clone(),
+            witness,
+        }))
+    }
     /// 执行实际原宿主与成果来源的最后联合观察；返回封闭同步见证而不是正文。
     pub async fn verify_artifact_read_current_before(
         &self,

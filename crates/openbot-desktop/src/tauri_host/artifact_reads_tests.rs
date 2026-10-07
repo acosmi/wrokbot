@@ -401,11 +401,24 @@ impl LocalFixture {
         )
         .await
         .map_err(|error| error.to_string())?;
+        let p1_setup_diagnostic = matches!(label, "p1-window-chunk" | "p1-window-operation");
+        let setup_diagnostic = if p1_setup_diagnostic {
+            Some("ARTIFACT_LOCAL_P1_SETUP_DIAGNOSTIC")
+        } else if label == "public-read-cached-cleanup" {
+            Some("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC")
+        } else {
+            None
+        };
         let populated = async {
             prepared
                 .protocol()
                 .bind_window("main", prepared.auth_context().clone(), None)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| {
+                    if p1_setup_diagnostic {
+                        eprintln!("ARTIFACT_LOCAL_P1_SETUP_DIAGNOSTIC phase=bind_window original_app_error={error}");
+                    }
+                    error.to_string()
+                })?;
             let auth = prepared
                 .protocol()
                 .windows
@@ -432,8 +445,8 @@ impl LocalFixture {
                         .execute(auth.clone(), AppCommand::BeginThreadRun(begin.clone()))
                         .await
                         .map_err(|error| {
-                            if label == "public-read-cached-cleanup" {
-                                eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=BeginThreadRun original_app_error={error}");
+                            if let Some(diagnostic) = setup_diagnostic {
+                                eprintln!("{diagnostic} phase=BeginThreadRun original_app_error={error}");
                             }
                             error.to_string()
                         })?,
@@ -455,11 +468,11 @@ impl LocalFixture {
                     }),
                 )
                 .await;
-            if label == "public-read-cached-cleanup" {
+            if let Some(diagnostic) = setup_diagnostic {
                 if let Err(error) = &receipt {
-                    eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=SaveRunMessageTextArtifact original_app_error={error}");
+                    eprintln!("{diagnostic} phase=SaveRunMessageTextArtifact original_app_error={error}");
                     let schema = openbot_infra::artifact_administration::verify_artifact_registration_schema(prepared.pool()).await;
-                    eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC phase=post_original_Save_error legacy41_42={schema:?}");
+                    eprintln!("{diagnostic} phase=post_original_Save_error legacy41_42={schema:?}");
                     if matches!(&schema, Err(openbot_application::ArtifactAdministrationError::Corrupt { field: "registration_schema" })) {
                         let expected = serde_json::from_str::<serde_json::Value>(include_str!("../../../../fixtures/db/artifact-registration-0042.json"));
                         let actual = openbot_infra::artifact_administration::capture_artifact_registration_schema(prepared.pool()).await;
@@ -467,10 +480,10 @@ impl LocalFixture {
                             (Ok(expected), Ok(actual)) => {
                                 let mut paths = Vec::new();
                                 cleanup_cached_schema_difference_paths(&expected, &actual, "", &mut paths);
-                                eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC legacy42_difference_paths={paths:?} path_limit=16 values_omitted=true");
+                                eprintln!("{diagnostic} legacy42_difference_paths={paths:?} path_limit=16 values_omitted=true");
                             }
-                            (Err(_), _) => eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC fixed_original_oracle_decode_failed=true"),
-                            (_, Err(error)) => eprintln!("ARTIFACT_LOCAL_CACHED_SETUP_DIAGNOSTIC legacy42_capture_error={error:?}"),
+                            (Err(_), _) => eprintln!("{diagnostic} fixed_original_oracle_decode_failed=true"),
+                            (_, Err(error)) => eprintln!("{diagnostic} legacy42_capture_error={error:?}"),
                         }
                     }
                 }
