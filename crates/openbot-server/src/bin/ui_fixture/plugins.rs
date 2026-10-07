@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use openbot_application::{McpConnectionAdministration, McpConnectionError};
-use openbot_contracts::auth::{AuthContext, Role};
+use openbot_contracts::auth::{AuthContext, AuthGeneration, Role};
+use openbot_contracts::ids::{ActorId, BotId, DeploymentId, TenantId};
 use openbot_contracts::mcp::*;
 use serde_json::json;
 
@@ -15,6 +16,16 @@ pub(super) struct PluginsFixture {
     base: super::FixtureConnections,
     inner: Arc<Mutex<Rows>>,
     next_mode: Arc<AtomicU8>,
+    home_skills: Option<HomeSkillsScope>,
+}
+
+#[derive(Clone)]
+struct HomeSkillsScope {
+    deployment: DeploymentId,
+    tenant: TenantId,
+    actor: ActorId,
+    auth_generation: AuthGeneration,
+    agent: BotId,
 }
 
 struct Rows {
@@ -40,7 +51,20 @@ impl PluginsFixture {
                 connected: Vec::new(),
             })),
             next_mode: Arc::new(AtomicU8::new(0)),
+            home_skills: None,
         }
+    }
+
+    // Synthetic Home QA data, enabled only by the Memory/fixed startup opt-in.
+    pub(super) fn with_home_skills(mut self, auth: &AuthContext) -> Self {
+        self.home_skills = Some(HomeSkillsScope {
+            deployment: auth.deployment().clone(),
+            tenant: auth.tenant().clone(),
+            actor: auth.actor().clone(),
+            auth_generation: auth.auth_generation(),
+            agent: BotId::new("fixture-owned-public"), // Operations Guide.
+        });
+        self
     }
 
     pub(super) fn control(&self, mode: u8) -> bool {
@@ -137,6 +161,46 @@ fn server(id: &str, title: &str, authentication: McpAdminAuthentication) -> McpA
 
 #[async_trait]
 impl McpConnectionAdministration for PluginsFixture {
+    async fn list_for_agent(
+        &self,
+        auth: &AuthContext,
+        agent_id: &BotId,
+    ) -> Result<GrantedPlugins, McpConnectionError> {
+        let scope = self
+            .home_skills
+            .as_ref()
+            .ok_or(McpConnectionError::Unavailable)?;
+        if auth.deployment() != &scope.deployment
+            || auth.tenant() != &scope.tenant
+            || auth.actor() != &scope.actor
+            || auth.auth_generation() != scope.auth_generation
+            || !auth.has_role(Role::User)
+            || agent_id != &scope.agent
+        {
+            return Err(McpConnectionError::NotVisible);
+        }
+        Ok(GrantedPlugins {
+            tools: Vec::new(),
+            skills: vec![
+                GrantedPluginSkill {
+                    slug: "review-note".to_owned(),
+                    title: "Review note".to_owned(),
+                    summary: "Synthetic Home QA selection".to_owned(),
+                    instructions: "Fixture-only: review the supplied note; no external calls."
+                        .to_owned(),
+                },
+                GrantedPluginSkill {
+                    slug: "check-list".to_owned(),
+                    title: "Check list".to_owned(),
+                    summary: "Synthetic Home QA order check".to_owned(),
+                    instructions:
+                        "Fixture-only: preserve the supplied checklist order; no external calls."
+                            .to_owned(),
+                },
+            ],
+        })
+    }
+
     async fn list_admin_page(
         &self,
         auth: &AuthContext,
@@ -408,5 +472,158 @@ impl McpConnectionAdministration for PluginsFixture {
         }
         self.after(mode, if enabled { "grant" } else { "revoke" }, id)?;
         Ok(PluginMutationAcknowledged { ok: true })
+    }
+}
+
+#[cfg(test)]
+mod home_skills_tests {
+    use super::*;
+
+    fn auth(
+        deployment: &str,
+        tenant: &str,
+        actor: &str,
+        generation: u64,
+        roles: &[Role],
+    ) -> AuthContext {
+        AuthContext::for_test(
+            DeploymentId::new(deployment),
+            TenantId::new(tenant),
+            ActorId::new(actor),
+            roles.iter().copied(),
+            AuthGeneration::new(generation),
+            false,
+        )
+    }
+
+    fn fixed_auth(roles: &[Role]) -> AuthContext {
+        auth(
+            super::super::FIXTURE_DEPLOYMENT,
+            super::super::FIXTURE_TENANT,
+            super::super::FIXTURE_ACTOR,
+            1,
+            roles,
+        )
+    }
+
+    fn fixture() -> PluginsFixture {
+        PluginsFixture::new(super::super::FixtureConnections::new(
+            ActorId::new(super::super::FIXTURE_ACTOR),
+            39015,
+            time::OffsetDateTime::UNIX_EPOCH,
+        ))
+    }
+
+    #[tokio::test]
+    async fn home_skills_default_remains_unavailable_for_fixed_and_foreign_callers() {
+        let fixture = fixture();
+        for caller in [
+            fixed_auth(&[Role::User, Role::Admin]),
+            auth("other-deployment", "other-tenant", "other-actor", 2, &[]),
+        ] {
+            for agent in ["fixture-owned-public", "fixture-owned-private"] {
+                assert!(matches!(
+                    fixture.list_for_agent(&caller, &BotId::new(agent)).await,
+                    Err(McpConnectionError::Unavailable)
+                ));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn home_skills_opt_in_returns_only_ordered_synthetic_skills_to_the_full_scope() {
+        let fixture = fixture().with_home_skills(&fixed_auth(&[Role::User, Role::Admin]));
+        let agent = BotId::new("fixture-owned-public");
+        for caller in [
+            fixed_auth(&[Role::User]),
+            fixed_auth(&[Role::User, Role::Admin]),
+        ] {
+            let mut granted = fixture.list_for_agent(&caller, &agent).await.unwrap();
+            assert!(granted.tools.is_empty());
+            assert_eq!(
+                granted
+                    .skills
+                    .iter()
+                    .map(|skill| skill.slug.as_str())
+                    .collect::<Vec<_>>(),
+                ["review-note", "check-list"]
+            );
+            assert!(granted.skills.iter().all(|skill| {
+                skill.summary.starts_with("Synthetic ")
+                    && skill.instructions.starts_with("Fixture-only: ")
+                    && skill.instructions.ends_with("no external calls.")
+            }));
+            // A caller-owned reply cannot mutate later grants or manufacture a tool grant.
+            granted.skills.clear();
+            assert_eq!(
+                fixture
+                    .list_for_agent(&caller, &agent)
+                    .await
+                    .unwrap()
+                    .skills
+                    .len(),
+                2
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn home_skills_opt_in_rejects_each_foreign_scope_dimension_and_non_user_role() {
+        let fixture = fixture().with_home_skills(&fixed_auth(&[Role::User, Role::Admin]));
+        let agent = BotId::new("fixture-owned-public");
+        for caller in [
+            auth(
+                "foreign",
+                super::super::FIXTURE_TENANT,
+                super::super::FIXTURE_ACTOR,
+                1,
+                &[Role::User],
+            ),
+            auth(
+                super::super::FIXTURE_DEPLOYMENT,
+                "foreign",
+                super::super::FIXTURE_ACTOR,
+                1,
+                &[Role::User],
+            ),
+            auth(
+                super::super::FIXTURE_DEPLOYMENT,
+                super::super::FIXTURE_TENANT,
+                "foreign",
+                1,
+                &[Role::User],
+            ),
+            auth(
+                super::super::FIXTURE_DEPLOYMENT,
+                super::super::FIXTURE_TENANT,
+                super::super::FIXTURE_ACTOR,
+                2,
+                &[Role::User],
+            ),
+            fixed_auth(&[Role::Admin]),
+            fixed_auth(&[]),
+        ] {
+            assert!(matches!(
+                fixture.list_for_agent(&caller, &agent).await,
+                Err(McpConnectionError::NotVisible)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn home_skills_opt_in_rejects_every_agent_except_operations_guide() {
+        let caller = fixed_auth(&[Role::User]);
+        let fixture = fixture().with_home_skills(&caller);
+        for agent in [
+            "fixture-owned-private",
+            "fixture-system-public",
+            "missing-agent",
+            "Fixture-owned-public",
+        ] {
+            assert!(matches!(
+                fixture.list_for_agent(&caller, &BotId::new(agent)).await,
+                Err(McpConnectionError::NotVisible)
+            ));
+        }
     }
 }
