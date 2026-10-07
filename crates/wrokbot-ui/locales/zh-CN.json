@@ -1185,5 +1185,33 @@
     "custom_source": "自定义 API",
     "custom_setup_note": "当前没有可用的自定义模型连接；仍可读取获准历史，助手配置的模型需按实际运行能力确认。",
     "custom_setup_action": "配置自定义模型"
+  },
+  "artifacts": {
+    "save": "保存为成果",
+    "source_unavailable": "仅可保存当前对话中新确认的消息。",
+    "saving": "正在保存，请稍候…",
+    "not_submitted": "此次保存未发送，可以重试保存同一条消息。",
+    "title": "保存的文本",
+    "registered": "保存已确认。",
+    "refresh": "读取成果详情",
+    "loading": "正在读取成果详情…",
+    "details": "成果详情",
+    "failed_partial": "成果不完整",
+    "available": "可用",
+    "identifier": "成果标识",
+    "media_type": "媒体类型",
+    "size": "大小（字节）",
+    "digest": "SHA-256",
+    "source_thread": "来源对话",
+    "source_run": "来源运行",
+    "retention": "显式保存的成果保留至删除。",
+    "limits": "上限：单个成果 64 MiB、每次运行 32 个成果、每个工作区 16 GiB。",
+    "unauthorized": "请确认当前登录账号后再读取详情。",
+    "not_visible": "当前账号无法访问此成果。",
+    "deleted": "此成果已删除。",
+    "expired": "此成果已过期。",
+    "unavailable": "暂时无法读取成果详情，可以重试读取。",
+    "invalid_response": "无法核对成果详情，可以重试读取。",
+    "unknown": "此次保存尚未确认，请勿重复提交。"
   }
 }
