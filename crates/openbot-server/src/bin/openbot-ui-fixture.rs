@@ -124,6 +124,7 @@ const FIXTURE_PG_RUN: &str = "fixture-pg-approval-run";
 const FIXTURE_PG_CALL: &str = "fixture-pg-approval-call";
 const FIXTURE_APPROVAL_DATABASE_URL: &str = "OPENBOT_UI_APPROVAL_DATABASE_URL";
 const FIXTURE_AUTH_JOURNEY_ENV: &str = "OPENBOT_UI_AUTH_FIXTURE";
+const FIXTURE_HOME_SKILLS_ENV: &str = "OPENBOT_UI_HOME_SKILLS_FIXTURE";
 const FIXTURE_APPROVAL_DATABASE_PREFIX: &str = "openbot_ui_approval_fixture_";
 const FIXTURE_APPROVAL_AUDIT_KEY: &[u8] = b"fixture-approval-audit-key-at-least-32";
 const FIXTURE_SESSION_ID: &str = "fixture-pg-session";
@@ -3617,6 +3618,32 @@ fn auth_journey_enabled() -> Result<bool, Box<dyn Error>> {
     }
 }
 
+fn home_skills_fixture_enabled(value: Option<&std::ffi::OsStr>) -> Result<bool, std::io::Error> {
+    match value {
+        None => Ok(false),
+        Some(value) if value == std::ffi::OsStr::new("1") => Ok(true),
+        Some(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "OPENBOT_UI_HOME_SKILLS_FIXTURE must be exactly 1 when present",
+        )),
+    }
+}
+
+fn validate_home_skills_fixture_mode(
+    enabled: bool,
+    approval_mode: &str,
+    auth_mode: &str,
+    auth_journey: bool,
+) -> Result<(), std::io::Error> {
+    if enabled && (approval_mode != "memory" || auth_mode != "fixed" || auth_journey) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Synthetic Home skills require Memory/fixed mode without the auth journey",
+        ));
+    }
+    Ok(())
+}
+
 async fn auth_journey_middleware(
     axum::extract::State(probe): axum::extract::State<AuthJourneyProbe>,
     request: axum::extract::Request,
@@ -3745,6 +3772,19 @@ fn is_auth_journey_protected_path(path: &str) -> bool {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (dist, port) = arguments()?;
     let auth_journey = auth_journey_enabled()?;
+    let home_skills_fixture =
+        home_skills_fixture_enabled(std::env::var_os(FIXTURE_HOME_SKILLS_ENV).as_deref())?;
+    // Reject the opt-in before PostgreSQL assembly or any listening socket.
+    validate_home_skills_fixture_mode(
+        home_skills_fixture,
+        if std::env::var_os(FIXTURE_APPROVAL_DATABASE_URL).is_some() {
+            "postgres"
+        } else {
+            "memory"
+        },
+        "fixed",
+        auth_journey,
+    )?;
     let now = OffsetDateTime::now_utc();
     let generation = AuthGeneration::new(1);
     let tenant = TenantId::new(FIXTURE_TENANT);
@@ -3769,6 +3809,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         mode: approval_mode,
         auth_mode,
     } = assemble_approval_fixture(now, &context).await?;
+    validate_home_skills_fixture_mode(home_skills_fixture, approval_mode, auth_mode, auth_journey)?;
+    let home_skills_context = home_skills_fixture.then(|| context.clone());
     let lifetime = default_session_lifetime();
     let resolver: Arc<dyn AuthResolver> = match auth_resolver {
         Some(resolver) => resolver,
@@ -3801,6 +3843,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let routing_probe = routing.probe();
     let agents = Arc::new(FixtureAgents::new());
     let plugins = fixture_plugins::PluginsFixture::new(connections);
+    let plugins = match home_skills_context.as_ref() {
+        Some(context) => plugins.with_home_skills(context),
+        None => plugins,
+    };
     let credentials = fixture_credentials::assemble(postgres_probe.as_ref())?;
     let application: Arc<dyn ApplicationService> = Arc::new(
         OpenBotApplication::new(channels.clone())
@@ -3958,6 +4004,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("OPENBOT_UI_APPROVAL_MODE={approval_mode}");
     println!("OPENBOT_UI_AUTH_MODE={auth_mode}");
     println!("OPENBOT_UI_AUTH_JOURNEY={auth_journey}");
+    if home_skills_fixture {
+        println!("OPENBOT_UI_HOME_SKILLS_FIXTURE=1");
+        println!("OPENBOT_UI_HOME_SKILLS_PROVENANCE=Synthetic");
+    }
     println!("OPENBOT_UI_FIXTURE_URL={origin}/approvals");
     axum::serve(listener, router).await?;
     Ok(())
@@ -3985,6 +4035,57 @@ mod approval_pg_tests {
     use super::*;
     use openbot_domain::policy::{ActionPolicy, PolicyMode};
     use openbot_domain::routing::RoutingReasonCode;
+
+    #[test]
+    fn home_skills_fixture_flag_is_absent_or_exact_one_without_echoing_rejected_values() {
+        use std::ffi::OsStr;
+
+        assert!(!home_skills_fixture_enabled(None).unwrap());
+        assert!(home_skills_fixture_enabled(Some(OsStr::new("1"))).unwrap());
+        for value in ["", "0", "true", " 1", "1\n", "private-value-canary"] {
+            let error = home_skills_fixture_enabled(Some(OsStr::new(value))).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert_eq!(
+                error.to_string(),
+                "OPENBOT_UI_HOME_SKILLS_FIXTURE must be exactly 1 when present"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn home_skills_fixture_flag_rejects_non_unicode_without_disclosing_it() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let error =
+            home_skills_fixture_enabled(Some(std::ffi::OsStr::from_bytes(b"\xff"))).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "OPENBOT_UI_HOME_SKILLS_FIXTURE must be exactly 1 when present"
+        );
+    }
+
+    #[test]
+    fn home_skills_fixture_opt_in_requires_memory_fixed_without_auth_journey() {
+        assert!(validate_home_skills_fixture_mode(true, "memory", "fixed", false).is_ok());
+        for (approval, auth, journey) in [
+            ("postgres", "fixed", false),
+            ("memory", "session", false),
+            ("memory", "fixed", true),
+            ("private-mode-canary", "private-auth-canary", false),
+        ] {
+            let error =
+                validate_home_skills_fixture_mode(true, approval, auth, journey).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert_eq!(
+                error.to_string(),
+                "Synthetic Home skills require Memory/fixed mode without the auth journey"
+            );
+            // None leaves every existing assembly mode under its original startup validation.
+            assert!(validate_home_skills_fixture_mode(false, approval, auth, journey).is_ok());
+        }
+    }
 
     #[tokio::test]
     async fn agent_callback_fixture_rotates_and_revokes_one_time_values() {
