@@ -1,5 +1,6 @@
 //! Channel destination route slices.
 
+pub(crate) mod artifacts;
 pub mod composer;
 pub mod conversation;
 pub mod detail;

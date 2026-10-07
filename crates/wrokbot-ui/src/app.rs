@@ -53,6 +53,7 @@ fn AuthenticatedWorkspace() -> impl IntoView {
     provide_context(crate::features::approvals::attention::RemoteInterruptActions::new());
     provide_context(crate::features::admin::plugins::PluginActions::new());
     provide_context(crate::features::memory::remember::RememberActions::new());
+    provide_context(crate::features::channels::artifacts::ArtifactActions::new());
     let model_actions = crate::features::settings::models::ModelActions::new();
     provide_context(model_actions);
     provide_context(
@@ -64,6 +65,7 @@ fn AuthenticatedWorkspace() -> impl IntoView {
     view! {
         <AppLayout>
             <crate::configuration_writes::ConfigurationWriteNotice />
+            <crate::features::channels::artifacts::ArtifactUnknownNotice />
             <AppRoutes />
         </AppLayout>
     }

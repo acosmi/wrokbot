@@ -24,6 +24,7 @@ use openbot_contracts::sandboxed::is_sandboxed_component_name;
 use openbot_contracts::text::trim_ecmascript;
 use sha2::{Digest, Sha256};
 
+use super::artifacts::{ArtifactMessageActions, ArtifactSourceObserver};
 use super::run_observation::{ObservedRunDirectory, OutputPhase, RunObservation};
 #[cfg(target_arch = "wasm32")]
 use crate::api::desktop_transport::{
@@ -846,6 +847,7 @@ fn ConversationSurface(
     let streaming_agent_seed = StoredValue::new(agent_seed.clone());
     let streaming_agent_name = StoredValue::new(agent_name.clone());
     let thread_id = RwSignal::new(thread);
+    let artifact_source = ArtifactSourceObserver::new(thread_id, agent_id, run_anchor);
     let allow_missing_snapshot = RwSignal::new(fresh_thread);
     let observed_runs = expect_context::<ObservedRunDirectory>();
     let state = RwSignal::new(ConversationState {
@@ -872,6 +874,7 @@ fn ConversationSurface(
         stream_error,
         reload_generation,
         allow_missing_snapshot,
+        artifact_source,
     );
     let component_attention =
         expect_context::<crate::features::approvals::attention::ComponentDecisionActions>();
@@ -1155,6 +1158,7 @@ fn ConversationSurface(
                 submitting.set(false);
                 return;
             };
+            artifact_source.stage_begin(&attempt);
             let result = begin_thread_run_with_skills_and_model(
                 resolved_thread,
                 &attempt.agent_id,
@@ -1165,6 +1169,7 @@ fn ConversationSurface(
                 attempt.model_selection.as_ref(),
             )
             .await;
+            artifact_source.begin_reply(&attempt.run_id, result.as_ref().map_err(|_| ()));
             match &result {
                 Ok(_) => ticket.accepted(),
                 Err(error) => ticket.failed(*error),
@@ -1572,6 +1577,7 @@ fn ConversationSurface(
                                         component_ask_disabled
                                         on_remember
                                         memory_available=thread_id.get().is_some()
+                                        artifact_source
                                     />
                                 }
                             }
@@ -1841,8 +1847,10 @@ fn TranscriptMessage(
     component_ask_disabled: Signal<bool>,
     on_remember: UnsyncCallback<(String, String)>,
     memory_available: bool,
+    artifact_source: ArtifactSourceObserver,
 ) -> impl IntoView {
     let i18n = use_i18n();
+    let artifact_message_id = message.id.clone();
     let remember_source = (message.id.clone(), message.content.clone());
     let can_remember = memory_available
         && matches!(
@@ -1917,6 +1925,7 @@ fn TranscriptMessage(
                     }}</MessageHeader>
                     {body}
                     {can_remember.then(|| view! { <MessageFooter><Button variant=ButtonVariant::Ghost size=ButtonSize::Small on_activate=move |_| on_remember.run(remember_source.clone())>{move || t!(i18n, memory.remember_action)}</Button></MessageFooter> })}
+                    {user.then(|| view! { <MessageFooter><ArtifactMessageActions message_id=artifact_message_id source=artifact_source/></MessageFooter> })}
                 </MessageContent>
             </Message>
         </MessageScrollerItem>
@@ -2001,6 +2010,7 @@ fn install_conversation_sync(
     stream_error: RwSignal<bool>,
     generation: RwSignal<u64>,
     allow_missing_snapshot: RwSignal<bool>,
+    artifact_source: ArtifactSourceObserver,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -2056,11 +2066,26 @@ fn install_conversation_sync(
                 let cursor = snapshot.last_event_sequence;
                 state.update(|state| state.install_snapshot(snapshot));
                 loading.set(false);
+                let handoff_thread = thread.clone();
+                artifact_source.begin_channel_handoff(move || {
+                    generation.try_get_untracked() == Some(current_generation)
+                        && thread_id.try_get_untracked().flatten().as_ref() == Some(&handoff_thread)
+                });
+                if generation.get_untracked() != current_generation
+                    || thread_id.get_untracked().as_ref() != Some(&thread)
+                {
+                    return;
+                }
+                let cursor = artifact_source.bootstrap_cursor(cursor);
                 if is_tauri_host() {
                     let expected_thread = thread.clone();
                     let handlers = DesktopStructuredHandlers::new(
-                        move |event| match apply_thread_stream_event(event, &expected_thread, state)
-                        {
+                        move |event| match apply_thread_stream_event(
+                            event,
+                            &expected_thread,
+                            state,
+                            artifact_source,
+                        ) {
                             ThreadStreamOutcome::Keep => true,
                             ThreadStreamOutcome::Reload => false,
                             ThreadStreamOutcome::Error => {
@@ -2101,7 +2126,14 @@ fn install_conversation_sync(
                     }
                     return;
                 }
-                match open_event_source(&thread, cursor, state, stream_error, generation) {
+                match open_event_source(
+                    &thread,
+                    cursor,
+                    state,
+                    stream_error,
+                    generation,
+                    artifact_source,
+                ) {
                     Ok(opened) => {
                         if generation.get_untracked() == current_generation {
                             connection.set_value(Some(opened));
@@ -2129,6 +2161,7 @@ fn install_conversation_sync(
         stream_error,
         generation,
         allow_missing_snapshot,
+        artifact_source,
     );
 }
 
@@ -2144,10 +2177,14 @@ fn apply_thread_stream_event(
     event: AppEvent,
     expected_thread: &ThreadId,
     state: RwSignal<ConversationState>,
+    artifact_source: ArtifactSourceObserver,
 ) -> ThreadStreamOutcome {
     match event {
         AppEvent::ThreadRunEvent(event) => {
             let effect = state.try_update(|state| apply_live_event(state, expected_thread, &event));
+            if matches!(&effect, Some(Ok(_))) {
+                artifact_source.native_event(&event);
+            }
             match effect {
                 Some(Ok(LiveEffect::ReloadSnapshot)) | Some(Err(())) => ThreadStreamOutcome::Reload,
                 Some(Ok(LiveEffect::None)) => ThreadStreamOutcome::Keep,
@@ -2181,6 +2218,7 @@ fn open_event_source(
     state: RwSignal<ConversationState>,
     stream_error: RwSignal<bool>,
     generation: RwSignal<u64>,
+    artifact_source: ArtifactSourceObserver,
 ) -> Result<EventConnection, ()> {
     let path = thread_event_stream_path(thread, cursor).map_err(|_| ())?;
     let source = EventSource::new(&path).map_err(|_| ())?;
@@ -2201,7 +2239,7 @@ fn open_event_source(
             event_source.close();
             return;
         };
-        match apply_thread_stream_event(event, &expected_thread, state) {
+        match apply_thread_stream_event(event, &expected_thread, state, artifact_source) {
             ThreadStreamOutcome::Keep => {}
             ThreadStreamOutcome::Reload => {
                 generation.update(|value| *value = value.saturating_add(1));
@@ -3253,5 +3291,85 @@ mod tests {
         assert!(should_drain_queue(
             pending, false, false, true, false, false, false,
         ));
+    }
+
+    #[test]
+    fn channel_new_pending_replay_boundary_includes_zero_without_lowering_snapshot() {
+        use super::super::artifacts::channel_handoff_replay_cursor;
+        for (snapshot, started, expected) in [
+            (Some(0), Some(0), None),
+            (Some(9), Some(0), None),
+            (Some(9), Some(7), Some(6)),
+            (Some(3), Some(7), Some(3)),
+            (None, Some(7), None),
+            (Some(9), None, Some(9)),
+        ] {
+            let mut snapshot_state = ConversationState::default();
+            let mut current = current_snapshot(Some(RunId::new("run-1")), "native output");
+            current.last_event_sequence = snapshot;
+            snapshot_state.install_snapshot(current);
+            let before = snapshot_state.clone();
+            assert_eq!(
+                channel_handoff_replay_cursor(snapshot_state.cursor, started),
+                expected
+            );
+            assert_eq!(snapshot_state, before);
+        }
+    }
+
+    #[test]
+    fn channel_new_original_started_replay_keeps_transcript_deduplicated() {
+        let mut snapshot = current_snapshot(Some(RunId::new("run-1")), "native output");
+        snapshot.last_event_sequence = Some(0);
+        let mut state = ConversationState::default();
+        state.install_snapshot(snapshot);
+        let before = state.clone();
+        let started = event(
+            0,
+            ThreadRunEventKind::Started,
+            serde_json::json!({
+                "runId": "run-1", "messageId": "run-1:input", "botId": "bot-1"
+            }),
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                apply_live_event(&mut state, &ThreadId::new("thread-1"), &started),
+                Ok(LiveEffect::None)
+            );
+            assert_eq!(state, before);
+        }
+        let mut foreign = started.clone();
+        foreign.thread_id = ThreadId::new("foreign-thread");
+        assert_eq!(
+            apply_live_event(&mut state, &ThreadId::new("thread-1"), &foreign),
+            Err(())
+        );
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn pending_never_resolving_target_proof_does_not_block_native_transcript_progress() {
+        use super::super::artifacts::channel_handoff_replay_cursor;
+        let mut snapshot = current_snapshot(Some(RunId::new("run-1")), "existing output");
+        snapshot.last_event_sequence = Some(0);
+        let mut state = ConversationState::default();
+        state.install_snapshot(snapshot);
+        // This is the synchronous native-subscription input with a real pending ACK=0.
+        // No optional target-proof future is awaited or completed to obtain it.
+        assert_eq!(channel_handoff_replay_cursor(state.cursor, Some(0)), None);
+        assert_eq!(
+            apply_live_event(
+                &mut state,
+                &ThreadId::new("thread-1"),
+                &event(
+                    1,
+                    ThreadRunEventKind::SemanticChunk,
+                    serde_json::json!({"channel":"text","delta":" new actual output"})
+                )
+            ),
+            Ok(LiveEffect::None)
+        );
+        assert_eq!(state.cursor, Some(1));
+        assert_eq!(state.streaming_text, "existing output new actual output");
     }
 }

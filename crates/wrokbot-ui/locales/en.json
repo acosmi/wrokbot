@@ -1185,5 +1185,33 @@
     "custom_source": "Custom API",
     "custom_setup_note": "No custom model connection is available. Authorized history remains readable; the assistant model depends on its actual runtime capabilities.",
     "custom_setup_action": "Configure a custom model"
+  },
+  "artifacts": {
+    "save": "Save as artifact",
+    "source_unavailable": "Saving requires a newly confirmed message in this conversation.",
+    "saving": "Saving. Please wait…",
+    "not_submitted": "The save was not sent. You can try this message again.",
+    "title": "Saved text",
+    "registered": "Save confirmed.",
+    "refresh": "Read artifact details",
+    "loading": "Reading artifact details…",
+    "details": "Artifact details",
+    "failed_partial": "Incomplete artifact",
+    "available": "Available",
+    "identifier": "Artifact ID",
+    "media_type": "Media type",
+    "size": "Size (bytes)",
+    "digest": "SHA-256",
+    "source_thread": "Source conversation",
+    "source_run": "Source run",
+    "retention": "Explicitly saved artifacts are retained until deletion.",
+    "limits": "Limits: 64 MiB per artifact, 32 artifacts per run, 16 GiB per workspace.",
+    "unauthorized": "Confirm your signed-in account before reading these details.",
+    "not_visible": "This artifact is not available to your current account.",
+    "deleted": "This artifact has been deleted.",
+    "expired": "This artifact has expired.",
+    "unavailable": "Artifact details are unavailable. You can try reading them again.",
+    "invalid_response": "Artifact details could not be verified. You can try reading them again.",
+    "unknown": "This save has not been confirmed. Do not submit it again."
   }
 }
