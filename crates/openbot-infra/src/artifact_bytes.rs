@@ -58,6 +58,13 @@ pub(crate) enum ArtifactByteProbe {
 /// supplies no permission and cannot replace the real deadline or filesystem checks.
 #[cfg(feature = "server-runtime")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private guarded byte inspection foundation; producer integration is a separate task"
+    )
+)]
 pub(crate) enum ArtifactProbePhase {
     Entry,
     BeforeHashSegment,
@@ -187,6 +194,13 @@ impl StoreDirectories {
     }
 
     #[cfg(feature = "server-runtime")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "private guarded byte inspection foundation; producer integration is a separate task"
+        )
+    )]
     fn check_current_children(&self, original_deadline: Instant) -> Result<(), ArtifactByteError> {
         let root = probe_io_before(original_deadline, || {
             self.root.metadata().map_err(|_| ArtifactByteError::Io)
@@ -591,6 +605,13 @@ impl ArtifactByteStore {
     /// deletion, read-barrier or durable product-state authority. The supplied budget is never
     /// refreshed; a synchronous syscall that returns late leaves the observation indeterminate.
     #[cfg(feature = "server-runtime")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "private guarded byte inspection foundation; producer integration is a separate task"
+        )
+    )]
     pub(crate) fn probe_actual_guarded_before(
         &self,
         id: Uuid,
@@ -602,6 +623,13 @@ impl ArtifactByteStore {
     }
 
     #[cfg(feature = "server-runtime")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "private guarded byte inspection foundation; producer integration is a separate task"
+        )
+    )]
     fn check_probe_current(&self, original_deadline: Instant) -> Result<(), ArtifactByteError> {
         if Instant::now() >= original_deadline {
             return Err(ArtifactByteError::Io);
@@ -614,6 +642,13 @@ impl ArtifactByteStore {
     }
 
     #[cfg(feature = "server-runtime")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "private guarded byte inspection foundation; producer integration is a separate task"
+        )
+    )]
     fn probe_cutpoint(
         &self,
         original_deadline: Instant,
@@ -629,6 +664,13 @@ impl ArtifactByteStore {
     }
 
     #[cfg(feature = "server-runtime")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "private guarded byte inspection foundation; producer integration is a separate task"
+        )
+    )]
     fn check_probe_retained_current(
         &self,
         name: &str,
@@ -672,6 +714,13 @@ impl ArtifactByteStore {
     }
 
     #[cfg(feature = "server-runtime")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "private guarded byte inspection foundation; producer integration is a separate task"
+        )
+    )]
     fn probe_actual_guarded_inner(
         &self,
         id: Uuid,
@@ -830,6 +879,13 @@ fn probe_open(directory: &File, name: &str) -> Result<Option<File>, ArtifactByte
 }
 
 #[cfg(feature = "server-runtime")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private guarded byte inspection foundation; producer integration is a separate task"
+    )
+)]
 fn probe_io_before<T>(
     original_deadline: Instant,
     io: impl FnOnce() -> Result<T, ArtifactByteError>,

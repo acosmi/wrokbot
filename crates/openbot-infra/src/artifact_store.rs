@@ -453,6 +453,10 @@ impl DatasetBoundArtifactStore {
 
     /// Inspect only this original Store's bytes on an owned blocking worker. An ordinary probe
     /// is no permission, deletion receipt or barrier acknowledgement, even when all IO succeeds.
+    #[expect(
+        dead_code,
+        reason = "private guarded byte inspection foundation; producer integration is a separate task"
+    )]
     pub(crate) fn probe_actual_guarded_before(
         &self,
         id: Uuid,
