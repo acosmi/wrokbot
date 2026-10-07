@@ -92,7 +92,6 @@ pub mod intelligence;
 pub mod mcp;
 pub mod memory;
 pub mod model_connections;
-pub mod versioned_model_selection;
 pub mod people;
 pub mod policy;
 pub mod reconciliation;
@@ -107,6 +106,7 @@ pub mod telemetry;
 pub mod text;
 pub mod tool;
 pub mod ui;
+pub mod versioned_model_selection;
 
 // R425 非 Serde 受信宿主接口。
 pub use artifact_read::PendingArtifactReadBuffer;
