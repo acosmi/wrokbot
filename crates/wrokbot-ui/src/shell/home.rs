@@ -228,7 +228,7 @@ pub fn HomePage() -> impl IntoView {
             || submission_blocked.get()
             || (resumable.get().is_none()
                 && (!has_agents.get()
-                    || trim_ecmascript(&draft.get()).is_empty()
+                    || !home_has_task(&draft.get(), selected_mention.get().as_ref())
                     || skill_composer.invalid.get()))
     });
     let mention_open = Signal::derive(move || active.get().is_some() && !inputs_locked.get());
@@ -250,7 +250,7 @@ pub fn HomePage() -> impl IntoView {
                 return;
             }
             let message = draft.get_untracked();
-            if message.is_empty() {
+            if !home_has_task(&message, selected_mention.get_untracked().as_ref()) {
                 return;
             }
             if let Some(model_notice) = model_notice(model_composer.selection_status()) {
@@ -701,6 +701,19 @@ fn selection_is_present(value: &str, selection: &MentionSelection) -> bool {
     value.contains(&selection_marker(selection))
 }
 
+/// The selected assistant marker is routing context, not a task description.
+/// Skill candidates have already been removed by the shared composer; the original draft stays intact.
+fn home_has_task(value: &str, selected: Option<&MentionSelection>) -> bool {
+    let text = trim_ecmascript(value);
+    if text.is_empty() {
+        return false;
+    }
+    let Some(selected) = selected.filter(|selected| selection_is_present(value, selected)) else {
+        return true;
+    };
+    text != trim_ecmascript(&selection_marker(selected))
+}
+
 fn selected_agent_id(value: &str, selection: Option<&MentionSelection>) -> Option<BotId> {
     selection
         .filter(|selection| selection_is_present(value, selection))
@@ -795,6 +808,61 @@ mod tests {
                 .query,
             "Ada"
         );
+    }
+
+    #[test]
+    fn home_chosen_assistant_and_skills_without_task_are_rejected() {
+        let guide = agent("guide", "Operations Guide", true, AgentVisibility::Public);
+        let raw = insert_mention(" @", None, &guide).unwrap();
+        let selected = MentionSelection {
+            agent_id: guide.id,
+            display_text: guide.name,
+        };
+        let picked = crate::features::channels::composer::skills::selected_draft(
+            raw.clone(),
+            vec!["review".into(), "check".into()],
+        );
+        assert_eq!(raw, " @Operations Guide ");
+        assert!(!home_has_task(&picked.text, Some(&selected)));
+        assert_eq!(picked.text, raw);
+        assert_eq!(picked.command_ids, ["review", "check"]);
+    }
+
+    #[test]
+    fn home_blank_task_detection_uses_ecmascript_whitespace() {
+        let selected = MentionSelection {
+            agent_id: BotId::new("guide"),
+            display_text: "Operations Guide".into(),
+        };
+        for raw in [
+            "",
+            " \t\r\n\u{3000}\u{00a0}\u{feff}",
+            " @Operations Guide ",
+            "\u{feff}@Operations Guide\u{00a0}\r\n",
+        ] {
+            assert!(!home_has_task(raw, Some(&selected)), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn home_task_detection_keeps_task_text_and_literal_at_content() {
+        let selected = MentionSelection {
+            agent_id: BotId::new("guide"),
+            display_text: "Operations Guide".into(),
+        };
+        for raw in [
+            "@Operations Guide review this material",
+            "Review this material @Operations Guide",
+            "  @Operations Guide\n保留我的原话  ",
+            "user@example.test",
+            "https://example.test/@Operations-Guide",
+            "\"@Operations Guide\"",
+            "@Operations Guidebook",
+            "@Another Guide",
+        ] {
+            assert!(home_has_task(raw, Some(&selected)), "{raw:?}");
+        }
+        assert!(home_has_task("@Operations Guide", None));
     }
 
     #[test]
