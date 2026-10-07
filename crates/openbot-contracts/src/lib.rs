@@ -92,6 +92,7 @@ pub mod intelligence;
 pub mod mcp;
 pub mod memory;
 pub mod model_connections;
+pub mod versioned_model_selection;
 pub mod people;
 pub mod policy;
 pub mod reconciliation;

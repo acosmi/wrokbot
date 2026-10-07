@@ -4,7 +4,7 @@
  * 文档里 `/* … 其余 token 一一映射 … *\/` 的省略号在这里按 design/tokens.toml 展开成全量；
  * 2026-09-05 用户裁决：参考图驱动的新视觉规格。
  *
- * 由 trunk 的 `tailwind-css` pipeline 交给 Tailwind standalone CLI 4.3.3 编译
+ * 由 Trunk pre-build 的 Rust ui-assets 调用 Tailwind standalone CLI 4.3.3 编译
  * （参数只有 --input/--output/--minify，不传 --config，见 §12.1）。零 Node、零 npm。
  *
  * G6 的本地闸门会实际运行 Tailwind/Trunk；不得再把未编译的 CSS 当作已验证产物。
@@ -3677,7 +3677,7 @@ textarea:focus-visible,
 .ob-approval-payload { padding: 0 22px 18px; }
 .ob-approval-payload h3 { margin: 0 0 8px; font-size: 13px; font-weight: 550; }
 .ob-approval-payload pre { max-height: 310px; margin: 0; padding: 13px; overflow: auto; background: var(--bg-code); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); }
-.ob-approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 0; padding: 12px 18px; border-top: 1px solid var(--review-border); background: var(--bg-review-footer); }
+.ob-approval-actions { justify-content: flex-end; gap: 8px; margin: 0; padding: 12px 18px; border-top: 1px solid var(--review-border); background: var(--bg-review-footer); }
 .ob-approval-actions .ob-button { padding: 9px 13px; border-radius: 9px; }
 .ob-approval-actions .ob-button[data-variant="primary"] { background: var(--bg-review-positive); color: var(--fg-review-positive); }
 .ob-approval-actions .ob-button:disabled { opacity: .55; }
@@ -4318,7 +4318,6 @@ html[data-window-chrome="macos-overlay"] .ob-shell-topbar > .ob-sidebar-trigger 
 .ob-chat-composer:focus-within { outline: 2px solid var(--ring); outline-offset: 2px; }
 .ob-chat-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; margin-top: 8px; }
 .ob-chat-controls > :is(.ob-skill-picker, .ob-channel-new-recipient) { min-width: 0; max-width: 100%; }
-.ob-chat-controls > .ob-select { min-width: 0; max-width: 220px; }
 .ob-chat-controls :is(.ob-select-trigger, .ob-skill-picker > .ob-button) {
   min-height: 28px; max-width: 220px; padding: 3px 7px; border: 0;
   border-radius: 7px; background: transparent; color: var(--fg-secondary); font-size: 12px;

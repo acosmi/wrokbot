@@ -483,7 +483,12 @@ pub(crate) async fn verify_artifact_registry_schema_on(
 ) -> Result<(), ArtifactRegistryError> {
     native::validate_current(client)
         .await
-        .map_err(|_| corrupt("native_schema"))?;
+        .map_err(|error| match error {
+            crate::db::InfraError::Connect { .. } | crate::db::InfraError::Query { .. } => {
+                ArtifactRegistryError::Unavailable
+            }
+            _ => corrupt("native_schema"),
+        })?;
     let public: schema_facts::SchemaFacts = serde_json::from_str(REGISTERED_PUBLIC_SCHEMA)
         .map_err(|_| corrupt("public_schema_oracle"))?;
     if schema_facts::fetch(client)

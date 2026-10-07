@@ -389,11 +389,13 @@ fn fingerprint(value: &Value) -> Result<Value, String> {
     )
 }
 
-// Only owned relations. Secret/cipher/signature columns are removed before any digest or reply.
+// Only owned relations. PostgreSQL supplies ciphertext equality witnesses, then removes the
+// original encrypted columns before the snapshot crosses this boundary. Replies contain only
+// relation fingerprints; equivalent re-encryption must still count as a storage mutation.
 const SNAPSHOT: &str = "SELECT jsonb_build_object(
  'model_connections',(SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id),'[]'::jsonb) FROM public.model_connections m),
- 'model_connection_secrets',(SELECT coalesce(jsonb_agg((to_jsonb(s)-'encrypted_value') ORDER BY id),'[]'::jsonb) FROM public.model_connection_secrets s),
- 'credentials',(SELECT coalesce(jsonb_agg((to_jsonb(c)-'encrypted_value') ORDER BY id),'[]'::jsonb) FROM public.credentials c),
+ 'model_connection_secrets',(SELECT coalesce(jsonb_agg((to_jsonb(s)-'encrypted_value') || jsonb_build_object('ciphertext_sha256',encode(sha256(convert_to(s.encrypted_value,'UTF8')),'hex')) ORDER BY id),'[]'::jsonb) FROM public.model_connection_secrets s),
+ 'credentials',(SELECT coalesce(jsonb_agg((to_jsonb(c)-'encrypted_value') || jsonb_build_object('ciphertext_sha256',encode(sha256(convert_to(c.encrypted_value,'UTF8')),'hex')) ORDER BY id),'[]'::jsonb) FROM public.credentials c),
  'action_policy',(SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY id),'[]'::jsonb) FROM public.action_policy p),
  'agents',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY id),'[]'::jsonb) FROM public.agents a),
  'agent_profiles',(SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY agent_id),'[]'::jsonb) FROM public.agent_profiles p),
@@ -413,6 +415,101 @@ const SNAPSHOT: &str = "SELECT jsonb_build_object(
  'memory_events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY memory_id,seq),'[]'::jsonb) FROM public.memory_events e),
  'audit_events',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY id),'[]'::jsonb) FROM public.audit_events a),
  'audit_checkpoints',(SELECT coalesce(jsonb_agg((to_jsonb(c)-'signature') ORDER BY sequence),'[]'::jsonb) FROM public.audit_checkpoints c))";
+
+pub(super) async fn verify_ciphertext_snapshot_mutation(
+    config: pool::DatabaseConfig,
+) -> Result<(), String> {
+    let pool = pool::connect(&config)
+        .await
+        .map_err(|_| "cipher_observer_pool")?;
+    let mut client = pool.get().await.map_err(|_| "cipher_observer_connection")?;
+    fresh::apply(&mut client)
+        .await
+        .map_err(|_| "cipher_observer_schema")?;
+    let connection = Uuid::now_v7();
+    let secret = Uuid::now_v7();
+    let credential = Uuid::now_v7();
+    let before_cipher = "owned-ciphertext-before-canary";
+    let after_cipher = "owned-ciphertext-after-canary";
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|_| "cipher_fixture_begin")?;
+    tx.batch_execute("INSERT INTO public.users(id,email,auth_generation) VALUES('cipher-observer-owner','cipher-observer@example.test',0)")
+        .await.map_err(|_| "cipher_fixture_owner")?;
+    tx.execute("INSERT INTO public.model_connections
+        (id,deployment_id,tenant_id,owner_user_id,name,protocol,endpoint,model,enabled,
+         revision,current_secret_id,created_at,updated_at)
+        VALUES($1,'owned-deployment','owned-tenant','cipher-observer-owner','Owned observer',
+         'openai_responses','https://observer.example.test/v1','owned-model',false,1,$2,now(),now())",
+        &[&connection, &secret]).await.map_err(|_| "cipher_fixture_model")?;
+    tx.execute(
+        "INSERT INTO public.model_connection_secrets
+        (id,connection_id,deployment_id,tenant_id,owner_user_id,encrypted_value,created_at)
+        VALUES($1,$2,'owned-deployment','owned-tenant','cipher-observer-owner',$3,now())",
+        &[&secret, &connection, &before_cipher],
+    )
+    .await
+    .map_err(|_| "cipher_fixture_secret")?;
+    tx.execute(
+        "INSERT INTO public.credentials(id,kind,provider,encrypted_value,key_id,metadata)
+        VALUES($1,'model','owned-observer',$2,'owned-key','{}')",
+        &[&credential, &before_cipher],
+    )
+    .await
+    .map_err(|_| "cipher_fixture_credential")?;
+    tx.commit().await.map_err(|_| "cipher_fixture_commit")?;
+    let before: Value = client
+        .query_one(SNAPSHOT, &[])
+        .await
+        .map_err(|_| "cipher_snapshot_before")?
+        .get(0);
+    for (table, id) in [
+        ("model_connection_secrets", secret),
+        ("credentials", credential),
+    ] {
+        client
+            .execute(
+                &format!("UPDATE public.{table} SET encrypted_value=$2 WHERE id=$1"),
+                &[&id, &after_cipher],
+            )
+            .await
+            .map_err(|_| "cipher_fixture_change")?;
+        let after: Value = client
+            .query_one(SNAPSHOT, &[])
+            .await
+            .map_err(|_| "cipher_snapshot_after")?
+            .get(0);
+        if fingerprint(&before[table])? == fingerprint(&after[table])? {
+            return Err("cipher_only_mutation_was_invisible".to_owned());
+        }
+        let encoded = serde_json::to_string(&after).map_err(|_| "cipher_snapshot_encode")?;
+        if encoded.contains(before_cipher)
+            || encoded.contains(after_cipher)
+            || encoded.contains("encrypted_value")
+        {
+            return Err("cipher_snapshot_exposed_original_cipher".to_owned());
+        }
+        client
+            .execute(
+                &format!("UPDATE public.{table} SET encrypted_value=$2 WHERE id=$1"),
+                &[&id, &before_cipher],
+            )
+            .await
+            .map_err(|_| "cipher_fixture_restore")?;
+        let restored: Value = client
+            .query_one(SNAPSHOT, &[])
+            .await
+            .map_err(|_| "cipher_snapshot_restored")?
+            .get(0);
+        if fingerprint(&before[table])? != fingerprint(&restored[table])? {
+            return Err("cipher_snapshot_other_columns_changed".to_owned());
+        }
+    }
+    drop(client);
+    pool.close();
+    Ok(())
+}
 
 async fn live_counters(state: &State, counts: Counts) -> Value {
     let records = state.requests.lock().await;

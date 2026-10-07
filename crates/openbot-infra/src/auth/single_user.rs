@@ -69,6 +69,18 @@ impl VerifiedSingleUserPrincipal {
     ) -> bool {
         repository.matches_pool_scope(&self.pool, self.auth.deployment(), self.auth.tenant())
     }
+    /// Enroll artifact reads only through this principal's original business Pool and namespace.
+    #[cfg(all(
+        feature = "server-runtime",
+        any(target_os = "macos", target_os = "linux")
+    ))]
+    #[must_use]
+    pub fn matches_artifact_read_authority(
+        &self,
+        authority: &crate::artifact_read_authority::PostgresArtifactReadAuthority,
+    ) -> bool {
+        authority.matches_pool_scope(&self.pool, self.auth.deployment(), self.auth.tenant())
+    }
     #[cfg(feature = "server-runtime")]
     pub fn matches_capability_facts(
         &self,

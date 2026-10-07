@@ -148,6 +148,36 @@ fn pins(root: &Path) -> Result<toml::Value> {
         .context("parse tools/pins.toml")
 }
 
+pub(crate) fn verified_tailwindcss(root: &Path) -> Result<PathBuf> {
+    let search_path = std::env::var_os("PATH").context("PATH missing for pinned Tailwind")?;
+    let binary = std::env::split_paths(&search_path)
+        .map(|directory| directory.join(executable("tailwindcss")))
+        .find(|path| {
+            let Ok(metadata) = fs::metadata(path) else {
+                return false;
+            };
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                metadata.is_file()
+            }
+        })
+        .context("pinned tailwindcss not found on PATH; run cargo xtask tools fetch first")?
+        .canonicalize()
+        .context("resolve pinned Tailwind path")?;
+    let pins = pins(root)?;
+    let tailwind = tool(&pins, "tailwindcss")?;
+    let artifact = artifact(tailwind, current_platform()?)?;
+    verify_sha(&binary, string(artifact, "sha256")?)?;
+    verify_version(&binary, tailwind)?;
+    Ok(binary)
+}
+
 fn tool<'a>(pins: &'a toml::Value, id: &str) -> Result<&'a toml::Table> {
     pins.get("tools")
         .and_then(|tools| tools.get(id))

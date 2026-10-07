@@ -6,7 +6,7 @@
 use serde_json::Value;
 use tokio_postgres::Client;
 
-use super::native;
+use super::{InfraError, native};
 
 /// 封闭错误只携带静态字段，不回显数据库值、连接信息或任意消息。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -25,17 +25,19 @@ pub enum ArtifactCleanupSchemaError {
     },
 }
 
-// 由 Root 在受控真实 PostgreSQL fresh/upgrade 独立比较后冻结；capture 不读取它。
+// 当前oracle必须在受控真实 PostgreSQL fresh/upgrade 独立核同后冻结；capture不读取它。
 const REGISTERED_SCHEMA: &str =
-    include_str!("../../../../fixtures/db/artifact-cleanup-fences-0044.json");
+    include_str!("../../../../fixtures/db/artifact-cleanup-fences-0045.json");
+const REGISTERED_PARENTS: &str =
+    include_str!("../../../../fixtures/db/artifact-registration-0042.json");
 
-/// 独立读取实际 catalog 与0044及以前原迁移台账，不从预期 fixture 推导事实。
+/// 保留0044独立捕获的观察窗口，供升级前原oracle核验。
 ///
 /// FK 同时观察列序、引用关系、真实被引用键、动作及延迟属性；所有额外索引、
 /// 用户 trigger/rule、FK 内部执行钩子、已丢弃属性和 guard 的安全属性均进入比较。原终态 CHECK
 /// 是 completed 结构判断的依赖，因此其实际定义也被观察。将来的合法原迁移
 /// 由 native 前缀校验处理，不改变这个0044观察窗口。
-pub const ARTIFACT_CLEANUP_SCHEMA_SQL: &str = r"
+pub const ARTIFACT_CLEANUP_SCHEMA_0044_SQL: &str = r"
 SELECT pg_catalog.jsonb_build_object(
  'nativeLedger',(
    SELECT coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
@@ -217,10 +219,77 @@ async fn verify_storage_prerequisites(client: &Client) -> Result<(), ArtifactCle
     Ok(())
 }
 
+fn current_capture_sql() -> String {
+    let receipt_guard = r"
+ 'receiptGuard',(
+   SELECT pg_catalog.jsonb_build_object(
+     'schema',n.nspname,'name',p.proname,
+     'arguments',pg_catalog.pg_get_function_identity_arguments(p.oid),
+     'language',l.lanname,'securityDefiner',p.prosecdef,'configuration',p.proconfig,
+     'volatility',p.provolatile::text,'parallel',p.proparallel::text,
+     'strict',p.proisstrict,'leakproof',p.proleakproof,
+     'returnType',pg_catalog.format_type(p.prorettype,NULL),
+     'definition',pg_catalog.pg_get_functiondef(p.oid))
+   FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+   JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+   WHERE n.nspname='openbot_internal'
+     AND p.proname='prevent_artifact_cleanup_saved_receipt_mismatch' AND p.pronargs=0
+ ),
+ 'terminalConstraints',(";
+    ARTIFACT_CLEANUP_SCHEMA_0044_SQL
+        .replace("m.version<=44", "m.version<=45")
+        .replace(" 'terminalConstraints',(", receipt_guard)
+}
+
+async fn verify_parent_guards(client: &Client) -> Result<(), ArtifactCleanupSchemaError> {
+    let expected: Value =
+        serde_json::from_str(REGISTERED_PARENTS).map_err(|_| corrupt("parent_oracle"))?;
+    // The original registration oracle freezes enabled triggers and the exact attached
+    // function identity. Capture those live facts; never infer them from table CHECKs.
+    for table in ["artifact_records", "artifact_save_operations"] {
+        let sql = crate::artifact_registry::ARTIFACT_REGISTRY_SCHEMA_SQL
+            .replace("artifact_dataset_bindings", table);
+        let raw: String = client
+            .query_one(&sql, &[])
+            .await
+            .map_err(|_| ArtifactCleanupSchemaError::Unavailable)?
+            .try_get(0)
+            .map_err(|_| corrupt("parent_triggers"))?;
+        let actual: Value = serde_json::from_str(&raw).map_err(|_| corrupt("parent_triggers"))?;
+        let wanted = expected[table]
+            .get("triggers")
+            .ok_or_else(|| corrupt("parent_oracle"))?;
+        if actual.get("triggers") != Some(wanted) {
+            return Err(corrupt("parent_triggers"));
+        }
+    }
+    let raw: String = client
+        .query_one(
+            "SELECT coalesce(jsonb_agg(jsonb_build_object(
+            'name',p.proname,'definition',pg_get_functiondef(p.oid),
+            'arguments',pg_get_function_identity_arguments(p.oid),
+            'securityDefiner',p.prosecdef,'configuration',p.proconfig)
+          ORDER BY p.proname),'[]'::jsonb)::text
+         FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+         WHERE n.nspname='openbot_internal' AND p.proname IN
+           ('prevent_artifact_operation_misuse','prevent_artifact_record_misuse')",
+            &[],
+        )
+        .await
+        .map_err(|_| ArtifactCleanupSchemaError::Unavailable)?
+        .try_get(0)
+        .map_err(|_| corrupt("parent_guards"))?;
+    let actual: Value = serde_json::from_str(&raw).map_err(|_| corrupt("parent_guards"))?;
+    if expected.get("registration_guards") != Some(&actual) {
+        return Err(corrupt("parent_guards"));
+    }
+    Ok(())
+}
+
 /// 捕获原连接上的实际有序事实；不读取验收 oracle，也不写入任何行。
 pub async fn capture(client: &Client) -> Result<Value, ArtifactCleanupSchemaError> {
     let raw: String = client
-        .query_one(ARTIFACT_CLEANUP_SCHEMA_SQL, &[])
+        .query_one(&current_capture_sql(), &[])
         .await
         .map_err(|_| ArtifactCleanupSchemaError::Unavailable)?
         .try_get(0)
@@ -231,9 +300,15 @@ pub async fn capture(client: &Client) -> Result<Value, ArtifactCleanupSchemaErro
 /// 核对合法原 native 前缀及独立冻结的内部结构；不返回清理权限或成功凭证。
 pub async fn verify(client: &Client) -> Result<(), ArtifactCleanupSchemaError> {
     verify_storage_prerequisites(client).await?;
-    native::validate_known_prefix(client, native::NATIVE_0044_VERSION)
+    native::validate_known_prefix(client, native::NATIVE_0045_VERSION)
         .await
-        .map_err(|_| corrupt("native_prefix"))?;
+        .map_err(|error| match error {
+            InfraError::Connect { .. } | InfraError::Query { .. } => {
+                ArtifactCleanupSchemaError::Unavailable
+            }
+            _ => corrupt("native_prefix"),
+        })?;
+    verify_parent_guards(client).await?;
     let expected: Value =
         serde_json::from_str(REGISTERED_SCHEMA).map_err(|_| corrupt("schema_oracle"))?;
     if capture(client).await? != expected {
