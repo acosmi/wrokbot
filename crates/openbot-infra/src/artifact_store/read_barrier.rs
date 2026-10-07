@@ -83,7 +83,26 @@ struct SelectorInventory {
     // The original authority joint covers also Application cached/control-tail callers.
     // Those actual futures need inventory even after Entry/State disposed all body resources.
     original_queries: usize,
+    // This invocation owns only its metadata query. It never subtracts an old read owner.
+    // Plain terminal facts avoid a Store -> invocation -> original Store ownership cycle.
+    physical: Option<PhysicalInvocationSlot>,
     generation: u64,
+}
+
+struct PhysicalInvocationSlot {
+    id: uuid::Uuid,
+    key: ArtifactCleanupFenceKey,
+    query_alive: bool,
+    query_acknowledged: bool,
+    worker_reserved: bool,
+    worker_started: bool,
+    worker_ended: bool,
+}
+
+impl PhysicalInvocationSlot {
+    fn is_retired(&self) -> bool {
+        !self.query_alive && self.query_acknowledged && (!self.worker_reserved || self.worker_ended)
+    }
 }
 
 fn keep_unproven(selector: &mut SelectorInventory, key: Option<ArtifactCleanupFenceKey>) {
@@ -300,6 +319,14 @@ impl StoreReadGate {
     }
 
     fn is_drained(&self, key: &ArtifactCleanupFenceKey) -> Result<bool, ArtifactReadDrainError> {
+        self.drained_generation(key)
+            .map(|generation| generation.is_some())
+    }
+
+    fn drained_generation(
+        &self,
+        key: &ArtifactCleanupFenceKey,
+    ) -> Result<Option<u64>, ArtifactReadDrainError> {
         let (generation, states) = {
             let inventory = self
                 .inventory
@@ -323,7 +350,7 @@ impl StoreReadGate {
                         && (entry.queries != 0 || entry.jobs != 0)
                 })
             {
-                return Ok(false);
+                return Ok(None);
             }
             // Strong temporary owners are returned out of the lock before any can drop.
             let states = selector
@@ -338,7 +365,7 @@ impl StoreReadGate {
         };
         for state in &states {
             if !state.shared_inventory_drained()? {
-                return Ok(false);
+                return Ok(None);
             }
         }
         let inventory = self
@@ -350,7 +377,367 @@ impl StoreReadGate {
             .selectors
             .get(key.artifact_id())
             .ok_or(ArtifactReadDrainError::Unavailable)?;
-        Ok(selector.generation == generation)
+        Ok((selector.generation == generation).then_some(generation))
+    }
+}
+
+/// Unique same-Store metadata invocation. The slot is neither a current grant nor a drain ACK.
+pub(crate) struct PhysicalInvocationClaim {
+    store: Arc<DatasetBoundArtifactStore>,
+    key: ArtifactCleanupFenceKey,
+    id: uuid::Uuid,
+    deadline: Instant,
+}
+
+/// Only the original guarded transaction's on-time explicit ROLLBACK ACK consumes this owner.
+pub(crate) struct PhysicalInvocationQueryOwner {
+    claim: Arc<PhysicalInvocationClaim>,
+    acknowledged: bool,
+}
+
+/// Declared before the worker IO guard and leaf so actual resource Drop precedes ended facts.
+pub(crate) struct PhysicalWorkerLease {
+    claim: Arc<PhysicalInvocationClaim>,
+    active: bool,
+}
+
+impl PhysicalInvocationClaim {
+    pub(crate) fn register(
+        store: Arc<DatasetBoundArtifactStore>,
+        key: ArtifactCleanupFenceKey,
+        deadline: Instant,
+    ) -> Result<(Arc<Self>, PhysicalInvocationQueryOwner), ArtifactStoreError> {
+        let strict = ArtifactCleanupFenceKey::from_stored(
+            key.deployment_id().clone(),
+            key.tenant_id().clone(),
+            key.dataset_id(),
+            key.operation_id().as_str(),
+            key.artifact_id(),
+        )
+        .map_err(|_| ArtifactStoreError::BindingMismatch)?;
+        if strict != key || !store.reads.matches_key(&key) {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        if Instant::now() >= deadline {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        let id = uuid::Uuid::now_v7();
+        {
+            let mut inventory = store
+                .reads
+                .inventory
+                .lock()
+                .map_err(|_| ArtifactStoreError::Unavailable)?;
+            let selector = inventory
+                .selectors
+                .entry(key.artifact_id().to_owned())
+                .or_default();
+            if selector
+                .original_key
+                .as_ref()
+                .is_some_and(|original| original != &key)
+            {
+                return Err(ArtifactStoreError::BindingMismatch);
+            }
+            if selector.unbound_unproven
+                || selector.unproven.contains(&key)
+                || selector
+                    .physical
+                    .as_ref()
+                    .is_some_and(|slot| !slot.is_retired())
+            {
+                return Err(ArtifactStoreError::Unavailable);
+            }
+            selector.original_key = Some(key.clone());
+            selector.physical = Some(PhysicalInvocationSlot {
+                id,
+                key: key.clone(),
+                query_alive: true,
+                query_acknowledged: false,
+                worker_reserved: false,
+                worker_started: false,
+                worker_ended: false,
+            });
+            selector.generation = selector.generation.wrapping_add(1);
+        }
+        let claim = Arc::new(Self {
+            store,
+            key,
+            id,
+            deadline,
+        });
+        let owner = PhysicalInvocationQueryOwner {
+            claim: Arc::clone(&claim),
+            acknowledged: false,
+        };
+        // Permanent close requests genuine original owners to stop, outside the inventory lock.
+        claim.store.reads.close(&claim.key)?;
+        if Instant::now() >= deadline {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        Ok((claim, owner))
+    }
+
+    pub(crate) async fn wait_original_reads_before(&self) -> Result<(), ArtifactStoreError> {
+        loop {
+            let changed = self.store.reads.changed.notified();
+            self.check_deadline()?;
+            if self
+                .store
+                .reads
+                .is_drained(&self.key)
+                .map_err(|_| ArtifactStoreError::Unavailable)?
+            {
+                return Ok(());
+            }
+            tokio::select! {
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(self.deadline)) => {
+                    self.mark_unproven();
+                    return Err(ArtifactStoreError::Unavailable);
+                },
+                _ = changed => {},
+                _ = tokio::time::sleep(Duration::from_millis(5)) => {},
+            }
+        }
+    }
+
+    pub(crate) fn reserve_worker(
+        self: &Arc<Self>,
+    ) -> Result<PhysicalWorkerLease, ArtifactStoreError> {
+        self.check_deadline()?;
+        let mut inventory = self
+            .store
+            .reads
+            .inventory
+            .lock()
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        let selector = inventory
+            .selectors
+            .get_mut(self.key.artifact_id())
+            .ok_or(ArtifactStoreError::Unavailable)?;
+        if selector.unbound_unproven || selector.unproven.contains(&self.key) {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        let slot = selector
+            .physical
+            .as_mut()
+            .filter(|slot| slot.id == self.id && slot.key == self.key)
+            .ok_or(ArtifactStoreError::BindingMismatch)?;
+        if !slot.query_alive || slot.query_acknowledged || slot.worker_reserved {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        slot.worker_reserved = true;
+        selector.generation = selector.generation.wrapping_add(1);
+        Ok(PhysicalWorkerLease {
+            claim: Arc::clone(self),
+            active: true,
+        })
+    }
+
+    pub(crate) fn try_start_worker(
+        &self,
+        worker: &PhysicalWorkerLease,
+    ) -> Result<(), ArtifactStoreError> {
+        self.check_deadline()?;
+        if !std::ptr::eq(self, worker.claim.as_ref()) || !worker.active {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        let generation = self
+            .store
+            .reads
+            .drained_generation(&self.key)
+            .map_err(|_| ArtifactStoreError::Unavailable)?
+            .ok_or(ArtifactStoreError::Unavailable)?;
+        let mut inventory = self
+            .store
+            .reads
+            .inventory
+            .lock()
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        let selector = inventory
+            .selectors
+            .get_mut(self.key.artifact_id())
+            .ok_or(ArtifactStoreError::Unavailable)?;
+        if selector.generation != generation
+            || selector.unbound_unproven
+            || selector.unproven.contains(&self.key)
+            || !selector.closed.contains(&self.key)
+        {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        if Instant::now() >= self.deadline {
+            keep_unproven(selector, Some(self.key.clone()));
+            selector.generation = selector.generation.wrapping_add(1);
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        let slot = selector
+            .physical
+            .as_mut()
+            .filter(|slot| slot.id == self.id && slot.key == self.key)
+            .ok_or(ArtifactStoreError::BindingMismatch)?;
+        if !slot.query_alive
+            || slot.query_acknowledged
+            || !slot.worker_reserved
+            || slot.worker_started
+            || slot.worker_ended
+        {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        slot.worker_started = true;
+        selector.generation = selector.generation.wrapping_add(1);
+        Ok(())
+    }
+
+    pub(crate) fn verify_publish(&self) -> Result<(), ArtifactStoreError> {
+        self.check_deadline()?;
+        let generation = self
+            .store
+            .reads
+            .drained_generation(&self.key)
+            .map_err(|_| ArtifactStoreError::Unavailable)?
+            .ok_or(ArtifactStoreError::Unavailable)?;
+        let mut inventory = self
+            .store
+            .reads
+            .inventory
+            .lock()
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        let selector = inventory
+            .selectors
+            .get_mut(self.key.artifact_id())
+            .ok_or(ArtifactStoreError::Unavailable)?;
+        if selector.generation != generation
+            || selector.unbound_unproven
+            || selector.unproven.contains(&self.key)
+            || !selector.closed.contains(&self.key)
+        {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        if Instant::now() >= self.deadline {
+            keep_unproven(selector, Some(self.key.clone()));
+            selector.generation = selector.generation.wrapping_add(1);
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        let slot = selector
+            .physical
+            .as_ref()
+            .filter(|slot| slot.id == self.id && slot.key == self.key)
+            .ok_or(ArtifactStoreError::BindingMismatch)?;
+        if slot.query_alive
+            || !slot.query_acknowledged
+            || !slot.worker_reserved
+            || !slot.worker_started
+            || !slot.worker_ended
+        {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn mark_unproven(&self) {
+        if let Ok(mut inventory) = self.store.reads.inventory.lock()
+            && let Some(selector) = inventory.selectors.get_mut(self.key.artifact_id())
+        {
+            keep_unproven(selector, Some(self.key.clone()));
+            selector.generation = selector.generation.wrapping_add(1);
+        }
+        self.store.reads.changed.notify_waiters();
+    }
+
+    fn check_deadline(&self) -> Result<(), ArtifactStoreError> {
+        if Instant::now() >= self.deadline {
+            self.mark_unproven();
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        Ok(())
+    }
+}
+
+impl PhysicalInvocationQueryOwner {
+    pub(crate) fn acknowledge_rollback(mut self) -> Result<(), ArtifactStoreError> {
+        self.claim.check_deadline()?;
+        let mut inventory = self
+            .claim
+            .store
+            .reads
+            .inventory
+            .lock()
+            .map_err(|_| ArtifactStoreError::Unavailable)?;
+        let selector = inventory
+            .selectors
+            .get_mut(self.claim.key.artifact_id())
+            .ok_or(ArtifactStoreError::Unavailable)?;
+        if Instant::now() >= self.claim.deadline {
+            keep_unproven(selector, Some(self.claim.key.clone()));
+            selector.generation = selector.generation.wrapping_add(1);
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        let slot = selector
+            .physical
+            .as_mut()
+            .filter(|slot| slot.id == self.claim.id && slot.key == self.claim.key)
+            .ok_or(ArtifactStoreError::BindingMismatch)?;
+        if !slot.query_alive || slot.query_acknowledged {
+            return Err(ArtifactStoreError::Unavailable);
+        }
+        slot.query_alive = false;
+        slot.query_acknowledged = true;
+        selector.generation = selector.generation.wrapping_add(1);
+        self.acknowledged = true;
+        drop(inventory);
+        self.claim.store.reads.changed.notify_waiters();
+        Ok(())
+    }
+}
+
+impl Drop for PhysicalInvocationQueryOwner {
+    fn drop(&mut self) {
+        if !self.acknowledged {
+            if let Ok(mut inventory) = self.claim.store.reads.inventory.lock()
+                && let Some(selector) = inventory.selectors.get_mut(self.claim.key.artifact_id())
+            {
+                if let Some(slot) = selector
+                    .physical
+                    .as_mut()
+                    .filter(|slot| slot.id == self.claim.id)
+                {
+                    slot.query_alive = false;
+                }
+                keep_unproven(selector, Some(self.claim.key.clone()));
+                selector.generation = selector.generation.wrapping_add(1);
+            }
+            self.claim.store.reads.changed.notify_waiters();
+        }
+    }
+}
+
+impl PhysicalWorkerLease {
+    pub(crate) fn finish_after_resources(mut self) {
+        self.record_ended();
+        self.active = false;
+    }
+
+    fn record_ended(&self) {
+        if let Ok(mut inventory) = self.claim.store.reads.inventory.lock()
+            && let Some(selector) = inventory.selectors.get_mut(self.claim.key.artifact_id())
+            && let Some(slot) = selector
+                .physical
+                .as_mut()
+                .filter(|slot| slot.id == self.claim.id)
+        {
+            slot.worker_ended = true;
+            selector.generation = selector.generation.wrapping_add(1);
+        }
+        self.claim.store.reads.changed.notify_waiters();
+    }
+}
+
+impl Drop for PhysicalWorkerLease {
+    fn drop(&mut self) {
+        if self.active {
+            // The worker declares this lease first. Unwind drops its leaf/IO owners first.
+            self.record_ended();
+        }
     }
 }
 

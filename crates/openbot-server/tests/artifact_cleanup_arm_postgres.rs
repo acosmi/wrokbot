@@ -21,7 +21,10 @@ use openbot_domain::artifact::ArtifactQuotaPolicy;
 use openbot_domain::identity::session::{SessionHashKey, SessionToken, SessionTokenHash};
 use openbot_domain::vault::SecretBytes;
 use openbot_infra::artifact_administration::{
-    ArmedArtifactCleanupIntent, ArtifactCleanupArmError as Error, PostgresArtifactAdministration,
+    ArmedArtifactCleanupIntent, ArtifactCleanupArmError as Error,
+    ArtifactCleanupPhysicalError as PhysicalError, ArtifactCleanupPhysicalIoPhase as PhysicalPhase,
+    ArtifactCleanupPhysicalObserver, ArtifactCleanupPhysicalState as PhysicalState,
+    PostgresArtifactAdministration,
 };
 use openbot_infra::artifact_registry::ArtifactDatasetRegistry;
 use openbot_infra::artifact_store::DatasetBoundArtifactStore;
@@ -41,7 +44,7 @@ use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
@@ -1938,7 +1941,7 @@ async fn original_pair_charge_or_cleanup_schema_drift_refuses_without_mutation()
                     }.map_err(|e|e.to_string())?;
                     require(changed==1,"controller did not corrupt exactly its actual original operation")?;
                     tx.batch_execute("ALTER TABLE openbot_internal.artifact_save_operations ENABLE TRIGGER artifact_save_operations_identity_guard").await.map_err(|e|e.to_string())?;
-                    ("openbot_internal.artifact_save_operations",if fault=="operation_artifact"{"operation_pair"}else if fault=="charge"{"operation_pair"}else{"positive_receipt"})
+                    ("openbot_internal.artifact_save_operations",if fault=="operation_artifact"||fault=="charge"{"operation_pair"}else{"positive_receipt"})
                 },
                 "request_receipt"|"positive_receipt_missing"=>{
                     tx.batch_execute("ALTER TABLE openbot_internal.artifact_saved_receipts DISABLE TRIGGER artifact_saved_receipts_append_only").await.map_err(|e|e.to_string())?;
@@ -2118,6 +2121,1168 @@ async fn lost_original_arm_commit_ack_remains_unknown_without_cleanup_grant() {
         retired_original(f,pid,&observation,&socket).await?;
         require(database_facts(&f.admin).await?==durable&&object_fact(&f.path())?==object,"unknown arm erased durable intent, repeated IO, changed charge or deleted original object")?;
         eprintln!("ARTIFACT_CLEANUP_ARM_COMMIT_UNKNOWN original_upstream_commit_ack=true original_forwarded_commit_ack=false original_error=CommitUnknown durable_fence_and_audit=true original_driver_destroyed=true matching_frontend_eof=true original_backend_gone=true usable_intent=false physical_delete=false retry=false");
+        Ok(())
+    })).await;
+}
+
+// Task020: this oracle follows only the originally saved dev/inode, including nlink=0.
+fn physical_macos_inode_fds_for(
+    original_device: u64,
+    original_inode: u64,
+) -> Result<Vec<String>, String> {
+    let device = original_device & u64::from(u32::MAX);
+    let sample = || -> Result<Vec<String>, String> {
+        let pid = std::process::id();
+        let mut child = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "finite original own-PID lsof unavailable (Unproven)")?;
+        let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("finite original lsof streams unavailable (Unproven)".to_owned());
+        };
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let errors = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let waited = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5))
+                }
+                Ok(None) => break Err("finite original own-PID lsof timed out (Unproven)"),
+                Err(_) => break Err("finite original own-PID lsof wait failed (Unproven)"),
+            }
+        };
+        // All error paths still reap this original child and both original pipe workers.
+        // A killed/timed-out/error child is never credited as a natural successful sample.
+        if waited.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let output = output.join();
+        let errors = errors.join();
+        let status = waited?;
+        let output = output
+            .map_err(|_| "original lsof stdout worker failed")?
+            .map_err(|_| "original lsof stdout read failed")?;
+        let errors = errors
+            .map_err(|_| "original lsof stderr worker failed")?
+            .map_err(|_| "original lsof stderr read failed")?;
+        require(
+            status.success()
+                && output.len() <= 65_536
+                && errors.is_empty()
+                && output.ends_with(b"\n"),
+            "original lsof was failed, incomplete, truncated or emitted stderr (Unproven)",
+        )?;
+        let text = std::str::from_utf8(&output).map_err(|_| "original lsof output invalid")?;
+        let mut self_pid = false;
+        let mut fd = None;
+        let mut dev = None;
+        let mut ino = None;
+        let mut found = std::collections::BTreeSet::new();
+        for line in text.lines().chain(std::iter::once("f")) {
+            let (kind, value) = line
+                .split_at_checked(1)
+                .ok_or("original lsof empty field")?;
+            match kind {
+                "p" => {
+                    require(
+                        value.parse::<u32>().ok() == Some(pid),
+                        "original lsof observed a peer PID",
+                    )?;
+                    self_pid = true;
+                }
+                "f" => {
+                    if dev == Some(device) && ino == Some(original_inode) {
+                        found.insert(fd.ok_or("original inode had a nonnumeric ambiguous FD")?);
+                    }
+                    fd = value.parse::<u32>().ok();
+                    dev = None;
+                    ino = None;
+                }
+                "D" => {
+                    dev = Some(
+                        if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16)
+                        } else {
+                            value.parse::<u64>()
+                        }
+                        .map_err(|_| "original lsof device invalid")?,
+                    );
+                }
+                "i" => {
+                    ino = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "original lsof inode invalid")?,
+                    );
+                }
+                _ => return Err("original lsof unexpected field".to_owned()),
+            }
+        }
+        require(self_pid, "original lsof self-PID field missing")?;
+        Ok(found.into_iter().map(|fd| fd.to_string()).collect())
+    };
+    let first = sample()?;
+    let second = sample()?;
+    require(
+        first == second,
+        "original inode FD inventory changed between two actual samples (Unproven)",
+    )?;
+    Ok(first)
+}
+
+#[derive(Default)]
+struct PhysicalPhaseFacts {
+    seen: [usize; 4],
+    original_fd: Option<i32>,
+    nlink_after_unlink: Option<u64>,
+    error: Option<String>,
+    released: bool,
+}
+struct PhysicalPhaseGate {
+    artifact: Uuid,
+    original: ObjectFact,
+    pause: usize,
+    absent_at_entry: bool,
+    facts: Mutex<PhysicalPhaseFacts>,
+    changed: Condvar,
+}
+impl PhysicalPhaseGate {
+    fn new(
+        f: &Fixture,
+        original: ObjectFact,
+        pause: usize,
+        absent_at_entry: bool,
+    ) -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Self {
+            artifact: Uuid::parse_str(&f.receipt.artifact_id).map_err(|e| e.to_string())?,
+            original,
+            pause,
+            absent_at_entry,
+            facts: Mutex::new(PhysicalPhaseFacts::default()),
+            changed: Condvar::new(),
+        }))
+    }
+    fn release(&self) {
+        if let Ok(mut facts) = self.facts.lock() {
+            facts.released = true;
+            self.changed.notify_all();
+        }
+    }
+    fn saw(&self, phase: usize) -> bool {
+        self.facts.lock().is_ok_and(|f| f.seen[phase - 1] > 0)
+    }
+    fn check(&self) -> Result<(), String> {
+        let facts = self
+            .facts
+            .lock()
+            .map_err(|_| "original physical observer poisoned")?;
+        match &facts.error {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        }
+    }
+    async fn wait(&self, phase: usize, deadline: Instant) -> Result<(), String> {
+        wait_fact(
+            || self.saw(phase),
+            deadline,
+            "actual original physical phase was not reached",
+        )
+        .await?;
+        self.check()
+    }
+    fn after_unlink_is_original_zero_link(&self) -> Result<(), String> {
+        let facts = self
+            .facts
+            .lock()
+            .map_err(|_| "original physical observer poisoned")?;
+        require(
+            facts.seen[2] == 1
+                && facts.original_fd.is_some()
+                && facts.nlink_after_unlink == Some(0),
+            "AfterUnlink did not observe the actually held original inode with nlink=0",
+        )
+    }
+}
+impl ArtifactCleanupPhysicalObserver for PhysicalPhaseGate {
+    fn on_phase(&self, phase: PhysicalPhase, artifact_id: Uuid, original_leaf_fd: Option<i32>) {
+        let index = match phase {
+            PhysicalPhase::PreflightReady => 1,
+            PhysicalPhase::BeforeFirstUnlink => 2,
+            PhysicalPhase::AfterUnlinkBeforeSync => 3,
+            PhysicalPhase::WorkerEnded => 4,
+        };
+        // A finite duplicate of the explicitly supplied live original FD is metadata-only.
+        // It closes before the callback pauses or WorkerEnded is accepted; it is not an
+        // original-worker closure receipt, nor does it read body bytes.
+        let observed = (|| -> Result<Option<u64>, String> {
+            require(
+                artifact_id == self.artifact,
+                "physical observer rebound artifact UUID",
+            )?;
+            if index == 4 {
+                require(
+                    original_leaf_fd.is_none(),
+                    "WorkerEnded still exported a live leaf FD",
+                )?;
+                return Ok(None);
+            }
+            let Some(fd) = original_leaf_fd else {
+                require(
+                    self.absent_at_entry
+                        || self
+                            .facts
+                            .lock()
+                            .is_ok_and(|f| f.nlink_after_unlink == Some(0)),
+                    "retained preflight did not hold its actual original leaf FD",
+                )?;
+                return Ok(None);
+            };
+            let duplicate = std::fs::File::open(format!("/dev/fd/{fd}"))
+                .map_err(|_| "original physical FD duplicate failed")?;
+            let metadata = duplicate
+                .metadata()
+                .map_err(|_| "original physical FD metadata failed")?;
+            let valid = metadata.is_file()
+                && metadata.dev() == self.original.dev
+                && metadata.ino() == self.original.ino
+                && metadata.uid() == self.original.uid
+                && metadata.mode() == self.original.mode
+                && metadata.len() == self.original.len;
+            let nlink = metadata.nlink();
+            drop(duplicate);
+            require(
+                valid,
+                "phase FD was not the originally saved physical inode",
+            )?;
+            require(
+                if index == 3 { nlink == 0 } else { nlink == 1 },
+                "original phase FD had unexpected actual link count",
+            )?;
+            Ok(Some(nlink))
+        })();
+        let Ok(mut facts) = self.facts.lock() else {
+            return;
+        };
+        facts.seen[index - 1] += 1;
+        match observed {
+            Ok(nlink) => {
+                if let Some(fd) = original_leaf_fd {
+                    facts.original_fd = Some(fd);
+                }
+                if index == 3 {
+                    facts.nlink_after_unlink = nlink;
+                }
+            }
+            Err(error) => facts.error = Some(error),
+        }
+        self.changed.notify_all();
+        // The producer's deadline is unchanged. This separate finite fixture wait can
+        // retain a worker after its main query expires, for genuine unproven cleanup.
+        let stop = Instant::now() + Duration::from_secs(8);
+        while index == self.pause && !facts.released {
+            let remaining = stop.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                facts.error =
+                    Some("original physical phase controller was not released".to_owned());
+                break;
+            }
+            match self.changed.wait_timeout(facts, remaining) {
+                Ok((next, _)) => facts = next,
+                Err(_) => return,
+            }
+        }
+    }
+}
+struct PhysicalGateRelease(Arc<PhysicalPhaseGate>);
+impl Drop for PhysicalGateRelease {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+fn install_physical_gate(
+    f: &Fixture,
+    original: ObjectFact,
+    pause: usize,
+    absent: bool,
+) -> Result<Arc<PhysicalPhaseGate>, String> {
+    let gate = PhysicalPhaseGate::new(f, original, pause, absent)?;
+    f.actual
+        .install_cleanup_physical_observer(gate.clone())
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(gate)
+}
+fn physical_inode_fds(original: &ObjectFact) -> Result<Vec<String>, String> {
+    physical_inode_fds_for(original.dev, original.ino)
+}
+fn physical_inode_fds_for(device: u64, inode: u64) -> Result<Vec<String>, String> {
+    if cfg!(target_os = "macos") {
+        return physical_macos_inode_fds_for(device, inode);
+    }
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("/proc/self/fd").map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if std::fs::metadata(entry.path()).is_ok_and(|m| m.dev() == device && m.ino() == inode) {
+            found.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+async fn physical_original_fd_closed(gate: &Arc<PhysicalPhaseGate>) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    gate.wait(4, deadline).await?;
+    let original = gate.original.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        loop {
+            if physical_inode_fds(&original)?.is_empty() {
+                return Ok(());
+            }
+            require(
+                Instant::now() < deadline,
+                "WorkerEnded label did not close the actual original inode FD",
+            )?;
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    gate.check()
+}
+async fn physical_normal_original_ack(
+    f: &Fixture,
+    pid: i32,
+    socket: &SocketFacts,
+) -> Result<(), String> {
+    require(
+        socket.pid.load(Ordering::SeqCst) == pid
+            && socket.entered.load(Ordering::SeqCst) & (BEGIN_BIT | ROLLBACK_BIT)
+                == (BEGIN_BIT | ROLLBACK_BIT)
+            && socket.server_ack.load(Ordering::SeqCst) & (BEGIN_BIT | ROLLBACK_BIT)
+                == (BEGIN_BIT | ROLLBACK_BIT)
+            && socket.forwarded_ack.load(Ordering::SeqCst) & (BEGIN_BIT | ROLLBACK_BIT)
+                == (BEGIN_BIT | ROLLBACK_BIT)
+            && socket.withheld.load(Ordering::SeqCst) == 0
+            && !socket.frontend_eof.load(Ordering::SeqCst),
+        "normal physical observation lacked this original query's true BEGIN/ROLLBACK ACK",
+    )?;
+    let current = f.pool.get().await.map_err(|e| e.to_string())?;
+    let current_pid: i32 = current
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|e| e.to_string())?
+        .get(0);
+    require(
+        current_pid == pid,
+        "normal original acknowledged query was retired rather than reusable",
+    )
+}
+fn physical_absent(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+async fn physical_poison_refuses(
+    f: &Fixture,
+    auth: &AuthContext,
+    intent: &ArmedArtifactCleanupIntent,
+    original_record: &openbot_infra::artifact_administration::ObservedArtifactReadRecord,
+) -> Result<(), String> {
+    require(
+        f.actual
+            .remove_armed_explicit_saved_bytes_before(
+                auth,
+                intent,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+            .is_err(),
+        "new remove erased original physical/read uncertainty",
+    )?;
+    require(
+        f.actual
+            .observe_armed_explicit_saved_bytes_before(
+                auth,
+                intent,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+            .is_err(),
+        "new observe erased original physical/read uncertainty",
+    )?;
+    let barrier = f
+        .actual
+        .close_observed_artifact_reads(original_record)
+        .map_err(|e| e.to_string())?;
+    require(
+        matches!(
+            barrier
+                .drain_before(Instant::now() + Duration::from_secs(2))
+                .await,
+            Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Unavailable)
+        ),
+        "original poisoned shared Store fabricated a finite drain ACK",
+    )
+}
+
+#[tokio::test]
+#[ignore = "requires Root-owned PostgreSQL and original armed Store; actual finite physical IO only"]
+async fn actual_original_armed_object_unlink_and_directory_sync_prove_absence_without_refund() {
+    with_fixture("physical-original-source-deleted", true, |f| Box::pin(async move {
+        let record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await.map_err(|e| e.to_string())?;
+        let object = object_fact(&f.path())?;
+        hard_delete_original_message(f).await?;
+        read_is_404(f).await?;
+        let intent = f.arm().await.map_err(|e| format!("{e:?}"))?;
+        f.verify_one_arm().await?;
+        let armed = database_facts(&f.admin).await?;
+        let gate = install_physical_gate(f, object, 0, false)?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let started = Instant::now();
+        let result = f.actual.remove_armed_explicit_saved_bytes_before(&f.auth, &intent,
+            started + Duration::from_secs(5)).await.map_err(|e| format!("{e:?}"))?;
+        require(started.elapsed() < Duration::from_secs(5) && result.state() == PhysicalState::DurableAbsent,
+            "actual original cleanup lacked a normal in-budget DurableAbsent observation")?;
+        gate.after_unlink_is_original_zero_link()?;
+        physical_original_fd_closed(&gate).await?;
+        physical_normal_original_ack(f, pid, &socket).await?;
+        require(physical_absent(&f.path()) && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id)),
+            "actual producer did not leave both canonical names absent")?;
+        require(database_facts(&f.admin).await? == armed, "physical IO changed original charge/Run32/pair/fence/audit rows or physical carriers")?;
+        let retry = f.application.execute(f.auth.clone(), AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
+            request_id: Uuid::now_v7().to_string(), source_thread_id: f.receipt.source_thread_id.clone(),
+            source_run_id: f.receipt.source_run_id.clone(), source_message_id: f.receipt.source_message_id.clone(),
+            expected_sha256: format!("{:x}", Sha256::digest(TEXT.as_bytes())),
+        })).await;
+        require(matches!(retry, Err(AppError::NotVisible)), "source-deleted locator Save recreated its armed object")?;
+        read_is_404(f).await?;
+        require(database_facts(&f.admin).await? == armed && physical_absent(&f.path()), "source-deleted retry mutated original armed facts")?;
+        let barrier = f.actual.close_observed_artifact_reads(&record).map_err(|e| e.to_string())?;
+        let ack = barrier.drain_before(Instant::now() + Duration::from_secs(2)).await.map_err(|e| format!("{e:?}"))?;
+        drop(ack); drop(barrier); drop(result); drop(intent); drop(record);
+        eprintln!("ARTIFACT_PHYSICAL_P01 actual_original_unlink=true original_fd_nlink_zero=true original_fd_closed=true guarded_directory_sync_and_double_absence=true original_query_rollback_ack=true business_charge_fence_audit_unchanged=true source_save_404=true terminal_refund=false");
+        Ok(())
+    })).await;
+}
+
+async fn physical_genuine_original_read_ack_loss(f: &Fixture) -> Result<(), String> {
+    // This genuine original record supplies only the existing finite close key.
+    // It neither replaces the Store nor proves deletion or a public read grant.
+    let original_record = f
+        .actual
+        .observe_read_record(&f.auth, &f.receipt.artifact_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let original_object = object_fact(&f.path())?;
+    let before = database_facts(&f.admin).await?;
+    let (original_pid, original_connection, socket) = f.original().await?;
+    clear_transaction_facts(&socket);
+    let relay = f
+        .relay
+        .as_ref()
+        .ok_or("P1 original guarded read relay missing")?;
+    let mut controller = f.admin.get().await.map_err(|error| error.to_string())?;
+    let transaction = controller
+        .transaction()
+        .await
+        .map_err(|error| error.to_string())?;
+    let controller_pid: i32 = transaction
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|error| error.to_string())?
+        .get(0);
+    socket
+        .hold_next_begin_after_forwarded_rollback
+        .store(true, Ordering::SeqCst);
+    let application = Arc::clone(&f.application);
+    let original_auth = f.auth.clone();
+    let artifact_id = f.receipt.artifact_id.clone();
+    let started = Instant::now();
+    let worker = tokio::spawn(async move {
+        application
+            .execute(
+                original_auth,
+                AppCommand::OpenArtifactRead(OpenArtifactRead { artifact_id }),
+            )
+            .await
+    });
+    let controlled = async {
+            wait_fact(|| socket.withheld.load(Ordering::SeqCst) == Hold::Begin as u8
+                && socket.forwarded_host_rollback_before_source_begin.load(Ordering::SeqCst)
+                && socket.post_schema_source_begin_held.load(Ordering::SeqCst),
+                Instant::now() + Duration::from_secs(2),
+                "P1 original source BEGIN ACK was not held after the actual forwarded Host ROLLBACK").await?;
+            require(socket.pid.load(Ordering::SeqCst) == original_pid
+                && !socket.post_schema_source_begin_forwarded.load(Ordering::SeqCst),
+                "P1 source BEGIN hold changed original producer or had already forwarded its ACK")?;
+            let observer = f.admin.get().await.map_err(|error| error.to_string())?;
+            let row = observer.query_one(
+                "SELECT pg_catalog.pg_backend_pid() AS observer_pid,state,query,xact_start IS NOT NULL AS actual_transaction FROM pg_catalog.pg_stat_activity WHERE pid=$1",
+                &[&original_pid],
+            ).await.map_err(|error| error.to_string())?;
+            let begin_observer_pid: i32 = row.get("observer_pid");
+            let begin_query: String = row.get("query");
+            require(begin_observer_pid != original_pid && begin_observer_pid != controller_pid && original_pid != controller_pid
+                && row.get::<_, Option<String>>("state").as_deref() == Some("idle in transaction")
+                && row.get::<_, bool>("actual_transaction")
+                && (begin_query.trim_start().starts_with("BEGIN") || begin_query.trim_start().starts_with("START TRANSACTION"))
+                && begin_query.contains("READ COMMITTED") && begin_query.contains("READ ONLY"),
+                "P1 held post-schema source BEGIN was not the original read-only transaction with distinct observer/controller")?;
+            drop(observer);
+            // The original source schema is now complete; its actual BEGIN ACK remains
+            // withheld so no source table query can preempt this genuine controller lock.
+            transaction.batch_execute("LOCK TABLE openbot_internal.artifact_cleanup_fences IN ACCESS EXCLUSIVE MODE").await
+                .map_err(|error| error.to_string())?;
+            relay.release_original_ack(&socket, Hold::Begin)?;
+            wait_fact(|| socket.post_schema_source_begin_forwarded.load(Ordering::SeqCst),
+                Instant::now() + Duration::from_secs(2),
+                "P1 did not release exactly the held original post-schema source BEGIN ACK").await?;
+            let wait_deadline = Instant::now() + Duration::from_secs(2);
+            let observer_pid = loop {
+                let observer = f.admin.get().await.map_err(|error| error.to_string())?;
+                let row = observer.query_opt(
+                    "SELECT pg_catalog.pg_backend_pid() AS observer_pid,query,wait_event_type,pg_catalog.pg_blocking_pids(pid) AS blockers FROM pg_catalog.pg_stat_activity WHERE pid=$1",
+                    &[&original_pid],
+                ).await.map_err(|error| error.to_string())?;
+                if let Some(row) = row {
+                    let query: String = row.get("query");
+                    let wait_type: Option<String> = row.get("wait_event_type");
+                    let blockers: Vec<i32> = row.get("blockers");
+                    if wait_type.as_deref() == Some("Lock")
+                        && blockers.contains(&controller_pid)
+                        && query.contains("artifact_private_read_record_snapshot")
+                        && query.contains("FROM visible_run r JOIN openbot_internal.artifact_records a")
+                        && query.contains("LEFT JOIN openbot_internal.artifact_cleanup_fences c")
+                    {
+                        let observer_pid: i32 = row.get("observer_pid");
+                        require(original_pid != controller_pid && observer_pid != original_pid && observer_pid != controller_pid,
+                            "P1 source query producer/controller/observer were not distinct actual backends")?;
+                        break observer_pid;
+                    }
+                }
+                require(Instant::now() < wait_deadline,
+                    "P1 original guarded read never reached the complete source snapshot at its actual controller lock")?;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            // Preliminary Host and schema queries are already past. Withhold only the
+            // ensuing original guarded read's ROLLBACK, after the proven source wait.
+            clear_transaction_facts(&socket);
+            relay.arm(Hold::Rollback);
+            transaction.rollback().await.map_err(|error| error.to_string())?;
+            wait_fact(|| socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8,
+                Instant::now() + Duration::from_secs(2),
+                "P1 actual original guarded read ROLLBACK did not reach its upstream ACK").await?;
+            require(socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+                && socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+                && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+                && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+                "P1 read uncertainty was not its actual original upstream ROLLBACK ACK withheld from the driver")?;
+            Ok::<i32, String>(observer_pid)
+        }.await;
+    drop(controller);
+    // Reap the original task even when a control assertion fails. A requested stop
+    // on that failure path is never a substitute for the evidence below.
+    if controlled.is_err() {
+        let _ = f.application.close_public_artifact_reads();
+    }
+    let original_outcome = worker.await.map_err(|error| error.to_string())?;
+    let observer_pid = controlled?;
+    require(
+        matches!(
+            original_outcome,
+            Err(AppError::DependencyUnavailable { .. })
+        ),
+        "P1 missing original read ROLLBACK ACK returned a byte/control grant or definite Host refusal",
+    )?;
+    original_five_seconds(started)?;
+    retired_original(f, original_pid, &original_connection, &socket).await?;
+    require(
+        socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+        "P1 original held read ACK was later forwarded or credited after retirement",
+    )?;
+    require(
+        database_facts(&f.admin).await? == before
+            && object_fact(&f.path())? == original_object
+            && owned_object_fds(&f.path())?.is_empty(),
+        "P1 original uncertain read changed business/object facts or opened an unowned object FD",
+    )?;
+
+    // Revoke the actual old issuer only after its original connection has truly
+    // retired. Install a fresh real resolver on the SAME Administration/Store.
+    f.resolver.close_request_bindings();
+    let fresh_resolver = PostgresSessionAuthResolver::new(
+        f.pool.clone(),
+        SESSION_KEY,
+        default_session_lifetime(),
+        DeploymentId::new(DEPLOYMENT),
+        TenantId::new(TENANT),
+    )
+    .map_err(|error| error.to_string())?;
+    fresh_resolver
+        .install_artifact_read_authority(&f.actual.read_authority())
+        .map_err(|_| "P1 new genuine Session issuer enrollment failed")?;
+    let recovery = async {
+            let fresh = resolve(&fresh_resolver, COOKIE_B).await?;
+            require(fresh == f.auth && !fresh.request_binding().ok_or("P1 recovery Session binding missing")?.identity()
+                .same_binding(f.auth.request_binding().ok_or("P1 original Session binding missing")?.identity()),
+                "P1 uncertain read recovery reused the closed owner or changed six Auth facts")?;
+            fresh.request_binding().ok_or("P1 new valid Session missing")?.verify_current_before(&fresh,
+                Instant::now() + Duration::from_secs(5)).await
+                .map_err(|error| format!("P1 new actual Session was not valid independently of Store poison: {error:?}"))?;
+            let after_auth = database_facts(&f.admin).await?;
+            only_tables_changed(&before, &after_auth, &["public.sessions"])?;
+            let mut expected_sessions = before["public.sessions"].as_array().ok_or("P1 original session facts missing")?.clone();
+            let fresh_sessions = after_auth["public.sessions"].as_array().ok_or("P1 recovery session facts missing")?;
+            require(expected_sessions.len() == fresh_sessions.len(), "P1 recovery changed original Session inventory")?;
+            for (old, new) in expected_sessions.iter_mut().zip(fresh_sessions) {
+                if old["row"]["id"].as_str() == Some("cleanup-session-b") {
+                    old["row"]["updated_at"] = new["row"]["updated_at"].clone();
+                    old["xmin"] = new["xmin"].clone();
+                    old["ctid"] = new["ctid"].clone();
+                }
+            }
+            require(expected_sessions == *fresh_sessions,
+                "P1 recovery changed fields beyond the named new Session idle observation")?;
+            let intent = f.actual.arm_explicit_saved_delete_before(&fresh, &f.receipt.artifact_id,
+                Instant::now() + Duration::from_secs(5)).await.map_err(|error| format!("genuine fresh-owner arm: {error:?}"))?;
+            f.verify_one_arm().await?;
+            let armed = database_facts(&f.admin).await?;
+            original_arm_append_only(&after_auth, &armed)?;
+            physical_poison_refuses(f, &fresh, &intent, &original_record).await?;
+            require(database_facts(&f.admin).await? == armed && object_fact(&f.path())? == original_object
+                && owned_object_fds(&f.path())?.is_empty(),
+                "P02 permanent uncertain refusal mutated armed business facts or original object")?;
+            drop(intent);
+            eprintln!("ARTIFACT_PHYSICAL_P02_ORIGINAL_READ_ROLLBACK_UNKNOWN original_producer_pid={original_pid} controller_pid={controller_pid} observer_pid={observer_pid} actual_host_rollback_forwarded_before_source_begin=true actual_post_schema_source_begin_held_and_released=true complete_original_source_query_lock_wait=true controller_rollback_ack=true original_upstream_read_rollback_ack=true original_forwarded_read_rollback_ack=false original_five_second_error=true original_driver_destroyed=true corresponding_frontend_eof=true original_backend_gone=true original_owner_closed_after_retirement=true new_true_owner_valid=true same_original_store_pair=true byte_grant=false finite_store_ack=false business_object_unchanged=true held_read_rollback_ack_released=false physical_delete=false");
+            Ok::<(), String>(())
+        }.await;
+    fresh_resolver.close_request_bindings();
+    recovery
+}
+
+struct PhysicalFrameBytesOwner(
+    openbot_application::artifact_read_lifecycle::CurrentArtifactReadFrame,
+);
+impl AsRef<[u8]> for PhysicalFrameBytesOwner {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires genuine leased frame/Bytes owners and a real original read rollback-ACK loss"]
+async fn actual_original_leased_owner_and_query_unproven_block_physical_cleanup() {
+    with_fixture("physical-held-original-allocation", true, |f| Box::pin(async move {
+        let record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await.map_err(|e| e.to_string())?;
+        let mut operation = f.application.open_current_artifact_read(f.auth.clone(), f.receipt.artifact_id.clone()).await.map_err(|e| e.to_string())?;
+        let pending = operation.next_block(&f.auth).await.map_err(|e| e.to_string())?;
+        require(pending.prefix_length().map_err(|e| e.to_string())? == TEXT.len(), "P02 did not obtain the genuine full leased allocation")?;
+        let frame = pending.handoff_frame(&f.auth).map_err(|e| e.to_string())?;
+        require(frame.as_bytes() == TEXT.as_bytes(), "P02 genuine frame changed saved bytes")?;
+        let bytes = axum::body::Bytes::from_owner(PhysicalFrameBytesOwner(frame));
+        let held = bytes.clone();
+        let sliced = bytes.slice(1..bytes.len());
+        drop(bytes);
+        let object = object_fact(&f.path())?;
+        let original_fds = owned_object_fds(&f.path())?;
+        require(original_fds.len() == 1, "P02 original leased owner did not retain its actual object FD")?;
+        let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+        let armed = database_facts(&f.admin).await?;
+        let gate = install_physical_gate(f, object.clone(), 0, false)?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let actual = Arc::clone(&f.actual); let auth = f.auth.clone(); let original_intent = intent.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move { actual.remove_armed_explicit_saved_bytes_before(&auth, &original_intent, started + Duration::from_secs(5)).await });
+        let controlled = async {
+            wait_fact(|| socket.forwarded_ack.load(Ordering::SeqCst) & BEGIN_BIT != 0,
+                Instant::now() + Duration::from_secs(2), "P02 physical invocation never obtained its actual original BEGIN ACK").await?;
+            let barrier = f.actual.close_observed_artifact_reads(&record).map_err(|e| e.to_string())?;
+            require(matches!(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await,
+                Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)), "P02 shared ACK ignored held original Bytes owners")?;
+            require(!gate.saw(1) && object_fact(&f.path())? == object && owned_object_fds(&f.path())? == original_fds,
+                "P02 worker preflight/unlink preceded actual original allocation/FD drain")?;
+            drop(operation);
+            drop(held);
+            require(matches!(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await,
+                Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)), "P02 clone Drop ignored a real surviving Bytes slice")?;
+            require(!gate.saw(1) && object_fact(&f.path())? == object, "P02 surviving slice allowed physical IO")?;
+            drop(sliced);
+            drop(barrier);
+            Ok::<(), String>(())
+        }.await;
+        let outcome = task.await.map_err(|e| e.to_string())?;
+        controlled?;
+        let observed = outcome.map_err(|e| format!("{e:?}"))?;
+        require(started.elapsed() < Duration::from_secs(5) && observed.state() == PhysicalState::DurableAbsent,
+            "P02 same original invocation did not continue normally after in-budget last-owner release")?;
+        gate.after_unlink_is_original_zero_link()?;
+        physical_original_fd_closed(&gate).await?;
+        physical_normal_original_ack(f, pid, &socket).await?;
+        require(physical_absent(&f.path()) && database_facts(&f.admin).await? == armed,
+            "P02 original invocation changed armed business facts or retained canonical bytes")?;
+        drop(observed); drop(intent); drop(record);
+        eprintln!("ARTIFACT_PHYSICAL_P02_LEASE held_frame_bytes_clone_slice=true held_original_fd=true no_preflight_while_owned=true same_original_invocation_continued=true original_query_excluded_old_read_inventory=true original_post_io_rollback_ack=true actual_original_fd_closed=true no_refund=true");
+        Ok(())
+    })).await;
+    with_fixture("physical-old-read-query-unproven", true, |f| {
+        Box::pin(physical_genuine_original_read_ack_loss(f))
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires actual original preflight FD and controlled leaf/fixed-child replacement"]
+async fn actual_foreign_store_or_preflight_replaced_object_refuses_cleanup_without_unlink() {
+    with_fixture("physical-foreign-original-store", true, |f| Box::pin(async move {
+        let intent = f.arm().await.map_err(|e| format!("{e:?}"))?;
+        let foreign_root = OwnedRoot::new()?;
+        let foreign_deployment = DeploymentId::new("foreign-physical-deployment");
+        let foreign_tenant = TenantId::new("foreign-physical-tenant");
+        let foreign_registry = Arc::new(ArtifactDatasetRegistry::from_server(f.pool.clone(),
+            &foreign_deployment, &foreign_tenant).await.map_err(|e| e.to_string())?);
+        let foreign_store = Arc::new(DatasetBoundArtifactStore::bind_host_root(
+            std::fs::File::open(&foreign_root.0).map_err(|e| e.to_string())?, foreign_registry.clone(), ArtifactQuotaPolicy::default()).await.map_err(|e| e.to_string())?);
+        let foreign = Arc::new(PostgresArtifactAdministration::new(foreign_registry.clone(), foreign_store,
+            ArtifactQuotaPolicy::default(), SecretBytes::new(vec![0x18; 32])).map_err(|e| e.to_string())?);
+        let original = object_fact(&f.path())?;
+        let gate = install_physical_gate(f, original.clone(), 0, false)?;
+        let before = database_facts(&f.admin).await?;
+        require(matches!(foreign.remove_armed_explicit_saved_bytes_before(&f.auth, &intent,
+            Instant::now() + Duration::from_secs(5)).await, Err(PhysicalError::Conflict)),
+            "foreign Store accepted original mechanical intent or refused only after fake Host IO")?;
+        require(!gate.saw(1) && !gate.saw(2) && !gate.saw(3) && !gate.saw(4), "foreign mechanical intent started the original worker")?;
+        require(database_facts(&f.admin).await? == before && object_fact(&f.path())? == original && owned_object_fds(&f.path())?.is_empty(),
+            "foreign Store refusal changed original business/object facts")?;
+        drop(foreign); drop(foreign_registry); drop(foreign_root); drop(intent);
+        eprintln!("ARTIFACT_PHYSICAL_P03_FOREIGN original_store_identity_mismatch=true mechanical_conflict=true worker_not_started=true zero_unlink=true business_original_object_unchanged=true");
+        Ok(())
+    })).await;
+    for kind in [0_u8, 1, 2] {
+        let tag = match kind {
+            0 => "physical-preflight-leaf-replaced",
+            1 => "physical-preflight-objects-replaced",
+            _ => "physical-preflight-staging-symlink",
+        };
+        with_fixture(tag, true, move |f| Box::pin(async move {
+            let original = object_fact(&f.path())?;
+            let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+            let before = database_facts(&f.admin).await?;
+            let gate = install_physical_gate(f, original.clone(), 2, false)?;
+            let release = PhysicalGateRelease(gate.clone());
+            let (pid, _, socket) = f.original().await?;
+            clear_transaction_facts(&socket);
+            let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone();
+            let task = tokio::spawn(async move { actual.remove_armed_explicit_saved_bytes_before(&auth,
+                &original_intent, Instant::now() + Duration::from_secs(5)).await });
+            let controlled = async {
+                gate.wait(2, Instant::now() + Duration::from_secs(2)).await?;
+                require(gate.saw(1) && !gate.saw(3), "drift controller did not run after actual full preflight and before unlink")?;
+                let kept;
+                let replaced;
+                if kind == 0 {
+                    kept = f.root.0.join("controller-original-retained-object");
+                    std::fs::rename(f.path(), &kept).map_err(|e| e.to_string())?;
+                    std::fs::write(f.path(), TEXT.as_bytes()).map_err(|e| e.to_string())?;
+                    use std::os::unix::fs::PermissionsExt as _;
+                    std::fs::set_permissions(f.path(), std::fs::Permissions::from_mode(0o400)).map_err(|e| e.to_string())?;
+                    replaced = object_fact(&f.path())?;
+                    require(replaced.ino != original.ino && replaced.sha256 == original.sha256 && object_fact(&kept)? == original,
+                        "preflight leaf replacement was not a distinct actual inode with original retained")?;
+                } else if kind == 1 {
+                    kept = f.root.0.join("controller-original-objects");
+                    std::fs::rename(f.root.0.join("objects"), &kept).map_err(|e| e.to_string())?;
+                    std::fs::DirBuilder::new().mode(0o700).create(f.root.0.join("objects")).map_err(|e| e.to_string())?;
+                    std::fs::write(f.path(), TEXT.as_bytes()).map_err(|e| e.to_string())?;
+                    use std::os::unix::fs::PermissionsExt as _;
+                    std::fs::set_permissions(f.path(), std::fs::Permissions::from_mode(0o400)).map_err(|e| e.to_string())?;
+                    replaced = object_fact(&f.path())?;
+                    require(replaced.ino != original.ino && replaced.sha256 == original.sha256
+                        && object_fact(&kept.join(&f.receipt.artifact_id))? == original,
+                        "fixed objects child replacement did not preserve original and distinct replacement inodes")?;
+                } else {
+                    kept = f.root.0.join("controller-original-staging");
+                    std::fs::rename(f.root.0.join("staging"), &kept).map_err(|e| e.to_string())?;
+                    std::os::unix::fs::symlink(&kept, f.root.0.join("staging")).map_err(|e| e.to_string())?;
+                    require(std::fs::symlink_metadata(f.root.0.join("staging")).map_err(|e| e.to_string())?.file_type().is_symlink(),
+                        "fixed staging child was not an actual NOFOLLOW symlink counterexample")?;
+                    replaced = object_fact(&f.path())?;
+                }
+                Ok::<(PathBuf, ObjectFact), String>((kept, replaced))
+            }.await;
+            drop(release);
+            let result = task.await.map_err(|e| e.to_string())?;
+            let (kept, replacement) = controlled?;
+            require(matches!(result, Err(PhysicalError::Corrupt { field: "object" | "store_binding" })),
+                "actual preflight leaf/fixed-child drift gained unlink or a normal observation")?;
+            physical_original_fd_closed(&gate).await?;
+            physical_normal_original_ack(f, pid, &socket).await?;
+            require(!gate.saw(3) && object_fact(&f.path())? == replacement && database_facts(&f.admin).await? == before,
+                "drift refusal unlinked replacement or mutated original armed business facts")?;
+            if kind == 0 { require(object_fact(&kept)? == original, "leaf drift refusal damaged retained original")?; }
+            if kind == 1 { require(object_fact(&kept.join(&f.receipt.artifact_id))? == original, "child drift refusal damaged original held directory object")?; }
+            if kind == 2 { require(object_fact(&f.path())? == original, "staging NOFOLLOW refusal damaged original object")?; }
+            if kind != 0 {
+                let original_child = std::fs::symlink_metadata(&kept).map_err(|e| e.to_string())?;
+                require(original_child.is_dir(), "fixed-child controller lost the original retained directory")?;
+                let device = original_child.dev(); let inode = original_child.ino();
+                let held_directory = tokio::task::spawn_blocking(move || physical_inode_fds_for(device, inode)).await.map_err(|e| e.to_string())??;
+                require(!held_directory.is_empty(), "still-live original Store lost its actual held root-child FD identity")?;
+            }
+            drop(intent);
+            eprintln!("ARTIFACT_PHYSICAL_P03_DRIFT kind={kind} original_preflight_fd_fullsha=true distinct_controller_replacement=true zero_unlink=true original_leaf_fd_closed=true held_store_directory_inventory_not_claimed_zero=true original_query_rollback_ack=true business_unchanged=true");
+            Ok(())
+        })).await;
+    }
+}
+
+async fn physical_schema_wait(f: &Fixture, pid: i32, controller_pid: i32) -> Result<(), String> {
+    wait_blocked(
+        &f.admin,
+        pid,
+        "openbot_internal.schema_migrations",
+        controller_pid,
+    )
+    .await?;
+    let observer = f.admin.get().await.map_err(|e| e.to_string())?;
+    let row = observer.query_one("SELECT pg_backend_pid() AS observer_pid,query,wait_event_type,pg_blocking_pids(pid) AS blockers FROM pg_catalog.pg_stat_activity WHERE pid=$1", &[&pid]).await.map_err(|e| e.to_string())?;
+    let observer_pid: i32 = row.get("observer_pid");
+    require(
+        observer_pid != pid
+            && observer_pid != controller_pid
+            && pid != controller_pid
+            && row.get::<_, Option<String>>("wait_event_type").as_deref() == Some("Lock")
+            && row.get::<_, Vec<i32>>("blockers").contains(&controller_pid)
+            && row.get::<_, String>("query").contains(
+                "SELECT name,checksum FROM openbot_internal.schema_migrations WHERE version=$1",
+            ),
+        "original physical schema waiter did not have a unique actual producer/controller/observer",
+    )
+}
+async fn physical_connection_check_interval(f: &Fixture) -> Result<(), String> {
+    let c = f.pool.get().await.map_err(|e| e.to_string())?;
+    c.batch_execute("SET client_connection_check_interval='10ms'")
+        .await
+        .map_err(|e| e.to_string())?;
+    let setting: String = c
+        .query_one(
+            "SELECT current_setting('client_connection_check_interval')",
+            &[],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .get(0);
+    require(
+        setting == "10ms",
+        "owned connection did not enable actual finite server-side disappearance checks",
+    )
+}
+
+#[tokio::test]
+#[ignore = "requires actual unlink, caller-only cancel, original expiry and main-runtime owner Drop"]
+async fn actual_original_physical_worker_cancel_and_expiry_keep_armed_charge_without_relabelling_effects()
+ {
+    with_fixture("physical-caller-wait-only-cancel", true, |f| Box::pin(async move {
+        let record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await.map_err(|e| e.to_string())?;
+        let object = object_fact(&f.path())?;
+        let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+        let armed = database_facts(&f.admin).await?;
+        let gate = install_physical_gate(f, object, 3, false)?;
+        let release = PhysicalGateRelease(gate.clone());
+        let (pid, _, socket) = f.original().await?; clear_transaction_facts(&socket);
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move { actual.remove_armed_explicit_saved_bytes_before(&auth, &original_intent, started + Duration::from_secs(5)).await });
+        let controlled = async {
+            gate.wait(3, Instant::now() + Duration::from_secs(2)).await?;
+            gate.after_unlink_is_original_zero_link()
+        }.await;
+        // This JoinHandle owns only the public caller waiter, not the implementation's
+        // independently owned main/query supervisor. Actual cancellation is reaped.
+        task.abort();
+        let joined = task.await;
+        drop(release);
+        controlled?;
+        require(joined.is_err_and(|e| e.is_cancelled()), "P04-A original caller waiter was not actually cancelled and reaped")?;
+        physical_original_fd_closed(&gate).await?;
+        wait_fact(|| socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0,
+            started + Duration::from_secs(5), "P04-A retained original supervisor did not forward its real in-budget ROLLBACK ACK").await?;
+        physical_normal_original_ack(f, pid, &socket).await?;
+        require(database_facts(&f.admin).await? == armed && physical_absent(&f.path()), "P04-A waiter cancellation relabelled true unlink or changed charge/fence")?;
+        let observed = f.actual.observe_armed_explicit_saved_bytes_before(&f.auth, &intent,
+            Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("P04-A new acknowledged reobservation: {e:?}"))?;
+        require(observed.state() == PhysicalState::DurableAbsent, "P04-A new observe did not independently prove actual double absence")?;
+        require(database_facts(&f.admin).await? == armed && gate.facts.lock().map_err(|_| "P04-A observer poisoned")?.seen[2] == 1, "P04-A reobservation repeated unlink or changed armed facts")?;
+        gate.check()?;
+        let barrier = f.actual.close_observed_artifact_reads(&record).map_err(|e| e.to_string())?;
+        let ack = barrier.drain_before(Instant::now() + Duration::from_secs(2)).await.map_err(|e| format!("{e:?}"))?;
+        drop(ack); drop(barrier); drop(observed); drop(intent); drop(record);
+        eprintln!("ARTIFACT_PHYSICAL_P04_A original_waiter_cancelled_reaped=true original_unlink_effect_kept=true original_main_supervisor_retained=true original_on_time_rollback_ack=true actual_original_fd_closed=true later_new_observe_only_durable_absent=true original_waiter_not_relabelled=true no_poison_clear=true charge_fence_unchanged=true");
+        Ok(())
+    })).await;
+    with_fixture("physical-original-post-unlink-expiry", true, |f| Box::pin(async move {
+        let record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await.map_err(|e| e.to_string())?;
+        let object = object_fact(&f.path())?;
+        let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+        let armed = database_facts(&f.admin).await?;
+        let gate = install_physical_gate(f, object, 3, false)?;
+        let release = PhysicalGateRelease(gate.clone());
+        let (pid, connection, socket) = f.original().await?; clear_transaction_facts(&socket);
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move { actual.remove_armed_explicit_saved_bytes_before(&auth, &original_intent, started + Duration::from_secs(5)).await });
+        let controlled = async {
+            gate.wait(3, Instant::now() + Duration::from_secs(2)).await?;
+            gate.after_unlink_is_original_zero_link()
+        }.await;
+        let result = task.await.map_err(|e| e.to_string())?;
+        drop(release); controlled?;
+        require(result.is_err(), "P04-B expired original invocation produced a normal physical witness")?;
+        original_five_seconds(started)?;
+        physical_original_fd_closed(&gate).await?;
+        retired_original(f, pid, &connection, &socket).await?;
+        physical_poison_refuses(f, &f.auth, &intent, &record).await?;
+        require(physical_absent(&f.path()) && database_facts(&f.admin).await? == armed,
+            "P04-B late resource end erased actual unlink or changed original armed facts")?;
+        drop(intent); drop(record);
+        eprintln!("ARTIFACT_PHYSICAL_P04_B actual_unlink_before_expiry=true original_fd_nlink_zero=true original_five_second_fail=true late_worker_fd_closed=true original_driver_backend_gone=true permanent_same_store_poison=true no_normal_reobservation=true charge_fence_unchanged=true");
+        Ok(())
+    })).await;
+    with_fixture("physical-main-runtime-owner-drop", true, |f| Box::pin(async move {
+        let record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await.map_err(|e| e.to_string())?;
+        let object = object_fact(&f.path())?;
+        let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+        let armed = database_facts(&f.admin).await?;
+        let gate = install_physical_gate(f, object.clone(), 0, false)?;
+        physical_connection_check_interval(f).await?;
+        let (pid, connection, socket) = f.original().await?; clear_transaction_facts(&socket);
+        let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+        let tx = controller.transaction().await.map_err(|e| e.to_string())?;
+        let controller_pid: i32 = tx.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|e| e.to_string())?.get(0);
+        tx.batch_execute("LOCK TABLE openbot_internal.schema_migrations IN ACCESS EXCLUSIVE MODE").await.map_err(|e| e.to_string())?;
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| e.to_string())?;
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone();
+        let original = runtime.spawn(async move { actual.remove_armed_explicit_saved_bytes_before(&auth,
+            &original_intent, Instant::now() + Duration::from_secs(5)).await });
+        let controlled = physical_schema_wait(f, pid, controller_pid).await;
+        // Normal Drop of THIS fixture-owned runtime destroys the actual main supervisor,
+        // while the external original Store/Pool/Host and its driver remain owned here.
+        tokio::task::spawn_blocking(move || drop(runtime)).await.map_err(|e| e.to_string())?;
+        let joined = original.await;
+        let controller_ack = tx.rollback().await.map_err(|e| e.to_string()); drop(controller);
+        controlled?; controller_ack?;
+        require(joined.is_err_and(|e| e.is_cancelled()), "P04-C actual runtime-owner Drop did not destroy and reap the original task")?;
+        retired_original(f, pid, &connection, &socket).await?;
+        require(!gate.saw(1) && !gate.saw(3) && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0,
+            "P04-C main owner Drop was mistaken for an original ACK or physical worker")?;
+        physical_poison_refuses(f, &f.auth, &intent, &record).await?;
+        require(database_facts(&f.admin).await? == armed && object_fact(&f.path())? == object && owned_object_fds(&f.path())?.is_empty(),
+            "P04-C genuine main owner retirement changed rows/object or retained original leaf FD")?;
+        drop(intent); drop(record);
+        eprintln!("ARTIFACT_PHYSICAL_P04_C actual_original_schema_lock_pid=true actual_main_runtime_owner_dropped=true original_task_cancelled_reaped=true original_query_ack=false original_driver_backend_gone=true permanent_same_store_poison=true zero_unlink=true charge_fence_unchanged=true");
+        Ok(())
+    })).await;
+}
+
+fn physical_session_b_idle_only(
+    before: &BTreeMap<String, Value>,
+    after: &BTreeMap<String, Value>,
+) -> Result<(), String> {
+    only_tables_changed(before, after, &["public.sessions"])?;
+    let mut expected = before["public.sessions"]
+        .as_array()
+        .ok_or("physical original Session facts missing")?
+        .clone();
+    let actual = after["public.sessions"]
+        .as_array()
+        .ok_or("physical fresh Session facts missing")?;
+    require(
+        expected.len() == actual.len(),
+        "physical Session observation changed row inventory",
+    )?;
+    for (old, new) in expected.iter_mut().zip(actual) {
+        if old["row"]["id"].as_str() == Some("cleanup-session-b") {
+            old["row"]["updated_at"] = new["row"]["updated_at"].clone();
+            old["xmin"] = new["xmin"].clone();
+            old["ctid"] = new["ctid"].clone();
+        }
+    }
+    require(
+        expected == *actual,
+        "physical current Session changed more than original B idle touch",
+    )
+}
+
+#[tokio::test]
+#[ignore = "requires actual absent names, original current refusal/unknown and post-IO rollback-ACK loss"]
+async fn actual_already_absent_armed_pair_requires_current_authority_and_acknowledged_reobservation()
+ {
+    with_fixture("physical-original-already-absent", true, |f| Box::pin(async move {
+        let original = object_fact(&f.path())?;
+        let intent = f.arm().await.map_err(|e| format!("{e:?}"))?;
+        let armed = database_facts(&f.admin).await?;
+        std::fs::remove_file(f.path()).map_err(|e| e.to_string())?;
+        require(physical_absent(&f.path()) && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id)),
+            "P05-A controlled fixture names were not actually absent")?;
+        let gate = install_physical_gate(f, original, 0, true)?;
+        let (pid, _, socket) = f.original().await?; clear_transaction_facts(&socket);
+        let observed = f.actual.observe_armed_explicit_saved_bytes_before(&f.auth, &intent,
+            Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("{e:?}"))?;
+        require(observed.state() == PhysicalState::DurableAbsent && !gate.saw(2) && !gate.saw(3),
+            "P05-A ordinary absence falsely reported a retained leaf or performed unlink")?;
+        physical_original_fd_closed(&gate).await?;
+        physical_normal_original_ack(f, pid, &socket).await?;
+        require(database_facts(&f.admin).await? == armed, "P05-A actual observe mutated original charge/receipt/fence/audit")?;
+        drop(observed); drop(intent);
+        eprintln!("ARTIFACT_PHYSICAL_P05_A both_names_actually_absent_before_call=true new_current_original_query=true guarded_three_directory_sync=true original_worker_ended=true original_rollback_ack=true zero_unlink=true durable_absent=true no_refund=true");
+        Ok(())
+    })).await;
+    with_fixture("physical-pregrant-known-session-refusal", true, |f| Box::pin(async move {
+        let original = object_fact(&f.path())?;
+        let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+        let armed = database_facts(&f.admin).await?;
+        let gate = install_physical_gate(f, original.clone(), 1, false)?;
+        let release = PhysicalGateRelease(gate.clone());
+        let (pid, _, socket) = f.original().await?; clear_transaction_facts(&socket);
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move { actual.remove_armed_explicit_saved_bytes_before(&auth, &original_intent,
+            started + Duration::from_secs(5)).await });
+        let controlled = async {
+            gate.wait(1, Instant::now() + Duration::from_secs(2)).await?;
+            let mut c = f.admin.get().await.map_err(|e| e.to_string())?;
+            let tx = c.transaction().await.map_err(|e| e.to_string())?;
+            let controller_pid: i32 = tx.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|e| e.to_string())?.get(0);
+            require(controller_pid != pid && tx.execute("DELETE FROM public.sessions WHERE id=$1", &[&A_ID]).await.map_err(|e| e.to_string())? == 1,
+                "P05-B-known did not revoke the actual original Session row independently")?;
+            tx.commit().await.map_err(|e| e.to_string())?;
+            let changed = database_facts(&f.admin).await?;
+            only_tables_changed(&armed, &changed, &["public.sessions"])?;
+            controller_removed_row(&armed, &changed, "public.sessions", "id", A_ID)?;
+            Ok::<BTreeMap<String, Value>, String>(changed)
+        }.await;
+        drop(release);
+        let result = task.await.map_err(|e| e.to_string())?;
+        let revoked = controlled?;
+        eprintln!("ARTIFACT_PHYSICAL_P05_B_KNOWN_CURRENT_RESULT original_closed_error={:?} original_elapsed_ms={} old_source_fail_not_relabelled=true",
+            result.as_ref().err(), started.elapsed().as_millis());
+        require(matches!(result, Err(PhysicalError::NotVisible)) && started.elapsed() < Duration::from_secs(5),
+            "P05-B-known current committed Session refusal was not definite original NotVisible")?;
+        physical_original_fd_closed(&gate).await?;
+        physical_normal_original_ack(f, pid, &socket).await?;
+        require(!gate.saw(2) && !gate.saw(3) && object_fact(&f.path())? == original && database_facts(&f.admin).await? == revoked,
+            "P05-B-known rejection started unlink or changed rows beyond the actual Session controller")?;
+        f.resolver.close_request_bindings();
+        let fresh_resolver = PostgresSessionAuthResolver::new(f.pool.clone(), SESSION_KEY, default_session_lifetime(),
+            DeploymentId::new(DEPLOYMENT), TenantId::new(TENANT)).map_err(|e| e.to_string())?;
+        fresh_resolver.install_artifact_read_authority(&f.actual.read_authority()).map_err(|_| "P05-B-known fresh issuer enrollment failed")?;
+        let recovery = async {
+            let fresh = resolve(&fresh_resolver, COOKIE_B).await?;
+            require(fresh == f.auth && !fresh.request_binding().ok_or("fresh Session missing")?.identity().same_binding(f.auth.request_binding().ok_or("original Session missing")?.identity()),
+                "P05-B-known reobservation reused the revoked original Host")?;
+            fresh.request_binding().ok_or("fresh Session missing")?.verify_current_before(&fresh, Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("{e:?}"))?;
+            let touched = database_facts(&f.admin).await?; physical_session_b_idle_only(&revoked, &touched)?;
+            let observed = f.actual.observe_armed_explicit_saved_bytes_before(&fresh, &intent, Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("known ACK must not invent poison: {e:?}"))?;
+            require(observed.state() == PhysicalState::Retained && !gate.saw(3) && object_fact(&f.path())? == original
+                && database_facts(&f.admin).await? == touched, "P05-B-known normal new observation changed bytes/business or retained false poison")?;
+            physical_original_fd_closed(&gate).await?; gate.check()?;
+            drop(observed);
+            Ok::<(), String>(())
+        }.await;
+        fresh_resolver.close_request_bindings(); recovery?;
+        drop(intent);
+        eprintln!("ARTIFACT_PHYSICAL_P05_B_KNOWN preflight_original_fd=true actual_session_controller_commit=true original_current_host_refusal=true original_on_time_rollback_ack=true actual_original_fd_closed=true zero_unlink=true new_true_session_retained_observation=true unknown_not_inferred_from_error=true no_poison_clear=true");
+        Ok(())
+    })).await;
+    with_fixture("physical-pregrant-original-schema-unknown", true, |f| Box::pin(async move {
+        let record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await.map_err(|e| e.to_string())?;
+        let original = object_fact(&f.path())?;
+        let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+        let armed = database_facts(&f.admin).await?;
+        let gate = install_physical_gate(f, original.clone(), 0, false)?;
+        physical_connection_check_interval(f).await?;
+        let (pid, connection, socket) = f.original().await?; clear_transaction_facts(&socket);
+        let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+        let tx = controller.transaction().await.map_err(|e| e.to_string())?;
+        let controller_pid: i32 = tx.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|e| e.to_string())?.get(0);
+        tx.batch_execute("LOCK TABLE openbot_internal.schema_migrations IN ACCESS EXCLUSIVE MODE").await.map_err(|e| e.to_string())?;
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move { actual.remove_armed_explicit_saved_bytes_before(&auth, &original_intent, started + Duration::from_secs(5)).await });
+        let controlled = physical_schema_wait(f, pid, controller_pid).await;
+        let result = task.await.map_err(|e| e.to_string())?;
+        let controller_ack = tx.rollback().await.map_err(|e| e.to_string()); drop(controller);
+        controlled?; controller_ack?;
+        require(result.is_err(), "P05-B-unknown original schema timeout produced a normal observation")?;
+        original_five_seconds(started)?;
+        retired_original(f, pid, &connection, &socket).await?;
+        require(!gate.saw(1) && !gate.saw(3) && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0,
+            "P05-B-unknown timeout fabricated worker effects or an original query ACK")?;
+        physical_poison_refuses(f, &f.auth, &intent, &record).await?;
+        require(object_fact(&f.path())? == original && database_facts(&f.admin).await? == armed && owned_object_fds(&f.path())?.is_empty(),
+            "P05-B-unknown retirement changed original object/business facts")?;
+        drop(intent); drop(record);
+        eprintln!("ARTIFACT_PHYSICAL_P05_B_UNKNOWN actual_original_schema_lock=true original_five_second_error=true original_query_ack=false original_driver_backend_gone=true permanent_same_store_poison=true zero_worker_unlink=true later_resources_not_normal_ack=true charge_fence_unchanged=true");
+        Ok(())
+    })).await;
+    with_fixture("physical-post-io-original-rollback-ack-loss", true, |f| Box::pin(async move {
+        let record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await.map_err(|e| e.to_string())?;
+        let original = object_fact(&f.path())?;
+        let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+        let armed = database_facts(&f.admin).await?;
+        let gate = install_physical_gate(f, original, 3, false)?;
+        let release = PhysicalGateRelease(gate.clone());
+        let (pid, connection, socket) = f.original().await?; clear_transaction_facts(&socket);
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move { actual.remove_armed_explicit_saved_bytes_before(&auth, &original_intent, started + Duration::from_secs(5)).await });
+        let controlled = async {
+            gate.wait(3, Instant::now() + Duration::from_secs(2)).await?;
+            gate.after_unlink_is_original_zero_link()?;
+            require(socket.forwarded_ack.load(Ordering::SeqCst) & BEGIN_BIT != 0,
+                "P05-C held IO did not belong to this original acknowledged BEGIN")?;
+            f.relay.as_ref().ok_or("P05-C original relay missing")?.arm(Hold::Rollback);
+            Ok::<(), String>(())
+        }.await;
+        drop(release);
+        let held = async {
+            controlled?;
+            gate.wait(4, Instant::now() + Duration::from_secs(2)).await?;
+            wait_fact(|| socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8,
+                Instant::now() + Duration::from_secs(2), "P05-C actual post-IO original rollback ACK was not withheld").await?;
+            require(socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0 && socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+                && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0 && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+                "P05-C uncertainty was not this original physical query's upstream rollback ACK")?;
+            physical_original_fd_closed(&gate).await?;
+            require(physical_absent(&f.path()) && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id)),
+                "P05-C lost ACK preceded actual physical unlink/sync/double absence")?;
+            Ok::<(), String>(())
+        }.await;
+        let result = task.await.map_err(|e| e.to_string())?;
+        held?;
+        require(result.is_err(), "P05-C missing original rollback ACK produced a normal physical witness")?;
+        original_five_seconds(started)?;
+        retired_original(f, pid, &connection, &socket).await?;
+        physical_poison_refuses(f, &f.auth, &intent, &record).await?;
+        require(socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0 && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0 && physical_absent(&f.path()) && database_facts(&f.admin).await? == armed,
+            "P05-C late retirement/observation laundered original missing ACK or true physical effects")?;
+        drop(intent); drop(record);
+        eprintln!("ARTIFACT_PHYSICAL_P05_C actual_io_worker_ended_before_ack_loss=true actual_original_fd_closed=true both_names_absent=true original_upstream_rollback_ack=true forwarded_original_ack=false original_driver_backend_gone=true permanent_same_store_poison=true physical_effects_kept=true normal_witness=false refund=false");
         Ok(())
     })).await;
 }

@@ -11,8 +11,8 @@ use openbot_contracts::artifacts::{
 };
 use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, Role};
 use openbot_contracts::request_binding::{
-    ArtifactCleanupHostObservation, ArtifactCleanupHostTailWitness, ArtifactCleanupSessionFacts,
-    HostRequestBindingError, HostRequestBindingKind,
+    ArtifactCleanupHostObservation, ArtifactCleanupHostTailWitness, ArtifactCleanupHostTarget,
+    ArtifactCleanupSessionFacts, HostRequestBindingError, HostRequestBindingKind,
 };
 use openbot_domain::artifact_cleanup::{ArtifactCleanupFence, ArtifactCleanupFenceKey};
 use openbot_domain::audit::event::{AuditEvent, AuditEventType};
@@ -24,6 +24,7 @@ use tokio_postgres::types::FromSql;
 use tokio_postgres::{Row, Transaction};
 
 use super::{PostgresArtifactAdministration, verify_artifact_read_schema_on};
+use crate::artifact_bytes::ArtifactBlob;
 use crate::artifact_store::{
     ArtifactReadControlledBarrier, ArtifactStoreError, DatasetBoundArtifactStore,
 };
@@ -87,6 +88,59 @@ pub struct ArmedArtifactCleanupIntent {
 impl core::fmt::Debug for ArmedArtifactCleanupIntent {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ArmedArtifactCleanupIntent([redacted confirmed intent])")
+    }
+}
+
+/// Mechanical original locator only. No confirmation or current host grant is copied.
+pub(super) struct OwnedCleanupPhysicalBinding {
+    original_store: Arc<DatasetBoundArtifactStore>,
+    original_key: ArtifactCleanupFenceKey,
+}
+
+impl OwnedCleanupPhysicalBinding {
+    pub(super) fn into_original_parts(
+        self,
+    ) -> (Arc<DatasetBoundArtifactStore>, ArtifactCleanupFenceKey) {
+        (self.original_store, self.original_key)
+    }
+}
+
+impl ArmedArtifactCleanupIntent {
+    pub(super) fn validated_physical_binding(
+        &self,
+        administration: &PostgresArtifactAdministration,
+    ) -> Result<OwnedCleanupPhysicalBinding, ArtifactStoreError> {
+        if !Arc::ptr_eq(&administration.store, &self.store)
+            || !administration
+                .store
+                .matches_registry_owner(&administration.registry)
+        {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        let key = self.fence.key();
+        let binding = administration.registry.binding();
+        let strict = ArtifactCleanupFenceKey::from_stored(
+            key.deployment_id().clone(),
+            key.tenant_id().clone(),
+            key.dataset_id(),
+            key.operation_id().as_str(),
+            key.artifact_id(),
+        )
+        .map_err(|_| ArtifactStoreError::BindingMismatch)?;
+        if strict != *key
+            || key.deployment_id().as_str() != binding.deployment_id()
+            || key.tenant_id().as_str() != binding.tenant_id()
+            || key.dataset_id() != binding.dataset_id()
+            || self.fence.terminal_status() != ArtifactGoneStatus::Deleted
+            || self.fence.phase()
+                != openbot_domain::artifact_cleanup::ArtifactCleanupFencePhase::Armed
+        {
+            return Err(ArtifactStoreError::BindingMismatch);
+        }
+        Ok(OwnedCleanupPhysicalBinding {
+            original_store: Arc::clone(&self.store),
+            original_key: strict,
+        })
     }
 }
 
@@ -189,31 +243,9 @@ impl PostgresArtifactAdministration {
         self: &Arc<Self>,
         intent: &ArmedArtifactCleanupIntent,
     ) -> Result<ArtifactReadControlledBarrier, ArtifactStoreError> {
-        if !Arc::ptr_eq(&self.store, &intent.store)
-            || !self.store.matches_registry_owner(&self.registry)
-        {
-            return Err(ArtifactStoreError::BindingMismatch);
-        }
-        let key = intent.fence.key();
-        let binding = self.registry.binding();
-        let strict = ArtifactCleanupFenceKey::from_stored(
-            key.deployment_id().clone(),
-            key.tenant_id().clone(),
-            key.dataset_id(),
-            key.operation_id().as_str(),
-            key.artifact_id(),
-        )
-        .map_err(|_| ArtifactStoreError::BindingMismatch)?;
-        if strict != *key
-            || key.deployment_id().as_str() != binding.deployment_id()
-            || key.tenant_id().as_str() != binding.tenant_id()
-            || key.dataset_id() != binding.dataset_id()
-            || intent.fence.terminal_status() != ArtifactGoneStatus::Deleted
-            || intent.fence.phase()
-                != openbot_domain::artifact_cleanup::ArtifactCleanupFencePhase::Armed
-        {
-            return Err(ArtifactStoreError::BindingMismatch);
-        }
+        let (_, strict) = intent
+            .validated_physical_binding(self)?
+            .into_original_parts();
         self.store.close_artifact_reads(strict)
     }
 }
@@ -222,6 +254,108 @@ struct CurrentRequest<'a> {
     administration: &'a PostgresArtifactAdministration,
     auth: &'a AuthContext,
     host: ArtifactCleanupHostObservation<'a>,
+}
+
+/// Borrowed original factory; its explicit original target lives in the owned supervisor.
+pub(super) struct PhysicalCurrentRequest<'a> {
+    current: CurrentRequest<'a>,
+}
+
+/// Immutable original comparison and a current statement's owned tail, neither an IO grant.
+pub(super) struct PhysicalCurrentSnapshot {
+    snapshot: Snapshot,
+    blob: ArtifactBlob,
+}
+
+impl<'a> PhysicalCurrentRequest<'a> {
+    pub(super) fn borrow_before(
+        administration: &'a PostgresArtifactAdministration,
+        auth: &'a AuthContext,
+        target: &'a dyn ArtifactCleanupHostTarget,
+        deadline: Instant,
+    ) -> Result<Self, Error> {
+        remaining(deadline)?;
+        administration
+            .check_namespace(auth)
+            .map_err(|_| Error::NotVisible)?;
+        if !administration
+            .store
+            .matches_registry_owner(&administration.registry)
+        {
+            return Err(corrupt("store_binding"));
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(Error::Host(HostRequestBindingError::Missing))?;
+        let host = binding
+            .borrow_artifact_cleanup_host_before(auth, target, deadline)
+            .map_err(Error::Host)?;
+        let current = CurrentRequest {
+            administration,
+            auth,
+            host,
+        };
+        current.check_attachment(deadline)?;
+        Ok(Self { current })
+    }
+
+    pub(super) async fn lock_before(
+        &self,
+        tx: &Transaction<'_>,
+        key: &ArtifactCleanupFenceKey,
+        deadline: Instant,
+    ) -> Result<PhysicalCurrentSnapshot, Error> {
+        let snapshot = self
+            .current
+            .lock_current(tx, key.artifact_id(), deadline)
+            .await?;
+        PhysicalCurrentSnapshot::from_current(snapshot, key)
+    }
+
+    pub(super) async fn refresh_before(
+        &self,
+        tx: &Transaction<'_>,
+        original: &PhysicalCurrentSnapshot,
+        deadline: Instant,
+    ) -> Result<PhysicalCurrentSnapshot, Error> {
+        let snapshot = self
+            .current
+            .observe(tx, original.snapshot.candidate.key.artifact_id(), deadline)
+            .await?;
+        snapshot.require_same(&original.snapshot.candidate)?;
+        PhysicalCurrentSnapshot::from_current(snapshot, &original.snapshot.candidate.key)
+    }
+}
+
+impl PhysicalCurrentSnapshot {
+    fn from_current(snapshot: Snapshot, key: &ArtifactCleanupFenceKey) -> Result<Self, Error> {
+        if snapshot.candidate.key != *key
+            || snapshot.candidate.fence.as_ref()
+                != Some(&ArtifactCleanupFence::armed(
+                    key.clone(),
+                    ArtifactGoneStatus::Deleted,
+                ))
+        {
+            return Err(Error::Conflict);
+        }
+        let id = uuid::Uuid::parse_str(key.artifact_id()).map_err(|_| corrupt("stored_uuid"))?;
+        let length = number(&snapshot.candidate.record, "byte_length", "record_pair")?;
+        let length = u64::try_from(length).map_err(|_| corrupt("record_pair"))?;
+        let digest =
+            super::parse_digest(text(&snapshot.candidate.record, "sha256", "record_pair")?)
+                .map_err(|_| corrupt("record_pair"))?;
+        let blob =
+            ArtifactBlob::from_record(id, length, digest).map_err(|_| corrupt("record_pair"))?;
+        Ok(Self { snapshot, blob })
+    }
+
+    pub(super) fn blob(&self) -> &ArtifactBlob {
+        &self.blob
+    }
+
+    pub(super) fn into_witness(self) -> Box<dyn ArtifactCleanupHostTailWitness> {
+        self.snapshot.witness
+    }
 }
 
 impl CurrentRequest<'_> {
@@ -401,19 +535,12 @@ impl CurrentRequest<'_> {
         Ok(facts)
     }
 
-    async fn operate(
+    async fn lock_current(
         &self,
         tx: &Transaction<'_>,
         artifact: &str,
         deadline: Instant,
-    ) -> Result<
-        (
-            ArtifactCleanupFence,
-            bool,
-            Box<dyn ArtifactCleanupHostTailWitness>,
-        ),
-        Error,
-    > {
+    ) -> Result<Snapshot, Error> {
         self.check_attachment(deadline)?;
         if bounded(
             deadline,
@@ -458,6 +585,25 @@ impl CurrentRequest<'_> {
         ])).await?;
         let locked = self.observe(tx, artifact, deadline).await?;
         locked.require_same(candidate)?;
+        Ok(locked)
+    }
+
+    async fn operate(
+        &self,
+        tx: &Transaction<'_>,
+        artifact: &str,
+        deadline: Instant,
+    ) -> Result<
+        (
+            ArtifactCleanupFence,
+            bool,
+            Box<dyn ArtifactCleanupHostTailWitness>,
+        ),
+        Error,
+    > {
+        let locked = self.lock_current(tx, artifact, deadline).await?;
+        let candidate = &locked.candidate;
+        let binding = self.administration.registry.binding();
         if let Some(fence) = &locked.candidate.fence {
             locked.verify_tail(self.auth, deadline)?;
             return Ok((fence.clone(), false, locked.witness));
