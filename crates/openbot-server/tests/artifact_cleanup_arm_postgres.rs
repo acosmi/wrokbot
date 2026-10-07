@@ -1941,7 +1941,7 @@ async fn original_pair_charge_or_cleanup_schema_drift_refuses_without_mutation()
                     }.map_err(|e|e.to_string())?;
                     require(changed==1,"controller did not corrupt exactly its actual original operation")?;
                     tx.batch_execute("ALTER TABLE openbot_internal.artifact_save_operations ENABLE TRIGGER artifact_save_operations_identity_guard").await.map_err(|e|e.to_string())?;
-                    ("openbot_internal.artifact_save_operations",if fault=="operation_artifact"{"operation_pair"}else if fault=="charge"{"operation_pair"}else{"positive_receipt"})
+                    ("openbot_internal.artifact_save_operations",if fault=="operation_artifact"||fault=="charge"{"operation_pair"}else{"positive_receipt"})
                 },
                 "request_receipt"|"positive_receipt_missing"=>{
                     tx.batch_execute("ALTER TABLE openbot_internal.artifact_saved_receipts DISABLE TRIGGER artifact_saved_receipts_append_only").await.map_err(|e|e.to_string())?;
