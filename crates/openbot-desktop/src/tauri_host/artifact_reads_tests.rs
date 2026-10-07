@@ -1667,6 +1667,15 @@ async fn cleanup_arm_local_waiter(
 #[ignore = "requires genuine Prepared Local/Window, owned PostgreSQL bundle and real Save/arm"]
 async fn actual_local_original_window_arms_missing_source_and_rebound_window_is_refused() {
     use openbot_infra::artifact_administration::ArtifactCleanupArmError as ArmError;
+    let missing_source_status = |response: Response<Vec<u8>>, phase: &'static str| {
+        let actual_status = response.status().as_u16();
+        eprintln!(
+            "ARTIFACT_CLEANUP_ARM_LOCAL_REFUSAL phase={phase} expected_status=404 actual_status={actual_status} response_body_omitted=true"
+        );
+        status(response, StatusCode::NOT_FOUND).map_err(|error| {
+            format!("{error}: phase={phase} expected_status=404 actual_status={actual_status}")
+        })
+    };
     let mut bundle = OwnedBundle::materialize().expect("Root-owned exact PG bundle");
     let fixture = LocalFixture::new(&bundle, "cleanup-arm-original-window")
         .await
@@ -1698,7 +1707,7 @@ async fn actual_local_original_window_arms_missing_source_and_rebound_window_is_
         let retained_messages:Vec<_>=original_messages.iter().filter(|v|v["row"]["message_id"].as_str()!=Some(fixture.artifact.source_message_id.as_str())).cloned().collect();
         require(retained_messages.len()+1==original_messages.len()&&retained_messages==*current_messages,"Local source controller changed undeclared messages or physical row carriers")?;
         require(before_source.get("public.messages")!=after_source.get("public.messages"),"Local source controller did not commit a real source row difference")?;
-        status(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await,StatusCode::NOT_FOUND)?;
+        missing_source_status(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await,"source_hard_delete_commit_ack_before_arm")?;
         require(matches!(fixture.prepared().application().execute(original_auth.clone(),AppCommand::GetArtifactMetadata(openbot_contracts::artifacts::GetArtifactMetadata{artifact_id:fixture.artifact.artifact_id.clone()})).await,Err(openbot_contracts::error::AppError::NotVisible)),"Local cleanup owner management reopened missing-source metadata")?;
         let before_arm=cleanup_arm_local_database_facts(fixture.prepared().pool()).await?;
         let intent=actual.arm_explicit_saved_delete_before(&original_auth,&fixture.artifact.artifact_id,Instant::now()+Duration::from_secs(10)).await.map_err(|e|e.to_string())?;
@@ -1716,7 +1725,7 @@ async fn actual_local_original_window_arms_missing_source_and_rebound_window_is_
         let barrier=actual.close_armed_artifact_reads(&intent).map_err(|e|e.to_string())?;
         let ack=barrier.drain_before(Instant::now()+Duration::from_secs(4)).await.map_err(|e|format!("{e:?}"))?;
         require(cleanup_owned_inode_fds(&path)?.is_empty()&&cleanup_arm_local_object_fact(&path)?==first_object,"Local finite armed close ACK lacked actual FD end or deleted original object")?;
-        status(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await,StatusCode::NOT_FOUND)?;
+        missing_source_status(bridge(&protocol,"main",open_request(&fixture.artifact.artifact_id)?).await,"armed_close_ack_original_source_missing")?;
         require(cleanup_arm_local_database_facts(fixture.prepared().pool()).await?==armed,"Local finite close or stopped reader wrote business rows")?;
         drop(ack);drop(barrier);drop(intent);
         // A second actual pair remains unfenced. Wait for its real original arm quota query,
