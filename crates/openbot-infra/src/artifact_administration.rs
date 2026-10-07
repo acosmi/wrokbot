@@ -43,6 +43,10 @@ pub mod artifact_read_authority;
 #[path = "artifact_read_lifecycle.rs"]
 pub mod artifact_read_lifecycle;
 
+#[path = "artifact_administration/cleanup_arm.rs"]
+mod cleanup_arm;
+pub use cleanup_arm::{ArmedArtifactCleanupIntent, ArtifactCleanupArmError};
+
 const WAIT: Duration = Duration::from_secs(5);
 const PG_PHASE: Duration = Duration::from_secs(30);
 const MEDIA: &str = "text/plain; charset=utf-8";

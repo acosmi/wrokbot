@@ -50,8 +50,10 @@ use openbot_contracts::error::{AppError, SensitiveWriteReason};
 use openbot_contracts::ids::{ActorId, DeploymentId, TenantId};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use openbot_contracts::request_binding::{
-    ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadTailWitness,
-    SourceRunArtifactIdsCurrentCheck, SourceRunArtifactIdsCurrentTarget,
+    ArtifactCleanupHostObservation, ArtifactCleanupHostTailFactory, ArtifactCleanupHostTailWitness,
+    ArtifactCleanupHostTarget, ArtifactCleanupSessionFacts, ArtifactReadCurrentError,
+    ArtifactReadCurrentTarget, ArtifactReadTailWitness, SourceRunArtifactIdsCurrentCheck,
+    SourceRunArtifactIdsCurrentTarget,
 };
 use openbot_contracts::request_binding::{
     HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind,
@@ -531,6 +533,62 @@ const CURRENT_SESSION_SQL: &str = "SELECT s.id,s.user_id,s.token,s.expires_at,s.
     WHERE s.id=$1 AND s.user_id=$2 AND s.token=$3 AND s.created_at=$4 AND s.auth_generation=$5";
 
 impl HostRequestBindingGuard for ServerSessionCurrentGuard {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn borrow_artifact_cleanup_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn ArtifactCleanupHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<ArtifactCleanupHostObservation<'a>, HostRequestBindingError> {
+        if auth != &self.original || !self.owner.is_current() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let authority = probe
+            .artifact_read_authority
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !authority.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant)
+            || !authority.matches_cleanup_host_target(target, auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        let epoch = self
+            .issuer
+            .borrow_server_session_epoch(binding.identity())?;
+        if !epoch.matches_raw_row(
+            &self.row.id,
+            &self.row.user_id,
+            &self.row.token_column,
+            self.row.created_at,
+            self.row.issued_generation,
+        ) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        ArtifactCleanupHostObservation::from_trusted_host(
+            HostRequestBindingKind::ServerSession,
+            binding.identity().clone(),
+            Some(epoch),
+            Box::new(ServerArtifactCleanupTailFactory {
+                probe: self.probe.clone(),
+                owner: self.owner.clone(),
+                issuer: self.issuer.clone(),
+                original: auth.clone(),
+                lifetime: probe.lifetime,
+                created_at: self.row.created_at,
+            }),
+        )
+    }
     fn borrow_remember_preference_host_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -830,6 +888,86 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[derive(Clone)]
+struct ServerArtifactCleanupTailFactory {
+    probe: Weak<ServerSessionProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+    lifetime: SessionLifetimePolicy,
+    created_at: OffsetDateTime,
+}
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl ArtifactCleanupHostTailFactory for ServerArtifactCleanupTailFactory {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<ArtifactCleanupSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn ArtifactCleanupHostTailWitness>, HostRequestBindingError> {
+        let session = session.ok_or(HostRequestBindingError::NotCurrent)?;
+        if session.created_at != self.created_at {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let witness = ServerArtifactCleanupTail {
+            source: self.clone(),
+            session,
+        };
+        witness.verify_current(auth, deadline)?;
+        Ok(Box::new(witness))
+    }
+}
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct ServerArtifactCleanupTail {
+    source: ServerArtifactCleanupTailFactory,
+    session: ArtifactCleanupSessionFacts,
+}
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl ArtifactCleanupHostTailWitness for ServerArtifactCleanupTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        verify_repository_host_attachment(
+            &self.source.owner,
+            &self.source.issuer,
+            &self.source.original,
+            auth,
+            deadline,
+        )?;
+        if self.source.probe.upgrade().is_none() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let now = OffsetDateTime::now_utc();
+        if now < self.session.observed_wall
+            || std::time::Instant::now() < self.session.observed_monotonic
+            || now >= self.session.expires_at
+            || evaluate_session(
+                self.source.lifetime,
+                SessionState::rehydrate(
+                    self.session.created_at,
+                    self.session.updated_at,
+                    auth.auth_generation(),
+                ),
+                auth.auth_generation(),
+                now,
+            )
+            .is_err()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        verify_repository_host_attachment(
+            &self.source.owner,
+            &self.source.issuer,
+            &self.source.original,
+            auth,
+            deadline,
+        )
+    }
+}
+
 #[derive(Clone)]
 struct ServerRememberPreferenceTailFactory {
     probe: Weak<ServerSessionProbeState>,
@@ -839,7 +977,7 @@ struct ServerRememberPreferenceTailFactory {
     lifetime: SessionLifetimePolicy,
     created_at: OffsetDateTime,
 }
-fn verify_remember_preference_attachment(
+fn verify_repository_host_attachment(
     owner: &RequestBindingOwnerObservation,
     issuer: &RequestBindingIssuer,
     original: &AuthContext,
@@ -891,7 +1029,7 @@ impl RememberPreferenceHostTailWitness for ServerRememberPreferenceTail {
         auth: &AuthContext,
         deadline: std::time::Instant,
     ) -> Result<(), HostRequestBindingError> {
-        verify_remember_preference_attachment(
+        verify_repository_host_attachment(
             &self.source.owner,
             &self.source.issuer,
             &self.source.original,
@@ -919,7 +1057,7 @@ impl RememberPreferenceHostTailWitness for ServerRememberPreferenceTail {
         {
             return Err(HostRequestBindingError::NotCurrent);
         }
-        verify_remember_preference_attachment(
+        verify_repository_host_attachment(
             &self.source.owner,
             &self.source.issuer,
             &self.source.original,
@@ -1591,7 +1729,7 @@ impl RememberPreferenceHostTailWitness for SingleUserRememberPreferenceTail {
         auth: &AuthContext,
         deadline: std::time::Instant,
     ) -> Result<(), HostRequestBindingError> {
-        verify_remember_preference_attachment(
+        verify_repository_host_attachment(
             &self.owner,
             &self.issuer,
             &self.original,

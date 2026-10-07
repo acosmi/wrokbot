@@ -13,9 +13,9 @@ use openbot_contracts::auth::{AuthContext, AuthContextBuilder, AuthGeneration, R
 use openbot_contracts::error::AppError;
 use openbot_contracts::ids::{DeploymentId, TenantId};
 use openbot_contracts::request_binding::{
-    ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadRecordFacts,
-    ArtifactReadTailWitness, BorrowedServerSessionEpoch, HostRequestBindingError,
-    HostRequestBindingIdentity, HostRequestBindingKind,
+    ArtifactCleanupHostTarget, ArtifactReadCurrentError, ArtifactReadCurrentTarget,
+    ArtifactReadRecordFacts, ArtifactReadTailWitness, BorrowedServerSessionEpoch,
+    HostRequestBindingError, HostRequestBindingIdentity, HostRequestBindingKind,
 };
 use openbot_domain::audit::hash::Sha256Digest;
 use openbot_domain::identity::roles::resolve_effective_role;
@@ -66,6 +66,33 @@ pub struct PostgresArtifactReadAuthority {
 }
 
 impl PostgresArtifactReadAuthority {
+    /// Match the actual enrolled administration authority and original request attachment.
+    /// This comparison supplies no current database authorization or cleanup grant.
+    #[must_use]
+    pub fn matches_cleanup_host_target(
+        &self,
+        target: &dyn ArtifactCleanupHostTarget,
+        auth: &AuthContext,
+    ) -> bool {
+        target.matches_authority(&self.identity)
+            && target.matches_auth(auth)
+            && self.administration.upgrade().is_some_and(|administration| {
+                administration.check_namespace(auth).is_ok()
+                    && administration
+                        .store
+                        .matches_registry_owner(&administration.registry)
+            })
+    }
+
+    // Only the real administration producer can borrow this original identity. No public
+    // identity getter, source snapshot, caller-supplied five-key or new Host lease is exposed.
+    pub(super) fn cleanup_host_target(&self, auth: &AuthContext) -> impl ArtifactCleanupHostTarget {
+        OriginalCleanupHostTarget {
+            identity: Arc::clone(&self.identity),
+            auth: auth.clone(),
+        }
+    }
+
     pub(super) fn read_store(
         &self,
     ) -> Result<Arc<DatasetBoundArtifactStore>, ArtifactReadCurrentError> {
@@ -408,16 +435,26 @@ impl PostgresArtifactReadAuthority {
             return Err(host_unavailable().into());
         }
         // The initial check only protects expensive physical work; it is never the final proof.
+        let phase = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .ok_or(ArtifactReadCurrentError::Unavailable)?;
+        let deadline = state
+            .original_deadline
+            .map_or(phase, |value| value.min(phase));
+        let target = RequestedArtifactReadTarget {
+            id: state.artifact_id.clone(),
+            auth: auth.clone(),
+            identity: Arc::clone(&self.identity),
+            state: Some(Arc::downgrade(state)),
+        };
         let query = state.begin_query()?;
-        let host = original.verify_current(auth).await;
-        if host.is_ok() {
-            query.complete();
-        } else {
-            // An owner/window tail can replace an unacknowledged PG failure with 401.
-            // The merged error port exposes no positive ACK for any such failure.
-            state.mark_closure_unproven();
-        }
-        host.map_err(|error| AppError::from(ArtifactReadCurrentError::Host(error)))?;
+        let host = original
+            .verify_artifact_read_control_current_before(auth, &target, deadline)
+            .await;
+        // A normal control-port result has no original resource or a genuine joint ACK.
+        // Its independent original guard already keeps every unacknowledged exit poisoned.
+        query.complete();
+        drop(host?);
         let administration = self
             .administration
             .upgrade()
@@ -514,24 +551,25 @@ impl PostgresArtifactReadAuthority {
             .request_binding()
             .ok_or_else(|| AppError::from(host_unavailable()))?;
         let host_deadline = if state.original_deadline.is_some() {
-            Some(state.joint_deadline()?)
+            state.joint_deadline()?
         } else {
-            None
+            Instant::now()
+                .checked_add(Duration::from_secs(5))
+                .ok_or(ArtifactReadCurrentError::Unavailable)?
+        };
+        let target = RequestedArtifactReadTarget {
+            id: state.artifact_id.clone(),
+            auth: auth.clone(),
+            identity: Arc::clone(&self.identity),
+            state: Some(Arc::downgrade(state)),
         };
         let query = state.begin_query()?;
-        let host = if let Some(deadline) = host_deadline {
-            original.verify_current_before(auth, deadline).await
-        } else {
-            original.verify_current(auth).await
-        };
-        if host.is_ok() {
-            query.complete();
-        } else {
-            // Preserve host classification, but do not infer original rollback from an
-            // error which a later owner/window check may have reclassified as 401.
-            state.mark_closure_unproven();
-        }
-        host.map_err(|error| AppError::from(ArtifactReadCurrentError::Host(error)))?;
+        let host = original
+            .verify_artifact_read_control_current_before(auth, &target, host_deadline)
+            .await;
+        // Completing this outer reservation never clears the concrete joint guard's poison.
+        query.complete();
+        drop(host?);
         if state.body_is_admitted().is_err() {
             self.classify_requested_refusal(state).await?;
             return Err(ArtifactReadCurrentError::Unavailable.into());
@@ -1157,6 +1195,21 @@ impl ArtifactReadCurrentTarget for RequestedArtifactReadTarget {
     }
     fn verify_physical_current(&self) -> Result<(), ArtifactReadCurrentError> {
         Err(ArtifactReadCurrentError::Unavailable)
+    }
+}
+
+struct OriginalCleanupHostTarget {
+    identity: Arc<()>,
+    auth: AuthContext,
+}
+
+impl ArtifactCleanupHostTarget for OriginalCleanupHostTarget {
+    fn matches_authority(&self, identity: &Arc<()>) -> bool {
+        Arc::ptr_eq(&self.identity, identity)
+    }
+
+    fn matches_auth(&self, auth: &AuthContext) -> bool {
+        same_original_auth(&self.auth, auth)
     }
 }
 
