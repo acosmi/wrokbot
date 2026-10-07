@@ -306,7 +306,7 @@ xtask —— OpenBot 仓库闸门驱动器
                                       检查 app.wasm gzip、CSS 与随包字体预算
   cargo xtask golden check-manifest | compare | verify
                                       校验visual manifest；比较PNG/生成diff；正式矩阵缺件或占位即红
-  cargo xtask ui-assets               用与 openbot-ui build.rs 同一生成器物化 ignored tokens.css
+  cargo xtask ui-assets               同源生成 ignored tokens.css，并用固定 Tailwind 编译 ignored app.css
   cargo xtask ui-finalize             仅供 Trunk post-build 生成外部 WASM bootstrap
   cargo xtask tools fetch            获取当前平台的钉版 Tailwind/wasm-opt，并按 lock 安装
                                       trunk/wasm-bindgen CLI 到 target/tools/bin
