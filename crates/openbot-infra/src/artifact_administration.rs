@@ -2,7 +2,8 @@
 //! Durable admission and IO_STARTED acknowledgements precede once-only physical IO. Unknown
 //! outcomes retain the original operation/charge; observation never grants a retry or byte read.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::db::pool::DatabasePool as Pool;
@@ -32,8 +33,8 @@ use uuid::Uuid;
 use crate::artifact_bytes::ArtifactBlob;
 use crate::artifact_registry::{ARTIFACT_REGISTRY_SCHEMA_SQL, ArtifactDatasetRegistry};
 use crate::artifact_store::{
-    ArtifactByteObservationState, ArtifactReadControlledBarrier, ArtifactStoreError,
-    DatasetBoundArtifactStore, VerifiedArtifactByteObservation,
+    ArtifactByteObservationState, ArtifactByteWritePhase, ArtifactReadControlledBarrier,
+    ArtifactStoreError, DatasetBoundArtifactStore, VerifiedArtifactByteObservation,
 };
 use crate::repo::audit::{append_event_in_transaction, next_event_coordinates};
 use crate::thread_directory::reconciliation_visibility::VISIBLE_RUN;
@@ -156,6 +157,210 @@ pub(crate) async fn verify_artifact_read_schema_on(
         })
 }
 
+/// Refusal to install the one bounded original-request diagnostic recorder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SaveProducerDiagnosticInstallError {
+    /// The original selector is not a canonical UUIDv7.
+    #[error("save_producer_diagnostic_invalid_request_id")]
+    InvalidRequestId,
+    /// This original administration already has a diagnostic registration.
+    #[error("save_producer_diagnostic_already_installed")]
+    AlreadyInstalled,
+}
+
+/// Original top-level Save boundary, with no SQL or user data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveProducerDiagnosticStage {
+    /// Validate the original request and selectors.
+    ValidateInput,
+    /// Check the original deployment and tenant.
+    CheckNamespace,
+    /// Verify the existing registration schema.
+    VerifyRegistrationSchema,
+    /// Observe space through the existing blocking worker.
+    AvailableBytes,
+    /// Execute the original durable admission.
+    Admit,
+    /// Execute the original IO_STARTED transaction.
+    StartIo,
+    /// Prepare and wait for the existing once-only write worker.
+    WriteWorker,
+    /// Execute the original finalization.
+    Finalize,
+}
+
+/// The original return class before Application erases closed Infra errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveProducerDiagnosticTerminal {
+    /// The original method actually returned its successful receipt.
+    Success,
+    /// The original method returned this unchanged closed Infra error.
+    Error(ArtifactAdministrationError),
+}
+
+/// Fieldless phase copied only from an actual returned write observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveProducerDiagnosticWorkerPhase {
+    /// The original write did not enter staging.
+    BeforeWrite,
+    /// The original observation reports staging.
+    Staging,
+    /// The original observation reports installation.
+    Installing,
+    /// The original observation reports an installed phase.
+    Installed,
+}
+
+/// Fieldless state copied only from an actual returned write observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveProducerDiagnosticWorkerState {
+    /// The original observation reports durable installation.
+    DurableInstalled,
+    /// The original observation reports durable absence.
+    DurableAbsent,
+    /// The original observation reports retained partial bytes.
+    RetainedPartial,
+    /// The original observation is indeterminate.
+    Indeterminate,
+}
+
+/// Fixed nongrant facts; a missing terminal or `lost` remains UNKNOWN.
+/// Neither worker flag proves driver, thread, descriptor or resource closure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveProducerDiagnosticSnapshot {
+    /// Last recorded original top-level boundary.
+    pub main_stage: Option<SaveProducerDiagnosticStage>,
+    /// Actual original return, if the caller reached one.
+    pub main_terminal: Option<SaveProducerDiagnosticTerminal>,
+    /// The existing write closure actually began.
+    pub worker_entered: bool,
+    /// The existing write call actually returned an observation.
+    pub worker_returned: bool,
+    /// Fieldless phase of that returned observation.
+    pub worker_phase: Option<SaveProducerDiagnosticWorkerPhase>,
+    /// Fieldless state of that returned observation.
+    pub worker_state: Option<SaveProducerDiagnosticWorkerState>,
+    /// Ambiguity or a failed nonblocking observation invalidates all facts.
+    pub lost: bool,
+}
+
+impl SaveProducerDiagnosticSnapshot {
+    const fn empty(lost: bool) -> Self {
+        Self {
+            main_stage: None,
+            main_terminal: None,
+            worker_entered: false,
+            worker_returned: false,
+            worker_phase: None,
+            worker_state: None,
+            lost,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SaveProducerDiagnosticEvent {
+    Stage(SaveProducerDiagnosticStage),
+    Terminal(SaveProducerDiagnosticTerminal),
+    WorkerEntered,
+    WorkerReturned(
+        SaveProducerDiagnosticWorkerPhase,
+        SaveProducerDiagnosticWorkerState,
+    ),
+}
+
+/// One private strict selector and fixed facts only; holds no business resource or backlink.
+pub struct SaveProducerDiagnosticCapture {
+    original_request_id: String,
+    claimed: AtomicBool,
+    lost: AtomicBool,
+    facts: Mutex<SaveProducerDiagnosticSnapshot>,
+}
+
+impl SaveProducerDiagnosticCapture {
+    fn new(original_request_id: String) -> Self {
+        Self {
+            original_request_id,
+            claimed: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
+            facts: Mutex::new(SaveProducerDiagnosticSnapshot::empty(false)),
+        }
+    }
+
+    fn begin_original(self: &Arc<Self>, original_request_id: &str) -> Option<Arc<Self>> {
+        if original_request_id != self.original_request_id.as_str() {
+            return None;
+        }
+        if self
+            .claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.lost.store(true, Ordering::Release);
+            return None;
+        }
+        Some(Arc::clone(self))
+    }
+
+    fn record(&self, event: SaveProducerDiagnosticEvent) {
+        if self.lost.load(Ordering::Acquire) {
+            return;
+        }
+        let Ok(mut facts) = self.facts.try_lock() else {
+            self.lost.store(true, Ordering::Release);
+            return;
+        };
+        match event {
+            SaveProducerDiagnosticEvent::Stage(stage) => facts.main_stage = Some(stage),
+            SaveProducerDiagnosticEvent::Terminal(terminal) => facts.main_terminal = Some(terminal),
+            SaveProducerDiagnosticEvent::WorkerEntered => facts.worker_entered = true,
+            SaveProducerDiagnosticEvent::WorkerReturned(phase, state) => {
+                facts.worker_returned = true;
+                facts.worker_phase = Some(phase);
+                facts.worker_state = Some(state);
+            }
+        }
+    }
+
+    fn record_worker_returned(&self, observation: &VerifiedArtifactByteObservation) {
+        let phase = match observation.phase() {
+            ArtifactByteWritePhase::BeforeWrite => SaveProducerDiagnosticWorkerPhase::BeforeWrite,
+            ArtifactByteWritePhase::Staging => SaveProducerDiagnosticWorkerPhase::Staging,
+            ArtifactByteWritePhase::Installing => SaveProducerDiagnosticWorkerPhase::Installing,
+            ArtifactByteWritePhase::Installed => SaveProducerDiagnosticWorkerPhase::Installed,
+        };
+        let state = match observation.state() {
+            ArtifactByteObservationState::DurableInstalled { .. } => {
+                SaveProducerDiagnosticWorkerState::DurableInstalled
+            }
+            ArtifactByteObservationState::DurableAbsent => {
+                SaveProducerDiagnosticWorkerState::DurableAbsent
+            }
+            ArtifactByteObservationState::RetainedPartial { .. } => {
+                SaveProducerDiagnosticWorkerState::RetainedPartial
+            }
+            ArtifactByteObservationState::Indeterminate => {
+                SaveProducerDiagnosticWorkerState::Indeterminate
+            }
+        };
+        self.record(SaveProducerDiagnosticEvent::WorkerReturned(phase, state));
+    }
+
+    /// Copy fixed facts without waiting. Loss or contention yields only UNKNOWN.
+    #[must_use]
+    pub fn snapshot(&self) -> SaveProducerDiagnosticSnapshot {
+        let Ok(facts) = self.facts.try_lock() else {
+            self.lost.store(true, Ordering::Release);
+            return SaveProducerDiagnosticSnapshot::empty(true);
+        };
+        if self.lost.load(Ordering::Acquire) {
+            SaveProducerDiagnosticSnapshot::empty(true)
+        } else {
+            *facts
+        }
+    }
+}
+
 /// Shared authenticated save adapter, retaining the exact trusted dataset and live byte owner.
 pub struct PostgresArtifactAdministration {
     registry: Arc<ArtifactDatasetRegistry>,
@@ -164,6 +369,7 @@ pub struct PostgresArtifactAdministration {
     audit_key: SecretBytes,
     read_authority: OnceLock<Arc<artifact_read_authority::PostgresArtifactReadAuthority>>,
     cleanup_physical_observer: OnceLock<Arc<dyn ArtifactCleanupPhysicalObserver>>,
+    save_producer_diagnostic: OnceLock<Arc<SaveProducerDiagnosticCapture>>,
 }
 
 /// A single owned-PG record/source snapshot bound to its exact actual byte-store owner.
@@ -278,7 +484,29 @@ impl PostgresArtifactAdministration {
             audit_key,
             read_authority: OnceLock::new(),
             cleanup_physical_observer: OnceLock::new(),
+            save_producer_diagnostic: OnceLock::new(),
         })
+    }
+
+    /// Install at most one nongrant recorder for this original canonical request.
+    /// Installation or observation failure never changes the original Save operation.
+    ///
+    /// # Errors
+    /// Refuses a noncanonical original UUIDv7 or an already installed registration.
+    pub fn install_save_producer_diagnostic_for_request(
+        self: &Arc<Self>,
+        original_request_id: &str,
+    ) -> Result<Arc<SaveProducerDiagnosticCapture>, SaveProducerDiagnosticInstallError> {
+        if canonical_artifact_uuid_v7(original_request_id).as_deref() != Some(original_request_id) {
+            return Err(SaveProducerDiagnosticInstallError::InvalidRequestId);
+        }
+        let capture = Arc::new(SaveProducerDiagnosticCapture::new(
+            original_request_id.to_owned(),
+        ));
+        self.save_producer_diagnostic
+            .set(Arc::clone(&capture))
+            .map_err(|_| SaveProducerDiagnosticInstallError::AlreadyInstalled)?;
+        Ok(capture)
     }
 
     /// Retain one actual reader authority; its weak administration link never forms a cycle.
@@ -1335,67 +1563,142 @@ impl ArtifactAdministration for PostgresArtifactAdministration {
         auth: &AuthContext,
         mut input: SaveRunMessageTextArtifact,
     ) -> Result<ArtifactRegistrationReceipt, ArtifactAdministrationError> {
-        input.request_id = canonical_artifact_uuid_v7(&input.request_id)
-            .ok_or(ArtifactAdministrationError::InvalidInput { field: "requestId" })?;
+        let diagnostic = self
+            .save_producer_diagnostic
+            .get()
+            .and_then(|capture| capture.begin_original(&input.request_id));
+        // These statement-local wrappers observe the same original Result once. They create
+        // no future, resource owner, retry or new timeout, and return that Result unchanged.
+        macro_rules! save_result {
+            ($expression:expr) => {{
+                let original_result: Result<_, ArtifactAdministrationError> = $expression;
+                if let (Some(capture), Err(error)) = (&diagnostic, &original_result) {
+                    capture.record(SaveProducerDiagnosticEvent::Terminal(
+                        SaveProducerDiagnosticTerminal::Error(*error),
+                    ));
+                }
+                original_result
+            }};
+        }
+        macro_rules! save_stage {
+            ($stage:ident) => {
+                if let Some(capture) = &diagnostic {
+                    capture.record(SaveProducerDiagnosticEvent::Stage(
+                        SaveProducerDiagnosticStage::$stage,
+                    ));
+                }
+            };
+        }
+        save_stage!(ValidateInput);
+        input.request_id = save_result!(
+            canonical_artifact_uuid_v7(&input.request_id)
+                .ok_or(ArtifactAdministrationError::InvalidInput { field: "requestId" })
+        )?;
         if !ThreadIdentity::is_plausible(&input.source_thread_id) {
-            return Err(ArtifactAdministrationError::InvalidInput {
+            return save_result!(Err(ArtifactAdministrationError::InvalidInput {
                 field: "sourceThreadId",
-            });
+            }));
         }
         for (field, id) in [
             ("sourceRunId", input.source_run_id.as_str()),
             ("sourceMessageId", input.source_message_id.as_str()),
         ] {
             if !is_valid_artifact_identity(id) {
-                return Err(ArtifactAdministrationError::InvalidInput { field });
+                return save_result!(Err(ArtifactAdministrationError::InvalidInput { field }));
             }
         }
         if !is_valid_artifact_sha256(&input.expected_sha256) {
-            return Err(ArtifactAdministrationError::InvalidInput {
+            return save_result!(Err(ArtifactAdministrationError::InvalidInput {
                 field: "expectedSha256",
-            });
+            }));
         }
-        self.check_namespace(auth)?;
-        verify_artifact_registration_schema(self.registry.pool()).await?;
+        save_stage!(CheckNamespace);
+        save_result!(self.check_namespace(auth))?;
+        save_stage!(VerifyRegistrationSchema);
+        save_result!(verify_artifact_registration_schema(self.registry.pool()).await)?;
+        save_stage!(AvailableBytes);
         let store = Arc::clone(&self.store);
-        let disk = tokio::time::timeout(
-            WAIT,
-            tokio::task::spawn_blocking(move || store.available_bytes()),
-        )
-        .await
-        .map_err(|_| unavailable())?
-        .map_err(|_| unavailable())?
-        .map_err(|_| unavailable())?;
-        let outcome = tokio::time::timeout(PG_PHASE, self.admit(auth, &input, disk))
-            .await
-            .map_err(|_| ArtifactAdministrationError::CommitUnknown)??;
+        let disk = save_result!(
+            save_result!(
+                save_result!(
+                    tokio::time::timeout(
+                        WAIT,
+                        tokio::task::spawn_blocking(move || store.available_bytes()),
+                    )
+                    .await
+                    .map_err(|_| unavailable())
+                )?
+                .map_err(|_| unavailable())
+            )?
+            .map_err(|_| unavailable())
+        )?;
+        save_stage!(Admit);
+        let outcome = save_result!(save_result!(
+            tokio::time::timeout(PG_PHASE, self.admit(auth, &input, disk))
+                .await
+                .map_err(|_| ArtifactAdministrationError::CommitUnknown)
+        )?)?;
         let mut admission = match outcome {
-            AdmissionOutcome::Observed(receipt) => return Ok(receipt),
+            AdmissionOutcome::Observed(receipt) => {
+                if let Some(capture) = &diagnostic {
+                    capture.record(SaveProducerDiagnosticEvent::Terminal(
+                        SaveProducerDiagnosticTerminal::Success,
+                    ));
+                }
+                return Ok(receipt);
+            }
             AdmissionOutcome::Prepared(value) => value,
         };
-        tokio::time::timeout(PG_PHASE, self.start_io(auth, &input, &admission))
-            .await
-            .map_err(|_| ArtifactAdministrationError::CommitUnknown)??;
+        save_stage!(StartIo);
+        save_result!(save_result!(
+            tokio::time::timeout(PG_PHASE, self.start_io(auth, &input, &admission))
+                .await
+                .map_err(|_| ArtifactAdministrationError::CommitUnknown)
+        )?)?;
+        save_stage!(WriteWorker);
         let store = Arc::clone(&self.store);
         let id = admission.artifact_id;
-        let expected = parse_digest(&input.expected_sha256)?;
+        let expected = save_result!(parse_digest(&input.expected_sha256))?;
         let text = std::mem::take(&mut admission.source.text);
+        let worker_diagnostic = diagnostic.clone();
         // Dropping/cancelling this waiter cannot cancel a worker; IO_STARTED and charge remain.
-        let observation = tokio::time::timeout(
-            PG_PHASE,
-            tokio::task::spawn_blocking(move || {
-                store.write_text_once(id, expected, text.as_bytes())
-            }),
-        )
-        .await
-        .map_err(|_| unavailable())?
-        .map_err(|_| unavailable())?;
-        tokio::time::timeout(
-            PG_PHASE,
-            self.finalize(auth, &input, &admission, &observation),
-        )
-        .await
-        .map_err(|_| ArtifactAdministrationError::CommitUnknown)?
+        let observation = save_result!(
+            save_result!(
+                tokio::time::timeout(
+                    PG_PHASE,
+                    tokio::task::spawn_blocking(move || {
+                        if let Some(capture) = &worker_diagnostic {
+                            capture.record(SaveProducerDiagnosticEvent::WorkerEntered);
+                        }
+                        let observation = store.write_text_once(id, expected, text.as_bytes());
+                        if let Some(capture) = &worker_diagnostic {
+                            capture.record_worker_returned(&observation);
+                        }
+                        observation
+                    }),
+                )
+                .await
+                .map_err(|_| unavailable())
+            )?
+            .map_err(|_| unavailable())
+        )?;
+        save_stage!(Finalize);
+        let result = save_result!(save_result!(
+            tokio::time::timeout(
+                PG_PHASE,
+                self.finalize(auth, &input, &admission, &observation),
+            )
+            .await
+            .map_err(|_| ArtifactAdministrationError::CommitUnknown)
+        )?);
+        if result.is_ok()
+            && let Some(capture) = &diagnostic
+        {
+            capture.record(SaveProducerDiagnosticEvent::Terminal(
+                SaveProducerDiagnosticTerminal::Success,
+            ));
+        }
+        result
     }
 
     async fn get_metadata(

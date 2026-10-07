@@ -750,6 +750,14 @@ impl LocalFixture {
                 expected_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
             };
             let original_save_auth = auth.clone();
+            // Scope04: observation only on the same Admin consumed by this Application.
+            // Installation loss cannot skip or change the single original Save below.
+            let original_save_diagnostic = if p1_setup_diagnostic {
+                Some(prepared.artifact_administration
+                    .install_save_producer_diagnostic_for_request(&original_save.request_id))
+            } else {
+                None
+            };
             let original_save_started = Instant::now();
             let receipt = prepared
                 .application()
@@ -762,6 +770,18 @@ impl LocalFixture {
                 if let Err(error) = &receipt {
                     eprintln!("{diagnostic} phase=SaveRunMessageTextArtifact original_app_error={error}");
                     if p1_setup_diagnostic {
+                        match &original_save_diagnostic {
+                            Some(Ok(capture)) => eprintln!(
+                                "ARTIFACT_LOCAL_P1_ORIGINAL_SAVE_PRODUCER snapshot={:?} original_single_save_executed=true nongrant=true",
+                                capture.snapshot()
+                            ),
+                            Some(Err(install_error)) => eprintln!(
+                                "ARTIFACT_LOCAL_P1_ORIGINAL_SAVE_PRODUCER install_error={install_error:?} original_single_save_executed=true diagnostic_UNKNOWN=true"
+                            ),
+                            None => eprintln!(
+                                "ARTIFACT_LOCAL_P1_ORIGINAL_SAVE_PRODUCER original_single_save_executed=true diagnostic_UNKNOWN=true"
+                            ),
+                        }
                         let diagnostic_deadline = Instant::now() + Duration::from_secs(2);
                         failed_p1_postmaster_pid = capture_original_p1_postmaster(&root.0, diagnostic_deadline);
                         match failed_p1_postmaster_pid {
