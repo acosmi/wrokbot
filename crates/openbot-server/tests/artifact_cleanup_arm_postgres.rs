@@ -33,10 +33,12 @@ use openbot_infra::thread_directory::{DEFAULT_THREAD_LEASE_DURATION, PostgresThr
 use openbot_server::{AuthResolver, PostgresSessionAuthResolver};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1016,12 +1018,11 @@ where
     .await;
 }
 fn owned_object_fds(path: &Path) -> Result<Vec<String>, String> {
+    if cfg!(target_os = "macos") {
+        return owned_macos_object_fds(path);
+    }
     let original = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-    let inventory = if cfg!(target_os = "macos") {
-        "/dev/fd"
-    } else {
-        "/proc/self/fd"
-    };
+    let inventory = "/proc/self/fd";
     let mut fds = Vec::new();
     for entry in std::fs::read_dir(inventory).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -1033,6 +1034,124 @@ fn owned_object_fds(path: &Path) -> Result<Vec<String>, String> {
     }
     fds.sort();
     Ok(fds)
+}
+
+// The same bounded, own-PID device/inode oracle exercised by the real 017 leased case.
+// macOS /dev/fd entries have devfs metadata; they are not Linux procfs descriptor aliases.
+fn owned_macos_object_fds(path: &Path) -> Result<Vec<String>, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    require(
+        metadata.is_file() && metadata.nlink() == 1,
+        "owned FD oracle requires original regular inode",
+    )?;
+    let device = metadata.dev() & u64::from(u32::MAX);
+    let inode = metadata.ino();
+    let sample = || -> Result<BTreeSet<u32>, String> {
+        let pid = std::process::id();
+        let mut child = Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-FfDi"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "own-PID lsof is unavailable (Unproven)".to_owned())?;
+        let stdout = child.stdout.take().ok_or("lsof stdout unavailable")?;
+        let stderr = child.stderr.take().ok_or("lsof stderr unavailable")?;
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65_537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let errors = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(8_193).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output.join();
+                let _ = errors.join();
+                return Err("own-PID lsof exceeded original five seconds (Unproven)".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let output = output
+            .join()
+            .map_err(|_| "lsof output worker panicked")?
+            .map_err(|error| error.to_string())?;
+        let errors = errors
+            .join()
+            .map_err(|_| "lsof error worker panicked")?
+            .map_err(|error| error.to_string())?;
+        require(
+            status.success()
+                && output.len() <= 65_536
+                && errors.len() <= 8_192
+                && output.ends_with(b"\n"),
+            "lsof incomplete/failed/truncated (Unproven)",
+        )?;
+        let text = std::str::from_utf8(&output).map_err(|_| "lsof output invalid (Unproven)")?;
+        let mut self_pid = false;
+        let mut fd = None;
+        let mut dev = None;
+        let mut ino = None;
+        let mut found = BTreeSet::new();
+        for line in text.lines().chain(std::iter::once("f")) {
+            let (kind, value) = line
+                .split_at_checked(1)
+                .ok_or("lsof empty field (Unproven)")?;
+            match kind {
+                "p" => {
+                    require(
+                        value.parse::<u32>().ok() == Some(pid),
+                        "lsof observed another PID",
+                    )?;
+                    self_pid = true;
+                }
+                "f" => {
+                    if dev == Some(device) && ino == Some(inode) {
+                        found.insert(
+                            fd.ok_or("original inode has an ambiguous nonnumeric FD (Unproven)")?,
+                        );
+                    }
+                    fd = value.parse::<u32>().ok();
+                    dev = None;
+                    ino = None;
+                }
+                "D" => {
+                    dev = Some(
+                        if let Some(hex) = value.strip_prefix("0x") {
+                            u64::from_str_radix(hex, 16)
+                        } else {
+                            value.parse::<u64>()
+                        }
+                        .map_err(|_| "lsof device invalid (Unproven)")?,
+                    );
+                }
+                "i" => {
+                    ino = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "lsof inode invalid (Unproven)")?,
+                    );
+                }
+                _ => return Err("lsof unexpected field (Unproven)".to_owned()),
+            }
+        }
+        require(self_pid, "lsof self-PID field missing (Unproven)")?;
+        Ok(found)
+    };
+    let first = sample()?;
+    let second = sample()?;
+    require(
+        first == second,
+        "own original FD inventory was unstable (Unproven)",
+    )?;
+    Ok(first.into_iter().map(|fd| fd.to_string()).collect())
 }
 async fn hard_delete_original_message(f: &Fixture) -> Result<(), String> {
     let before = database_facts(&f.admin).await?;
@@ -1106,9 +1225,13 @@ async fn read_is_404(f: &Fixture) -> Result<(), String> {
 async fn current_saved_owner_arms_after_source_hard_delete_and_read_stays_404() {
     with_fixture("cleanup-original-owner",false,|f|Box::pin(async move {
         let original=object_fact(&f.path())?;
-        let record=f.actual.observe_read_record(&f.auth,&f.receipt.artifact_id).await.map_err(|e|e.to_string())?;
-        let mut reader=f.store.open_observed_record(record).map_err(|e|e.to_string())?;
-        require(owned_object_fds(&f.path())?.len()==1,"original Store reader did not own exactly its real object FD")?;
+        let mut operation=f.application.open_current_artifact_read(f.auth.clone(),f.receipt.artifact_id.clone()).await.map_err(|e|e.to_string())?;
+        let pending=operation.next_block(&f.auth).await.map_err(|e|e.to_string())?;
+        require(pending.prefix_length().map_err(|e|e.to_string())?==TEXT.len(),"original Application did not materialize its actual pending allocation")?;
+        let frame=pending.handoff_frame(&f.auth).map_err(|e|e.to_string())?;
+        require(frame.as_bytes()==TEXT.as_bytes(),"original leased frame differs from actual saved bytes")?;
+        let original_fds=owned_object_fds(&f.path())?;
+        require(original_fds.len()==1,"original leased allocation did not own exactly its real object FD")?;
         hard_delete_original_message(f).await?; read_is_404(f).await?;
         let before=database_facts(&f.admin).await?;
         let intent=f.arm().await.map_err(|e|e.to_string())?;
@@ -1116,17 +1239,18 @@ async fn current_saved_owner_arms_after_source_hard_delete_and_read_stays_404() 
         let after=database_facts(&f.admin).await?; original_arm_append_only(&before,&after)?;
         require(object_fact(&f.path())?==original,"arm changed or removed original bytes/charge backing")?;
         let barrier=f.actual.close_armed_artifact_reads(&intent).map_err(|e|e.to_string())?;
-        require(barrier.drain_before(Instant::now()+Duration::from_millis(25)).await.is_err(),"armed bridge ACKed while the original FD reader remained")?;
-        let mut withheld=vec![0xaa;TEXT.len()+32];
-        require(reader.read_observed_chunk(&mut withheld).is_err() && withheld.iter().all(|b|*b==0),"closed original Store reader exposed body or retained an unwiped buffer")?;
-        require(owned_object_fds(&f.path())?.len()==1,"stop request was mistaken for actual original FD release")?;
-        drop(reader);
+        require(barrier.drain_before(Instant::now()+Duration::from_millis(25)).await.is_err(),"armed bridge ACKed while the original leased allocation and FD remained")?;
+        require(frame.verify_current_tail(&f.auth).is_err(),"closed original leased frame still provided a current delivery witness")?;
+        require(owned_object_fds(&f.path())?==original_fds,"stop request was mistaken for actual original FD release")?;
+        drop(operation);
+        require(barrier.drain_before(Instant::now()+Duration::from_millis(25)).await.is_err()&&owned_object_fds(&f.path())?==original_fds,"operation Drop substituted for the original last complete allocation owner")?;
+        drop(frame);
         let ack=barrier.drain_before(Instant::now()+Duration::from_secs(3)).await.map_err(|e|format!("{e:?}"))?;
         require(owned_object_fds(&f.path())?.is_empty() && object_fact(&f.path())?==original,"finite ACK did not follow actual FD drop or physically deleted object")?;
         read_is_404(f).await?;
         require(database_facts(&f.admin).await?==after,"finite close or missing-source reads wrote business facts")?;
         drop(ack);drop(barrier);drop(intent);
-        eprintln!("ARTIFACT_CLEANUP_ARM_ORIGINAL_OWNER source_message_absent=true saved_owner_current=true original_commit_ack=true exact_arm_audit=true original_fd_drop_ack=true object_unchanged=true physical_delete=false");
+        eprintln!("ARTIFACT_CLEANUP_ARM_ORIGINAL_OWNER source_message_absent=true saved_owner_current=true original_commit_ack=true exact_arm_audit=true original_leased_allocation_materialized=true held_allocation_no_ack=true operation_drop_no_ack=true last_allocation_owner_dropped=true original_fd_drop_ack=true object_unchanged=true physical_delete=false");
         Ok(())
     })).await;
 }
@@ -1410,7 +1534,7 @@ async fn original_pair_charge_or_cleanup_schema_drift_refuses_without_mutation()
 #[tokio::test]
 #[ignore = "requires actual isolated PostgreSQL and original connections/loopback fault relay"]
 async fn original_arm_deadline_and_cancel_retire_unacknowledged_connection() {
-    for wait in ["actor", "quota", "operation", "fence", "audit"] {
+    for wait in ["actor", "quota", "operation", "fence_fk_record", "audit"] {
         with_fixture("cleanup-original-budget",true,|f|Box::pin(async move {
             let before=database_facts(&f.admin).await?;let original_object=object_fact(&f.path())?;
             let held=f.pool.get().await.map_err(|e|e.to_string())?;
@@ -1422,7 +1546,10 @@ async fn original_arm_deadline_and_cancel_retire_unacknowledged_connection() {
                 "actor"=>{tx.query_one("SELECT id FROM public.users WHERE id=$1 FOR UPDATE",&[&OWNER]).await.map_err(|e|e.to_string())?;"public.users"},
                 "quota"=>{tx.query_one("SELECT workspace_id FROM openbot_internal.artifact_workspace_quotas WHERE workspace_id=$1 FOR UPDATE",&[&f.receipt.source_thread_id.as_str()]).await.map_err(|e|e.to_string())?;"artifact_workspace_quotas"},
                 "operation"=>{tx.query_one("SELECT operation_id FROM openbot_internal.artifact_save_operations WHERE operation_id=$1 FOR UPDATE",&[&f.receipt.operation_id]).await.map_err(|e|e.to_string())?;"artifact_save_operations"},
-                "fence"=>{tx.execute("INSERT INTO openbot_internal.artifact_cleanup_fences(deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) VALUES($1,$2,$3,$4,$5,'deleted','armed')",&[&DEPLOYMENT,&TENANT,&f.registry.binding().dataset_id(),&f.receipt.operation_id,&f.receipt.artifact_id]).await.map_err(|e|e.to_string())?;"artifact_cleanup_fences"},
+                // The real uncommitted fence INSERT takes its exact original FK KEY SHARE.
+                // The producer therefore waits at record FOR UPDATE first, not at a later
+                // unique/fence statement. Observe that real coupled wait without relabelling it.
+                "fence_fk_record"=>{tx.execute("INSERT INTO openbot_internal.artifact_cleanup_fences(deployment_id,tenant_id,dataset_id,operation_id,artifact_id,terminal_status,phase) VALUES($1,$2,$3,$4,$5,'deleted','armed')",&[&DEPLOYMENT,&TENANT,&f.registry.binding().dataset_id(),&f.receipt.operation_id,&f.receipt.artifact_id]).await.map_err(|e|e.to_string())?;"artifact_records"},
                 _=>{tx.query_one("SELECT pg_advisory_xact_lock($1)",&[&AUDIT_LOCK]).await.map_err(|e|e.to_string())?;"pg_advisory_xact_lock"},
             };
             let actual=f.actual.clone();let auth=f.auth.clone();let artifact=f.receipt.artifact_id.clone();let started=Instant::now();
