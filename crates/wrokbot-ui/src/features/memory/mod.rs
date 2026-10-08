@@ -558,14 +558,18 @@ fn MemoryRow(
         move || lock_id.get_value(),
     );
     let busy = Signal::derive(move || pending_ids.get().contains(&busy_id) || write_lock.get());
-    let excerpt = record
-        .content
-        .as_deref()
-        .map(memory_excerpt)
-        .unwrap_or_else(|| t_string!(i18n, memory.content_erased).to_owned());
-    let correct_label = t_string!(i18n, memory.correct_label, memory = excerpt.clone()).to_owned();
-    let forbid_label = t_string!(i18n, memory.forbid_label, memory = excerpt.clone()).to_owned();
-    let delete_label = t_string!(i18n, memory.delete_label, memory = excerpt).to_owned();
+    let excerpt = StoredValue::new(record.content.as_deref().map(memory_excerpt));
+    let excerpt_label = move || {
+        excerpt
+            .get_value()
+            .unwrap_or_else(|| t_string!(i18n, memory.content_erased).to_owned())
+    };
+    let correct_label =
+        move || t_string!(i18n, memory.correct_label, memory = excerpt_label()).to_owned();
+    let forbid_label =
+        move || t_string!(i18n, memory.forbid_label, memory = excerpt_label()).to_owned();
+    let delete_label =
+        move || t_string!(i18n, memory.delete_label, memory = excerpt_label()).to_owned();
     let show_correct = record.status == MemoryStatus::Active && record.content.is_some();
     let show_forbid = !matches!(
         record.status,
@@ -626,7 +630,7 @@ fn MemoryRow(
                         id=correct_id.clone()
                         variant=ButtonVariant::Ghost
                         size=ButtonSize::Small
-                        aria_label=correct_label.clone()
+                        aria_label=correct_label
                         disabled=Signal::derive(move || busy.get() || !writes_enabled.get())
                         on_activate=move |_| on_correct.run(correct_record.get_value())
                     >{move || t!(i18n, memory.correct_entry)}</Button>
@@ -635,7 +639,7 @@ fn MemoryRow(
                     <Button
                         variant=ButtonVariant::Ghost
                         size=ButtonSize::Small
-                        aria_label=forbid_label.clone()
+                        aria_label=forbid_label
                         disabled=busy
                         on_activate=move |_| on_mutate.run((forbid_id.get_value(), MemoryMutation::Forbid))
                     >{move || t!(i18n, memory.forbid_entry)}</Button>
@@ -644,7 +648,7 @@ fn MemoryRow(
                     <Button
                         variant=ButtonVariant::DangerText
                         size=ButtonSize::Small
-                        aria_label=delete_label.clone()
+                        aria_label=delete_label
                         disabled=busy
                         on_activate=move |_| on_mutate.run((delete_id.get_value(), MemoryMutation::Delete))
                     >{move || t!(i18n, memory.delete_entry)}</Button>
