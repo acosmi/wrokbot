@@ -219,7 +219,7 @@ impl ServerFixture {
                 base_url: openbot_server::config::DeploymentAddress::parse(
                     "https://unused-package.example.test/v1",
                 )
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| format!("{e:?}"))?,
                 environment_api_key: None,
                 egress_allow_cidrs: vec!["127.0.0.1/32".to_owned()],
                 allow_http: false,

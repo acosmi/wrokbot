@@ -568,7 +568,7 @@ async fn genuine_prepared_local_raw_v2_snapshot_and_repeated_sampling() {
     let fixture = LocalFixture::new(&bundle, "v2-consumption", &tls)
         .await
         .expect("genuine Prepared Local startup");
-    let result=async {
+    let result:Result<(),String>=async {
         let prepared=fixture.prepared();
         let protocol=prepared.protocol();
         let create=protocol.handle("main",v2_request(Method::POST,"/api/me/model-connections",serde_json::to_vec(&json!({

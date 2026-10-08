@@ -906,8 +906,20 @@ mod v2_vault_tests {
                     // The withdrawal is still waiting on positive current authority; it
                     // has not committed. Cancellation drops the original guarded owner.
                     task.abort();assert!(matches!(task.await,Err(error)if error.is_cancelled()));
-                    assert_eq!(tokio::time::timeout(Duration::from_secs(3),change).await.unwrap().unwrap(),1);
+                    // Release the fixture barrier so the blocked original backend can
+                    // observe EOF. Local cancellation is not its rollback ACK.
                     barrier.commit().await.unwrap();drop(blocker);
+                    assert_eq!(tokio::time::timeout(Duration::from_secs(3),change).await.unwrap().unwrap(),1);
+                    assert!(!f.pool.is_closed());
+                    tokio::time::timeout(Duration::from_secs(3),async {
+                        loop {
+                            let ended:bool=checker.query_one("SELECT NOT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid=$1)",&[&consumer_pid]).await.unwrap().get(0);
+                            if ended{break;}
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    }).await.expect("actual cancelled original backend ended before successor");
+                    assert!(!f.pool.is_closed());
+                    eprintln!("CUSTOM_V2_WITHDRAWAL_ORIGINAL_ENDED consumer_backend={consumer_pid} actual_backend_absent=true pool_open=true");
                 }
                 // This actual retry observes the now-committed withdrawal, without
                 // treating cancellation/Drop or lock release as a rollback ACK.
@@ -1527,6 +1539,7 @@ mod v2_vault_tests {
                         .write_all(&held)
                         .await
                         .map_err(|_| "D1 held original frames forward")?;
+                    eprintln!("CUSTOM_V2_D1_TRACE released_original_bytes={}", held.len());
                     executed.store(false, Ordering::SeqCst);
                     control.counts.released.fetch_add(1, Ordering::SeqCst);
                     continue;
@@ -1540,6 +1553,9 @@ mod v2_vault_tests {
                     .write_all(&last_ready_wire_frame(tag, &bytes))
                     .await
                     .map_err(|_| "D1 server frame forward")?;
+                if tag == b'2' && selection.lock().map_err(|_| "D1 selection lock")?.portal.is_some() {
+                    eprintln!("CUSTOM_V2_D1_TRACE forwarded_bind_complete_bytes={}", bytes.len() + 5);
+                }
             }
             down_write
                 .shutdown()
@@ -1585,10 +1601,11 @@ mod v2_vault_tests {
             relay.control.armed.store(true,Ordering::SeqCst);
             let(changed,mut changes)=watch::channel(0usize);
             let wake=Arc::new(LastReadyWake{generation:AtomicUsize::new(0),changed});
-            let waker=Waker::from(wake);let mut cx=Context::from_waker(&waker);
+            let waker=Waker::from(wake.clone());let mut cx=Context::from_waker(&waker);
             let mut started=adapter.start(request.clone());
             let mut original_polls=0usize;
             let mut held=relay.held.take().unwrap();
+            let first_poll_before=std::time::Instant::now();
             let metadata=tokio::time::timeout(Duration::from_secs(4),async {
                 loop {
                     original_polls+=1;
@@ -1604,6 +1621,14 @@ mod v2_vault_tests {
             assert_eq!(adapter.v2_expired_last_authority_ready.load(Ordering::SeqCst),0);
             assert_eq!(adapter.v2_vault_opens.load(Ordering::SeqCst),0);assert_eq!(dns.0.load(Ordering::SeqCst),0);
             assert!(!original.snapshot().retirement_requested && !original.snapshot().connection_destroyed);
+            // One normal unexpired poll consumes any already queued BindComplete
+            // and registers the response waker. Pending is not SQLReady evidence.
+            assert!(first_poll_before.elapsed()<adapter.connect_budget.timeout());
+            let preexpiry_generation=wake.generation.load(Ordering::SeqCst);
+            original_polls+=1;
+            assert!(matches!(Future::poll(started.as_mut(),&mut cx),Poll::Pending),"held original last row must keep the unexpired business future Pending");
+            assert!(first_poll_before.elapsed()<adapter.connect_budget.timeout());
+            eprintln!("CUSTOM_V2_D1_TRACE preexpiry_polls={original_polls} wake_before={preexpiry_generation} wake_after={} elapsed_us={} held_bytes={}",wake.generation.load(Ordering::SeqCst),first_poll_before.elapsed().as_micros(),metadata.held_bytes);
             let polls_at_hold=original_polls;
             let held_at=std::time::Instant::now();
             // No business poll occurs here. This is a conservative natural wall-time
@@ -1612,8 +1637,10 @@ mod v2_vault_tests {
             assert!(held_at.elapsed()>adapter.connect_budget.timeout());
             assert_eq!(original_polls,polls_at_hold,"same business future was not polled during natural expiry");
             changes.borrow_and_update();
+            eprintln!("CUSTOM_V2_D1_TRACE before_release_polls={original_polls} wake_generation={} elapsed_us={}",wake.generation.load(Ordering::SeqCst),first_poll_before.elapsed().as_micros());
             relay.release.take().unwrap().send(()).expect("original actual held frames released");
             tokio::time::timeout(Duration::from_secs(2),changes.changed()).await.unwrap().unwrap();
+            eprintln!("CUSTOM_V2_D1_TRACE wake_after_release={} elapsed_us={}",wake.generation.load(Ordering::SeqCst),first_poll_before.elapsed().as_micros());
             // A wake/socket write supplies scheduling only. This ONE resumed poll
             // must itself reach the actual load Ok continuation and observe expiry.
             original_polls+=1;

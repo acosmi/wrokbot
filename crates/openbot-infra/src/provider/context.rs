@@ -417,7 +417,7 @@ impl PostgresAgentContextSource {
                 })?;
         let granted_mcp = match &self.mcp_catalog {
             Some(catalog) => catalog
-                .granted_tools_on_client(&client, lease.bot_id(), lease.actor_id())
+                .granted_tools_on_client(client, lease.bot_id(), lease.actor_id())
                 .await
                 .map_err(map_mcp_catalog_error)?,
             None => Vec::new(),
@@ -598,7 +598,7 @@ impl PostgresAgentContextSource {
                         field: "remote_run_assertion",
                     })?;
                 let authorization = load_remote_authorization(
-                    &client,
+                    client,
                     &configuration,
                     lease.bot_id(),
                     visible

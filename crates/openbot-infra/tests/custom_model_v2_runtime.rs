@@ -598,7 +598,7 @@ const TEST_LEAF_DER_BASE64: &str = "MIIBgDCCATKgAwIBAgIUWFITT9Bap6fPTrUyiQds6m7Y
 const TEST_KEY_DER_BASE64: &str =
     "MC4CAQAwBQYDK2VwBCIEIIhvzdQUg5xdTDZfBbx3RK3yTMHjMv2r8AJ5/hgshUDa";
 
-#[derive(Default, Default)]
+#[derive(Default)]
 struct NoFallback(AtomicUsize);
 #[async_trait]
 impl ProviderAdapter for NoFallback {

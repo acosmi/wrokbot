@@ -1176,7 +1176,7 @@ pub(crate) async fn validate_custom_model_catalog_in_transaction(
         latest_version = Some(actual_version);
     }
     let latest_version = latest_version.ok_or_else(invalid)?;
-    if latest_version < NATIVE_0046_VERSION || latest_version > NATIVE_LATEST_VERSION {
+    if !(NATIVE_0046_VERSION..=NATIVE_LATEST_VERSION).contains(&latest_version) {
         return Err(invalid());
     }
     super::custom_model_catalog_schema::verify_in_transaction(transaction)
