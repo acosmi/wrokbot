@@ -867,7 +867,7 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                             <SandboxedComponentFrame
                                 component=item.component
                                 arguments=item.arguments
-                                title=t_string!(i18n, admin.playground_preview).to_owned()
+                                title=move || t_string!(i18n, admin.playground_preview).to_owned()
                             />
                         }
                     />
@@ -886,15 +886,20 @@ pub fn SandboxPlaygroundPage() -> impl IntoView {
                                 children=move |component| {
                                     let open_component = component.clone();
                                     let delete_name = component.name.clone();
-                                    let status = if component.published {
-                                        t_string!(i18n, admin.playground_published, revision = component.revision).to_owned()
-                                    } else {
-                                        t_string!(i18n, admin.playground_draft_only).to_owned()
-                                    };
-                                    let status = if component.has_unpublished_changes {
-                                        format!("{status} · {}", t_string!(i18n, admin.playground_edited))
-                                    } else {
-                                        status
+                                    let published = component.published;
+                                    let revision = component.revision;
+                                    let has_unpublished_changes = component.has_unpublished_changes;
+                                    let status = move || {
+                                        let status = if published {
+                                            t_string!(i18n, admin.playground_published, revision = revision).to_owned()
+                                        } else {
+                                            t_string!(i18n, admin.playground_draft_only).to_owned()
+                                        };
+                                        if has_unpublished_changes {
+                                            format!("{status} · {}", t_string!(i18n, admin.playground_edited))
+                                        } else {
+                                            status
+                                        }
                                     };
                                     view! {
                                         <li>
