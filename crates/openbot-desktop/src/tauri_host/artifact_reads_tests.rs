@@ -695,6 +695,7 @@ impl LocalFixture {
         .await
         .map_err(|error| error.to_string())?;
         let p1_setup_diagnostic = matches!(label, "p1-window-chunk" | "p1-window-operation");
+        let arm_setup_diagnostic = label == "cleanup-arm-original-window";
         let setup_diagnostic = if p1_setup_diagnostic {
             Some("ARTIFACT_LOCAL_P1_SETUP_DIAGNOSTIC")
         } else if label == "public-read-cached-cleanup" {
@@ -740,11 +741,17 @@ impl LocalFixture {
                     if let Some(diagnostic) = setup_diagnostic {
                         eprintln!("{diagnostic} phase=BeginThreadRun original_app_error={error}");
                     }
+                    if arm_setup_diagnostic {
+                        eprintln!("ARTIFACT_LOCAL_ARM_SETUP_DIAGNOSTIC phase=BeginThreadRun original_app_error={error} original_passive=true nongrant=true original_single_save_executed=false original_result_unchanged=true");
+                    }
                     error.to_string()
                 })?;
             let AppReply::ThreadRunStarted(begin_receipt) = begin_reply else {
                 return Err("actual Local Begin did not return its durable receipt".to_owned());
             };
+            if arm_setup_diagnostic {
+                eprintln!("ARTIFACT_LOCAL_ARM_SETUP_DIAGNOSTIC phase=BeginThreadRun actual_thread_run_started_reply=true original_passive=true nongrant=true agent_terminal_observation_claimed=false original_result_unchanged=true");
+            }
             if p1_setup_diagnostic {
                 require(
                     begin_receipt.thread_id == begin.thread_id
@@ -811,7 +818,7 @@ impl LocalFixture {
             let original_save_auth = auth.clone();
             // Scope04: observation only on the same Admin consumed by this Application.
             // Installation loss cannot skip or change the single original Save below.
-            let original_save_diagnostic = if p1_setup_diagnostic {
+            let original_save_diagnostic = if p1_setup_diagnostic || arm_setup_diagnostic {
                 Some(prepared.artifact_administration
                     .install_save_producer_diagnostic_for_request(&original_save.request_id))
             } else {
@@ -867,6 +874,24 @@ impl LocalFixture {
                     }
                 }
             }
+            if arm_setup_diagnostic && let Err(error) = &receipt {
+                eprintln!("ARTIFACT_LOCAL_ARM_SETUP_DIAGNOSTIC phase=SaveRunMessageTextArtifact original_app_error={error} original_save_elapsed_ms={} original_passive=true nongrant=true original_single_save_executed=true original_result_unchanged=true original_budget_unchanged=true",
+                    original_save_started.elapsed().as_millis());
+                match &original_save_diagnostic {
+                    Some(Ok(capture)) => {
+                        let snapshot = capture.snapshot();
+                        let diagnostic_unknown = snapshot.lost || snapshot.main_stage.is_none()
+                            || snapshot.main_terminal.is_none();
+                        eprintln!("ARTIFACT_LOCAL_ARM_ORIGINAL_SAVE_PRODUCER snapshot={snapshot:?} diagnostic_UNKNOWN={diagnostic_unknown} original_passive=true nongrant=true original_single_save_executed=true original_result_unchanged=true original_budget_unchanged=true resource_or_query_ack_claimed=false");
+                    }
+                    Some(Err(install_error)) => eprintln!(
+                        "ARTIFACT_LOCAL_ARM_ORIGINAL_SAVE_PRODUCER install_error={install_error:?} diagnostic_UNKNOWN=true original_passive=true nongrant=true original_single_save_executed=true original_result_unchanged=true original_budget_unchanged=true resource_or_query_ack_claimed=false"
+                    ),
+                    None => eprintln!(
+                        "ARTIFACT_LOCAL_ARM_ORIGINAL_SAVE_PRODUCER diagnostic_UNKNOWN=true original_passive=true nongrant=true original_single_save_executed=true original_result_unchanged=true original_budget_unchanged=true resource_or_query_ack_claimed=false"
+                    ),
+                }
+            }
             // Preserve the original Save outcome; diagnostics never retry or replace it.
             let receipt = receipt.map_err(|error| error.to_string())?;
             let artifact = match receipt {
@@ -918,6 +943,25 @@ impl LocalFixture {
                 })
             }
             Err(error) => {
+                let failed_arm_postmaster_pid = if arm_setup_diagnostic {
+                    // This finite identity observation occurs after the original setup Err.
+                    // It does not extend or replay the original Save or change cleanup rules.
+                    let pid = capture_original_p1_postmaster(
+                        &root.0,
+                        Instant::now() + Duration::from_secs(2),
+                    );
+                    match pid {
+                        Some(pid) => eprintln!(
+                            "ARTIFACT_LOCAL_ARM_SETUP_FACTS original_owned_postmaster_pid={pid} original_private_root_pidfile_bound=true root_path_omitted=true original_passive=true nongrant=true original_setup_error_preserved=true resource_or_query_ack_claimed=false"
+                        ),
+                        None => eprintln!(
+                            "ARTIFACT_LOCAL_ARM_SETUP_FACTS original_private_root_pidfile_bound=false diagnostic_UNKNOWN=true root_path_omitted=true original_passive=true nongrant=true original_setup_error_preserved=true resource_or_query_ack_claimed=false"
+                        ),
+                    }
+                    pid
+                } else {
+                    None
+                };
                 let cleaned = prepared.shutdown().await;
                 if p1_setup_diagnostic {
                     match failed_p1_postmaster_pid {
@@ -933,6 +977,25 @@ impl LocalFixture {
                         },
                         None => eprintln!(
                             "ARTIFACT_LOCAL_P1_SETUP_FACTS original_pid_binding_missing=true original_save_error_preserved=true bundle_cleanup_not_inferred=true"
+                        ),
+                    }
+                }
+                if arm_setup_diagnostic {
+                    match failed_arm_postmaster_pid {
+                        Some(pid) => match owned_postmaster_live(pid) {
+                            Ok(live) => eprintln!(
+                                "ARTIFACT_LOCAL_ARM_SETUP_FACTS original_owned_postmaster_pid={pid} original_pid_gone_observed={} original_shutdown_ok={} original_passive=true nongrant=true original_setup_error_preserved=true bundle_cleanup_not_inferred=true save_or_query_ack_claimed=false",
+                                !live,
+                                cleaned.is_ok()
+                            ),
+                            Err(_) => eprintln!(
+                                "ARTIFACT_LOCAL_ARM_SETUP_FACTS original_pid_gone_observed=UNKNOWN pid_observation_failed=true original_shutdown_ok={} original_passive=true nongrant=true original_setup_error_preserved=true bundle_cleanup_not_inferred=true save_or_query_ack_claimed=false",
+                                cleaned.is_ok()
+                            ),
+                        },
+                        None => eprintln!(
+                            "ARTIFACT_LOCAL_ARM_SETUP_FACTS original_pid_gone_observed=UNKNOWN original_pid_binding_missing=true original_shutdown_ok={} original_passive=true nongrant=true original_setup_error_preserved=true bundle_cleanup_not_inferred=true save_or_query_ack_claimed=false",
+                            cleaned.is_ok()
                         ),
                     }
                 }
