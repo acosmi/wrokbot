@@ -24,6 +24,7 @@ use crate::agent_callback::{PostgresAgentCallbackTokens, PostgresRemoteCallbackA
 use crate::agent_tools::PostgresBuiltInToolControlPlane;
 use crate::component_catalogue::PostgresComponentAdministration;
 use crate::credential_admin::PostgresCredentialAdministration;
+use crate::custom_model_catalog::PostgresCustomModelCatalogInventory;
 use crate::google_drive::GoogleDriveRestTransport;
 use crate::google_drive_oauth::GoogleDriveOAuthClient;
 use crate::mcp::SafeRmcpClient;
@@ -151,6 +152,7 @@ impl core::fmt::Debug for PostgresApplicationAssemblyInput {
 
 /// Shared assembly output plus the background/lifecycle adapters its host must retain.
 pub struct PostgresApplicationAssembly {
+    pub custom_model_catalog_inventory: Arc<PostgresCustomModelCatalogInventory>,
     pub runtime_capability_facts: Option<Arc<PostgresRuntimeCapabilityFacts>>,
     pub application: Arc<dyn ApplicationService>,
     pub run_runtime: Arc<dyn RunRuntime>,
@@ -168,6 +170,10 @@ impl core::fmt::Debug for PostgresApplicationAssembly {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("PostgresApplicationAssembly")
+            .field(
+                "custom_model_catalog_inventory",
+                &"PostgresCustomModelCatalogInventory",
+            )
             .field("application", &"Arc<dyn ApplicationService>")
             .field("run_runtime", &"Arc<dyn RunRuntime>")
             .field("remote_interrupts", &"PostgresRemoteInterruptCoordinator")
@@ -417,6 +423,10 @@ pub async fn assemble_postgres_application(
         )
         .map_err(|_| fail("model_connections"))?,
     );
+    let custom_model_catalog_inventory = Arc::new(
+        PostgresCustomModelCatalogInventory::new(pool.clone(), deployment.clone(), tenant.clone())
+            .map_err(|_| fail("custom_model_catalog"))?,
+    );
     let channels = ChannelRepo::new(pool.clone());
     let runtime_capability_facts = runtime_capabilities
         .as_ref()
@@ -485,6 +495,7 @@ pub async fn assemble_postgres_application(
         .with_mcp_connections(mcp_connections.clone())
         .with_credentials(credentials)
         .with_model_connections(model_connections)
+        .with_custom_model_catalog_inventory(custom_model_catalog_inventory.clone())
         .with_tool_approvals(tool_approvals)
         .with_ui_preferences(ui_preferences)
         .with_run_cost_budgets(Arc::new(PostgresRunCostBudgetAdministration::new(
@@ -503,6 +514,7 @@ pub async fn assemble_postgres_application(
     let application: Arc<dyn ApplicationService> = Arc::new(application);
     let mcp_revocation_reconciler = McpRevocationReconciler::start(mcp_connections.clone());
     Ok(PostgresApplicationAssembly {
+        custom_model_catalog_inventory,
         runtime_capability_facts,
         application,
         run_runtime,

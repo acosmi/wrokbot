@@ -83,6 +83,8 @@ pub mod chunk;
 pub mod components;
 pub mod credential_admin;
 pub mod cursor;
+pub mod custom_model_catalog;
+mod custom_model_catalog_delivery;
 pub mod intelligence_import;
 pub mod mcp_connections;
 pub mod model_connections;
@@ -143,6 +145,11 @@ pub use components::{
     sync_component_catalogue, update_component_governance, validate_manifest_entries,
 };
 pub use cursor::{ChannelCursor, channel_recency};
+pub use custom_model_catalog::{
+    CurrentCustomModelCatalogPage, CustomModelCatalogError, CustomModelCatalogInventory,
+    NoCustomModelCatalogInventory,
+};
+pub use custom_model_catalog_delivery::PublicCustomModelCatalogDelivery;
 pub use intelligence_import::{
     INTELLIGENCE_SOURCE_COMMIT, IntelligenceImportCursorStatus, IntelligenceImportError,
     IntelligenceImportProgress, IntelligenceImportReport, IntelligenceImportReportStatus,

@@ -56,6 +56,11 @@ use openbot_contracts::request_binding::{
     SourceRunArtifactIdsCurrentTarget,
 };
 use openbot_contracts::request_binding::{
+    CustomModelCatalogHostObservation, CustomModelCatalogHostTailFactory,
+    CustomModelCatalogHostTailWitness, CustomModelCatalogHostTarget,
+    CustomModelCatalogSessionFacts,
+};
+use openbot_contracts::request_binding::{
     HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind,
     RememberPreferenceHostObservation, RememberPreferenceHostTailFactory,
     RememberPreferenceHostTailWitness, RememberPreferenceHostTarget,
@@ -72,6 +77,7 @@ use openbot_infra::approval_preferences::PostgresRememberPreferenceRepository;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use openbot_infra::artifact_read_authority::PostgresArtifactReadAuthority;
 use openbot_infra::auth::sso::ReadOnlySsoCapabilitySource;
+use openbot_infra::custom_model_catalog::PostgresCustomModelCatalogInventory;
 use openbot_infra::runtime_capability_facts::{
     PostgresRuntimeCapabilityFacts, RuntimeCapabilityCollectorFactory,
     RuntimeCapabilityRevisionOwner,
@@ -315,9 +321,15 @@ impl FromRequestParts<ServerState> for OriginAuthenticated {
             .headers
             .get(http::header::ORIGIN)
             .map(|value| value.to_str().unwrap_or(""));
-        state
-            .authorize_authenticated_origin(&resolved, origin)
-            .await?;
+        if parts.method == http::Method::GET
+            && parts.uri.path() == crate::http::custom_model_catalog::PATH
+        {
+            state.authorize_custom_model_catalog_origin(origin)?;
+        } else {
+            state
+                .authorize_authenticated_origin(&resolved, origin)
+                .await?;
+        }
         let auth = resolved.into_context();
         Span::current().record(ACTOR_ID_FIELD, tracing::field::display(auth.actor()));
         Ok(Self(auth))
@@ -505,6 +517,7 @@ struct ServerSessionProbeState {
     tenant: TenantId,
     capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
     remember_preferences: std::sync::OnceLock<Weak<PostgresRememberPreferenceRepository>>,
+    custom_model_catalog_inventory: std::sync::OnceLock<Weak<PostgresCustomModelCatalogInventory>>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     artifact_read_authority: std::sync::OnceLock<Weak<PostgresArtifactReadAuthority>>,
 }
@@ -580,6 +593,61 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
             binding.identity().clone(),
             Some(epoch),
             Box::new(ServerArtifactCleanupTailFactory {
+                probe: self.probe.clone(),
+                owner: self.owner.clone(),
+                issuer: self.issuer.clone(),
+                original: auth.clone(),
+                lifetime: probe.lifetime,
+                created_at: self.row.created_at,
+            }),
+        )
+    }
+    fn borrow_custom_model_catalog_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn CustomModelCatalogHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<CustomModelCatalogHostObservation<'a>, HostRequestBindingError> {
+        if auth != &self.original || !self.owner.is_current() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let repository = probe
+            .custom_model_catalog_inventory
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !repository.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant)
+            || !repository.matches_host_target(target, auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        let epoch = self
+            .issuer
+            .borrow_server_session_epoch(binding.identity())?;
+        if !epoch.matches_raw_row(
+            &self.row.id,
+            &self.row.user_id,
+            &self.row.token_column,
+            self.row.created_at,
+            self.row.issued_generation,
+        ) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        CustomModelCatalogHostObservation::from_trusted_host(
+            HostRequestBindingKind::ServerSession,
+            binding.identity().clone(),
+            Some(epoch),
+            Box::new(ServerCustomModelCatalogTailFactory {
                 probe: self.probe.clone(),
                 owner: self.owner.clone(),
                 issuer: self.issuer.clone(),
@@ -969,6 +1037,82 @@ impl ArtifactCleanupHostTailWitness for ServerArtifactCleanupTail {
 }
 
 #[derive(Clone)]
+struct ServerCustomModelCatalogTailFactory {
+    probe: Weak<ServerSessionProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+    lifetime: SessionLifetimePolicy,
+    created_at: OffsetDateTime,
+}
+impl CustomModelCatalogHostTailFactory for ServerCustomModelCatalogTailFactory {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<CustomModelCatalogSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn CustomModelCatalogHostTailWitness>, HostRequestBindingError> {
+        let session = session.ok_or(HostRequestBindingError::NotCurrent)?;
+        if session.created_at != self.created_at {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let witness = ServerCustomModelCatalogTail {
+            source: self.clone(),
+            session,
+        };
+        witness.verify_current(auth, deadline)?;
+        Ok(Box::new(witness))
+    }
+}
+struct ServerCustomModelCatalogTail {
+    source: ServerCustomModelCatalogTailFactory,
+    session: CustomModelCatalogSessionFacts,
+}
+impl CustomModelCatalogHostTailWitness for ServerCustomModelCatalogTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        verify_repository_host_attachment(
+            &self.source.owner,
+            &self.source.issuer,
+            &self.source.original,
+            auth,
+            deadline,
+        )?;
+        if self.source.probe.upgrade().is_none() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let now = OffsetDateTime::now_utc();
+        if now < self.session.observed_wall
+            || std::time::Instant::now() < self.session.observed_monotonic
+            || now >= self.session.expires_at
+            || evaluate_session(
+                self.source.lifetime,
+                SessionState::rehydrate(
+                    self.session.created_at,
+                    self.session.updated_at,
+                    auth.auth_generation(),
+                ),
+                auth.auth_generation(),
+                now,
+            )
+            .is_err()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        verify_repository_host_attachment(
+            &self.source.owner,
+            &self.source.issuer,
+            &self.source.original,
+            auth,
+            deadline,
+        )
+    }
+}
+
+#[derive(Clone)]
 struct ServerRememberPreferenceTailFactory {
     probe: Weak<ServerSessionProbeState>,
     owner: RequestBindingOwnerObservation,
@@ -1245,6 +1389,26 @@ impl ServerSessionCurrentGuard {
 }
 
 impl PostgresSessionAuthResolver {
+    /// Install one actual same-Pool inventory before serving any request.
+    pub fn install_custom_model_catalog_inventory(
+        &self,
+        repository: &Arc<PostgresCustomModelCatalogInventory>,
+    ) -> Result<(), HostRequestBindingError> {
+        let owner = &self.binding_owner;
+        let probe = &owner.probe;
+        if !owner.issuer.observation().is_current()
+            || probe.custom_model_catalog_inventory.get().is_some()
+            || !repository.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        repository.enroll_host_issuer(&owner.issuer)?;
+        probe
+            .custom_model_catalog_inventory
+            .set(Arc::downgrade(repository))
+            .map_err(|_| HostRequestBindingError::Unavailable)
+    }
+
     /// 构造。session hash key 为空会使所有 token 共享无密钥摘要，直接拒绝。
     pub fn new(
         pool: openbot_infra::db::pool::DatabasePool,
@@ -1268,6 +1432,7 @@ impl PostgresSessionAuthResolver {
             tenant: tenant.clone(),
             capability_facts: std::sync::OnceLock::new(),
             remember_preferences: std::sync::OnceLock::new(),
+            custom_model_catalog_inventory: std::sync::OnceLock::new(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             artifact_read_authority: std::sync::OnceLock::new(),
         });
@@ -1612,8 +1777,14 @@ struct SingleUserProbeState {
     principal: openbot_infra::auth::single_user::VerifiedSingleUserPrincipal,
     capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
     remember_preferences: std::sync::OnceLock<Weak<PostgresRememberPreferenceRepository>>,
+    custom_model_catalog_inventory: std::sync::OnceLock<SingleUserCustomCatalogEnrollment>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     artifact_read_authority: std::sync::OnceLock<Weak<PostgresArtifactReadAuthority>>,
+}
+
+struct SingleUserCustomCatalogEnrollment {
+    repository: Weak<PostgresCustomModelCatalogInventory>,
+    pool: openbot_infra::db::pool::DatabasePool,
 }
 
 struct SingleUserCurrentGuard {
@@ -1688,6 +1859,60 @@ impl HostRequestBindingGuard for SingleUserCurrentGuard {
         })
     }
 
+    fn borrow_custom_model_catalog_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn CustomModelCatalogHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<CustomModelCatalogHostObservation<'a>, HostRequestBindingError> {
+        if !self.owner.is_current() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        if probe.principal.auth_context() != auth {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let enrollment = probe
+            .custom_model_catalog_inventory
+            .get()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let repository = enrollment
+            .repository
+            .upgrade()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !probe.principal.matches_pool_scope(&enrollment.pool)
+            || !repository.matches_pool_scope(&enrollment.pool, auth.deployment(), auth.tenant())
+            || !repository.matches_host_target(target, auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if binding.kind() != HostRequestBindingKind::ServerSingleUserOwner
+            || !self.issuer.owns_identity(binding.identity())
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let factory = SingleUserCustomModelCatalogTail {
+            probe: self.probe.clone(),
+            owner: self.owner.clone(),
+            issuer: self.issuer.clone(),
+            original: auth.clone(),
+            observed_wall: OffsetDateTime::now_utc(),
+            observed_monotonic: std::time::Instant::now(),
+        };
+        factory.verify_current(auth, deadline)?;
+        CustomModelCatalogHostObservation::from_trusted_host(
+            HostRequestBindingKind::ServerSingleUserOwner,
+            binding.identity().clone(),
+            None,
+            Box::new(factory),
+        )
+    }
     fn borrow_remember_preference_host_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -1822,6 +2047,69 @@ impl ArtifactReadTailWitness for SingleUserArtifactReadTail {
 }
 
 #[derive(Clone)]
+struct SingleUserCustomModelCatalogTail {
+    probe: Weak<SingleUserProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+    observed_wall: OffsetDateTime,
+    observed_monotonic: std::time::Instant,
+}
+impl CustomModelCatalogHostTailFactory for SingleUserCustomModelCatalogTail {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<CustomModelCatalogSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn CustomModelCatalogHostTailWitness>, HostRequestBindingError> {
+        if session.is_some() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        self.verify_current(auth, deadline)?;
+        Ok(Box::new(self.clone()))
+    }
+}
+impl CustomModelCatalogHostTailWitness for SingleUserCustomModelCatalogTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        verify_repository_host_attachment(
+            &self.owner,
+            &self.issuer,
+            &self.original,
+            auth,
+            deadline,
+        )?;
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        if probe.principal.auth_context() != auth
+            || OffsetDateTime::now_utc() < self.observed_wall
+            || std::time::Instant::now() < self.observed_monotonic
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let enrollment = probe
+            .custom_model_catalog_inventory
+            .get()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let repository = enrollment
+            .repository
+            .upgrade()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !probe.principal.matches_pool_scope(&enrollment.pool)
+            || !repository.matches_pool_scope(&enrollment.pool, auth.deployment(), auth.tenant())
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        verify_repository_host_attachment(&self.owner, &self.issuer, &self.original, auth, deadline)
+    }
+}
+
+#[derive(Clone)]
 struct SingleUserRememberPreferenceTail {
     probe: Weak<SingleUserProbeState>,
     owner: RequestBindingOwnerObservation,
@@ -1877,6 +2165,35 @@ impl core::fmt::Debug for SingleUserAuthResolver {
 }
 
 impl SingleUserAuthResolver {
+    /// Only the verified principal and the original actual Pool can enroll this inventory.
+    pub fn install_custom_model_catalog_inventory(
+        &self,
+        repository: &Arc<PostgresCustomModelCatalogInventory>,
+        actual_pool: &openbot_infra::db::pool::DatabasePool,
+    ) -> Result<(), HostRequestBindingError> {
+        let owner = self
+            .binding_owner
+            .as_ref()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let original = owner.probe.principal.auth_context();
+        if !owner.issuer.observation().is_current()
+            || owner.probe.custom_model_catalog_inventory.get().is_some()
+            || !owner.probe.principal.matches_pool_scope(actual_pool)
+            || !repository.matches_pool_scope(actual_pool, original.deployment(), original.tenant())
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        repository.enroll_host_issuer(&owner.issuer)?;
+        owner
+            .probe
+            .custom_model_catalog_inventory
+            .set(SingleUserCustomCatalogEnrollment {
+                repository: Arc::downgrade(repository),
+                pool: actual_pool.clone(),
+            })
+            .map_err(|_| HostRequestBindingError::Unavailable)
+    }
+
     /// Construct only from the fixed Server principal verified against its business database.
     #[must_use]
     pub fn from_verified_principal(
@@ -1897,6 +2214,7 @@ impl SingleUserAuthResolver {
                     principal,
                     capability_facts: std::sync::OnceLock::new(),
                     remember_preferences: std::sync::OnceLock::new(),
+                    custom_model_catalog_inventory: std::sync::OnceLock::new(),
                     #[cfg(any(target_os = "macos", target_os = "linux"))]
                     artifact_read_authority: std::sync::OnceLock::new(),
                 }),

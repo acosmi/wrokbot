@@ -301,10 +301,7 @@ impl GuardedClient {
     }
 
     /// 原 reader 的固定只读 RC 事务，复用同一 owner、绝对期限及真实 ACK 路径。
-    #[cfg(all(
-        feature = "server-runtime",
-        any(target_os = "macos", target_os = "linux")
-    ))]
+    #[cfg(feature = "server-runtime")]
     pub(crate) async fn begin_read_committed_read_only(
         &mut self,
     ) -> Result<GuardedTransaction<'_>, TransactionOwnerError> {

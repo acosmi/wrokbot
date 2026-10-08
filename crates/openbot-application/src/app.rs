@@ -119,6 +119,9 @@ pub struct OpenBotApplication<
     mcp_connections: std::sync::Arc<dyn McpConnectionAdministration>,
     credentials: std::sync::Arc<dyn crate::credential_admin::CredentialAdministration>,
     model_connections: std::sync::Arc<dyn crate::model_connections::ModelConnectionAdministration>,
+    custom_model_catalog: std::sync::Arc<dyn crate::CustomModelCatalogInventory>,
+    custom_model_catalog_deliveries:
+        std::sync::Arc<crate::custom_model_catalog_delivery::CustomModelCatalogRegistry>,
     tool_approvals: std::sync::Arc<dyn ToolApprovalAdministration>,
     ui_preferences: std::sync::Arc<dyn UiPreferenceAdministration>,
     run_cost_budgets: std::sync::Arc<dyn RunCostBudgetAdministration>,
@@ -168,6 +171,10 @@ impl<R>
             model_connections: std::sync::Arc::new(
                 crate::model_connections::NoModelConnectionAdministration,
             ),
+            custom_model_catalog: std::sync::Arc::new(crate::NoCustomModelCatalogInventory),
+            custom_model_catalog_deliveries: std::sync::Arc::new(
+                crate::custom_model_catalog_delivery::CustomModelCatalogRegistry::new(),
+            ),
             tool_approvals: std::sync::Arc::new(NoToolApprovalAdministration),
             ui_preferences: std::sync::Arc::new(NoUiPreferenceAdministration),
             run_cost_budgets: std::sync::Arc::new(NoRunCostBudgetAdministration),
@@ -206,6 +213,8 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             mcp_connections: self.mcp_connections,
             credentials: self.credentials,
             model_connections: self.model_connections,
+            custom_model_catalog: self.custom_model_catalog,
+            custom_model_catalog_deliveries: self.custom_model_catalog_deliveries,
             tool_approvals: self.tool_approvals,
             ui_preferences: self.ui_preferences,
             run_cost_budgets: self.run_cost_budgets,
@@ -240,6 +249,8 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             mcp_connections: self.mcp_connections,
             credentials: self.credentials,
             model_connections: self.model_connections,
+            custom_model_catalog: self.custom_model_catalog,
+            custom_model_catalog_deliveries: self.custom_model_catalog_deliveries,
             tool_approvals: self.tool_approvals,
             ui_preferences: self.ui_preferences,
             run_cost_budgets: self.run_cost_budgets,
@@ -274,6 +285,8 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             mcp_connections: self.mcp_connections,
             credentials: self.credentials,
             model_connections: self.model_connections,
+            custom_model_catalog: self.custom_model_catalog,
+            custom_model_catalog_deliveries: self.custom_model_catalog_deliveries,
             tool_approvals: self.tool_approvals,
             ui_preferences: self.ui_preferences,
             run_cost_budgets: self.run_cost_budgets,
@@ -312,6 +325,8 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             mcp_connections: self.mcp_connections,
             credentials: self.credentials,
             model_connections: self.model_connections,
+            custom_model_catalog: self.custom_model_catalog,
+            custom_model_catalog_deliveries: self.custom_model_catalog_deliveries,
             tool_approvals: self.tool_approvals,
             ui_preferences: self.ui_preferences,
             run_cost_budgets: self.run_cost_budgets,
@@ -346,6 +361,8 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             mcp_connections: self.mcp_connections,
             credentials: self.credentials,
             model_connections: self.model_connections,
+            custom_model_catalog: self.custom_model_catalog,
+            custom_model_catalog_deliveries: self.custom_model_catalog_deliveries,
             tool_approvals: self.tool_approvals,
             ui_preferences: self.ui_preferences,
             run_cost_budgets: self.run_cost_budgets,
@@ -380,6 +397,8 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             mcp_connections: self.mcp_connections,
             credentials: self.credentials,
             model_connections: self.model_connections,
+            custom_model_catalog: self.custom_model_catalog,
+            custom_model_catalog_deliveries: self.custom_model_catalog_deliveries,
             tool_approvals: self.tool_approvals,
             ui_preferences: self.ui_preferences,
             run_cost_budgets: self.run_cost_budgets,
@@ -417,6 +436,8 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
             mcp_connections: self.mcp_connections,
             credentials: self.credentials,
             model_connections: self.model_connections,
+            custom_model_catalog: self.custom_model_catalog,
+            custom_model_catalog_deliveries: self.custom_model_catalog_deliveries,
             tool_approvals: self.tool_approvals,
             ui_preferences: self.ui_preferences,
             run_cost_budgets: self.run_cost_budgets,
@@ -536,6 +557,16 @@ impl<R, P, A, K, C, J, T, M, B> OpenBotApplication<R, P, A, K, C, J, T, M, B> {
         self
     }
 
+    /// 注入原宿主已安装的 custom 库存；同 Application 保留同一个配额/交付 registry。
+    #[must_use]
+    pub fn with_custom_model_catalog_inventory(
+        mut self,
+        inventory: std::sync::Arc<dyn crate::CustomModelCatalogInventory>,
+    ) -> Self {
+        self.custom_model_catalog = inventory;
+        self
+    }
+
     /// Attach authenticated run-cost budget storage shared by Server and Desktop.
     #[must_use]
     pub fn with_run_cost_budgets(
@@ -615,6 +646,11 @@ where
         command: AppCommand,
     ) -> Result<AppReply, AppError> {
         match command {
+            AppCommand::ListCustomModelCatalog(input) => Ok(AppReply::CustomModelCatalog(
+                self.custom_model_catalog_deliveries
+                    .list_current(self.custom_model_catalog.as_ref(), auth, input)
+                    .await?,
+            )),
             AppCommand::OpenArtifactRead(input) => Ok(AppReply::ArtifactReadOpened(
                 self.public_artifact_reads
                     .open(self.artifacts.as_ref(), auth, input)
@@ -1168,6 +1204,14 @@ where
     M: MemoryAdministration + 'static,
     B: AgentCallbackTokenAdministration + 'static,
 {
+    fn take_custom_model_catalog_delivery(
+        &self,
+        auth: AuthContext,
+        reply: AppReply,
+    ) -> Result<crate::PublicCustomModelCatalogDelivery, AppError> {
+        self.custom_model_catalog_deliveries.take(auth, reply)
+    }
+
     fn take_artifact_read_delivery(
         &self,
         auth: AuthContext,

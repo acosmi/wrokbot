@@ -236,6 +236,131 @@ impl<'a> RememberPreferenceHostObservation<'a> {
         self.factory.witness(auth, session, deadline)
     }
 }
+/// 专用目录仓储的原调用目标；实现端口本身不授予权限。
+pub trait CustomModelCatalogHostTarget: Send + Sync {
+    /// 比较具体已安装仓储的原 authority Arc。
+    fn matches_authority(&self, authority: &Arc<()>) -> bool;
+    /// 同时比较原六项 Auth facts 与原 attached binding。
+    fn matches_auth(&self, auth: &AuthContext) -> bool;
+}
+
+/// 原仓储最后一条实际 SQL 解码的 session 时钟事实；不是 session proof。
+#[derive(Clone, Copy)]
+pub struct CustomModelCatalogSessionFacts {
+    /// 原不可变创建时间。
+    pub created_at: OffsetDateTime,
+    /// 不执行 touch 的当前活动时间。
+    pub updated_at: OffsetDateTime,
+    /// 当前行的过期时间。
+    pub expires_at: OffsetDateTime,
+    /// 解码时的墙上时钟。
+    pub observed_wall: OffsetDateTime,
+    /// 同次解码的单调时钟。
+    pub observed_monotonic: std::time::Instant,
+}
+
+/// 同步核验原宿主的目录尾见证；不持 lease 或本次 PG checkout。
+pub trait CustomModelCatalogHostTailWitness: Send + Sync {
+    /// 在原绝对 deadline 下观察原 issuer/owner/window/epoch/clock。
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError>;
+}
+
+/// 原真实 producer 借出自己的寿命策略，任意实现不构成 enrollment。
+pub trait CustomModelCatalogHostTailFactory: Send + Sync {
+    /// 以同原 SQL 实际解码的 session 事实构造静态同步尾见证。
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<CustomModelCatalogSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn CustomModelCatalogHostTailWitness>, HostRequestBindingError>;
+}
+
+/// 借用真实原 Host 输入；不复制 bearer token、不延长原 owner lease。
+pub struct CustomModelCatalogHostObservation<'a> {
+    kind: HostRequestBindingKind,
+    identity: HostRequestBindingIdentity,
+    epoch: Option<BorrowedServerSessionEpoch<'a>>,
+    factory: Box<dyn CustomModelCatalogHostTailFactory + 'a>,
+}
+
+/// 消费原 observation 时保留原借用寿命的四项，不是新权限。
+pub type CustomModelCatalogHostObservationParts<'a> = (
+    HostRequestBindingKind,
+    HostRequestBindingIdentity,
+    Option<BorrowedServerSessionEpoch<'a>>,
+    Box<dyn CustomModelCatalogHostTailFactory + 'a>,
+);
+
+impl<'a> CustomModelCatalogHostObservation<'a> {
+    /// 受信构造函数；仓储仍须独立核具体 Pool/scope/issuer enrollment。
+    #[doc(hidden)]
+    pub fn from_trusted_host(
+        kind: HostRequestBindingKind,
+        identity: HostRequestBindingIdentity,
+        epoch: Option<BorrowedServerSessionEpoch<'a>>,
+        factory: Box<dyn CustomModelCatalogHostTailFactory + 'a>,
+    ) -> Result<Self, HostRequestBindingError> {
+        if kind != identity.kind {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        match (&identity.epoch, &epoch) {
+            (Epoch::Session(original), Some(borrowed)) if original == borrowed.epoch => {}
+            (Epoch::SingleUser | Epoch::Window { .. }, None) => {}
+            _ => return Err(HostRequestBindingError::NotCurrent),
+        }
+        Ok(Self {
+            kind,
+            identity,
+            epoch,
+            factory,
+        })
+    }
+
+    /// 原封闭 Host 种类；不是当前授权结论。
+    #[must_use]
+    pub const fn kind(&self) -> HostRequestBindingKind {
+        self.kind
+    }
+
+    /// 原 attachment，用于真实仓储与 issuer 比较。
+    #[must_use]
+    pub const fn identity(&self) -> &HostRequestBindingIdentity {
+        &self.identity
+    }
+
+    /// 重借原 issuer-owned epoch，不暴露 token 或制造新 epoch。
+    #[must_use]
+    pub fn server_session_epoch(&self) -> Option<BorrowedServerSessionEpoch<'_>> {
+        self.epoch
+            .as_ref()
+            .map(|epoch| BorrowedServerSessionEpoch { epoch: epoch.epoch })
+    }
+
+    /// 只有原 session Host 接收 Some；非 session Host 必须为 None。
+    pub fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<CustomModelCatalogSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn CustomModelCatalogHostTailWitness>, HostRequestBindingError> {
+        if (self.kind == HostRequestBindingKind::ServerSession) != session.is_some() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        self.factory.witness(auth, session, deadline)
+    }
+
+    /// 消费式拆分原四项，borrowed epoch 仍受原 `'a` 约束。
+    #[must_use]
+    pub fn into_parts(self) -> CustomModelCatalogHostObservationParts<'a> {
+        (self.kind, self.identity, self.epoch, self.factory)
+    }
+}
+
 /// 已登记成果联合校验的等价非 Serde Future 返回类型；不改变输出或生命周期。
 pub type ArtifactReadCurrentCheck<'a> = Pin<
     Box<
@@ -291,6 +416,16 @@ pub type ArtifactSaveReceiptCurrentCheck<'a> =
 
 /// 受信 Rust host 的当前验证 port；任意 Rust 实现不自动取得可信身份。
 pub trait HostRequestBindingGuard: Send + Sync {
+    /// 原目录仓储的专用只读 Host 借用；未装配默认不可用。
+    fn borrow_custom_model_catalog_host_before<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+        _target: &'a dyn CustomModelCatalogHostTarget,
+        _deadline: std::time::Instant,
+    ) -> Result<CustomModelCatalogHostObservation<'a>, HostRequestBindingError> {
+        Err(HostRequestBindingError::Unavailable)
+    }
+
     /// Borrow the original enrolled cleanup host without I/O; unsupported hosts refuse.
     fn borrow_artifact_cleanup_host_before<'a>(
         &'a self,
@@ -573,6 +708,25 @@ pub struct VerifiedHostRequestBinding {
     guard: Arc<dyn HostRequestBindingGuard>,
 }
 impl VerifiedHostRequestBinding {
+    /// 原 attachment 前后核同，仅借用专用真实 producer，不执行数据库 I/O。
+    pub fn borrow_custom_model_catalog_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn CustomModelCatalogHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<CustomModelCatalogHostObservation<'a>, HostRequestBindingError> {
+        self.check_repository_host_attachment(auth, deadline)?;
+        let observation = self
+            .guard
+            .borrow_custom_model_catalog_host_before(auth, target, deadline)?;
+        self.check_repository_host_attachment(auth, deadline)?;
+        if observation.kind() != self.kind() || !self.identity.same_binding(observation.identity())
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        Ok(observation)
+    }
+
     /// Pure attachment bookends around the dedicated real cleanup producer delegation.
     pub fn borrow_artifact_cleanup_host_before<'a>(
         &'a self,

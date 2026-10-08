@@ -392,6 +392,7 @@ impl AgentToolGateway {
                 | AppReply::McpConnections(_)
                 | AppReply::Credentials(_)
                 | AppReply::ModelConnections(_)
+                | AppReply::CustomModelCatalog(_)
                 | AppReply::ModelConnection(_)
                 | AppReply::ModelConnectionDeleted(_)
                 | AppReply::CredentialWritten(_)
