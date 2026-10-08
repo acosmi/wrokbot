@@ -484,14 +484,59 @@ struct WireFacts {
     hold_schema: AtomicBool,
     schema_seen: Notify,
     schema_release: Notify,
+    schema_gate_entered: AtomicUsize,
+    schema_gate_released: AtomicUsize,
+    schema_gate_forward_attempts: AtomicUsize,
     terminated: AtomicBool,
+}
+
+impl WireFacts {
+    fn record_finish(
+        &self,
+        mode: &'static str,
+        terminal: &'static str,
+        accepted: bool,
+        original: Option<pool::ConnectionSnapshot>,
+    ) {
+        eprintln!(
+            "CUSTOM_CATALOG_RELAY_FINISH mode={mode} terminal={terminal} accepted={accepted} original={original:?} schema_gate_entered={} schema_gate_released={} schema_gate_forward_attempts={} begins={} read_only_rc={} final_statements={} commits={} rollback_cz={} terminated={}",
+            self.schema_gate_entered.load(Ordering::SeqCst),
+            self.schema_gate_released.load(Ordering::SeqCst),
+            self.schema_gate_forward_attempts.load(Ordering::SeqCst),
+            self.begins.load(Ordering::SeqCst),
+            self.read_only_rc.load(Ordering::SeqCst),
+            self.final_statements.load(Ordering::SeqCst),
+            self.commits.load(Ordering::SeqCst),
+            self.rollback_cz.load(Ordering::SeqCst),
+            self.terminated.load(Ordering::SeqCst),
+        );
+    }
+}
+
+enum RelayEnd {
+    Complete,
+    DownstreamFrameReadClosed(std::io::Error),
+}
+
+fn relay_io_error(
+    direction: &'static str,
+    operation: &'static str,
+    error: &std::io::Error,
+) -> String {
+    let diagnostic = format!(
+        "CUSTOM_CATALOG_RELAY_IO direction={direction} operation={operation} kind={:?} raw_os_error={:?} message={error}",
+        error.kind(),
+        error.raw_os_error(),
+    );
+    eprintln!("{diagnostic}");
+    diagnostic
 }
 
 struct WireRelay {
     port: u16,
     facts: Arc<WireFacts>,
     stop: Option<oneshot::Sender<()>>,
-    task: Option<JoinHandle<TestResult>>,
+    task: Option<JoinHandle<TestResult<RelayEnd>>>,
 }
 
 impl Drop for WireRelay {
@@ -548,8 +593,11 @@ impl WireRelay {
         )?;
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
-            .map_err(|e| e.to_string())?;
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+            .map_err(|error| relay_io_error("listener", "bind", &error))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| relay_io_error("listener", "local_addr", &error))?
+            .port();
         let upstream_host = config.host.clone();
         let upstream_port = config.port;
         let facts = Arc::new(WireFacts::default());
@@ -557,35 +605,70 @@ impl WireRelay {
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             let operation = async move {
-                let (mut downstream, _) = listener.accept().await.map_err(|e| e.to_string())?;
+                let (mut downstream, _) = listener
+                    .accept()
+                    .await
+                    .map_err(|error| relay_io_error("downstream", "accept", &error))?;
                 let mut upstream = TcpStream::connect((upstream_host.as_str(), upstream_port))
                     .await
-                    .map_err(|e| e.to_string())?;
-                let length = downstream.read_u32().await.map_err(|e| e.to_string())?;
-                require((8..=64 * 1024).contains(&length), "relay invalid startup")?;
-                let mut startup = vec![0; (length - 4) as usize];
-                downstream
-                    .read_exact(&mut startup)
+                    .map_err(|error| relay_io_error("upstream", "connect", &error))?;
+                let length = downstream
+                    .read_u32()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|error| relay_io_error("downstream", "startup_length_read", &error))?;
+                require((8..=64 * 1024).contains(&length), "relay invalid startup").map_err(
+                    |message| {
+                        relay_io_error(
+                            "downstream",
+                            "startup_protocol",
+                            &std::io::Error::other(message),
+                        )
+                    },
+                )?;
+                let mut startup = vec![0; (length - 4) as usize];
+                downstream.read_exact(&mut startup).await.map_err(|error| {
+                    relay_io_error("downstream", "startup_payload_read", &error)
+                })?;
                 require(
                     startup.get(..4) == Some(&196_608_u32.to_be_bytes()),
                     "relay requires original NoTls v3 startup",
-                )?;
+                )
+                .map_err(|message| {
+                    relay_io_error(
+                        "downstream",
+                        "startup_protocol",
+                        &std::io::Error::other(message),
+                    )
+                })?;
                 upstream
                     .write_u32(length)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|error| relay_io_error("upstream", "startup_length_write", &error))?;
                 upstream
                     .write_all(&startup)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|error| relay_io_error("upstream", "startup_payload_write", &error))?;
                 let (mut down_read, mut down_write) = downstream.into_split();
                 let (mut up_read, mut up_write) = upstream.into_split();
                 let frontend_facts = observed.clone();
                 let frontend = async move {
                     loop {
-                        let (tag, payload) = frame(&mut down_read).await?;
+                        let (tag, payload) = match frame(&mut down_read).await {
+                            Ok(value) => value,
+                            Err(error) => {
+                                let diagnostic = relay_io_error("downstream", "frame_read", &error);
+                                if matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::UnexpectedEof
+                                        | std::io::ErrorKind::ConnectionReset
+                                ) {
+                                    return Ok::<RelayEnd, String>(
+                                        RelayEnd::DownstreamFrameReadClosed(error),
+                                    );
+                                }
+                                return Err(diagnostic);
+                            }
+                        };
                         if let Some(sql) = sql_in_frame(tag, &payload) {
                             let upper = sql.trim().to_ascii_uppercase();
                             if upper.starts_with("START TRANSACTION") || upper.starts_with("BEGIN")
@@ -607,27 +690,46 @@ impl WireRelay {
                                 frontend_facts.schema_parse.store(true, Ordering::SeqCst);
                             }
                         }
-                        send_frame(&mut up_write, tag, &payload).await?;
+                        send_frame(&mut up_write, tag, &payload)
+                            .await
+                            .map_err(|error| relay_io_error("upstream", "frame_write", &error))?;
                         if tag == b'X' {
                             frontend_facts.terminated.store(true, Ordering::SeqCst);
-                            return Ok::<(), std::io::Error>(());
+                            return Ok(RelayEnd::Complete);
                         }
                     }
                 };
                 let backend_facts = observed.clone();
                 let backend = async move {
                     loop {
-                        let (tag, payload) = frame(&mut up_read).await?;
+                        let (tag, payload) = match frame(&mut up_read).await {
+                            Ok(value) => value,
+                            Err(error) => {
+                                let diagnostic = relay_io_error("upstream", "frame_read", &error);
+                                if error.kind() == std::io::ErrorKind::UnexpectedEof
+                                    && backend_facts.terminated.load(Ordering::SeqCst)
+                                {
+                                    return Ok::<RelayEnd, String>(RelayEnd::Complete);
+                                }
+                                return Err(diagnostic);
+                            }
+                        };
                         if tag == b'K' {
                             if payload.len() != 8 {
-                                return Err(std::io::Error::other("relay bad BackendKeyData"));
+                                return Err(relay_io_error(
+                                    "upstream",
+                                    "backend_key_protocol",
+                                    &std::io::Error::other("relay bad BackendKeyData"),
+                                ));
                             }
                             backend_facts.pid.store(
-                                i32::from_be_bytes(
-                                    payload[..4]
-                                        .try_into()
-                                        .map_err(|_| std::io::Error::other("relay bad PID"))?,
-                                ),
+                                i32::from_be_bytes(payload[..4].try_into().map_err(|_| {
+                                    relay_io_error(
+                                        "upstream",
+                                        "backend_pid_protocol",
+                                        &std::io::Error::other("relay bad PID"),
+                                    )
+                                })?),
                                 Ordering::SeqCst,
                             );
                         }
@@ -637,40 +739,68 @@ impl WireRelay {
                             && backend_facts.schema_parse.swap(false, Ordering::SeqCst)
                             && backend_facts.hold_schema.swap(false, Ordering::SeqCst);
                         if rollback || schema {
-                            let (ready_tag, ready) = frame(&mut up_read).await?;
+                            let (ready_tag, ready) = match frame(&mut up_read).await {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    let diagnostic =
+                                        relay_io_error("upstream", "ready_frame_read", &error);
+                                    if error.kind() == std::io::ErrorKind::UnexpectedEof
+                                        && backend_facts.terminated.load(Ordering::SeqCst)
+                                    {
+                                        return Ok(RelayEnd::Complete);
+                                    }
+                                    return Err(diagnostic);
+                                }
+                            };
                             if ready_tag != b'Z'
                                 || ready.as_slice() != if rollback { b"I" } else { b"T" }
                             {
-                                return Err(std::io::Error::other("relay unexpected real C/Z"));
+                                return Err(relay_io_error(
+                                    "upstream",
+                                    "command_ready_protocol",
+                                    &std::io::Error::other("relay unexpected real C/Z"),
+                                ));
                             }
                             if rollback {
                                 backend_facts.rollback_cz.fetch_add(1, Ordering::SeqCst);
                                 if backend_facts.drop_rollback.swap(false, Ordering::SeqCst) {
-                                    return Ok(());
+                                    return Ok(RelayEnd::Complete);
                                 }
                             } else {
+                                backend_facts
+                                    .schema_gate_entered
+                                    .fetch_add(1, Ordering::SeqCst);
                                 backend_facts.schema_seen.notify_one();
                                 backend_facts.schema_release.notified().await;
+                                backend_facts
+                                    .schema_gate_released
+                                    .fetch_add(1, Ordering::SeqCst);
+                                backend_facts
+                                    .schema_gate_forward_attempts
+                                    .fetch_add(1, Ordering::SeqCst);
                             }
-                            send_frame(&mut down_write, tag, &payload).await?;
-                            send_frame(&mut down_write, ready_tag, &ready).await?;
+                            send_frame(&mut down_write, tag, &payload)
+                                .await
+                                .map_err(|error| {
+                                    relay_io_error("downstream", "command_frame_write", &error)
+                                })?;
+                            send_frame(&mut down_write, ready_tag, &ready)
+                                .await
+                                .map_err(|error| {
+                                    relay_io_error("downstream", "ready_frame_write", &error)
+                                })?;
                         } else {
-                            send_frame(&mut down_write, tag, &payload).await?;
+                            send_frame(&mut down_write, tag, &payload)
+                                .await
+                                .map_err(|error| {
+                                    relay_io_error("downstream", "frame_write", &error)
+                                })?;
                         }
                     }
                 };
                 tokio::select! {
-                    value = frontend => match value {
-                        Ok(()) => Ok(()),
-                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(()),
-                        Err(e) => Err(e.to_string()),
-                    },
-                    value = backend => match value {
-                        Ok(()) => Ok(()),
-                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof
-                            && observed.terminated.load(Ordering::SeqCst) => Ok(()),
-                        Err(e) => Err(e.to_string()),
-                    }
+                    value = frontend => value,
+                    value = backend => value,
                 }
             };
             tokio::select! {
@@ -696,7 +826,85 @@ impl WireRelay {
         config
     }
 
-    async fn finish(mut self) -> TestResult {
+    async fn finish(self) -> TestResult {
+        let facts = self.facts.clone();
+        let joined = self.join_original().await;
+        let terminal = match &joined {
+            Ok(RelayEnd::Complete) => "complete",
+            Ok(RelayEnd::DownstreamFrameReadClosed(_)) => "downstream_frame_read_closed",
+            Err(_) => "failure",
+        };
+        let result = match joined {
+            Ok(RelayEnd::Complete) => Ok(()),
+            Ok(RelayEnd::DownstreamFrameReadClosed(error)) => {
+                if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "ordinary relay refused downstream frame-read kind={:?} raw_os_error={:?} message={error}",
+                        error.kind(),
+                        error.raw_os_error(),
+                    ))
+                }
+            }
+            Err(error) => Err(error),
+        };
+        facts.record_finish("ordinary", terminal, result.is_ok(), None);
+        result
+    }
+
+    async fn finish_after_original_retirement(
+        self,
+        original: &pool::ConnectionObservation,
+    ) -> TestResult {
+        let facts = self.facts.clone();
+        let joined = self.join_original().await;
+        let snapshot = original.snapshot();
+        let terminal = match &joined {
+            Ok(RelayEnd::Complete) => "complete",
+            Ok(RelayEnd::DownstreamFrameReadClosed(_)) => "downstream_frame_read_closed",
+            Err(_) => "failure",
+        };
+        let result = match joined {
+            Ok(RelayEnd::DownstreamFrameReadClosed(error)) => (|| {
+                require(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                    ),
+                    "cancelled relay ended with a different downstream read error",
+                )?;
+                require(
+                    snapshot.connection_started
+                        && snapshot.retirement_requested
+                        && snapshot.connection_destroyed
+                        && snapshot.destruction
+                            == Some(pool::ConnectionDestruction::ConnectionDestroyed),
+                    "cancelled relay lacks the original connection destruction",
+                )?;
+                require(
+                    facts.schema_gate_entered.load(Ordering::SeqCst) == 1
+                        && facts.schema_gate_released.load(Ordering::SeqCst) == 0
+                        && facts.schema_gate_forward_attempts.load(Ordering::SeqCst) == 0
+                        && facts.begins.load(Ordering::SeqCst) == 1
+                        && facts.read_only_rc.load(Ordering::SeqCst) == 1
+                        && facts.final_statements.load(Ordering::SeqCst) == 0
+                        && facts.commits.load(Ordering::SeqCst) == 0
+                        && facts.rollback_cz.load(Ordering::SeqCst) == 0
+                        && !facts.terminated.load(Ordering::SeqCst),
+                    "cancelled relay gate/statement history does not match the original cancellation",
+                )
+            })(),
+            Ok(RelayEnd::Complete) => {
+                Err("cancelled relay lacks its downstream frame-read terminal".to_owned())
+            }
+            Err(error) => Err(error),
+        };
+        facts.record_finish("cancel_only", terminal, result.is_ok(), Some(snapshot));
+        result
+    }
+
+    async fn join_original(mut self) -> TestResult<RelayEnd> {
         let mut task = self.task.take().ok_or("original relay task missing")?;
         match tokio::time::timeout(CLOSE_BUDGET, &mut task).await {
             Ok(joined) => {
@@ -1176,13 +1384,13 @@ async fn inventory_original_deadline_includes_checkout_and_cancellation_is_unpro
         let family = HostFamily::install(&inventory)?;
         let (auth, _host) = session(&c, &inventory, &family, "deadline", "alice", false, Arc::default()).await?;
         let held = wire.get().await.map_err(|e| e.to_string())?;
+        let original = held.observation();
         let start = Instant::now();
         require(matches!(inventory.list_current(&auth, &request(None), start + Duration::from_millis(40)).await,
             Err(Error::Unavailable)), "checkout wait reset the original deadline")?;
         require(start.elapsed() < Duration::from_secs(1) && relay.facts.begins.load(Ordering::SeqCst) == 0,
             "expired checkout started a new transaction or waited a fresh budget")?;
         drop(held);
-        let original = wire.connection_observations().into_iter().next().ok_or("original observation absent")?;
         relay.facts.hold_schema.store(true, Ordering::SeqCst);
         {
             let input = request(None);
@@ -1194,16 +1402,33 @@ async fn inventory_original_deadline_includes_checkout_and_cancellation_is_unpro
                     value.map_err(|_| "schema cancellation gate did not actually arrive")?;
                 },
             }
+            let before = original.snapshot();
+            eprintln!("CUSTOM_CATALOG_RELAY_CANCEL_ORIGINAL stage=before_future_drop original={before:?}");
+            require(before.connection_started && !before.retirement_requested
+                && !before.connection_destroyed && before.destruction.is_none(),
+                "original connection was already retired/destroyed before cancellation")?;
+            require(relay.facts.schema_gate_entered.load(Ordering::SeqCst) == 1
+                && relay.facts.schema_gate_released.load(Ordering::SeqCst) == 0
+                && relay.facts.schema_gate_forward_attempts.load(Ordering::SeqCst) == 0,
+                "original cancellation did not reach an unreleased real schema gate")?;
             // Actual future Drop, not timeout relabelled as a rollback acknowledgement.
         }
-        // Keep the real held schema C/Z behind the gate after cancellation;
-        // the original downstream closure ends the relay frontend naturally.
+        // Keep real schema C/Z withheld. Confirm the downstream read tail only
+        // after original destruction and natural relay join, before closing the Pool.
         require(original.snapshot().retirement_requested, "cancelled original transaction stayed reusable")?;
         require(original.wait_for_destruction_before(Instant::now() + CLOSE_BUDGET).await.map_err(|e| e.to_string())?
             == pool::ConnectionDestruction::ConnectionDestroyed, "cancelled original connection did not retire")?;
+        let after = original.snapshot();
+        eprintln!("CUSTOM_CATALOG_RELAY_CANCEL_ORIGINAL stage=after_original_destruction_before_pool_close original={after:?}");
+        require(after.retirement_requested && after.connection_destroyed
+            && after.destruction == Some(pool::ConnectionDestruction::ConnectionDestroyed),
+            "original destruction was not recorded before Pool close")?;
         // The destructor may enqueue a rollback, but no returned inventory success or
         // acknowledged owner state is inferred from any eventual relay C/Z count.
-        drop(auth); drop(inventory); close_pool(wire).await?; relay.finish().await?;
+        drop(auth); drop(inventory);
+        let relay_result = relay.finish_after_original_retirement(&original).await;
+        let pool_result = close_pool(wire).await;
+        relay_result.and(pool_result)?;
         Ok(())
     }).await;
 }
