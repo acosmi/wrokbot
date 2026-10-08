@@ -55,6 +55,7 @@ pub mod auth_sso;
 pub mod channels;
 pub mod components;
 pub mod computers;
+pub mod custom_model_catalog;
 pub mod health;
 pub mod memories;
 pub mod metrics;
@@ -305,6 +306,19 @@ impl ServerState {
         };
         security.authorize_origin(origin)?;
         self.inner.auth.touch(resolved).await
+    }
+
+    /// Catalogue observation preserves the original session idle/touch facts.
+    pub(crate) fn authorize_custom_model_catalog_origin(
+        &self,
+        origin: Option<&str>,
+    ) -> Result<(), openbot_contracts::error::AppError> {
+        let Some(security) = &self.inner.sensitive_write else {
+            return Err(openbot_contracts::error::AppError::DependencyUnavailable {
+                dependency: "sensitive_write_security",
+            });
+        };
+        security.authorize_origin(origin)
     }
 
     /// Fresh same-origin write whose per-resource authorization remains in application/infra.
@@ -797,6 +811,10 @@ pub fn router(state: ServerState) -> Router {
         )
         .route("/api/me", get(admin::me))
         .route(
+            custom_model_catalog::PATH,
+            get(custom_model_catalog::list).head(custom_model_catalog::reject_head),
+        )
+        .route(
             runtime_capabilities::RUNTIME_CAPABILITIES_PATH,
             get(runtime_capabilities::get).head(runtime_capabilities::reject_head),
         )
@@ -887,6 +905,9 @@ pub fn router(state: ServerState) -> Router {
         .layer(axum::middleware::from_fn(artifact_reads::response_policy))
         .layer(axum::middleware::from_fn(
             artifact_save_receipts::response_policy,
+        ))
+        .layer(axum::middleware::from_fn(
+            custom_model_catalog::response_policy,
         ))
         .layer(axum::middleware::from_fn(record_http_metrics))
         .layer(axum::middleware::from_fn(trace_request))

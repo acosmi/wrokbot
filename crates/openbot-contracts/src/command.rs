@@ -44,6 +44,7 @@ use crate::components::{
     ComponentHumanDecisionRequest, ComponentHumanDecisionResolved, ComponentRecords,
     GrantedCompiledComponents, PendingComponentHumanDecisions,
 };
+use crate::custom_model_catalog::{CustomModelCatalogPageRequest, CustomModelCatalogReply};
 use crate::ids::{ActorId, BotId, ChannelId, RunId, ThreadId};
 use crate::mcp::{
     GrantedPlugins, McpAdminPage, McpConnectionDisconnected, McpConnections,
@@ -147,6 +148,8 @@ pub enum AppCommand {
 
     /// List the current actor's custom-model connections.
     ListModelConnections(crate::model_connections::ModelConnectionPageRequest),
+    /// 当前 actor 的版本化 custom 库存；原响应交付见证不可由 DTO 重建。
+    ListCustomModelCatalog(CustomModelCatalogPageRequest),
     /// Read one current actor-owned connection.
     GetModelConnection {
         /// Opaque actor-owned connection identifier.
@@ -751,6 +754,8 @@ pub enum AppReply {
     Credentials(crate::credential_admin::CredentialPage),
     /// Current owner's bounded model inventory.
     ModelConnections(crate::model_connections::ModelConnectionPage),
+    /// 当前 owner 的原请求目录应答，必须经过 Application 一次交付消费。
+    CustomModelCatalog(CustomModelCatalogReply),
     /// Safe connection read/write receipt.
     ModelConnection(crate::model_connections::ModelConnection),
     /// Confirmed local connection retirement.

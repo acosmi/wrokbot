@@ -83,6 +83,7 @@ pub mod budget;
 pub mod command;
 pub mod components;
 pub mod credential_admin;
+pub mod custom_model_catalog;
 pub mod desktop;
 pub mod engine;
 pub mod error;
@@ -110,6 +111,11 @@ pub mod versioned_model_selection;
 
 // R425 非 Serde 受信宿主接口。
 pub use artifact_read::PendingArtifactReadBuffer;
+pub use custom_model_catalog::{
+    CustomModelCatalogEntry, CustomModelCatalogPage, CustomModelCatalogPageRequest,
+    CustomModelCatalogReply, CustomModelCatalogReplyAllocation, CustomModelCatalogReplyCancel,
+    CustomModelCatalogReplyRegistration,
+};
 pub use request_binding::{
     ArtifactReadCurrentError, ArtifactReadCurrentTarget, ArtifactReadRecordFacts,
     ArtifactReadTailWitness,
@@ -119,4 +125,9 @@ pub use request_binding::{
     HostRequestBindingIdentity, HostRequestBindingKind, MAX_SERVER_SESSION_EPOCH_LOOKUP_BYTES,
     RequestBindingAttachError, RequestBindingIssuer, RequestBindingOwnerLease,
     RequestBindingOwnerObservation, ServerSessionBindingIdentity, VerifiedHostRequestBinding,
+};
+pub use request_binding::{
+    CustomModelCatalogHostObservation, CustomModelCatalogHostObservationParts,
+    CustomModelCatalogHostTailFactory, CustomModelCatalogHostTailWitness,
+    CustomModelCatalogHostTarget, CustomModelCatalogSessionFacts,
 };

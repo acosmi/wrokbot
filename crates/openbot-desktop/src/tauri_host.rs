@@ -6,6 +6,7 @@ mod artifact_reads;
 mod artifact_save_receipt;
 mod artifacts;
 mod assets;
+mod custom_model_catalog;
 #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
 mod local_confirmation;
 mod memories;
@@ -65,7 +66,9 @@ use openbot_contracts::remote_interrupt::{RemoteInterruptAnswer, RemoteInterrupt
 use openbot_contracts::request_binding::{
     ArtifactCleanupHostObservation, ArtifactCleanupHostTailFactory, ArtifactCleanupHostTailWitness,
     ArtifactCleanupHostTarget, ArtifactCleanupSessionFacts, ArtifactReadCurrentError,
-    ArtifactReadCurrentTarget, ArtifactReadTailWitness, HostRequestBindingError,
+    ArtifactReadCurrentTarget, ArtifactReadTailWitness, CustomModelCatalogHostObservation,
+    CustomModelCatalogHostTailFactory, CustomModelCatalogHostTailWitness,
+    CustomModelCatalogHostTarget, CustomModelCatalogSessionFacts, HostRequestBindingError,
     HostRequestBindingGuard, HostRequestBindingIdentity, HostRequestBindingKind,
     RememberPreferenceHostObservation, RememberPreferenceHostTailFactory,
     RememberPreferenceHostTailWitness, RememberPreferenceHostTarget,
@@ -513,6 +516,53 @@ impl HostRequestBindingGuard for WindowRequestBindingGuard {
         )
     }
 
+    fn borrow_custom_model_catalog_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn CustomModelCatalogHostTarget,
+        deadline: Instant,
+    ) -> Result<CustomModelCatalogHostObservation<'a>, HostRequestBindingError> {
+        self.check_window(auth)?;
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if !self
+            .issuer
+            .matches_desktop_window_epoch(binding.identity(), &self.label, self.id)
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        // The enrolled real Local source lends its repository attachment. Its async
+        // current guard and an upstream Remote binding do not authorize this operation.
+        let source = self
+            .source
+            .as_ref()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let inner = source.borrow_custom_model_catalog_host_before(auth, target, deadline)?;
+        self.check_window(auth)?;
+        if inner.kind() != HostRequestBindingKind::DesktopWindow
+            || !inner.identity().same_binding(binding.identity())
+            || inner.server_session_epoch().is_some()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        CustomModelCatalogHostObservation::from_trusted_host(
+            HostRequestBindingKind::DesktopWindow,
+            binding.identity().clone(),
+            None,
+            Box::new(WindowCustomModelCatalogTailFactory {
+                window: self.repository_tail_source(),
+                original: binding.identity().clone(),
+                inner,
+            }),
+        )
+    }
     fn borrow_remember_preference_host_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -831,6 +881,73 @@ struct WindowArtifactCleanupTail {
     inner: Box<dyn ArtifactCleanupHostTailWitness>,
 }
 impl ArtifactCleanupHostTailWitness for WindowArtifactCleanupTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        self.window.check_window(auth)?;
+        if !auth.request_binding().is_some_and(|binding| {
+            self.original.same_binding(binding.identity())
+                && self.window.issuer.matches_desktop_window_epoch(
+                    binding.identity(),
+                    &self.window.label,
+                    self.window.id,
+                )
+        }) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        self.inner.verify_current(auth, deadline)?;
+        self.window.check_window(auth)?;
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        Ok(())
+    }
+}
+
+struct WindowCustomModelCatalogTailFactory<'a> {
+    window: WindowRequestBindingGuard,
+    original: HostRequestBindingIdentity,
+    inner: CustomModelCatalogHostObservation<'a>,
+}
+impl CustomModelCatalogHostTailFactory for WindowCustomModelCatalogTailFactory<'_> {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<CustomModelCatalogSessionFacts>,
+        deadline: Instant,
+    ) -> Result<Box<dyn CustomModelCatalogHostTailWitness>, HostRequestBindingError> {
+        self.window.check_window(auth)?;
+        if !auth
+            .request_binding()
+            .is_some_and(|binding| self.original.same_binding(binding.identity()))
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if deadline <= Instant::now() {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let inner = self.inner.witness(auth, session, deadline)?;
+        let witness = WindowCustomModelCatalogTail {
+            window: self.window.repository_tail_source(),
+            original: self.original.clone(),
+            inner,
+        };
+        witness.verify_current(auth, deadline)?;
+        Ok(Box::new(witness))
+    }
+}
+
+struct WindowCustomModelCatalogTail {
+    window: WindowRequestBindingGuard,
+    original: HostRequestBindingIdentity,
+    inner: Box<dyn CustomModelCatalogHostTailWitness>,
+}
+impl CustomModelCatalogHostTailWitness for WindowCustomModelCatalogTail {
     fn verify_current(
         &self,
         auth: &AuthContext,
@@ -1182,6 +1299,27 @@ impl DesktopTauriProtocol {
         Ok(self.with_current_identity_source(source))
     }
 
+    #[cfg(all(feature = "desktop-local-runtime", target_os = "macos"))]
+    pub(crate) fn with_custom_model_catalog_identity_source(
+        self,
+        source: Arc<crate::local_confirmation_authority::PostgresLocalConfirmationAuthority>,
+    ) -> Result<Self, HostRequestBindingError> {
+        let expected: Arc<dyn HostRequestBindingGuard> = source.clone();
+        if self
+            .current_identity_source
+            .as_ref()
+            .is_some_and(|current| !Arc::ptr_eq(current, &expected))
+            || self
+                .local_capability_authority
+                .as_ref()
+                .is_some_and(|current| !Arc::ptr_eq(current, &source))
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        source.enroll_custom_model_catalog_window_issuer(&self.request_binding_issuer)?;
+        Ok(self.with_current_identity_source(source))
+    }
+
     /// Bind one host-created webview label to verified local session authority.
     pub fn bind_window(
         &self,
@@ -1409,6 +1547,16 @@ impl DesktopTauriProtocol {
 
     /// Handle one custom-protocol request. Public for deterministic host-adapter tests.
     pub async fn handle(&self, label: &str, mut request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+        if custom_model_catalog::owns_path(request.uri().path()) {
+            let prepared = self
+                .prepare_custom_model_catalog_response(label, request)
+                .await;
+            return self.finish_prepared_custom_model_catalog_response(
+                label,
+                prepared,
+                |response| response,
+            );
+        }
         if artifact_reads::owns_path(request.uri().path()) {
             let prepared = self
                 .prepare_public_artifact_read_response(label, request)
@@ -3543,7 +3691,18 @@ pub(crate) fn register_tauri_protocol_slot(
             };
             let label = context.webview_label().to_owned();
             tauri::async_runtime::spawn(async move {
-                if artifact_reads::owns_path(request.uri().path()) {
+                if custom_model_catalog::owns_path(request.uri().path()) {
+                    let prepared = protocol
+                        .prepare_custom_model_catalog_response(&label, request)
+                        .await;
+                    protocol.finish_prepared_custom_model_catalog_response(
+                        &label,
+                        prepared,
+                        |response| {
+                            responder.respond(response);
+                        },
+                    );
+                } else if artifact_reads::owns_path(request.uri().path()) {
                     let prepared = protocol
                         .prepare_public_artifact_read_response(&label, request)
                         .await;

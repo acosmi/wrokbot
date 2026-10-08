@@ -39,7 +39,7 @@ enum SandboxRenderState {
 pub fn SandboxedComponentFrame(
     component: PublishedSandboxedComponent,
     arguments: Value,
-    #[prop(into)] title: String,
+    #[prop(into)] title: TextProp,
 ) -> AnyView {
     let i18n = use_i18n();
     if !current_host_allows_web_sandbox() {
