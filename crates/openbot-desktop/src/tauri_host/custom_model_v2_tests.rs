@@ -639,16 +639,30 @@ async fn genuine_prepared_local_raw_v2_snapshot_and_repeated_sampling() {
         checked!(!denied.status().is_success()); checked_eq!(tls.captures()?.len(),2);
         let client=prepared.pool().get().await.map_err(|e|e.to_string())?;
         client.execute("UPDATE public.model_connections SET enabled=true WHERE id=$1",&[&snapshot.connection_id]).await.map_err(|e|e.to_string())?;
+        // The original sync trigger advances catalog revision on disable and reenable.
+        // Fresh fault requests use the actual current revision; historical replay keeps raw.
+        let current=client.query_one("SELECT c.revision AS connection_revision,cc.catalog_revision FROM public.model_connections c JOIN public.custom_model_catalogs cc ON cc.connection_id=c.id AND cc.deployment_id=c.deployment_id AND cc.tenant_id=c.tenant_id AND cc.owner_user_id=c.owner_user_id WHERE c.id=$1 AND c.deployment_id=$2 AND c.tenant_id=$3 AND c.owner_user_id=$4 AND c.enabled AND c.deleted_at IS NULL AND cc.enabled AND NOT cc.retired",&[&snapshot.connection_id,&auth.deployment().as_str(),&auth.tenant().as_str(),&auth.actor().as_str()]).await.map_err(|e|e.to_string())?;
+        let connection_revision:i64=current.try_get("connection_revision").map_err(|e|e.to_string())?;
+        let catalog_revision:i64=current.try_get("catalog_revision").map_err(|e|e.to_string())?;
+        checked_eq!(connection_revision,model.revision);
+        checked!(catalog_revision>0 && catalog_revision>selection["expectedCatalogRevision"].as_i64().ok_or("original catalog revision missing")?);
+        let mut current_selection=selection.clone();
+        current_selection["expectedCatalogRevision"]=json!(catalog_revision);
+        eprintln!("CUSTOM_V2_LOCAL_CURRENT_SELECTOR connection_revision={connection_revision} catalog_revision={catalog_revision}");
         // Controlled fault injection into this synthetic database only. Production must reject
         // the altered digest; the fixture restores its saved original after recording refusal.
         checked_eq!(client.execute("UPDATE openbot_internal.desktop_vault_canaries SET encrypted_canary=$1 WHERE deployment_id=$2 AND tenant_id=$3",&[&format!("{encrypted_canary}x"),&auth.deployment().as_str(),&auth.tenant().as_str()]).await.map_err(|e|e.to_string())?,1); drop(client);
-        let canary_denied=protocol.handle("main",v2_request(Method::POST,&path,v2_body("owned-local-canary-drift-run",&selection))).await;
+        let canary_denied=protocol.handle("main",v2_request(Method::POST,&path,v2_body("owned-local-canary-drift-run",&current_selection))).await;
         let client=prepared.pool().get().await.map_err(|e|e.to_string())?;
         client.execute("UPDATE openbot_internal.desktop_vault_canaries SET encrypted_canary=$1 WHERE deployment_id=$2 AND tenant_id=$3",&[&encrypted_canary,&auth.deployment().as_str(),&auth.tenant().as_str()]).await.map_err(|e|e.to_string())?;
-        checked!(!canary_denied.status().is_success()); checked_eq!(tls.captures()?.len(),2);
+        eprintln!("CUSTOM_V2_LOCAL_CANARY_RESPONSE status={}",canary_denied.status());
+        checked_eq!(canary_denied.status(),StatusCode::SERVICE_UNAVAILABLE);
+        let canary_error:Value=serde_json::from_slice(canary_denied.body()).map_err(|e|e.to_string())?;
+        checked_eq!(canary_error["code"],"dependency_unavailable");
+        checked_eq!(tls.captures()?.len(),2);
         checked_eq!(client.query_one("SELECT count(*) FROM public.runs WHERE run_id IN ('owned-local-malformed-run','owned-local-large-run','owned-local-disabled-run','owned-local-canary-drift-run')",&[]).await.map_err(|e|e.to_string())?.get::<_,i64>(0),0);
         drop(client);
-        local_m04_original_lineage_faults(prepared,&tls,&path,&raw,&selection).await?;
+        local_m04_original_lineage_faults(prepared,&tls,&path,&raw,&current_selection).await?;
         Ok(())
     }.await;
     // Ordinary assertions return Result so both actual owners close even on a failure.
@@ -990,11 +1004,14 @@ async fn local_m04_original_lineage_faults(
         if let Some(denied) = denied {
             // Do not count an expired/unbound window's401, parser400 or unrelated
             // permission refusal as a model/dataset fault producer.
+            eprintln!("CUSTOM_V2_LOCAL_M04_RESPONSE branch={fault:?} status={}",denied.status());
             require(
                 denied.status() == StatusCode::SERVICE_UNAVAILABLE,
                 "owned Local lineage fault did not reach the production dependency rejection",
             )?;
             let error: Value = serde_json::from_slice(denied.body()).map_err(|e| e.to_string())?;
+            let observed_code=if error["code"]=="dependency_unavailable" {"dependency_unavailable"} else {"unexpected_public_code"};
+            eprintln!("CUSTOM_V2_LOCAL_M04_ERROR branch={fault:?} code={observed_code}");
             require(
                 error["code"] == "dependency_unavailable",
                 "owned Local lineage fault returned an unrelated error",

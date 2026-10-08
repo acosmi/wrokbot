@@ -417,7 +417,8 @@ async fn actual_server_session_raw_v2_snapshot_context_and_repeated_sampling() {
             let (consumer,actual_agent) = fixture.agent(&tls)?;
             agent = actual_agent;
             checked_eq!(consumer.dispatch(claim.lease().clone()).await,RunDispatchDecision::Accepted);
-            fixture.assembly().run_runtime.acknowledge_dispatch(&claim).await.map_err(|e|e.to_string())?;
+            let active_lease = fixture.assembly().run_runtime.acknowledge_dispatch(&claim).await.map_err(|e|e.to_string())?;
+            consumer.activate(&active_lease).await.map_err(|code|format!("actual dispatch activation failed: {code:?}"))?;
             tls.release()?;
             wait_completed(&fixture.pool,"owned-server-v2-run").await?;
             let captures = tls.captures()?;
