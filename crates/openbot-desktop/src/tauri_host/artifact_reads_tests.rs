@@ -752,7 +752,7 @@ impl LocalFixture {
             if arm_setup_diagnostic {
                 eprintln!("ARTIFACT_LOCAL_ARM_SETUP_DIAGNOSTIC phase=BeginThreadRun actual_thread_run_started_reply=true original_passive=true nongrant=true agent_terminal_observation_claimed=false original_result_unchanged=true");
             }
-            if p1_setup_diagnostic {
+            if p1_setup_diagnostic || arm_setup_diagnostic {
                 require(
                     begin_receipt.thread_id == begin.thread_id
                         && begin_receipt.run_id == begin.run_id,
@@ -803,7 +803,7 @@ impl LocalFixture {
                     // Dropping this real stream requests its existing producer to stop;
                     // neither Drop nor durable terminal observation is a resource closure ACK.
                     drop(events);
-                    eprintln!("ARTIFACT_LOCAL_P1_RUN_PRECONDITION original_run_terminal={terminal:?} original_foreground_inactive=true one_absolute_fixture_budget=true original_save_not_started=true stream_drop_is_not_join_ack=true");
+                    eprintln!("ARTIFACT_LOCAL_P1_RUN_PRECONDITION fixture_label={label} original_run_terminal={terminal:?} original_foreground_inactive=true one_absolute_fixture_budget=true original_save_not_started=true stream_drop_is_not_join_ack=true");
                     Ok::<_, String>(())
                 }).await.map_err(|_| "P1 original run fixture deadline expired".to_owned())??;
             }
