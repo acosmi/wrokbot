@@ -107,7 +107,7 @@ impl ServerFixture {
             deny: vec![],
             allow: vec![r#"tool.name == "remember" && bot.id == "owned-v2-bot" && actor.id == "owned-v2-server-owner""#.to_owned()],
         }, Some(ACTOR)).await.map_err(|e|e.to_string())?;
-        checked_eq!(policy_store.load().await.map_err(|e|e.to_string())?,openbot_infra::policy::PolicyOrigin::Database);
+        require(policy_store.load().await.map_err(|e|e.to_string())? == openbot_infra::policy::PolicyOrigin::Database, "custom-V2 policy must load from database")?;
         let assembly = assemble_postgres_application(PostgresApplicationAssemblyInput {
             pool: pool.clone(),
             listener_database: config.into(),
