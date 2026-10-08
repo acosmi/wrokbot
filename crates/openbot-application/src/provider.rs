@@ -431,7 +431,7 @@ impl core::fmt::Debug for RunModelV2Snapshot {
 #[derive(Clone, PartialEq, Eq)]
 enum RunModelBindingDetails {
     V1,
-    V2(RunModelV2Snapshot),
+    V2(Box<RunModelV2Snapshot>),
 }
 
 #[cfg(test)]
@@ -628,7 +628,7 @@ impl RunModelBinding {
             secret_id,
             configuration,
         )?;
-        binding.details = RunModelBindingDetails::V2(snapshot);
+        binding.details = RunModelBindingDetails::V2(Box::new(snapshot));
         Ok(binding)
     }
 
@@ -636,7 +636,7 @@ impl RunModelBinding {
     pub fn v2_snapshot(&self) -> Option<&RunModelV2Snapshot> {
         match &self.details {
             RunModelBindingDetails::V1 => None,
-            RunModelBindingDetails::V2(snapshot) => Some(snapshot),
+            RunModelBindingDetails::V2(snapshot) => Some(snapshot.as_ref()),
         }
     }
 

@@ -2093,7 +2093,7 @@ async fn apply_begin_v2(
         request,
         &model_snapshot,
         &dataset,
-        fencing.get(),
+        fencing,
     )
     .await?;
     let user_message_seq = state
