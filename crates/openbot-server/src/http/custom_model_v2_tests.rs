@@ -43,6 +43,7 @@ const COOKIE: &str = "owned-v2-server-cookie-00000000001";
 const NEW_COOKIE: &str = "owned-v2-server-cookie-00000000002";
 const ORIGIN: &str = "https://owned-v2-server.example.test";
 const API_KEY: &str = "OWNED_V2_HOST_SYNTHETIC_KEY";
+const PROXY_SECRET: &str = "2525252525252525252525252525252525252525252525252525252525252525";
 
 struct ClosedRemoteProbe;
 #[async_trait]
@@ -101,7 +102,12 @@ impl ServerFixture {
                 .map_err(|e| e.to_string())?,
         );
         let policy_store = PolicyStore::postgres(pool.clone(), None);
-        policy_store.load().await.map_err(|e| e.to_string())?;
+        policy_store.set(openbot_domain::policy::ActionPolicy {
+            mode: openbot_domain::policy::PolicyMode::Enforce,
+            deny: vec![],
+            allow: vec![r#"tool.name == "remember" && bot.id == "owned-v2-bot" && actor.id == "owned-v2-server-owner""#.to_owned()],
+        }, Some(ACTOR)).await.map_err(|e|e.to_string())?;
+        checked_eq!(policy_store.load().await.map_err(|e|e.to_string())?,openbot_infra::policy::PolicyOrigin::Database);
         let assembly = assemble_postgres_application(PostgresApplicationAssemblyInput {
             pool: pool.clone(),
             listener_database: config.into(),
@@ -164,10 +170,17 @@ impl ServerFixture {
     }
 
     fn router(&self) -> axum::Router {
+        let environment = openbot_server::config::EnvMap::from([
+            ("OPENBOT_PUBLIC_URL".to_owned(), ORIGIN.to_owned()),
+            ("OPENBOT_TLS_PROXY_SECRET".to_owned(), PROXY_SECRET.to_owned()),
+        ]);
+        let configuration = openbot_server::config::ServerConfig::from_env_map(&environment)
+            .expect("owned HTTPS proxy configuration");
         ServerBuilder::new(
             Arc::clone(&self.assembly().application),
             self.resolver.clone(),
         )
+        .with_transport_policy(configuration.transport_policy(false))
         .with_sensitive_write_security(SensitiveWriteSecurity::new(
             default_session_lifetime(),
             TrustedOrigins::from_configured([ORIGIN]).unwrap(),
@@ -310,7 +323,12 @@ async fn post(
         .method("POST")
         .uri(path)
         .header("origin", ORIGIN)
-        .header("content-type", "application/json");
+        .header("content-type", "application/json")
+        .header("x-wrok-bot-proxy-secret", PROXY_SECRET)
+        .header("x-forwarded-proto", "https")
+        .header("x-forwarded-host", "owned-v2-server.example.test")
+        // Controlled oneshot peer input, not evidence of an incoming TCP socket.
+        .extension(axum::extract::ConnectInfo(SocketAddr::from(([127,0,0,1],41025))));
     if let Some(cookie) = cookie {
         request = request.header("cookie", format!("openbot_session={cookie}"));
     }
@@ -332,6 +350,7 @@ async fn post(
         .await
         .map_err(|e| e.to_string())?;
     let value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    eprintln!("CUSTOM_V2_SERVER_ROUTE_STATUS status={status}");
     Ok((status, value))
 }
 

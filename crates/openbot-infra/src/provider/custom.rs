@@ -1166,6 +1166,8 @@ mod v2_vault_tests {
         executed: AtomicUsize,
         held: AtomicUsize,
         released: AtomicUsize,
+        bind_held: AtomicUsize,
+        bind_released: AtomicUsize,
         listener_closed: AtomicBool,
     }
     struct LastReadyHeld {
@@ -1173,6 +1175,7 @@ mod v2_vault_tests {
         query_bytes: usize,
         parameter_count: u16,
         held_bytes: usize,
+        bind_held_bytes: usize,
     }
     #[derive(Default)]
     struct LastReadySelection {
@@ -1186,12 +1189,16 @@ mod v2_vault_tests {
         counts: LastReadyRelayCounts,
         held: Mutex<Option<oneshot::Sender<LastReadyHeld>>>,
         release: Mutex<Option<oneshot::Receiver<()>>>,
+        bind_release: Mutex<Option<oneshot::Receiver<()>>>,
+        bind_forwarded: Mutex<Option<oneshot::Sender<()>>>,
     }
     struct LastAuthorityReadyRelay {
         config: pool::DatabaseConfig,
         control: Arc<LastReadyRelayControl>,
         held: Option<oneshot::Receiver<LastReadyHeld>>,
         release: Option<oneshot::Sender<()>>,
+        bind_release: Option<oneshot::Sender<()>>,
+        bind_forwarded: Option<oneshot::Receiver<()>>,
         stop: Option<oneshot::Sender<()>>,
         task: Option<JoinHandle<()>>,
     }
@@ -1205,11 +1212,15 @@ mod v2_vault_tests {
             assert!(![39025, 39027].contains(&routed.port));
             let (held_tx, held_rx) = oneshot::channel();
             let (release_tx, release_rx) = oneshot::channel();
+            let (bind_release_tx, bind_release_rx) = oneshot::channel();
+            let (bind_forwarded_tx, bind_forwarded_rx) = oneshot::channel();
             let control = Arc::new(LastReadyRelayControl {
                 armed: AtomicBool::new(false),
                 counts: LastReadyRelayCounts::default(),
                 held: Mutex::new(Some(held_tx)),
                 release: Mutex::new(Some(release_rx)),
+                bind_release: Mutex::new(Some(bind_release_rx)),
+                bind_forwarded: Mutex::new(Some(bind_forwarded_tx)),
             });
             let c = control.clone();
             let (stop, mut stopped) = oneshot::channel();
@@ -1254,6 +1265,8 @@ mod v2_vault_tests {
                 control,
                 held: Some(held_rx),
                 release: Some(release_tx),
+                bind_release: Some(bind_release_tx),
+                bind_forwarded: Some(bind_forwarded_rx),
                 stop: Some(stop),
                 task: Some(task),
             }
@@ -1276,6 +1289,8 @@ mod v2_vault_tests {
                 "one original backend and one original-manager successor"
             );
             assert_eq!(self.control.counts.joined.load(Ordering::SeqCst), accepted);
+            assert_eq!(self.control.counts.bind_held.load(Ordering::SeqCst), 1);
+            assert_eq!(self.control.counts.bind_released.load(Ordering::SeqCst), 1);
             eprintln!(
                 "CUSTOM_V2_D1_RELAY_CLOSED accepted={accepted} joined={accepted} listener_closed=true all_children_normal=true"
             );
@@ -1470,6 +1485,7 @@ mod v2_vault_tests {
             Ok::<(), &'static str>(())
         };
         let server = async move {
+            let mut bind_complete = None;
             while let Some((tag, bytes)) = last_ready_frame(&mut up_read).await? {
                 if tag == b'K' {
                     if bytes.len() != 8 {
@@ -1479,6 +1495,14 @@ mod v2_vault_tests {
                         i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
                         Ordering::SeqCst,
                     );
+                }
+                if tag == b'2' && selection.lock().map_err(|_| "D1 selection lock")?.portal.is_some() {
+                    // Keep the selected original BindComplete separate from the original 32B result.
+                    if !bytes.is_empty() || bind_complete.replace(last_ready_wire_frame(tag, &bytes)).is_some() {
+                        return Err("D1 single original empty BindComplete required");
+                    }
+                    control.counts.bind_held.fetch_add(1, Ordering::SeqCst);
+                    continue;
                 }
                 if executed.load(Ordering::SeqCst) && tag == b'D' {
                     // Original binary bool true; these are actual server bytes,
@@ -1501,6 +1525,8 @@ mod v2_vault_tests {
                         return Err("D1 original in-transaction ReadyForQuery required");
                     }
                     held.extend_from_slice(&last_ready_wire_frame(ready, &ready_bytes));
+                    let bind = bind_complete.take().ok_or("D1 actual BindComplete missing")?;
+                    if bind.len() != 5 { return Err("D1 original BindComplete must be 5B"); }
                     let metadata = {
                         let selected = selection.lock().map_err(|_| "D1 selection lock")?;
                         LastReadyHeld {
@@ -1508,6 +1534,7 @@ mod v2_vault_tests {
                             query_bytes: selected.query_bytes,
                             parameter_count: selected.parameter_count,
                             held_bytes: held.len(),
+                            bind_held_bytes: bind.len(),
                         }
                     };
                     if metadata.backend_pid <= 0 {
@@ -1527,12 +1554,25 @@ mod v2_vault_tests {
                             .take()
                             .ok_or("D1 duplicate gate release")?
                     };
+                    let bind_release = control.bind_release.lock().map_err(|_| "D1 bind release lock")?
+                        .take().ok_or("D1 duplicate bind release")?;
+                    let bind_forwarded = control.bind_forwarded.lock().map_err(|_| "D1 bind forward lock")?
+                        .take().ok_or("D1 duplicate bind forward observer")?;
+                    // One unchanged total 8s gate covers BOTH actual releases, starting before metadata.
+                    let gate_deadline = tokio::time::Instant::now() + Duration::from_secs(8);
                     control.counts.held.fetch_add(1, Ordering::SeqCst);
                     held_sender
                         .send(metadata)
                         .map_err(|_| "D1 actual gate observer dropped")?;
-                    tokio::time::timeout(Duration::from_secs(8), release)
-                        .await
+                    tokio::time::timeout_at(gate_deadline, bind_release).await
+                        .map_err(|_| "D1 actual bind release budget exhausted")?
+                        .map_err(|_| "D1 actual bind release dropped")?;
+                    down_write.write_all(&bind).await.map_err(|_| "D1 original BindComplete forward")?;
+                    control.counts.bind_released.fetch_add(1, Ordering::SeqCst);
+                    eprintln!("CUSTOM_V2_D1_TRACE released_original_bind_bytes={}", bind.len());
+                    // This observes the original write only; it is not a SQL/consumer ACK.
+                    bind_forwarded.send(()).map_err(|_| "D1 bind write observer dropped")?;
+                    tokio::time::timeout_at(gate_deadline, release).await
                         .map_err(|_| "D1 actual gate release budget exhausted")?
                         .map_err(|_| "D1 actual gate release dropped")?;
                     down_write
@@ -1553,9 +1593,6 @@ mod v2_vault_tests {
                     .write_all(&last_ready_wire_frame(tag, &bytes))
                     .await
                     .map_err(|_| "D1 server frame forward")?;
-                if tag == b'2' && selection.lock().map_err(|_| "D1 selection lock")?.portal.is_some() {
-                    eprintln!("CUSTOM_V2_D1_TRACE forwarded_bind_complete_bytes={}", bytes.len() + 5);
-                }
             }
             down_write
                 .shutdown()
@@ -1621,14 +1658,30 @@ mod v2_vault_tests {
             assert_eq!(adapter.v2_expired_last_authority_ready.load(Ordering::SeqCst),0);
             assert_eq!(adapter.v2_vault_opens.load(Ordering::SeqCst),0);assert_eq!(dns.0.load(Ordering::SeqCst),0);
             assert!(!original.snapshot().retirement_requested && !original.snapshot().connection_destroyed);
-            // One normal unexpired poll consumes any already queued BindComplete
-            // and registers the response waker. Pending is not SQLReady evidence.
+            assert_eq!(metadata.bind_held_bytes,5);
+            // A fresh Waker excludes delayed notifications from preceding requests.
+            // The same pinned future still waits for the selected original BindComplete.
+            let(changed,mut changes)=watch::channel(0usize);
+            let wake=Arc::new(LastReadyWake{generation:AtomicUsize::new(0),changed});
+            let waker=Waker::from(wake.clone());let mut cx=Context::from_waker(&waker);
+            let original_preexpiry_deadline=tokio::time::Instant::from_std(first_poll_before+adapter.connect_budget.timeout());
             assert!(first_poll_before.elapsed()<adapter.connect_budget.timeout());
-            let preexpiry_generation=wake.generation.load(Ordering::SeqCst);
             original_polls+=1;
-            assert!(matches!(Future::poll(started.as_mut(),&mut cx),Poll::Pending),"held original last row must keep the unexpired business future Pending");
+            assert!(matches!(Future::poll(started.as_mut(),&mut cx),Poll::Pending),"unforwarded original BindComplete must keep the same future Pending");
             assert!(first_poll_before.elapsed()<adapter.connect_budget.timeout());
-            eprintln!("CUSTOM_V2_D1_TRACE preexpiry_polls={original_polls} wake_before={preexpiry_generation} wake_after={} elapsed_us={} held_bytes={}",wake.generation.load(Ordering::SeqCst),first_poll_before.elapsed().as_micros(),metadata.held_bytes);
+            assert_eq!(wake.generation.load(Ordering::SeqCst),0,"fresh receiver waker must not have fired before original BindComplete release");
+            relay.bind_release.take().unwrap().send(()).expect("original actual BindComplete gate live");
+            let wait_deadline=original_preexpiry_deadline.min(tokio::time::Instant::now()+Duration::from_secs(2));
+            tokio::time::timeout_at(wait_deadline,relay.bind_forwarded.take().unwrap()).await.unwrap().unwrap();
+            tokio::time::timeout_at(wait_deadline,changes.changed()).await.unwrap().unwrap();
+            assert!(first_poll_before.elapsed()<adapter.connect_budget.timeout());
+            assert!(wake.generation.load(Ordering::SeqCst)>0);
+            original_polls+=1;
+            assert!(matches!(Future::poll(started.as_mut(),&mut cx),Poll::Pending),"consumed original BindComplete must reach the held RowStream Pending");
+            assert!(first_poll_before.elapsed()<adapter.connect_budget.timeout());
+            assert_eq!(adapter.v2_expired_last_authority_ready.load(Ordering::SeqCst),0);
+            assert_eq!(adapter.v2_vault_opens.load(Ordering::SeqCst),0);assert_eq!(dns.0.load(Ordering::SeqCst),0);
+            eprintln!("CUSTOM_V2_D1_TRACE bind_consumed_unexpired_polls={original_polls} fresh_wake={} elapsed_us={} bind_held_bytes={} result_held_bytes={}",wake.generation.load(Ordering::SeqCst),first_poll_before.elapsed().as_micros(),metadata.bind_held_bytes,metadata.held_bytes);
             let polls_at_hold=original_polls;
             let held_at=std::time::Instant::now();
             // No business poll occurs here. This is a conservative natural wall-time
@@ -1677,7 +1730,7 @@ mod v2_vault_tests {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             }).await.expect("actual original backend ended before Pool.close");drop(successor);
-            for count in [&relay.control.counts.parsed,&relay.control.counts.bound,&relay.control.counts.executed,&relay.control.counts.held,&relay.control.counts.released] {
+            for count in [&relay.control.counts.parsed,&relay.control.counts.bound,&relay.control.counts.executed,&relay.control.counts.held,&relay.control.counts.released,&relay.control.counts.bind_held,&relay.control.counts.bind_released] {
                 assert_eq!(count.load(Ordering::SeqCst),1);
             }
             if let Err(error)=proof {

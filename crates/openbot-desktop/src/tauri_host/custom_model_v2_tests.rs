@@ -571,6 +571,17 @@ async fn genuine_prepared_local_raw_v2_snapshot_and_repeated_sampling() {
     let result:Result<(),String>=async {
         let prepared=fixture.prepared();
         let protocol=prepared.protocol();
+        let policy=openbot_contracts::policy::ActionPolicyDocument {
+            mode:openbot_contracts::policy::ActionPolicyMode::Enforce,
+            deny:vec![],
+            allow:vec![r#"tool.name == "remember" && bot.id == "desktop-assistant" && actor.id == "desktop-local-user""#.to_owned()],
+        };
+        let installed=prepared.application().execute(prepared.auth_context().clone(),
+            openbot_contracts::command::AppCommand::SetActionPolicy{policy:policy.clone()})
+            .await.map_err(|e|e.to_string())?;
+        let openbot_contracts::command::AppReply::ActionPolicy{policy:Some(actual)}=installed
+            else{return Err("actual Local action policy installation reply mismatch".to_owned());};
+        checked_eq!(actual,policy);
         let create=protocol.handle("main",v2_request(Method::POST,"/api/me/model-connections",serde_json::to_vec(&json!({
             "name":"Owned Local V2 model","protocol":"openai_responses","endpoint":tls.endpoint(),"model":"owned-host-model","enabled":true,"apiKey":API_KEY,
         })).map_err(|e|e.to_string())?)).await;
