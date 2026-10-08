@@ -296,31 +296,30 @@ fn ComponentDetail(detail: ComponentDetailData, state: MutationState) -> impl In
         })
         .count();
     let agent_count = agents.get_value().len();
-    let available_summary = if agents_empty {
-        t_string!(i18n, admin.component_available_none).to_owned()
-    } else if available == agent_count {
-        t_string!(i18n, admin.component_available_all, count = available).to_owned()
-    } else if available == 0 {
-        t_string!(i18n, admin.component_available_none).to_owned()
-    } else {
-        t_string!(
-            i18n,
-            admin.component_available_some,
-            count = available,
-            total = agent_count,
-        )
-        .to_owned()
+    let available_summary = move || {
+        if agents_empty {
+            t_string!(i18n, admin.component_available_none).to_owned()
+        } else if available == agent_count {
+            t_string!(i18n, admin.component_available_all, count = available).to_owned()
+        } else if available == 0 {
+            t_string!(i18n, admin.component_available_none).to_owned()
+        } else {
+            t_string!(
+                i18n,
+                admin.component_available_some,
+                count = available,
+                total = agent_count,
+            )
+            .to_owned()
+        }
     };
-    let published_description = component
-        .published_description
-        .clone()
-        .unwrap_or_else(|| t_string!(i18n, admin.component_publication_off).to_owned());
+    let published_description = component.published_description.clone();
 
     view! {
         <PageHeader
             heading_id="admin-component-title"
             title
-            description=published_description
+            description=move || published_description.clone().unwrap_or_else(|| t_string!(i18n, admin.component_publication_off).to_owned())
         />
         <div class="ob-admin-component-detail-preview">
             <ComponentPreview name=preview_name />
