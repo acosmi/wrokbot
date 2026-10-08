@@ -39,8 +39,10 @@ pub fn AgentProfilePanel(
     );
     let action_error = RwSignal::new(false);
     let generation = RwSignal::new(0_u64);
+    let reload_generation = RwSignal::new(0_u64);
 
     Effect::new(move |_| {
+        let _ = reload_generation.get();
         let selected = agent_id.get();
         let Some(request_generation) = advance_generation(generation) else {
             profile.set(None);
@@ -95,7 +97,19 @@ pub fn AgentProfilePanel(
         </Show>
         <Show when=move || load_error.get()>
             <p class="ob-agent-profile-error" role="alert">
-                {move || t!(i18n, agents.detail_load_error)}
+                <span>{move || t!(i18n, agents.detail_load_error)}</span>
+                <Button
+                    variant=ButtonVariant::Ghost
+                    size=ButtonSize::Small
+                    loading=Signal::derive(move || loading.get())
+                    on_activate=move |_| {
+                        if loading.get_untracked() {
+                            return;
+                        }
+                        loading.set(true);
+                        reload_generation.update(|generation| *generation = generation.saturating_add(1));
+                    }
+                >{move || t!(i18n, common.retry)}</Button>
             </p>
         </Show>
         {move || profile.get().map(|current| {
