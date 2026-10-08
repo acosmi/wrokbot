@@ -14,9 +14,12 @@ use time::OffsetDateTime;
 use tokio_postgres::{IsolationLevel, Row};
 
 use crate::db::desktop_local::DesktopLocalDatabase;
-use crate::db::desktop_vault_canary::{
-    VerifiedDesktopArtifactReadProvenance, VerifiedDesktopVaultCanary,
-};
+#[cfg(all(
+    feature = "server-runtime",
+    any(target_os = "macos", target_os = "linux")
+))]
+use crate::db::desktop_vault_canary::VerifiedDesktopArtifactReadProvenance;
+use crate::db::desktop_vault_canary::VerifiedDesktopVaultCanary;
 use crate::db::{native, schema_facts};
 
 /// Ordered, nonsecret PostgreSQL catalog facts for the internal registry and its actual guard.
@@ -104,7 +107,7 @@ SELECT pg_catalog.jsonb_build_object(
 // Current live catalog facts cannot become their own acceptance oracle.
 const REGISTERED_INTERNAL_SCHEMA: &str =
     include_str!("../../../fixtures/db/artifact-dataset-bindings-0041.json");
-const REGISTERED_PUBLIC_SCHEMA: &str = include_str!("../../../fixtures/db/schema-0040.json");
+const REGISTERED_PUBLIC_SCHEMA: &str = include_str!("../../../fixtures/db/schema-0046.json");
 
 const READ_NAMESPACE: &str = r"
 SELECT
@@ -194,6 +197,10 @@ impl core::fmt::Debug for VerifiedArtifactDatasetBinding {
 pub struct ArtifactDatasetRegistry {
     pool: Pool,
     binding: VerifiedArtifactDatasetBinding,
+    #[cfg(all(
+        feature = "server-runtime",
+        any(target_os = "macos", target_os = "linux")
+    ))]
     desktop_read_provenance: Option<VerifiedDesktopArtifactReadProvenance>,
 }
 
@@ -280,6 +287,10 @@ impl ArtifactDatasetRegistry {
         Ok(Self {
             pool,
             binding,
+            #[cfg(all(
+                feature = "server-runtime",
+                any(target_os = "macos", target_os = "linux")
+            ))]
             desktop_read_provenance: None,
         })
     }
@@ -367,6 +378,10 @@ impl ArtifactDatasetRegistry {
         Ok(Self {
             pool,
             binding,
+            #[cfg(all(
+                feature = "server-runtime",
+                any(target_os = "macos", target_os = "linux")
+            ))]
             desktop_read_provenance: Some(proof.artifact_read_provenance()),
         })
     }
@@ -390,6 +405,10 @@ impl ArtifactDatasetRegistry {
     }
 
     /// Genuine Desktop adoption is required; historical initial_origin is insufficient.
+    #[cfg(all(
+        feature = "server-runtime",
+        any(target_os = "macos", target_os = "linux")
+    ))]
     #[must_use]
     pub(crate) fn matches_desktop_read_installation(
         &self,
@@ -403,6 +422,10 @@ impl ArtifactDatasetRegistry {
     }
 
     /// Compare the actual final joint statement with the original cryptographic tuple/digest.
+    #[cfg(all(
+        feature = "server-runtime",
+        any(target_os = "macos", target_os = "linux")
+    ))]
     pub(crate) fn matches_desktop_read_current_row(
         &self,
         row: &Row,

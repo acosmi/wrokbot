@@ -24,6 +24,7 @@ const PUBLIC_0036: &str = include_str!("../../../../fixtures/db/schema-0036.json
 const PUBLIC_0037: &str = include_str!("../../../../fixtures/db/schema-0037.json");
 const PUBLIC_0039: &str = include_str!("../../../../fixtures/db/schema-0039.json");
 const PUBLIC_0040: &str = include_str!("../../../../fixtures/db/schema-0040.json");
+const PUBLIC_0046: &str = include_str!("../../../../fixtures/db/schema-0046.json");
 const PUBLIC_0038: &str = include_str!("../../../../fixtures/db/schema-0038.json");
 
 #[derive(Debug, thiserror::Error)]
@@ -137,6 +138,10 @@ impl VerifiedDesktopRememberPreferenceProvenance {
 
 /// Sealed facts copied only from a cryptographically verified real Desktop database.
 /// This is not a second proof constructor or a live host-owner lease.
+#[cfg(all(
+    feature = "server-runtime",
+    any(target_os = "macos", target_os = "linux")
+))]
 pub(crate) struct VerifiedDesktopArtifactReadProvenance {
     system_identifier: String,
     database_oid: u32,
@@ -148,6 +153,10 @@ pub(crate) struct VerifiedDesktopArtifactReadProvenance {
     encrypted_canary_digest: Sha256Digest,
 }
 
+#[cfg(all(
+    feature = "server-runtime",
+    any(target_os = "macos", target_os = "linux")
+))]
 impl VerifiedDesktopArtifactReadProvenance {
     pub(crate) fn matches_installation(
         &self,
@@ -231,6 +240,10 @@ impl VerifiedDesktopVaultCanary {
             }
         })
     }
+    #[cfg(all(
+        feature = "server-runtime",
+        any(target_os = "macos", target_os = "linux")
+    ))]
     pub(crate) fn artifact_read_provenance(&self) -> VerifiedDesktopArtifactReadProvenance {
         VerifiedDesktopArtifactReadProvenance {
             system_identifier: self.system_identifier.clone(),
@@ -532,6 +545,13 @@ pub async fn verify_pre_upgrade_layout(
                 "desktop_vault_public_relation_unknown",
             ));
         }
+        if ledger.latest_version() >= native::NATIVE_0046_VERSION {
+            super::custom_model_catalog_schema::verify(&client)
+                .await
+                .map_err(|_| {
+                    InfraError::repository_invariant("custom_model_catalog_schema_invalid")
+                })?;
+        }
         Ok(ValidatedDesktopVaultLayout {
             native_version: ledger.latest_version(),
         })
@@ -572,6 +592,7 @@ fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraErr
         native::NATIVE_0044_VERSION => PUBLIC_0040,
         //0045 adds only the internal saved-receipt completion guard.
         native::NATIVE_0045_VERSION => PUBLIC_0040,
+        native::NATIVE_0046_VERSION => PUBLIC_0046,
         _ => {
             return Err(InfraError::repository_invariant(
                 "desktop_vault_native_schema_unregistered",

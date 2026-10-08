@@ -695,6 +695,7 @@ pub const NATIVE_0028_TABLES: &[TableSpec] = &[TableSpec {
     column_specs: remote_agent_interrupts::COLUMN_SPECS,
 }];
 
+pub mod custom_model_catalogs;
 pub mod model_connection_secrets;
 pub mod model_connections;
 pub mod oauth_refresh_operations;
@@ -809,6 +810,13 @@ pub const NATIVE_0040_TABLES: &[TableSpec] = &[TableSpec {
     column_specs: editing_ui_preferences::COLUMN_SPECS,
 }];
 
+/// Native0046 stable custom-model identities and independent definition revisions.
+pub const NATIVE_0046_TABLES: &[TableSpec] = &[TableSpec {
+    name: custom_model_catalogs::TABLE_NAME,
+    columns: custom_model_catalogs::COLUMNS,
+    column_specs: custom_model_catalogs::COLUMN_SPECS,
+}];
+
 /// Complete current public-table registry: fixed upstream 0012 plus every Rust-owned native table.
 /// Historical callers that specifically compare the upstream boundary must continue using
 /// [`ALL_TABLES`] instead.
@@ -839,6 +847,7 @@ pub fn current_table_specs() -> impl Iterator<Item = &'static TableSpec> {
         .chain(NATIVE_0038_TABLES.iter())
         .chain(NATIVE_0039_TABLES.iter())
         .chain(NATIVE_0040_TABLES.iter())
+        .chain(NATIVE_0046_TABLES.iter())
 }
 
 #[cfg(test)]

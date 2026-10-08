@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0045_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0046_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -298,6 +298,13 @@ pub const NATIVE_0045_VERSION: i32 = 45;
 pub const NATIVE_0045_NAME: &str = "native_0045_artifact_cleanup_saved_receipts";
 /// Null-safe original receipt guard; no cleanup producer or receipt backfill.
 pub const NATIVE_0045_SQL: &str = include_str!("../../sql/native_0045.sql");
+
+/// Durable custom-model catalog foundation; no inventory or send authority is exposed here.
+pub const NATIVE_0046_VERSION: i32 = 46;
+/// Stable ledger identity for the additive catalog migration.
+pub const NATIVE_0046_NAME: &str = "native_0046_custom_model_catalogs";
+/// Exact catalog schema, legacy backfill and original-transaction synchronization trigger.
+pub const NATIVE_0046_SQL: &str = include_str!("../../sql/native_0046.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -478,6 +485,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0045_VERSION,
         name: NATIVE_0045_NAME,
         sql: NATIVE_0045_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0046_VERSION,
+        name: NATIVE_0046_NAME,
+        sql: NATIVE_0046_SQL,
     },
 ];
 
@@ -722,6 +734,12 @@ pub fn native_0044_checksum() -> String {
 #[must_use]
 pub fn native_0045_checksum() -> String {
     Sha256Digest::of(NATIVE_0045_SQL.as_bytes()).to_hex()
+}
+
+/// Checksum of the exact additive custom-model catalog migration bytes.
+#[must_use]
+pub fn native_0046_checksum() -> String {
+    Sha256Digest::of(NATIVE_0046_SQL.as_bytes()).to_hex()
 }
 
 /// SHA-256 of the registered sandbox editing migration.
@@ -1086,11 +1104,63 @@ pub(crate) async fn apply_through_in_transaction(
         // Even an exact ledger replay must reject a missing or misbound projection. Never repair.
         super::occupancy::validate_all(transaction).await?;
     }
+    if max_version >= NATIVE_0046_VERSION {
+        validate_custom_model_catalog_in_transaction(transaction).await?;
+    }
     Ok(if applied == 0 {
         ApplyOutcome::AlreadyApplied
     } else {
         ApplyOutcome::Applied
     })
+}
+
+/// Prove the complete known ledger prefix and catalog facts on the original migration transaction.
+/// An exact replay has the same proof; no separate connection, repair or commit occurs here.
+async fn validate_custom_model_catalog_in_transaction(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<(), InfraError> {
+    let invalid = || InfraError::repository_invariant("custom_model_catalog_schema_invalid");
+    let limit = NATIVE_MIGRATION_COUNT
+        .checked_add(1)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(invalid)?;
+    let rows = transaction
+        .query(
+            "SELECT version,name,checksum FROM openbot_internal.schema_migrations ORDER BY version,name,checksum LIMIT $1",
+            &[&limit],
+        )
+        .await
+        .map_err(|_| invalid())?;
+    if rows.is_empty() {
+        return Err(invalid());
+    }
+
+    let mut latest_version = None;
+    for (index, row) in rows.iter().enumerate() {
+        let actual_version: i32 = row.try_get("version").map_err(|_| invalid())?;
+        let actual_name: String = row.try_get("name").map_err(|_| invalid())?;
+        let actual_checksum: String = row.try_get("checksum").map_err(|_| invalid())?;
+        let expected = MIGRATIONS.get(index).ok_or_else(invalid)?;
+        let expected_contiguous_version = NATIVE_0013_VERSION
+            .checked_add(i32::try_from(index).map_err(|_| invalid())?)
+            .ok_or_else(invalid)?;
+        let expected_checksum = Sha256Digest::of(expected.sql.as_bytes()).to_hex();
+        if expected.version != expected_contiguous_version
+            || actual_version != expected.version
+            || actual_name != expected.name
+            || actual_checksum != expected_checksum
+        {
+            return Err(invalid());
+        }
+        latest_version = Some(actual_version);
+    }
+    let latest_version = latest_version.ok_or_else(invalid)?;
+    if latest_version < NATIVE_0046_VERSION || latest_version > NATIVE_LATEST_VERSION {
+        return Err(invalid());
+    }
+    super::custom_model_catalog_schema::verify_in_transaction(transaction)
+        .await
+        .map_err(|_| invalid())
 }
 
 pub(crate) async fn lock_migrations(
@@ -1116,6 +1186,15 @@ mod tests {
     #[test]
     fn schema_migration_sql_is_mechanically_expand_only() {
         let forbidden_prefixes = ["DROP ", "TRUNCATE ", "DELETE ", "UPDATE "];
+        let catalog_sql_parts = NATIVE_0046_SQL
+            .split("$custom_model_catalog_sync$")
+            .collect::<Vec<_>>();
+        assert_eq!(catalog_sql_parts.len(), 3);
+        assert_eq!(catalog_sql_parts[1].len(), 2738);
+        assert_eq!(
+            Sha256Digest::of(catalog_sql_parts[1].as_bytes()).to_hex(),
+            "dd3033fd6fb82953088844a2649c83ab60bbb163318f02dbaac42fc2b25a921b",
+        );
         for line in statement_lines(NATIVE_0013_SQL)
             .chain(statement_lines(NATIVE_0014_SQL))
             .chain(statement_lines(NATIVE_0015_SQL))
@@ -1139,6 +1218,13 @@ mod tests {
             .chain(statement_lines(NATIVE_0037_SQL))
             .chain(statement_lines(NATIVE_0038_SQL))
             .chain(statement_lines(NATIVE_0045_SQL))
+            // Only the exact registered catalog trigger body is excluded from top-level checks.
+            .chain(
+                catalog_sql_parts
+                    .into_iter()
+                    .step_by(2)
+                    .flat_map(statement_lines),
+            )
             // Stored trigger bodies contain the specifically authorized exact-slot DELETE.
             // The migration's top-level DDL still has the same expand-only check.
             .chain(
@@ -1366,7 +1452,7 @@ mod tests {
         assert_ne!(native_0035_checksum(), native_0036_checksum());
         assert_eq!(native_0037_checksum().len(), 64);
         assert_ne!(native_0036_checksum(), native_0037_checksum());
-        assert_eq!(MIGRATIONS.len(), 33);
+        assert_eq!(MIGRATIONS.len(), 34);
         assert_eq!(native_0038_checksum().len(), 64);
         assert_ne!(native_0037_checksum(), native_0038_checksum());
         assert_eq!(native_0039_checksum().len(), 64);
@@ -1383,6 +1469,12 @@ mod tests {
         assert_ne!(native_0043_checksum(), native_0044_checksum());
         assert_eq!(native_0045_checksum().len(), 64);
         assert_ne!(native_0044_checksum(), native_0045_checksum());
-        assert_eq!(MIGRATIONS[32].version, NATIVE_LATEST_VERSION);
+        assert_eq!(native_0046_checksum().len(), 64);
+        assert_ne!(native_0045_checksum(), native_0046_checksum());
+        assert_eq!(
+            native_0046_checksum(),
+            "ec9cdbb01b2a09524b92fe6494f160df58c68f976a6ba1163dc41515c0495ed8",
+        );
+        assert_eq!(MIGRATIONS[33].version, NATIVE_LATEST_VERSION);
     }
 }

@@ -339,10 +339,9 @@ fn incompressible_identity(tag: &str) -> String {
         .collect()
 }
 
-async fn assert_old_oracles(pool: &DatabasePool) {
+async fn assert_old_oracles(pool: &DatabasePool, public_fixture: &'static str) {
     let client = pool.get().await.unwrap();
-    let public: schema_facts::SchemaFacts =
-        serde_json::from_str(include_str!("../../../fixtures/db/schema-0040.json")).unwrap();
+    let public: schema_facts::SchemaFacts = serde_json::from_str(public_fixture).unwrap();
     assert_eq!(schema_facts::fetch(&client).await.unwrap(), public);
     let preferences: Value = serde_json::from_str(include_str!(
         "../../../fixtures/db/approval-preferences-0043.json"
@@ -411,12 +410,12 @@ async fn native_0045_desktop_canary_preflight_accepts_fresh_and_upgrade_read_onl
                     &pool,
                 )
                 .await
-                .expect("actual native45 canary preflight must accept its unchanged public layout");
-                assert_eq!(layout.native_version(), native::NATIVE_0045_VERSION);
+                .expect("current canary preflight must accept its registered public layout");
+                assert_eq!(layout.native_version(), native::NATIVE_0046_VERSION);
                 openbot_infra::db::desktop_vault_canary::verify_current_layout(&pool)
                     .await
                     .unwrap();
-                assert_old_oracles(&pool).await;
+                assert_old_oracles(&pool, include_str!("../../../fixtures/db/schema-0046.json")).await;
                 let client = pool.get().await.unwrap();
                 assert_eq!(ledger(&client).await, before_ledger);
                 assert_eq!(business_rows(&client).await, before_rows);
@@ -436,7 +435,7 @@ async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
         "../../../fixtures/db/artifact-cleanup-fences-0045.json"
     ))
     .unwrap();
-    assert_eq!(native::NATIVE_LATEST_VERSION, 45);
+    assert_eq!(native::NATIVE_LATEST_VERSION, native::NATIVE_0046_VERSION);
     for upgrade in [false, true] {
         let expected = expected.clone();
         harness::with_temp_database(
@@ -485,7 +484,7 @@ async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
                     assert_eq!(ledger(&client).await, old_ledger);
                     assert_eq!(legacy_rows(&client).await, old_rows);
                     drop(client);
-                    assert_old_oracles(&pool).await;
+                    assert_old_oracles(&pool, include_str!("../../../fixtures/db/schema-0040.json")).await;
                     client = pool.get().await.unwrap();
                     native::apply(&mut client).await.unwrap();
                 } else {
@@ -501,16 +500,23 @@ async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
                 let current = ledger(&client).await;
                 assert_eq!(
                     current.iter().map(|row| row.0).collect::<Vec<_>>(),
-                    (13..=45).collect::<Vec<_>>()
+                    (13..=native::NATIVE_0046_VERSION).collect::<Vec<_>>()
                 );
-                assert_eq!(current.last().unwrap().1, native::NATIVE_0045_NAME);
+                assert_eq!(current.last().unwrap().1, native::NATIVE_0046_NAME);
                 assert_eq!(
                     current.last().unwrap().2,
-                    format!("{:x}", Sha256::digest(native::NATIVE_0045_SQL.as_bytes()))
+                    format!("{:x}", Sha256::digest(native::NATIVE_0046_SQL.as_bytes()))
                 );
                 if upgrade {
                     assert_eq!(&current[..old_ledger.len()], old_ledger.as_slice());
-                    assert_eq!(current.len(), old_ledger.len() + 1);
+                    assert_eq!(current.len(), old_ledger.len() + 2);
+                    assert_eq!(
+                        current[old_ledger.len()..]
+                            .iter()
+                            .map(|row| row.0)
+                            .collect::<Vec<_>>(),
+                        [native::NATIVE_0045_VERSION, native::NATIVE_0046_VERSION]
+                    );
                     assert_eq!(legacy_rows(&client).await, old_rows);
                 }
                 let before = business_rows(&client).await;
@@ -531,7 +537,7 @@ async fn fresh_and_upgrade_catalogs_match_frozen_cleanup_oracle() {
                 assert_eq!(ledger(&client).await, current);
                 assert_eq!(business_rows(&client).await, before);
                 drop(client);
-                assert_old_oracles(&pool).await;
+                assert_old_oracles(&pool, include_str!("../../../fixtures/db/schema-0046.json")).await;
                 artifact_administration::verify_artifact_registration_schema(&pool)
                     .await
                     .unwrap();

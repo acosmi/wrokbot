@@ -106,6 +106,10 @@ async fn actual_0040_upgrades_once_without_rewriting_older_ledger_or_public_sche
             baseline::apply(&c).await.map_err(|e| e.to_string())?;
             native::apply_through(&mut c, 40).await.map_err(|e| e.to_string())?;
             let before = schema_facts::fetch(&c).await.map_err(|e| e.to_string())?;
+            let historical: schema_facts::SchemaFacts =
+                serde_json::from_str(include_str!("../../../fixtures/db/schema-0040.json"))
+                    .unwrap();
+            assert_eq!(before, historical);
             let ledger_sql = "SELECT version,name,checksum,applied_at::text FROM openbot_internal.schema_migrations WHERE version <= 40 ORDER BY version";
             let ledger_before: Vec<(i32, String, String, String)> = c
                 .query(ledger_sql, &[]).await.map_err(|e| e.to_string())?
@@ -115,7 +119,11 @@ async fn actual_0040_upgrades_once_without_rewriting_older_ledger_or_public_sche
                 .query(ledger_sql, &[]).await.map_err(|e| e.to_string())?
                 .into_iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3))).collect();
             assert_eq!(ledger_after, ledger_before);
-            assert_eq!(schema_facts::fetch(&c).await.map_err(|e| e.to_string())?, before);
+            // The current migration adds its registered table and model connection trigger.
+            let current: schema_facts::SchemaFacts =
+                serde_json::from_str(include_str!("../../../fixtures/db/schema-0046.json"))
+                    .unwrap();
+            assert_eq!(schema_facts::fetch(&c).await.map_err(|e| e.to_string())?, current);
             assert_eq!(native::apply(&mut c).await.map_err(|e| e.to_string())?, native::ApplyOutcome::AlreadyApplied);
             drop(c);
             assert_eq!(capture_artifact_registry_schema(&p).await.unwrap(), internal_fixture());
