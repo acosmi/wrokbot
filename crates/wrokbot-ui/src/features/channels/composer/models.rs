@@ -359,18 +359,26 @@ pub(crate) fn ModelPicker(state: ModelComposer, disabled: Signal<bool>) -> impl 
                         };
                         let value = selection_key(Some(&selection)).expect("selection key");
                         let option_id = format!("run-model-{}-{}", row.id, row.revision);
-                        let source_label = match row.source {
-                            ModelConnectionSource::Custom => t_string!(i18n, models.custom_source).to_owned(),
+                        let presentation = StoredValue::new((row.source, row.model, row.id, row.name.clone()));
+                        let enabled = row.enabled;
+                        let has_credential = row.has_credential;
+                        let summary = move || presentation.with_value(|(source, model, id, _)| {
+                            let source_label = match source {
+                                ModelConnectionSource::Custom => t_string!(i18n, models.custom_source).to_owned(),
+                            };
+                            let availability = if !enabled {
+                                t_string!(i18n, models.disabled).to_owned()
+                            } else if !has_credential {
+                                t_string!(i18n, models.key_missing).to_owned()
+                            } else {
+                                t_string!(i18n, models.key_stored).to_owned()
+                            };
+                            format!("{model} · {source_label} · {id} · {availability}")
+                        });
+                        let label = move || {
+                            let summary = summary();
+                            presentation.with_value(|(_, _, _, name)| format!("{name} · {summary}"))
                         };
-                        let availability = if !row.enabled {
-                            t_string!(i18n, models.disabled).to_owned()
-                        } else if !row.has_credential {
-                            t_string!(i18n, models.key_missing).to_owned()
-                        } else {
-                            t_string!(i18n, models.key_stored).to_owned()
-                        };
-                        let summary = format!("{} · {source_label} · {} · {availability}", row.model, row.id);
-                        let label = format!("{} · {summary}", row.name);
                         view! {
                             <SelectItem
                                 id=option_id
@@ -383,7 +391,7 @@ pub(crate) fn ModelPicker(state: ModelComposer, disabled: Signal<bool>) -> impl 
                                     )
                                 })
                             >
-                                <strong>{row.name}</strong><small>{summary}</small>
+                                <strong>{row.name}</strong><small>{move || summary()}</small>
                             </SelectItem>
                         }
                     }/>
