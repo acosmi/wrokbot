@@ -1,7 +1,7 @@
 //! Current preference schema facts, old nullable fields and fixed baseline registry.
 mod harness;
 use openbot_infra::db::{
-    baseline, desktop_vault_canary, fresh, native, pool, schema_facts, tables,
+    baseline, desktop_vault_canary, native, pool, schema_facts, tables,
 };
 use tokio_postgres::error::SqlState;
 
@@ -14,7 +14,11 @@ async fn schema40_matches_owned_oracle_and_keeps_native21_baseline() {
         |config| async move {
             let p = pool::connect(&config).await.unwrap();
             let mut c = p.get().await.unwrap();
-            fresh::apply(&mut c).await.unwrap();
+            // This historical case fixes native40; current fresh is covered separately.
+            baseline::apply(&c).await.unwrap();
+            native::apply_through(&mut c, native::NATIVE_0040_VERSION)
+                .await
+                .unwrap();
             let actual = schema_facts::fetch(&c).await.unwrap();
             let expected: schema_facts::SchemaFacts =
                 serde_json::from_str(include_str!("../../../fixtures/db/schema-0040.json"))
@@ -53,13 +57,19 @@ async fn schema40_matches_owned_oracle_and_keeps_native21_baseline() {
                 1
             );
             assert_eq!(
-                native::apply(&mut c).await.unwrap(),
+                native::apply_through(&mut c, native::NATIVE_0040_VERSION)
+                    .await
+                    .unwrap(),
                 native::ApplyOutcome::AlreadyApplied
             );
             drop(c);
-            desktop_vault_canary::verify_current_layout(&p)
-                .await
-                .unwrap();
+            assert_eq!(
+                desktop_vault_canary::verify_pre_upgrade_layout(&p)
+                    .await
+                    .unwrap()
+                    .native_version(),
+                native::NATIVE_0040_VERSION
+            );
             p.close();
             Ok(())
         },
