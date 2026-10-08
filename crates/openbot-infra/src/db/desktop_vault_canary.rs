@@ -138,6 +138,10 @@ impl VerifiedDesktopRememberPreferenceProvenance {
 
 /// Sealed facts copied only from a cryptographically verified real Desktop database.
 /// This is not a second proof constructor or a live host-owner lease.
+#[cfg(all(
+    feature = "server-runtime",
+    any(target_os = "macos", target_os = "linux")
+))]
 pub(crate) struct VerifiedDesktopArtifactReadProvenance {
     system_identifier: String,
     database_oid: u32,
@@ -149,6 +153,10 @@ pub(crate) struct VerifiedDesktopArtifactReadProvenance {
     encrypted_canary_digest: Sha256Digest,
 }
 
+#[cfg(all(
+    feature = "server-runtime",
+    any(target_os = "macos", target_os = "linux")
+))]
 impl VerifiedDesktopArtifactReadProvenance {
     pub(crate) fn matches_installation(
         &self,
@@ -232,6 +240,10 @@ impl VerifiedDesktopVaultCanary {
             }
         })
     }
+    #[cfg(all(
+        feature = "server-runtime",
+        any(target_os = "macos", target_os = "linux")
+    ))]
     pub(crate) fn artifact_read_provenance(&self) -> VerifiedDesktopArtifactReadProvenance {
         VerifiedDesktopArtifactReadProvenance {
             system_identifier: self.system_identifier.clone(),

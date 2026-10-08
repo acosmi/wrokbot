@@ -440,7 +440,7 @@ async fn foundation_fresh_and_original45_upgrade_capture_exact_shape_and_backfil
                     administration.delete(&actor("alice"), &third.id,
                         &DeleteModelConnection { expected_revision: third.revision })
                         .await.map_err(|e| e.to_string())?;
-                    let mut c = p.get().await.map_err(|e| e.to_string())?;
+                    let c = p.get().await.map_err(|e| e.to_string())?;
                     // SQL-legal old definitions which the Rust normalizer would reject remain raw.
                     c.execute("UPDATE public.model_connections SET endpoint=' legacy RAW endpoint ',
                         model=' legacy RAW model ',revision=42 WHERE id=$1",
