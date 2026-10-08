@@ -35,9 +35,11 @@ enum Recorded {
     V2(BeginThreadRunV2),
 }
 
+type RecordedCall = (String, String, String, u64, Recorded);
+
 #[derive(Default)]
 struct RecordingApplication {
-    calls: Mutex<Vec<(String, String, String, u64, Recorded)>>,
+    calls: Mutex<Vec<RecordedCall>>,
     failure: Mutex<Option<AppError>>,
 }
 

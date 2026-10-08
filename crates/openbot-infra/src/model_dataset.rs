@@ -1183,6 +1183,29 @@ mod physical_lineage_tests {
             .args(["--exit-on-error", "--no-owner", "--dbname=openbot"])
             .arg(&dump);
         run_tool(command, "restore").await;
+        // Reparse the original BETWEEN syntax for this owned fixture's one CHECK.
+        // pg_dump's deparsed >=/<= form flattens its leading AND on restore.
+        let identity_bounds = include_str!("../sql/native_0035.sql")
+            .split_once("    CONSTRAINT remember_effect_receipts_identity_bounds CHECK (\n")
+            .unwrap()
+            .1
+            .split_once("\n    ),\n")
+            .unwrap()
+            .0;
+        let mut client = original.pool.get().await.unwrap();
+        let transaction = client.transaction().await.unwrap();
+        transaction
+            .batch_execute(&format!(
+                "ALTER TABLE public.remember_effect_receipts \
+                 DROP CONSTRAINT remember_effect_receipts_identity_bounds; \
+                 ALTER TABLE public.remember_effect_receipts \
+                 ADD CONSTRAINT remember_effect_receipts_identity_bounds \
+                 CHECK ({identity_bounds});"
+            ))
+            .await
+            .unwrap();
+        transaction.commit().await.unwrap();
+        drop(client);
         assert!(std::ptr::eq(
             original.pool.manager(),
             fixture.database.pool().manager()
