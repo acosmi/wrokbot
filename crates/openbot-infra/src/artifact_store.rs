@@ -31,6 +31,8 @@ pub use read_barrier::{ArtifactReadControlledBarrier, ArtifactReadControlledDrai
 pub(crate) use read_barrier::{
     PhysicalInvocationClaim, PhysicalInvocationQueryOwner, PhysicalWorkerLease,
     StoreReadEnrollment, StoreReadJobLease, StoreReadQueryLease, StoreReadQueryReservation,
+    TerminalInvocationClaim, TerminalInvocationQueryOwner, TerminalPublishMode,
+    TerminalWorkerLease,
 };
 use read_barrier::{StoreReadFdLease, StoreReadGate};
 

@@ -56,6 +56,13 @@ pub use cleanup_physical::{
     ArtifactCleanupPhysicalState,
 };
 
+#[path = "artifact_administration/cleanup_terminal.rs"]
+mod cleanup_terminal;
+pub use cleanup_terminal::{
+    ArtifactCleanupTerminalError, ArtifactCleanupTerminalObservation,
+    ArtifactCleanupTerminalObserver, ArtifactCleanupTerminalPhase, ArtifactCleanupTerminalState,
+};
+
 const WAIT: Duration = Duration::from_secs(5);
 const PG_PHASE: Duration = Duration::from_secs(30);
 const MEDIA: &str = "text/plain; charset=utf-8";

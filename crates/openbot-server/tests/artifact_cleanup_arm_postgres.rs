@@ -24,6 +24,8 @@ use openbot_infra::artifact_administration::{
     ArmedArtifactCleanupIntent, ArtifactCleanupArmError as Error,
     ArtifactCleanupPhysicalError as PhysicalError, ArtifactCleanupPhysicalIoPhase as PhysicalPhase,
     ArtifactCleanupPhysicalObserver, ArtifactCleanupPhysicalState as PhysicalState,
+    ArtifactCleanupTerminalError as TerminalError, ArtifactCleanupTerminalObserver,
+    ArtifactCleanupTerminalPhase as TerminalPhase, ArtifactCleanupTerminalState as TerminalState,
     PostgresArtifactAdministration,
 };
 use openbot_infra::artifact_registry::ArtifactDatasetRegistry;
@@ -600,6 +602,9 @@ struct SocketFacts {
     forwarded_host_rollback_before_source_begin: AtomicBool,
     post_schema_source_begin_held: AtomicBool,
     post_schema_source_begin_forwarded: AtomicBool,
+    // Actual ErrorResponse observation for the one owned terminal audit INSERT fault only.
+    terminal_g35_audit_fault_p0001: AtomicBool,
+    terminal_g35_audit_fault_error_forwarded: AtomicBool,
 }
 #[derive(Default)]
 struct RelayState {
@@ -826,6 +831,12 @@ async fn relay_original(
         let mut holding = 0;
         let mut original_held_packets = Vec::new();
         while let Some(packet) = frame(&mut backend_read).await? {
+            let terminal_g35_fault = terminal_g35_is_original_audit_fault(&packet);
+            if terminal_g35_fault {
+                backend_facts
+                    .terminal_g35_audit_fault_p0001
+                    .store(true, Ordering::SeqCst);
+            }
             if packet[0] == b'K' && packet.len() == 13 {
                 backend_facts.pid.store(
                     i32::from_be_bytes(packet[5..9].try_into().expect("PID width")),
@@ -864,6 +875,11 @@ async fn relay_original(
             }
             if holding == 0 {
                 frontend_write.write_all(&packet).await?;
+                if terminal_g35_fault {
+                    backend_facts
+                        .terminal_g35_audit_fault_error_forwarded
+                        .store(true, Ordering::SeqCst);
+                }
                 if bit != 0 {
                     backend_facts.forwarded_ack.fetch_or(bit, Ordering::SeqCst);
                     if bit == ROLLBACK_BIT
@@ -3283,6 +3299,2517 @@ async fn actual_already_absent_armed_pair_requires_current_authority_and_acknowl
             "P05-C late retirement/observation laundered original missing ACK or true physical effects")?;
         drop(intent); drop(record);
         eprintln!("ARTIFACT_PHYSICAL_P05_C actual_io_worker_ended_before_ack_loss=true actual_original_fd_closed=true both_names_absent=true original_upstream_rollback_ack=true forwarded_original_ack=false original_driver_backend_gone=true permanent_same_store_poison=true physical_effects_kept=true normal_witness=false refund=false");
+        Ok(())
+    })).await;
+}
+
+// Terminal assertions use real row images and the fixture's original wire,
+// independently of the producer's observer or in-memory committed fact.
+const TERMINAL_TABLES: &[&str] = &[
+    "openbot_internal.artifact_workspace_quotas",
+    "openbot_internal.artifact_save_operations",
+    "openbot_internal.artifact_records",
+    "openbot_internal.artifact_cleanup_fences",
+    "public.audit_events",
+    "public.audit_checkpoints",
+];
+const TERMINAL_OPERATION_NULLS: &[&str] = &[
+    "store_id",
+    "workspace_kind",
+    "workspace_id",
+    "expected_sha256",
+    "expected_bytes",
+    "charged_bytes",
+    "actual_absent",
+    "actual_byte_length",
+    "actual_sha256",
+    "actual_location",
+    "observation_phase",
+    "created_at",
+];
+const TERMINAL_RECORD_NULLS: &[&str] = &[
+    "workspace_kind",
+    "workspace_id",
+    "media_type",
+    "byte_length",
+    "sha256",
+    "retention_class",
+    "saved_by",
+    "saved_at",
+];
+
+fn terminal_original_row<'a>(
+    facts: &'a BTreeMap<String, Value>,
+    table: &str,
+    id_column: &str,
+    id: &str,
+) -> Result<&'a Value, String> {
+    let rows = facts
+        .get(table)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("missing original terminal table {table}"))?;
+    let mut matching = rows
+        .iter()
+        .filter_map(|entry| entry.get("row"))
+        .filter(|row| row.get(id_column).and_then(Value::as_str) == Some(id));
+    let row = matching
+        .next()
+        .ok_or_else(|| format!("missing exact terminal row {table}"))?;
+    require(matching.next().is_none(), "ambiguous exact terminal row")?;
+    Ok(row)
+}
+
+fn terminal_exact_one_row_change(
+    before: &BTreeMap<String, Value>,
+    after: &BTreeMap<String, Value>,
+    table: &str,
+    id_column: &str,
+    id: &str,
+    expected: &Value,
+) -> Result<(), String> {
+    let old = before
+        .get(table)
+        .and_then(Value::as_array)
+        .ok_or("old terminal table absent")?;
+    let new = after
+        .get(table)
+        .and_then(Value::as_array)
+        .ok_or("new terminal table absent")?;
+    require(
+        old.len() == new.len(),
+        "terminal added or removed an original business row",
+    )?;
+    require(
+        terminal_original_row(after, table, id_column, id)? == expected,
+        "terminal changed more than its exact registered fields",
+    )?;
+    for entry in old {
+        let row = entry
+            .get("row")
+            .ok_or("original terminal physical row absent")?;
+        if row.get(id_column).and_then(Value::as_str) != Some(id) {
+            require(
+                new.contains(entry),
+                "terminal changed an unrelated physical business row",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn terminal_verify_once(
+    f: &Fixture,
+    before: &BTreeMap<String, Value>,
+    after: &BTreeMap<String, Value>,
+) -> Result<Uuid, String> {
+    only_tables_changed(before, after, TERMINAL_TABLES)?;
+    let original_operation = terminal_original_row(
+        before,
+        "openbot_internal.artifact_save_operations",
+        "operation_id",
+        &f.receipt.operation_id,
+    )?;
+    let charge = original_operation
+        .get("charged_bytes")
+        .and_then(Value::as_i64)
+        .ok_or("positive original operation charge absent")?;
+    require(
+        charge == i64::try_from(TEXT.len()).map_err(|e| e.to_string())? && charge > 0,
+        "terminal fixture did not start with its genuine original Save charge",
+    )?;
+    let mut operation = original_operation.clone();
+    operation["state"] = Value::String("deleted".to_owned());
+    for field in TERMINAL_OPERATION_NULLS {
+        operation[*field] = Value::Null;
+    }
+    terminal_exact_one_row_change(
+        before,
+        after,
+        "openbot_internal.artifact_save_operations",
+        "operation_id",
+        &f.receipt.operation_id,
+        &operation,
+    )?;
+    let mut record = terminal_original_row(
+        before,
+        "openbot_internal.artifact_records",
+        "artifact_id",
+        &f.receipt.artifact_id,
+    )?
+    .clone();
+    record["status"] = Value::String("deleted".to_owned());
+    for field in TERMINAL_RECORD_NULLS {
+        record[*field] = Value::Null;
+    }
+    terminal_exact_one_row_change(
+        before,
+        after,
+        "openbot_internal.artifact_records",
+        "artifact_id",
+        &f.receipt.artifact_id,
+        &record,
+    )?;
+    let mut fence = terminal_original_row(
+        before,
+        "openbot_internal.artifact_cleanup_fences",
+        "artifact_id",
+        &f.receipt.artifact_id,
+    )?
+    .clone();
+    fence["phase"] = Value::String("completed".to_owned());
+    terminal_exact_one_row_change(
+        before,
+        after,
+        "openbot_internal.artifact_cleanup_fences",
+        "artifact_id",
+        &f.receipt.artifact_id,
+        &fence,
+    )?;
+    let mut quota = terminal_original_row(
+        before,
+        "openbot_internal.artifact_workspace_quotas",
+        "workspace_id",
+        f.receipt.source_thread_id.as_str(),
+    )?
+    .clone();
+    let total = quota["charged_bytes"]
+        .as_i64()
+        .ok_or("original quota total absent")?;
+    quota["charged_bytes"] = Value::from(
+        total
+            .checked_sub(charge)
+            .filter(|remaining| *remaining >= 0)
+            .ok_or("original quota subtraction invalid")?,
+    );
+    terminal_exact_one_row_change(
+        before,
+        after,
+        "openbot_internal.artifact_workspace_quotas",
+        "workspace_id",
+        f.receipt.source_thread_id.as_str(),
+        &quota,
+    )?;
+    let old = before
+        .get("public.audit_events")
+        .and_then(Value::as_array)
+        .ok_or("old audit rows absent")?;
+    let new = after
+        .get("public.audit_events")
+        .and_then(Value::as_array)
+        .ok_or("new audit rows absent")?;
+    require(
+        new.len() == old.len() + 1 && old.iter().all(|row| new.contains(row)),
+        "terminal did not append exactly one audit while preserving original physical rows",
+    )?;
+    let event = new
+        .iter()
+        .find(|row| !old.contains(row))
+        .and_then(|row| row.get("row"))
+        .ok_or("actual appended audit row absent")?;
+    require(
+        event["actor_user_id"].as_str() == Some(OWNER)
+            && event["event_type"].as_str() == Some("artifact.cleanup_completed")
+            && event["target_type"].as_str() == Some("artifact")
+            && event["target_id"].as_str() == Some(f.receipt.artifact_id.as_str())
+            && event["payload"]
+                == serde_json::json!({
+                    "artifact_id":f.receipt.artifact_id,
+                    "artifact_operation_id":f.receipt.operation_id
+                })
+            && event["row_hash"]
+                .as_str()
+                .is_some_and(|hash| hash.len() == 64),
+        "terminal audit changed its actual actor/type/target or exact content-free payload",
+    )?;
+    Uuid::parse_str(
+        event["id"]
+            .as_str()
+            .ok_or("actual append audit UUID absent")?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+async fn terminal_prepare(f: &Fixture) -> Result<ArmedArtifactCleanupIntent, String> {
+    let intent = f.arm().await.map_err(|e| format!("{e:?}"))?;
+    let physical = f
+        .actual
+        .remove_armed_explicit_saved_bytes_before(
+            &f.auth,
+            &intent,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    require(
+        physical.state() == PhysicalState::DurableAbsent
+            && physical_absent(&f.path())
+            && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id)),
+        "terminal precondition did not obtain genuine original physical double absence",
+    )?;
+    drop(physical);
+    Ok(intent)
+}
+
+#[derive(Default)]
+struct TerminalObserverFacts {
+    phases: Mutex<Vec<TerminalPhase>>,
+}
+impl ArtifactCleanupTerminalObserver for TerminalObserverFacts {
+    fn on_phase(&self, phase: TerminalPhase, _artifact_id: Uuid, original_leaf_fd: Option<i32>) {
+        assert!(
+            original_leaf_fd.is_none(),
+            "absent terminal worker acquired a leaf FD"
+        );
+        self.phases
+            .lock()
+            .expect("original terminal phase facts")
+            .push(phase);
+    }
+}
+impl TerminalObserverFacts {
+    fn normal_order(&self) -> Result<(), String> {
+        require(
+            *self
+                .phases
+                .lock()
+                .map_err(|_| "terminal phase facts poisoned")?
+                == [
+                    TerminalPhase::AbsenceGuarded,
+                    TerminalPhase::BeforeCommit,
+                    TerminalPhase::AfterCommitAckBeforeWorkerEnd,
+                    TerminalPhase::WorkerEnded,
+                ],
+            "terminal original worker/permission/ACK/actual resource-end observer order changed",
+        )
+    }
+    fn no_worker(&self) -> Result<(), String> {
+        require(
+            self.phases
+                .lock()
+                .map_err(|_| "terminal phase facts poisoned")?
+                .is_empty(),
+            "completed retry reserved a physical worker or pretended resource End",
+        )
+    }
+}
+
+async fn terminal_original_ack(
+    f: &Fixture,
+    pid: i32,
+    socket: &SocketFacts,
+    commit: bool,
+) -> Result<(), String> {
+    let bit = if commit { COMMIT_BIT } else { ROLLBACK_BIT };
+    require(
+        socket.pid.load(Ordering::SeqCst) == pid
+            && socket.entered.load(Ordering::SeqCst) & (BEGIN_BIT | bit) == (BEGIN_BIT | bit)
+            && socket.server_ack.load(Ordering::SeqCst) & (BEGIN_BIT | bit) == (BEGIN_BIT | bit)
+            && socket.forwarded_ack.load(Ordering::SeqCst) & (BEGIN_BIT | bit) == (BEGIN_BIT | bit)
+            && socket.withheld.load(Ordering::SeqCst) == 0
+            && !socket.frontend_eof.load(Ordering::SeqCst),
+        "terminal result lacked true original BEGIN/disposition packets",
+    )?;
+    if !commit {
+        require(
+            socket.entered.load(Ordering::SeqCst) & COMMIT_BIT == 0,
+            "completed or refused terminal entered COMMIT",
+        )?;
+    }
+    let current = f.pool.get().await.map_err(|e| e.to_string())?;
+    require(
+        current
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .map_err(|e| e.to_string())?
+            .get::<_, i32>(0)
+            == pid,
+        "normal original terminal query was retired rather than reusable",
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned PG and real original Store terminal transaction"]
+async fn actual_terminal_commits_once_refunds_original_charge_and_retry_has_no_worker_or_recharge()
+{
+    with_fixture("terminal-original-once", true, |f| Box::pin(async move {
+        let intent = terminal_prepare(f).await?;
+        let before = database_facts(&f.admin).await?;
+        let observer = Arc::new(TerminalObserverFacts::default());
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let started = Instant::now();
+        let observed = f.actual.finalize_armed_explicit_saved_before_with_observer(
+            &f.auth, &intent, started + Duration::from_secs(5), Some(observer.clone()))
+            .await.map_err(|e| format!("{e:?}"))?;
+        require(started.elapsed() < Duration::from_secs(5)
+            && observed.state() == TerminalState::Committed, "terminal did not commit inside original budget")?;
+        terminal_original_ack(f, pid, &socket, true).await?;
+        observer.normal_order()?;
+        let after = database_facts(&f.admin).await?;
+        let event_id = terminal_verify_once(f, &before, &after)?;
+        let gone = AppError::ArtifactGone {
+            status: openbot_contracts::artifacts::ArtifactGoneStatus::Deleted,
+        };
+        require(gone.http_status() == 410 && matches!(
+            f.application.read_current_artifact_chunk(f.auth.clone(), f.receipt.artifact_id.clone()).await,
+            Err(error) if error == gone,
+        ), "source-present terminal body did not retain the exact deleted410 error")?;
+        let retained = openbot_application::ArtifactAdministration::get_metadata(
+            f.actual.as_ref(), &f.auth, &f.receipt.artifact_id,
+        ).await.map_err(|e| e.to_string())?;
+        require(retained == openbot_contracts::artifacts::ArtifactMetadata::Deleted(
+            openbot_contracts::artifacts::ArtifactTombstone {
+                artifact_id: f.receipt.artifact_id.clone(),
+                operation_id: f.receipt.operation_id.clone(),
+                request_id: f.receipt.request_id.clone(),
+                owner_actor_id: f.receipt.owner_actor_id.clone(),
+                source_thread_id: f.receipt.source_thread_id.clone(),
+                source_run_id: f.receipt.source_run_id.clone(),
+                source_message_id: f.receipt.source_message_id.clone(),
+                source_call_seq: f.receipt.source_call_seq,
+                source_attempt_seq: f.receipt.source_attempt_seq,
+            },
+        ), "source-present terminal metadata changed its complete original tombstone")?;
+        require(matches!(f.application.execute(f.auth.clone(), AppCommand::GetArtifactMetadata(
+            openbot_contracts::artifacts::GetArtifactMetadata { artifact_id: f.receipt.artifact_id.clone() },
+        )).await, Err(error) if error == gone),
+            "public source-present terminal metadata did not project the exact deleted410 error")?;
+        drop(observed);
+        // This real lock remains held during CompletedTerminal. A retry that
+        // touches/initializes quota must fail its original deadline.
+        let mut held = f.admin.get().await.map_err(|e| e.to_string())?;
+        let quota_lock = held.transaction().await.map_err(|e| e.to_string())?;
+        quota_lock.query_one("SELECT charged_bytes FROM openbot_internal.artifact_workspace_quotas WHERE workspace_id=$1 FOR UPDATE",
+            &[&f.receipt.source_thread_id.as_str()]).await.map_err(|e| e.to_string())?;
+        let retry_observer = Arc::new(TerminalObserverFacts::default());
+        clear_transaction_facts(&socket);
+        let retry = f.actual.finalize_armed_explicit_saved_before_with_observer(
+            &f.auth, &intent, Instant::now() + Duration::from_secs(2), Some(retry_observer.clone()))
+            .await.map_err(|e| format!("{e:?}"))?;
+        require(retry.state() == TerminalState::AlreadyCompleted, "healthy same-live Store retry was not Completed")?;
+        terminal_original_ack(f, pid, &socket, false).await?;
+        retry_observer.no_worker()?;
+        require(database_facts(&f.admin).await? == after,
+            "completed retry changed any original business/receipt/Run/quota/audit physical row")?;
+        quota_lock.rollback().await.map_err(|e| e.to_string())?;
+        drop(held); drop(retry); drop(intent);
+        eprintln!("ARTIFACT_TERMINAL_G01 original_pid={pid} actual_audit_event_id={event_id} original_commit_ack=true exact_original_refund_once=true record8null_operation12null=true seven_identities_positive_receipt_and_run_preserved=true completed_own_rollback_ack=true completed_locked_quota_not_accessed=true completed_no_worker_or_repeat_audit=true");
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires original source deletion, real arm/physical and actual terminal transaction"]
+async fn actual_terminal_after_source_hard_delete_keeps_management_and_body404() {
+    with_fixture("terminal-original-source-deleted", true, |f| Box::pin(async move {
+        hard_delete_original_message(f).await?;
+        read_is_404(f).await?;
+        let intent = terminal_prepare(f).await?;
+        let before = database_facts(&f.admin).await?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let result = f.actual.finalize_armed_explicit_saved_before(
+            &f.auth, &intent, Instant::now() + Duration::from_secs(5))
+            .await.map_err(|e| format!("{e:?}"))?;
+        require(result.state() == TerminalState::Committed,
+            "hard-deleted source prevented current original saved-owner terminal management")?;
+        terminal_original_ack(f, pid, &socket, true).await?;
+        let after = database_facts(&f.admin).await?;
+        let event_id = terminal_verify_once(f, &before, &after)?;
+        read_is_404(f).await?;
+        require(database_facts(&f.admin).await? == after,
+            "source body/metadata refusal changed completed original facts")?;
+        drop(result); drop(intent);
+        eprintln!("ARTIFACT_TERMINAL_SOURCE_DELETED original_pid={pid} actual_audit_event_id={event_id} original_source_stays_absent=true saved_owner_management_current=true body_metadata404=true original_commit_ack=true");
+        Ok(())
+    })).await;
+}
+
+// V7-IMPL-022 registered Server G01/G02/G04 suffix. Controlled rows and unlink
+// below belong only to the harness's synthetic owned fixture; they are not Save
+// UUID collisions, another producer's refund, or a successful physical020 call.
+#[allow(non_camel_case_types)]
+struct terminal_g124_PhaseGate {
+    pause: TerminalPhase,
+    original_deadline: Instant,
+    facts: Mutex<(bool, bool, Vec<TerminalPhase>)>,
+    changed: Condvar,
+}
+impl terminal_g124_PhaseGate {
+    fn new(pause: TerminalPhase, original_deadline: Instant) -> Arc<Self> {
+        Arc::new(Self {
+            pause,
+            original_deadline,
+            facts: Mutex::new((false, false, Vec::new())),
+            changed: Condvar::new(),
+        })
+    }
+    fn seen(&self) -> bool {
+        self.facts.lock().is_ok_and(|facts| facts.0)
+    }
+    fn release(&self) {
+        if let Ok(mut facts) = self.facts.lock() {
+            facts.1 = true;
+            self.changed.notify_all();
+        }
+    }
+    fn normal_order(&self) -> Result<(), String> {
+        require(
+            self.facts
+                .lock()
+                .map_err(|_| "G124 original observer facts poisoned")?
+                .2
+                == [
+                    TerminalPhase::AbsenceGuarded,
+                    TerminalPhase::BeforeCommit,
+                    TerminalPhase::AfterCommitAckBeforeWorkerEnd,
+                    TerminalPhase::WorkerEnded,
+                ],
+            "G124 original resource/permission/ACK/end order changed",
+        )
+    }
+}
+impl ArtifactCleanupTerminalObserver for terminal_g124_PhaseGate {
+    fn on_phase(&self, phase: TerminalPhase, _artifact: Uuid, original_leaf_fd: Option<i32>) {
+        assert!(
+            original_leaf_fd.is_none(),
+            "G124 absent terminal retained a body FD"
+        );
+        let record_and_pause = || {
+            let Ok(mut facts) = self.facts.lock() else {
+                return;
+            };
+            facts.2.push(phase);
+            if phase == self.pause {
+                facts.0 = true;
+                self.changed.notify_all();
+                while !facts.1 && Instant::now() < self.original_deadline {
+                    let remaining = self
+                        .original_deadline
+                        .saturating_duration_since(Instant::now());
+                    let Ok((next, _)) = self.changed.wait_timeout(facts, remaining) else {
+                        return;
+                    };
+                    facts = next;
+                }
+            }
+        };
+        if phase == TerminalPhase::BeforeCommit && phase == self.pause {
+            // This cutpoint runs in the real async supervisor. Hand its multi-thread
+            // runtime work off before announcing the pause and blocking this thread.
+            tokio::task::block_in_place(record_and_pause);
+        } else {
+            // AbsenceGuarded already runs in the original spawn_blocking worker.
+            record_and_pause();
+        }
+    }
+}
+#[allow(non_camel_case_types)]
+struct terminal_g124_PhaseRelease(Arc<terminal_g124_PhaseGate>);
+impl Drop for terminal_g124_PhaseRelease {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+async fn terminal_g124_save_second(f: &Fixture) -> Result<ArtifactRegistrationReceipt, String> {
+    let reply = f
+        .application
+        .execute(
+            f.auth.clone(),
+            AppCommand::SaveRunMessageTextArtifact(SaveRunMessageTextArtifact {
+                request_id: Uuid::now_v7().to_string(),
+                source_thread_id: f.receipt.source_thread_id.clone(),
+                source_run_id: f.receipt.source_run_id.clone(),
+                source_message_id: f.receipt.source_message_id.clone(),
+                expected_sha256: format!("{:x}", Sha256::digest(TEXT.as_bytes())),
+            }),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let AppReply::ArtifactRegistrationReceipt(receipt) = reply else {
+        return Err("G124 genuine second Save returned another reply".to_owned());
+    };
+    require(
+        receipt.artifact_id != f.receipt.artifact_id
+            && receipt.operation_id != f.receipt.operation_id,
+        "G124 genuine second Save did not mint its own exact pair",
+    )?;
+    require(
+        object_fact(&f.root.0.join("objects").join(&receipt.artifact_id))?.sha256
+            == format!("{:x}", Sha256::digest(TEXT.as_bytes())),
+        "G124 genuine second Save did not materialize its actual object",
+    )?;
+    Ok(receipt)
+}
+
+fn terminal_g124_unlink_owned_original(f: &Fixture, original: &ObjectFact) -> Result<(), String> {
+    require(
+        object_fact(&f.path())? == *original
+            && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id)),
+        "G124 controlled absence did not select its original owned canonical inode",
+    )?;
+    std::fs::remove_file(f.path()).map_err(|e| e.to_string())?;
+    std::fs::File::open(f.root.0.join("objects"))
+        .map_err(|e| e.to_string())?
+        .sync_all()
+        .map_err(|e| e.to_string())?;
+    std::fs::File::open(f.root.0.join("staging"))
+        .map_err(|e| e.to_string())?
+        .sync_all()
+        .map_err(|e| e.to_string())?;
+    require(
+        physical_absent(&f.path())
+            && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id)),
+        "G124 fixture controller did not leave the two actual owned names absent",
+    )
+}
+
+fn terminal_g124_unlinked_inode_still_owned(original: &ObjectFact) -> Result<Vec<String>, String> {
+    let fds = physical_inode_fds(original)?;
+    require(
+        !fds.is_empty(),
+        "G124 old allocation lost its original FD before actual last-owner release",
+    )?;
+    for fd in &fds {
+        let duplicate = std::fs::File::open(format!("/dev/fd/{fd}")).map_err(|e| e.to_string())?;
+        let metadata = duplicate.metadata().map_err(|e| e.to_string())?;
+        let valid = metadata.is_file()
+            && metadata.dev() == original.dev
+            && metadata.ino() == original.ino
+            && metadata.uid() == original.uid
+            && metadata.len() == original.len
+            && metadata.nlink() == 0;
+        drop(duplicate);
+        require(
+            valid,
+            "G124 actual old FD was not the unlinked original saved inode",
+        )?;
+    }
+    Ok(fds)
+}
+
+async fn terminal_g124_inode_really_closed(original: ObjectFact) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    tokio::task::spawn_blocking(move || {
+        let mut unstable_samples = 0_u32;
+        loop {
+            match physical_inode_fds(&original) {
+                Ok(fds) if fds.is_empty() => {
+                    require(Instant::now() < deadline,
+                        "G124 original FD empty observation arrived after its existing tail budget")?;
+                    eprintln!("ARTIFACT_TERMINAL_G124_FD_TAIL stable_double_empty=true transient_unstable_samples={unstable_samples} original_two_second_tail=true");
+                    return Ok(());
+                }
+                Ok(_) => {}
+                Err(error) if error == "original inode FD inventory changed between two actual samples (Unproven)" => {
+                    // Actual async cleanup can close this inode between the two strict
+                    // samples. This observation proves no closure; await a stable pair.
+                    unstable_samples += 1;
+                }
+                Err(error) => return Err(error),
+            }
+            require(
+                Instant::now() < deadline,
+                "G124 original old inode FD did not actually end",
+            )?;
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+async fn terminal_g124_open_control(f: &Fixture) -> Result<String, String> {
+    let reply = f
+        .application
+        .execute(
+            f.auth.clone(),
+            AppCommand::OpenArtifactRead(OpenArtifactRead {
+                artifact_id: f.receipt.artifact_id.clone(),
+            }),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let AppReply::ArtifactReadOpened(opened) = &reply else {
+        return Err("G124 actual public original reader was not opened".to_owned());
+    };
+    let handle = opened.handle_id.clone();
+    require(
+        opened.artifact_id == f.receipt.artifact_id && opened.byte_length == TEXT.len() as u64,
+        "G124 real public reader did not prepare the exact saved object",
+    )?;
+    let delivery = f
+        .application
+        .take_artifact_read_control_delivery(f.auth.clone(), reply)
+        .map_err(|e| e.to_string())?;
+    delivery
+        .verify_current_tail(&f.auth)
+        .map_err(|e| e.to_string())?;
+    drop(delivery);
+    Ok(handle)
+}
+
+#[allow(non_camel_case_types)]
+struct terminal_g124_HeldControlQuery {
+    original_pid: i32,
+    original_connection: ConnectionObservation,
+    socket: Arc<SocketFacts>,
+    task: tokio::task::JoinHandle<Result<AppReply, AppError>>,
+}
+
+// This is the genuine public Close control-tail joint, not a labelled metadata
+// fixture or a new Host lease. Its own schema is complete before the real BEGIN
+// ACK is held. The original read-only source joint then waits on the controller's
+// actual fence relation lock; only its ensuing original ROLLBACK is withheld.
+async fn terminal_g124_hold_original_control_tail(
+    f: &Fixture,
+    handle_id: String,
+) -> Result<terminal_g124_HeldControlQuery, String> {
+    let (pid, connection, socket) = f.original().await?;
+    clear_transaction_facts(&socket);
+    let relay = f
+        .relay
+        .as_ref()
+        .ok_or("G124 original control relay absent")?;
+    relay.arm(Hold::Begin);
+    let application = Arc::clone(&f.application);
+    let auth = f.auth.clone();
+    let task = tokio::spawn(async move {
+        application
+            .execute(
+                auth,
+                AppCommand::CloseArtifactRead(
+                    openbot_contracts::artifact_read_protocol::CloseArtifactRead { handle_id },
+                ),
+            )
+            .await
+    });
+    let controlled = async {
+        wait_fact(|| socket.withheld.load(Ordering::SeqCst) == Hold::Begin as u8,
+            Instant::now() + Duration::from_secs(2), "G124 actual control BEGIN ACK did not reach original relay").await?;
+        let observer = f.admin.get().await.map_err(|e| e.to_string())?;
+        let row = observer.query_one(
+            "SELECT pg_backend_pid() AS observer_pid,state,query,xact_start IS NOT NULL AS actual_transaction FROM pg_catalog.pg_stat_activity WHERE pid=$1",
+            &[&pid],
+        ).await.map_err(|e| e.to_string())?;
+        let query: String = row.get("query");
+        require(row.get::<_, i32>("observer_pid") != pid
+            && row.get::<_, Option<String>>("state").as_deref() == Some("idle in transaction")
+            && row.get::<_, bool>("actual_transaction")
+            && (query.trim_start().starts_with("BEGIN") || query.trim_start().starts_with("START TRANSACTION"))
+            && query.contains("READ COMMITTED") && query.contains("READ ONLY"),
+            "G124 held control BEGIN was not the original actual read-only transaction")?;
+        drop(observer);
+        let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+        let transaction = controller.transaction().await.map_err(|e| e.to_string())?;
+        let controller_pid: i32 = transaction.query_one("SELECT pg_backend_pid()", &[])
+            .await.map_err(|e| e.to_string())?.get(0);
+        require(controller_pid != pid, "G124 control query and controller reused the same backend")?;
+        transaction.batch_execute("LOCK TABLE openbot_internal.artifact_cleanup_fences IN ACCESS EXCLUSIVE MODE")
+            .await.map_err(|e| e.to_string())?;
+        relay.release_original_ack(&socket, Hold::Begin)?;
+        wait_blocked(&f.admin, pid, "artifact_current_host_joint_read_after_io", controller_pid).await?;
+        // Preliminary authentication is absent from this tail: its real original
+        // CurrentArtifactReadControlTail owns this reached source joint and query reservation.
+        relay.arm(Hold::Rollback);
+        transaction.rollback().await.map_err(|e| e.to_string())?;
+        drop(controller);
+        wait_fact(|| socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8,
+            Instant::now() + Duration::from_secs(2), "G124 actual reached control ROLLBACK ACK was not withheld").await?;
+        require(socket.pid.load(Ordering::SeqCst) == pid
+            && socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+            "G124 control uncertainty was not the actual original driver ACK boundary")?;
+        eprintln!("ARTIFACT_TERMINAL_G124_CONTROL original_pid={pid} controller_pid={controller_pid} actual_control_tail_joint_lock_wait=true original_readonly_begin_ack_released=true original_upstream_rollback_ack=true original_forwarded_rollback_ack=false");
+        Ok::<(), String>(())
+    }.await;
+    if let Err(error) = controlled {
+        match socket.withheld.load(Ordering::SeqCst) {
+            value if value == Hold::Begin as u8 => {
+                let _ = relay.release_original_ack(&socket, Hold::Begin);
+            }
+            value if value == Hold::Rollback as u8 => {
+                let _ = relay.release_original_ack(&socket, Hold::Rollback);
+            }
+            _ => {}
+        }
+        let _ = task.await;
+        return Err(error);
+    }
+    Ok(terminal_g124_HeldControlQuery {
+        original_pid: pid,
+        original_connection: connection,
+        socket,
+        task,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires original Store invocation slots, real exact-key transactions and genuine second Save"]
+async fn actual_terminal_slot_excludes_same_key_and_preserves_independent_keys() {
+    with_fixture("terminal-g124-real-key-slots", true, |f| Box::pin(async move {
+        let second = terminal_g124_save_second(f).await?;
+        let second_intent = Arc::new(f.actual.arm_explicit_saved_delete_before(
+            &f.auth, &second.artifact_id, Instant::now() + Duration::from_secs(5),
+        ).await.map_err(|e| format!("{e:?}"))?);
+        let second_path = f.root.0.join("objects").join(&second.artifact_id);
+        let second_original = object_fact(&second_path)?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(5);
+        let gate = terminal_g124_PhaseGate::new(TerminalPhase::BeforeCommit, deadline);
+        let release = terminal_g124_PhaseRelease(Arc::clone(&gate));
+        let actual = Arc::clone(&f.actual); let auth = f.auth.clone(); let original = Arc::clone(&intent);
+        let observer = Arc::clone(&gate);
+        let first = tokio::spawn(async move { actual.finalize_armed_explicit_saved_before_with_observer(
+            &auth, &original, deadline, Some(observer),
+        ).await });
+        let controlled = async {
+            wait_fact(|| gate.seen(), Instant::now() + Duration::from_secs(2),
+                "G124 original terminal never reached the real BeforeCommit pause").await?;
+            require(socket.entered.load(Ordering::SeqCst) & COMMIT_BIT == 0,
+                "G124 original terminal committed before its real pause")?;
+            let duplicate_started = Instant::now();
+            let duplicate = f.actual.finalize_armed_explicit_saved_before(
+                &f.auth, &intent, deadline,
+            ).await;
+            let phases = gate.facts.lock().map_err(|_| "G124 phase diagnostic mutex poisoned")?.2.clone();
+            eprintln!("ARTIFACT_TERMINAL_G124_DUPLICATE original_pid={pid} actual_result={duplicate:?} phases={phases:?} entry_elapsed_us={} duplicate_elapsed_us={} original_deadline_elapsed={} relay_entered={} relay_server_ack={} relay_forwarded_ack={} relay_withheld={} relay_release={}",
+                started.elapsed().as_micros(), duplicate_started.elapsed().as_micros(), Instant::now() >= deadline,
+                socket.entered.load(Ordering::SeqCst), socket.server_ack.load(Ordering::SeqCst),
+                socket.forwarded_ack.load(Ordering::SeqCst), socket.withheld.load(Ordering::SeqCst),
+                socket.release_original_ack.load(Ordering::SeqCst));
+            require(matches!(duplicate, Err(TerminalError::ReadsUnproven)),
+                "G124 same-key terminal duplicate entered another original query")?;
+            require(matches!(f.actual.remove_armed_explicit_saved_bytes_before(
+                &f.auth, &intent, deadline,
+            ).await, Err(PhysicalError::PhysicalUnproven)), "G124 physical cross-mode invocation bypassed the same active slot")?;
+            require(matches!(f.actual.observe_armed_explicit_saved_bytes_before(
+                &f.auth, &intent, deadline,
+            ).await, Err(PhysicalError::PhysicalUnproven)), "G124 observe cross-mode invocation bypassed the same active slot")?;
+            require(object_fact(&second_path)? == second_original && database_facts(&f.admin).await? == before,
+                "G124 refused duplicates changed another artifact or published uncommitted original rows")?;
+            Ok::<(), String>(())
+        }.await;
+        let actual = Arc::clone(&f.actual); let auth = f.auth.clone(); let other_intent = Arc::clone(&second_intent);
+        let independent = tokio::spawn(async move { actual.remove_armed_explicit_saved_bytes_before(
+            &auth, &other_intent, deadline,
+        ).await });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let independent_waiting = !independent.is_finished() && object_fact(&second_path)? == second_original;
+        drop(release);
+        let first_outcome = first.await.map_err(|e| e.to_string())?;
+        let independent_outcome = independent.await.map_err(|e| e.to_string())?;
+        controlled?;
+        require(independent_waiting, "G124 distinct-key invocation was rejected instead of waiting for its actual shared Pool")?;
+        let committed = first_outcome.map_err(|e| format!("{e:?}"))?;
+        let absent = independent_outcome.map_err(|e| format!("{e:?}"))?;
+        require(committed.state() == TerminalState::Committed && absent.state() == PhysicalState::DurableAbsent
+            && started.elapsed() < Duration::from_secs(5), "G124 exact independent key did not continue inside its original budget")?;
+        terminal_original_ack(f, pid, &socket, true).await?;
+        gate.normal_order()?;
+        let after = database_facts(&f.admin).await?;
+        let event = terminal_verify_once(f, &before, &after)?;
+        require(physical_absent(&second_path), "G124 actual second physical worker did not remove its own original object")?;
+        drop(absent); drop(committed); drop(intent); drop(second_intent);
+        eprintln!("ARTIFACT_TERMINAL_G124_SLOT original_pid={pid} actual_audit_event_id={event} original_before_commit_paused=true same_key_terminal_and_both_physical_modes_refused=true second_genuine_save_distinct_pair=true independent_key_waited_real_pool=true independent_key_normal_physical_absence=true original_terminal_commit_ack=true exact_original_refund_once=true");
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires original quota row waiter and explicit synthetic controller aggregate change"]
+async fn actual_terminal_original_quota_wait_uses_latest_aggregate_once() {
+    with_fixture("terminal-g124-fresh-real-quota", true, |f| Box::pin(async move {
+        let second = terminal_g124_save_second(f).await?;
+        let second_path = f.root.0.join("objects").join(&second.artifact_id);
+        let second_original = object_fact(&second_path)?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        let charge = i64::try_from(TEXT.len()).map_err(|e| e.to_string())?;
+        let original_total = terminal_original_row(&before, "openbot_internal.artifact_workspace_quotas",
+            "workspace_id", f.receipt.source_thread_id.as_str())?["charged_bytes"].as_i64().ok_or("G124 original aggregate absent")?;
+        require(original_total == charge * 2, "G124 both genuine Save charges were not present before terminal entry")?;
+        let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+        let transaction = controller.transaction().await.map_err(|e| e.to_string())?;
+        let controller_pid: i32 = transaction.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|e| e.to_string())?.get(0);
+        transaction.query_one("SELECT charged_bytes FROM openbot_internal.artifact_workspace_quotas WHERE workspace_id=$1 FOR UPDATE",
+            &[&f.receipt.source_thread_id.as_str()]).await.map_err(|e| e.to_string())?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let started = Instant::now(); let deadline = started + Duration::from_secs(5);
+        let gate = terminal_g124_PhaseGate::new(TerminalPhase::AbsenceGuarded, deadline);
+        let release = terminal_g124_PhaseRelease(Arc::clone(&gate));
+        let actual = Arc::clone(&f.actual); let auth = f.auth.clone(); let original = Arc::clone(&intent); let observer = Arc::clone(&gate);
+        let task = tokio::spawn(async move { actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original, deadline, Some(observer)).await });
+        let controlled = async {
+            wait_blocked(&f.admin, pid, "artifact_workspace_quotas", controller_pid).await?;
+            require(!gate.seen() && socket.entered.load(Ordering::SeqCst) & COMMIT_BIT == 0,
+                "G124 worker or COMMIT preceded the real original quota lock")?;
+            // This is an explicit owned counter input, NOT another concurrent Save.
+            // The second genuine artifact already existed before entry. Changing the
+            // nominal aggregate while the real waiter is blocked exposes a stale read.
+            let controlled_extra: i64 = 13;
+            let fresh_total = original_total.checked_add(controlled_extra).ok_or("G124 counter overflow")?;
+            require(transaction.execute(
+                "UPDATE openbot_internal.artifact_workspace_quotas SET charged_bytes=$1 WHERE workspace_id=$2",
+                &[&fresh_total, &f.receipt.source_thread_id.as_str()],
+            ).await.map_err(|e| e.to_string())? == 1, "G124 controller did not change its one original quota row")?;
+            transaction.commit().await.map_err(|e| e.to_string())?;
+            wait_fact(|| gate.seen(), Instant::now() + Duration::from_secs(2),
+                "G124 terminal did not resume from the genuine original quota wait").await?;
+            let fresh = database_facts(&f.admin).await?;
+            only_tables_changed(&before, &fresh, &["openbot_internal.artifact_workspace_quotas"])?;
+            controller_update_columns(&before, &fresh, "openbot_internal.artifact_workspace_quotas",
+                "workspace_id", f.receipt.source_thread_id.as_str(), &["charged_bytes"])?;
+            require(terminal_original_row(&fresh, "openbot_internal.artifact_workspace_quotas", "workspace_id",
+                f.receipt.source_thread_id.as_str())?["charged_bytes"].as_i64() == Some(fresh_total),
+                "G124 nominal controller aggregate was not actually visible after its real COMMIT")?;
+            Ok::<_, String>((fresh, fresh_total, controlled_extra))
+        }.await;
+        drop(controller);
+        drop(release);
+        let outcome = task.await.map_err(|e| e.to_string())?;
+        let (fresh, fresh_total, controlled_extra) = controlled?;
+        let committed = outcome.map_err(|e| format!("{e:?}"))?;
+        require(committed.state() == TerminalState::Committed && started.elapsed() < Duration::from_secs(5),
+            "G124 resumed terminal did not commit within its original quota-wait budget")?;
+        terminal_original_ack(f, pid, &socket, true).await?;
+        gate.normal_order()?;
+        let after = database_facts(&f.admin).await?;
+        let event = terminal_verify_once(f, &fresh, &after)?;
+        require(terminal_original_row(&after, "openbot_internal.artifact_workspace_quotas", "workspace_id",
+            f.receipt.source_thread_id.as_str())?["charged_bytes"].as_i64() == fresh_total.checked_sub(charge)
+            && object_fact(&second_path)? == second_original,
+            "G124 terminal used its earlier aggregate or changed the second genuine artifact")?;
+        clear_transaction_facts(&socket);
+        let retry = f.actual.finalize_armed_explicit_saved_before(&f.auth, &intent, Instant::now() + Duration::from_secs(2))
+            .await.map_err(|e| format!("{e:?}"))?;
+        require(retry.state() == TerminalState::AlreadyCompleted && database_facts(&f.admin).await? == after,
+            "G124 healthy retry subtracted the current aggregate twice")?;
+        terminal_original_ack(f, pid, &socket, false).await?;
+        drop(retry); drop(committed); drop(intent);
+        eprintln!("ARTIFACT_TERMINAL_G124_QUOTA original_pid={pid} controller_pid={controller_pid} actual_audit_event_id={event} second_genuine_save_preexisted=true concurrent_second_save_claimed=false controlled_extra_nominal_bytes={controlled_extra} actual_original_quota_wait=true fresh_aggregate={fresh_total} original_charge={charge} one_checked_sub_refund=true second_pair_and_object_unchanged=true original_commit_ack=true completed_own_rollback_ack=true");
+        Ok(())
+    })).await;
+}
+
+#[allow(non_camel_case_types)]
+struct terminal_g124_AlternateNamespace {
+    root: OwnedRoot,
+    store: Arc<DatasetBoundArtifactStore>,
+    actual: Arc<PostgresArtifactAdministration>,
+    resolver: PostgresSessionAuthResolver,
+    auth: AuthContext,
+}
+impl terminal_g124_AlternateNamespace {
+    fn close(self) {
+        self.resolver.close_request_bindings();
+        drop(self.auth);
+        drop(self.actual);
+        drop(self.store);
+        drop(self.resolver);
+        drop(self.root);
+    }
+}
+
+// Legal INSERTs retain every SQL guard. Same UUIDs in another namespace are an
+// explicit synthetic input; no claim is made that real Save generated a collision.
+// receipt_mode: 0 = absent, 1 = full original positive receipt, 2 = new legal
+// positive receipt with a different request identity for strict-decoder refusal.
+async fn terminal_g124_alternate_namespace(
+    f: &Fixture,
+    original: &BTreeMap<String, Value>,
+    receipt_mode: u8,
+) -> Result<terminal_g124_AlternateNamespace, String> {
+    let root = OwnedRoot::new()?;
+    let deployment = DeploymentId::new(format!("owned-terminal-g124-{}", Uuid::now_v7()));
+    let tenant = TenantId::new("owned-terminal-g124-alternate");
+    let registry = Arc::new(
+        ArtifactDatasetRegistry::from_server(f.pool.clone(), &deployment, &tenant)
+            .await
+            .map_err(|e| e.to_string())?,
+    );
+    let store = Arc::new(
+        DatasetBoundArtifactStore::bind_host_root(
+            std::fs::File::open(&root.0).map_err(|e| e.to_string())?,
+            Arc::clone(&registry),
+            ArtifactQuotaPolicy::default(),
+        )
+        .await
+        .map_err(|e| e.to_string())?,
+    );
+    let actual = Arc::new(
+        PostgresArtifactAdministration::new(
+            Arc::clone(&registry),
+            Arc::clone(&store),
+            ArtifactQuotaPolicy::default(),
+            SecretBytes::new(vec![0x18; 32]),
+        )
+        .map_err(|e| e.to_string())?,
+    );
+    let resolver = PostgresSessionAuthResolver::new(
+        f.pool.clone(),
+        SESSION_KEY,
+        default_session_lifetime(),
+        deployment,
+        tenant,
+    )
+    .map_err(|e| e.to_string())?;
+    resolver
+        .install_artifact_read_authority(&actual.read_authority())
+        .map_err(|_| "G124 actual alternate namespace authority enrollment failed")?;
+    let auth = resolve(&resolver, COOKIE_B).await?;
+    let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+    let transaction = controller.transaction().await.map_err(|e| e.to_string())?;
+    let controller_pid: i32 = transaction
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|e| e.to_string())?
+        .get(0);
+    let binding = registry.binding();
+    for (table, selector, id) in [
+        (
+            "openbot_internal.artifact_save_operations",
+            "operation_id",
+            f.receipt.operation_id.as_str(),
+        ),
+        (
+            "openbot_internal.artifact_records",
+            "artifact_id",
+            f.receipt.artifact_id.as_str(),
+        ),
+        (
+            "openbot_internal.artifact_workspace_quotas",
+            "workspace_id",
+            f.receipt.source_thread_id.as_str(),
+        ),
+        (
+            "openbot_internal.artifact_saved_receipts",
+            "operation_id",
+            f.receipt.operation_id.as_str(),
+        ),
+    ] {
+        if table == "openbot_internal.artifact_saved_receipts" && receipt_mode == 0 {
+            continue;
+        }
+        let mut row = terminal_original_row(original, table, selector, id)?.clone();
+        row["deployment_id"] = Value::String(binding.deployment_id().to_owned());
+        row["tenant_id"] = Value::String(binding.tenant_id().to_owned());
+        row["dataset_id"] = Value::String(binding.dataset_id().to_owned());
+        if table == "openbot_internal.artifact_save_operations" {
+            row["store_id"] = Value::String(store.store_id().to_string());
+        }
+        if table == "openbot_internal.artifact_saved_receipts" && receipt_mode == 2 {
+            row["request_id"] = Value::String(Uuid::now_v7().to_string());
+        }
+        // Identifiers are from the four fixed owned tables above, never input SQL.
+        let sql = format!(
+            "INSERT INTO {table} SELECT (jsonb_populate_record(NULL::{table},$1::jsonb)).*"
+        );
+        require(
+            transaction
+                .execute(&sql, &[&row])
+                .await
+                .map_err(|e| e.to_string())?
+                == 1,
+            "G124 legal controller input did not insert its one alternate namespace row",
+        )?;
+    }
+    transaction.commit().await.map_err(|e| e.to_string())?;
+    drop(controller);
+    eprintln!(
+        "ARTIFACT_TERMINAL_G124_NAMESPACE controller_pid={controller_pid} controlled_same_two_uuid_namespace_input=true real_save_uuid_collision_claimed=false sql_guards_retained=true receipt_mode={receipt_mode} controller_commit_ack=true"
+    );
+    Ok(terminal_g124_AlternateNamespace {
+        root,
+        store,
+        actual,
+        resolver,
+        auth,
+    })
+}
+
+async fn terminal_g124_controller_complete_namespace(
+    f: &Fixture,
+    alternate: &terminal_g124_AlternateNamespace,
+) -> Result<(), String> {
+    let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+    let transaction = controller.transaction().await.map_err(|e| e.to_string())?;
+    let controller_pid: i32 = transaction
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .map_err(|e| e.to_string())?
+        .get(0);
+    let row = transaction.query_one(
+        "SELECT deployment_id,tenant_id,dataset_id FROM openbot_internal.artifact_store_bindings WHERE store_id=$1",
+        &[&alternate.store.store_id().to_string()],
+    ).await.map_err(|e| e.to_string())?;
+    let deployment: String = row.get(0);
+    let tenant: String = row.get(1);
+    let dataset: String = row.get(2);
+    require(transaction.execute(
+        "UPDATE openbot_internal.artifact_records SET status='deleted',workspace_kind=NULL,workspace_id=NULL,media_type=NULL,byte_length=NULL,sha256=NULL,retention_class=NULL,saved_by=NULL,saved_at=NULL WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND artifact_id=$4 AND status='available'",
+        &[&deployment, &tenant, &dataset, &f.receipt.artifact_id],
+    ).await.map_err(|e| e.to_string())? == 1, "G124 controlled namespace record transition did not reach its actual pair")?;
+    require(transaction.execute(
+        "UPDATE openbot_internal.artifact_save_operations SET state='deleted',store_id=NULL,workspace_kind=NULL,workspace_id=NULL,expected_sha256=NULL,expected_bytes=NULL,charged_bytes=NULL,actual_absent=NULL,actual_byte_length=NULL,actual_sha256=NULL,actual_location=NULL,observation_phase=NULL,created_at=NULL WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND operation_id=$4 AND state='available'",
+        &[&deployment, &tenant, &dataset, &f.receipt.operation_id],
+    ).await.map_err(|e| e.to_string())? == 1, "G124 controlled namespace operation transition did not reach its actual pair")?;
+    require(transaction.execute(
+        "UPDATE openbot_internal.artifact_cleanup_fences SET phase='completed' WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND artifact_id=$4 AND phase='armed'",
+        &[&deployment, &tenant, &dataset, &f.receipt.artifact_id],
+    ).await.map_err(|e| e.to_string())? == 1, "G124 retained 44/45 guards refused the legal exact completed namespace pair")?;
+    require(transaction.execute(
+        "UPDATE openbot_internal.artifact_workspace_quotas SET charged_bytes=0 WHERE deployment_id=$1 AND tenant_id=$2 AND dataset_id=$3 AND workspace_id=$4",
+        &[&deployment, &tenant, &dataset, &f.receipt.source_thread_id.as_str()],
+    ).await.map_err(|e| e.to_string())? == 1, "G124 controlled namespace quota input did not select its own scope")?;
+    transaction.commit().await.map_err(|e| e.to_string())?;
+    drop(controller);
+    require(
+        physical_absent(
+            &alternate
+                .root
+                .0
+                .join("objects")
+                .join(&f.receipt.artifact_id),
+        ),
+        "G124 alternate controlled pair unexpectedly materialized a Save object",
+    )?;
+    eprintln!(
+        "ARTIFACT_TERMINAL_G124_CONTROLLED_COMPLETE controller_pid={controller_pid} exact_original_seven_and_full_positive_receipt_retained=true legal_record8null_operation12null_fence_completed=true namespace_counter_controller_zero=true sql_identity_and_receipt_guards_retained=true terminal_producer_commit_claimed=false terminal_fact_manufactured=false"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires real original committed fact, same-root exclusive Busy and a genuine new namespace Store with legal same UUID input"]
+async fn actual_terminal_completed_refuses_other_namespace_same_ids_or_missing_original_fact() {
+    with_fixture("terminal-g124-exact-original-fact", true, |f| Box::pin(async move {
+        let live = database_facts(&f.admin).await?;
+        let intent = f.arm().await.map_err(|e| format!("{e:?}"))?;
+        let armed = database_facts(&f.admin).await?;
+        // The genuine original Store and intent hold this root's exclusive lock.
+        // A second bind cannot mint a concurrent Store or a forged restart intent.
+        let same_root = DatasetBoundArtifactStore::bind_host_root(
+            std::fs::File::open(&f.root.0).map_err(|e| e.to_string())?, Arc::clone(&f.registry), ArtifactQuotaPolicy::default(),
+        ).await;
+        require(matches!(same_root, Err(openbot_infra::artifact_store::ArtifactStoreError::Busy))
+            && database_facts(&f.admin).await? == armed,
+            "G124 original exclusive root permitted another Store or second bind changed business facts")?;
+        let physical = f.actual.remove_armed_explicit_saved_bytes_before(&f.auth, &intent,
+            Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("{e:?}"))?;
+        require(physical.state() == PhysicalState::DurableAbsent, "G124 original physical producer lacked true absence")?;
+        drop(physical);
+        let before = database_facts(&f.admin).await?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let committed = f.actual.finalize_armed_explicit_saved_before(&f.auth, &intent, Instant::now() + Duration::from_secs(5))
+            .await.map_err(|e| format!("{e:?}"))?;
+        require(committed.state() == TerminalState::Committed, "G124 original same-live Store did not commit")?;
+        terminal_original_ack(f, pid, &socket, true).await?;
+        let completed = database_facts(&f.admin).await?;
+        let original_audit_id = terminal_verify_once(f, &before, &completed)?;
+        drop(committed);
+
+        // The two canonical UUIDs now legally appear in another genuine namespace.
+        // Its actual new Store has an independently acquired different root lock.
+        // Controlled completed rows have the full exact receipt but no fact from a
+        // real terminal COMMIT. This is reachable missing-fact coverage, not cold
+        // reopen recovery. The global real original audit still matches both IDs.
+        let alternate = terminal_g124_alternate_namespace(f, &live, 1).await?;
+        require(alternate.store.store_id() != f.store.store_id(),
+            "G124 alternate namespace reused the original durable Store identity")?;
+        let alternate_intent = alternate.actual.arm_explicit_saved_delete_before(&alternate.auth, &f.receipt.artifact_id,
+            Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("{e:?}"))?;
+        terminal_g124_controller_complete_namespace(f, &alternate).await?;
+        let controlled = database_facts(&f.admin).await?;
+        let retained_event = controlled["public.audit_events"].as_array().ok_or("G124 global audits absent")?.iter()
+            .find(|entry| entry["row"]["id"].as_str() == Some(original_audit_id.to_string().as_str()))
+            .ok_or("G124 actual original append audit disappeared")?;
+        require(retained_event["row"]["payload"] == serde_json::json!({
+            "artifact_id": f.receipt.artifact_id, "artifact_operation_id": f.receipt.operation_id,
+        }), "G124 alternate input did not coexist with the global actual matching two-ID audit")?;
+        let alternate_observer = Arc::new(TerminalObserverFacts::default());
+        clear_transaction_facts(&socket);
+        let wrong_namespace = alternate.actual.finalize_armed_explicit_saved_before_with_observer(
+            &alternate.auth, &alternate_intent, Instant::now() + Duration::from_secs(5),
+            Some(Arc::clone(&alternate_observer) as Arc<dyn ArtifactCleanupTerminalObserver>),
+        ).await;
+        require(matches!(wrong_namespace, Err(TerminalError::ReadsUnproven)),
+            "G124 matching global two-ID audit supplied the missing exact-key fact to the new namespace Store")?;
+        terminal_original_ack(f, pid, &socket, false).await?;
+        alternate_observer.no_worker()?;
+        require(database_facts(&f.admin).await? == controlled, "G124 other-namespace Completed refusal changed any physical business row")?;
+        let healthy_observer = Arc::new(TerminalObserverFacts::default());
+        clear_transaction_facts(&socket);
+        let healthy = f.actual.finalize_armed_explicit_saved_before_with_observer(&f.auth, &intent,
+            Instant::now() + Duration::from_secs(5), Some(Arc::clone(&healthy_observer) as Arc<dyn ArtifactCleanupTerminalObserver>))
+            .await.map_err(|e| format!("{e:?}"))?;
+        require(healthy.state() == TerminalState::AlreadyCompleted && database_facts(&f.admin).await? == controlled,
+            "G124 foreign missing fact poisoned or refunded the original healthy Store")?;
+        terminal_original_ack(f, pid, &socket, false).await?;
+        healthy_observer.no_worker()?;
+        drop(healthy); drop(alternate_intent); alternate.close(); drop(intent);
+        eprintln!("ARTIFACT_TERMINAL_G124_EXACT_FACT original_pid={pid} original_audit_event_id={original_audit_id} actual_original_store_commit_ack=true concurrent_original_root_bind_exact_busy=true new_namespace_store_and_root_genuine=true new_store_exact_key_missing_fact_refused=true cold_reopen_terminal_decoder_claimed=false legal_other_namespace_same_two_uuid_full_receipt=true matching_global_sql_audit_cannot_supply_other_fact=true refused_own_rollback_ack=true refused_no_worker_or_repair=true original_same_live_store_completed_retry_healthy=true healthy_own_rollback_no_worker=true");
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires genuine Server allocation/Bytes clone owners, real old control-tail query and controlled owned unlink"]
+async fn actual_terminal_original_allocation_clone_and_control_tail_block_precommit() {
+    with_fixture("terminal-g124-real-old-owners", true, |f| Box::pin(async move {
+        let original = object_fact(&f.path())?;
+        let mut operation = f.application.open_current_artifact_read(f.auth.clone(), f.receipt.artifact_id.clone())
+            .await.map_err(|e| e.to_string())?;
+        let pending = operation.next_block(&f.auth).await.map_err(|e| e.to_string())?;
+        require(pending.prefix_length().map_err(|e| e.to_string())? == TEXT.len(),
+            "G124 original full leased allocation was not actually materialized")?;
+        let frame = pending.handoff_frame(&f.auth).map_err(|e| e.to_string())?;
+        require(frame.as_bytes() == TEXT.as_bytes(), "G124 original leased allocation changed saved bytes")?;
+        let bytes = axum::body::Bytes::from_owner(PhysicalFrameBytesOwner(frame));
+        let held_clone = bytes.clone();
+        let surviving_slice = bytes.slice(1..bytes.len());
+        let control_handle = terminal_g124_open_control(f).await?;
+        let original_fds = physical_inode_fds(&original)?;
+        require(original_fds.len() == 2, "G124 original direct allocation and actual public reader did not each retain their real FD")?;
+        let intent = Arc::new(f.arm().await.map_err(|e| format!("{e:?}"))?);
+        let armed = database_facts(&f.admin).await?;
+        let old = terminal_g124_hold_original_control_tail(f, control_handle).await?;
+        terminal_g124_unlink_owned_original(f, &original)?;
+        require(terminal_g124_unlinked_inode_still_owned(&original)? == original_fds,
+            "G124 controller absence closed old reader/allocation owners instead of unlinking owned names")?;
+        let relay = f.relay.as_ref().ok_or("G124 control relay absent")?;
+        let registered_old_socket = relay.socket_for_pid(old.original_pid)?;
+        require(Arc::ptr_eq(&old.socket, &registered_old_socket)
+            && old.socket.pid.load(Ordering::SeqCst) == old.original_pid
+            && old.socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8
+            && old.socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !old.socket.frontend_eof.load(Ordering::SeqCst) && !old.task.is_finished(),
+            "G124 rebase did not retain the same actual pending old control ROLLBACK socket")?;
+        // Terminal has not been spawned. Remove only inherited BEGIN/COMMIT bits;
+        // keep the old ROLLBACK that the original upstream C packet actually set.
+        let old_entered_before = old.socket.entered.fetch_and(ROLLBACK_BIT, Ordering::SeqCst);
+        let old_server_ack_before = old.socket.server_ack.fetch_and(ROLLBACK_BIT, Ordering::SeqCst);
+        let old_forwarded_ack_before = old.socket.forwarded_ack.swap(0, Ordering::SeqCst);
+        let old_entered_after = old.socket.entered.load(Ordering::SeqCst);
+        let old_server_ack_after = old.socket.server_ack.load(Ordering::SeqCst);
+        let old_forwarded_ack_after = old.socket.forwarded_ack.load(Ordering::SeqCst);
+        require(old_entered_before & ROLLBACK_BIT != 0 && old_entered_before & COMMIT_BIT == 0
+            && old_server_ack_before & ROLLBACK_BIT != 0 && old_server_ack_before & COMMIT_BIT == 0
+            && old_forwarded_ack_before & (ROLLBACK_BIT | COMMIT_BIT) == 0
+            && old_entered_after == ROLLBACK_BIT && old_server_ack_after == ROLLBACK_BIT
+            && old_forwarded_ack_after == 0
+            && old.socket.pid.load(Ordering::SeqCst) == old.original_pid
+            && old.socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !old.socket.frontend_eof.load(Ordering::SeqCst) && !old.task.is_finished(),
+            "G124 old upstream ROLLBACK evidence changed while clearing only inherited transaction bits")?;
+        eprintln!("ARTIFACT_TERMINAL_G124_CONTROL_REBASE original_pid={} same_registered_socket={} entered_before={old_entered_before} entered_after={old_entered_after} server_ack_before={old_server_ack_before} server_ack_after={old_server_ack_after} forwarded_ack_before={old_forwarded_ack_before} forwarded_ack_after={old_forwarded_ack_after} withheld={} release={} frontend_eof={} old_task_finished={}",
+            old.original_pid, Arc::ptr_eq(&old.socket, &registered_old_socket),
+            old.socket.withheld.load(Ordering::SeqCst), old.socket.release_original_ack.load(Ordering::SeqCst),
+            old.socket.frontend_eof.load(Ordering::SeqCst), old.task.is_finished());
+        let observer = Arc::new(TerminalObserverFacts::default());
+        let started = Instant::now(); let deadline = started + Duration::from_secs(5);
+        let actual = Arc::clone(&f.actual); let auth = f.auth.clone(); let original_intent = Arc::clone(&intent);
+        let phase_observer = Arc::clone(&observer);
+        let task = tokio::spawn(async move { actual.finalize_armed_explicit_saved_before_with_observer(
+            &auth, &original_intent, deadline, Some(phase_observer),
+        ).await });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        require(!task.is_finished() && observer.no_worker().is_ok()
+            && old.socket.entered.load(Ordering::SeqCst) & COMMIT_BIT == 0
+            && database_facts(&f.admin).await? == armed,
+            "G124 terminal permission ignored the original outstanding public control-tail query")?;
+        require(Arc::ptr_eq(&old.socket, &relay.socket_for_pid(old.original_pid)?)
+            && old.socket.pid.load(Ordering::SeqCst) == old.original_pid
+            && old.socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8
+            && old.socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !old.socket.frontend_eof.load(Ordering::SeqCst) && !old.task.is_finished(),
+            "G124 release no longer addressed the same actual unforwarded old ROLLBACK")?;
+        relay.release_original_ack(&old.socket, Hold::Rollback)?;
+        let old_result = old.task.await.map_err(|e| e.to_string())?;
+        wait_fact(|| old.socket.release_original_ack.load(Ordering::SeqCst) == 0,
+            deadline, "G124 original held ROLLBACK C/Z release was not consumed inside the original terminal budget").await?;
+        eprintln!("ARTIFACT_TERMINAL_G124_KNOWN_CONTROL original_pid={} actual_error={:?} terminal_elapsed_us={} original_terminal_deadline_elapsed={} relay_entered={} relay_server_ack={} relay_forwarded_ack={} relay_release={}",
+            old.original_pid, old_result.as_ref().err(), started.elapsed().as_micros(), Instant::now() >= deadline,
+            old.socket.entered.load(Ordering::SeqCst), old.socket.server_ack.load(Ordering::SeqCst),
+            old.socket.forwarded_ack.load(Ordering::SeqCst), old.socket.release_original_ack.load(Ordering::SeqCst));
+        require(matches!(old_result, Err(AppError::DependencyUnavailable { dependency: "artifacts" }))
+            && Arc::ptr_eq(&old.socket, &relay.socket_for_pid(old.original_pid)?)
+            && old.socket.pid.load(Ordering::SeqCst) == old.original_pid
+            && old.socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !old.socket.frontend_eof.load(Ordering::SeqCst) && Instant::now() < deadline,
+            "G124 original public Close refusal did not consume its real in-budget source ROLLBACK ACK")?;
+        // The real old task has completed and its original C/Z release is consumed.
+        // Retire only that old fixture latch; a new terminal BEGIN may already exist.
+        let consumed_old_hold = old.socket.withheld.compare_exchange(
+            Hold::Rollback as u8, 0, Ordering::SeqCst, Ordering::SeqCst,
+        ).map_err(|actual| format!("G124 consumed old ROLLBACK latch changed before retirement: {actual}"))?;
+        require(consumed_old_hold == Hold::Rollback as u8
+            && old.socket.withheld.load(Ordering::SeqCst) == 0
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0,
+            "G124 consumed old control latch remained live after its real ACK and task completion")?;
+        eprintln!("ARTIFACT_TERMINAL_G124_CONTROL_CONSUMED original_pid={} consumed_old_hold={consumed_old_hold} entered={} server_ack={} forwarded_ack={} withheld={} release={} terminal_elapsed_us={}",
+            old.original_pid, old.socket.entered.load(Ordering::SeqCst), old.socket.server_ack.load(Ordering::SeqCst),
+            old.socket.forwarded_ack.load(Ordering::SeqCst), old.socket.withheld.load(Ordering::SeqCst),
+            old.socket.release_original_ack.load(Ordering::SeqCst), started.elapsed().as_micros());
+        wait_fact(|| old.socket.forwarded_ack.load(Ordering::SeqCst) & BEGIN_BIT != 0,
+            Instant::now() + Duration::from_secs(2), "G124 terminal did not obtain its own original BEGIN after actual old query drain").await?;
+        let barrier = f.actual.close_armed_artifact_reads(&intent).map_err(|e| e.to_string())?;
+        require(!task.is_finished() && observer.no_worker().is_ok()
+            && matches!(barrier.drain_before(Instant::now() + Duration::from_millis(25)).await,
+                Err(openbot_infra::artifact_read_lifecycle::ArtifactReadDrainError::Elapsed)),
+            "G124 terminal started physical work while original complete allocation owners survived")?;
+        drop(operation); drop(bytes); drop(held_clone);
+        wait_fact(|| physical_inode_fds(&original).is_ok_and(|fds| fds.len() == 1),
+            deadline, "G124 actual public reader FD had not ended after its real control refusal").await?;
+        require(terminal_g124_unlinked_inode_still_owned(&original)?.len() == 1
+            && !task.is_finished() && observer.no_worker().is_ok()
+            && old.socket.entered.load(Ordering::SeqCst) & COMMIT_BIT == 0,
+            "G124 operation/base/clone Drop substituted for the original surviving Bytes slice owner")?;
+        drop(surviving_slice);
+        terminal_g124_inode_really_closed(original).await?;
+        let committed = task.await.map_err(|e| e.to_string())?.map_err(|e| format!("{e:?}"))?;
+        require(committed.state() == TerminalState::Committed && started.elapsed() < Duration::from_secs(5),
+            "G124 same terminal invocation did not continue after real in-budget old owner release")?;
+        terminal_original_ack(f, old.original_pid, &old.socket, true).await?;
+        observer.normal_order()?;
+        let after = database_facts(&f.admin).await?;
+        let event = terminal_verify_once(f, &armed, &after)?;
+        drop(committed);
+        let ack = barrier.drain_before(Instant::now() + Duration::from_secs(2)).await.map_err(|e| format!("{e:?}"))?;
+        require(physical_absent(&f.path()) && database_facts(&f.admin).await? == after,
+            "G124 final actual owner/control/query drain changed committed facts")?;
+        drop(ack); drop(barrier); drop(intent); drop(old.original_connection);
+        eprintln!("ARTIFACT_TERMINAL_G124_REAL_OWNERS original_pid={} actual_audit_event_id={event} genuine_complete_allocation=true original_axum_owned_bytes_clone_and_slice=true actual_public_close_control_tail_query_held=true old_original_rollback_ack_released=true controlled_owned_canonical_unlink=true physical020_success_claimed=false original_unlinked_fd_nlink_zero=true no_permission_while_query_or_last_bytes_owner_live=true actual_original_fd_end=true same_five_second_invocation_commit_ack=true local_copy_or_responder_claimed=false", old.original_pid);
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires held genuine old allocation expiry and actual original control-tail rollback ACK loss"]
+async fn actual_terminal_expiry_and_unknown_reader_or_query_remain_permanently_unproven() {
+    with_fixture("terminal-g124-old-allocation-expiry", true, |f| Box::pin(async move {
+        let original = object_fact(&f.path())?;
+        let observed_record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id)
+            .await.map_err(|e| e.to_string())?;
+        let mut operation = f.application.open_current_artifact_read(f.auth.clone(), f.receipt.artifact_id.clone())
+            .await.map_err(|e| e.to_string())?;
+        let pending = operation.next_block(&f.auth).await.map_err(|e| e.to_string())?;
+        require(pending.prefix_length().map_err(|e| e.to_string())? == TEXT.len(),
+            "G124 expiry did not hold the genuine complete old allocation")?;
+        let frame = pending.handoff_frame(&f.auth).map_err(|e| e.to_string())?;
+        let bytes = axum::body::Bytes::from_owner(PhysicalFrameBytesOwner(frame));
+        let surviving = bytes.clone(); drop(bytes);
+        let intent = f.arm().await.map_err(|e| format!("{e:?}"))?;
+        let armed = database_facts(&f.admin).await?;
+        terminal_g124_unlink_owned_original(f, &original)?;
+        require(terminal_g124_unlinked_inode_still_owned(&original)?.len() == 1,
+            "G124 expiry controlled unlink did not retain the actual old allocation FD")?;
+        let (pid, connection, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let observer = Arc::new(TerminalObserverFacts::default());
+        let started = Instant::now();
+        let expired = f.actual.finalize_armed_explicit_saved_before_with_observer(
+            &f.auth, &intent, started + Duration::from_secs(5),
+            Some(Arc::clone(&observer) as Arc<dyn ArtifactCleanupTerminalObserver>),
+        ).await;
+        require(matches!(expired, Err(TerminalError::DeadlineExpired) | Err(TerminalError::ReadsUnproven)),
+            "G124 held old allocation expiry returned a normal or unrelated terminal result")?;
+        original_five_seconds(started)?;
+        observer.no_worker()?;
+        require(socket.entered.load(Ordering::SeqCst) & BEGIN_BIT != 0
+            && socket.entered.load(Ordering::SeqCst) & COMMIT_BIT == 0
+            && database_facts(&f.admin).await? == armed,
+            "G124 expired old-owner wait entered COMMIT or changed original business facts")?;
+        retired_original(f, pid, &connection, &socket).await?;
+        drop(operation); drop(surviving);
+        terminal_g124_inode_really_closed(original).await?;
+        let fresh = resolve(f.resolver.as_ref(), COOKIE_B).await?;
+        require(fresh == f.auth && !fresh.request_binding().ok_or("G124 fresh expiry Session missing")?.identity()
+            .same_binding(f.auth.request_binding().ok_or("G124 original expiry Session missing")?.identity()),
+            "G124 expiry recovery did not use a distinct genuine current Session")?;
+        fresh.request_binding().ok_or("G124 fresh expiry binding missing")?
+            .verify_current_before(&fresh, Instant::now() + Duration::from_secs(5))
+            .await.map_err(|e| format!("{e:?}"))?;
+        let after_auth = database_facts(&f.admin).await?;
+        only_tables_changed(&armed, &after_auth, &["public.sessions"])?;
+        require(matches!(f.actual.finalize_armed_explicit_saved_before(
+            &fresh, &intent, Instant::now() + Duration::from_secs(5),
+        ).await, Err(TerminalError::ReadsUnproven)), "G124 late old-owner release or new valid Session repaired expired terminal uncertainty")?;
+        physical_poison_refuses(f, &fresh, &intent, &observed_record).await?;
+        require(database_facts(&f.admin).await? == after_auth && physical_absent(&f.path()),
+            "G124 permanent expiry refusal repaired original charge/fence/audit or absent object")?;
+        drop(fresh); drop(intent); drop(observed_record);
+        eprintln!("ARTIFACT_TERMINAL_G124_EXPIRY original_pid={pid} genuine_old_full_allocation_and_fd_held=true controlled_owned_unlink=true physical020_success_claimed=false original_five_second_error=true zero_terminal_worker_or_commit=true original_connection_destructor_eof_backend_gone=true actual_late_original_owner_fd_end=true new_real_session_current=true terminal_and_physical_permanent_same_store_unproven=true no_refund_or_repair=true");
+        Ok(())
+    })).await;
+
+    with_fixture("terminal-g124-real-old-control-ack-unknown", true, |f| Box::pin(async move {
+        let original = object_fact(&f.path())?;
+        let observed_record = f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id)
+            .await.map_err(|e| e.to_string())?;
+        let control_handle = terminal_g124_open_control(f).await?;
+        let intent = f.arm().await.map_err(|e| format!("{e:?}"))?;
+        let armed = database_facts(&f.admin).await?;
+        let started = Instant::now();
+        let old = terminal_g124_hold_original_control_tail(f, control_handle).await?;
+        // Deliberately never release this genuine original upstream ROLLBACK ACK.
+        // The original closed-control budget stays five seconds, and its producer
+        // must report uncertainty and retire the actual guarded driver/connection.
+        let old_result = old.task.await.map_err(|e| e.to_string())?;
+        require(matches!(old_result, Err(AppError::DependencyUnavailable { .. })),
+            "G124 actual old control-tail ACK loss returned a grant or definite source refusal")?;
+        original_five_seconds(started)?;
+        retired_original(f, old.original_pid, &old.original_connection, &old.socket).await?;
+        require(old.socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && old.socket.frontend_eof.load(Ordering::SeqCst)
+            && database_facts(&f.admin).await? == armed && object_fact(&f.path())? == original,
+            "G124 retirement laundered the original lost control ACK or changed armed original facts")?;
+        terminal_g124_inode_really_closed(original.clone()).await?;
+        let fresh = resolve(f.resolver.as_ref(), COOKIE_B).await?;
+        require(fresh == f.auth && !fresh.request_binding().ok_or("G124 new control-loss Session missing")?.identity()
+            .same_binding(f.auth.request_binding().ok_or("G124 old control-loss Session missing")?.identity()),
+            "G124 unknown control recovery reused its original Session binding")?;
+        fresh.request_binding().ok_or("G124 new control-loss binding missing")?
+            .verify_current_before(&fresh, Instant::now() + Duration::from_secs(5))
+            .await.map_err(|e| format!("{e:?}"))?;
+        let after_auth = database_facts(&f.admin).await?;
+        only_tables_changed(&armed, &after_auth, &["public.sessions"])?;
+        let observer = Arc::new(TerminalObserverFacts::default());
+        require(matches!(f.actual.finalize_armed_explicit_saved_before_with_observer(
+            &fresh, &intent, Instant::now() + Duration::from_secs(5),
+            Some(Arc::clone(&observer) as Arc<dyn ArtifactCleanupTerminalObserver>),
+        ).await, Err(TerminalError::ReadsUnproven)), "G124 old true query ACK loss was repaired by a new genuine Session")?;
+        observer.no_worker()?;
+        physical_poison_refuses(f, &fresh, &intent, &observed_record).await?;
+        require(database_facts(&f.admin).await? == after_auth && object_fact(&f.path())? == original
+            && physical_inode_fds(&original)?.is_empty(),
+            "G124 unknown control refusal changed actual object, rows or recreated an original FD owner")?;
+        drop(fresh); drop(intent); drop(observed_record);
+        eprintln!("ARTIFACT_TERMINAL_G124_OLD_CONTROL_UNKNOWN original_pid={} genuine_original_public_close_tail_joint=true original_upstream_rollback_ack=true original_forwarded_rollback_ack=false original_five_second_error=true original_owned_connection_destructor_eof_backend_gone=true old_true_fd_end=true new_real_session_current=true terminal_and_physical_permanent_same_key_refusal=true original_object_and_business_facts_kept=true released_missing_ack=false", old.original_pid);
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires owned strict pair/quota/catalog refusals and legal alternate missing/mismatched receipt inputs"]
+async fn actual_terminal_pair_receipt_schema_or_original_quota_corruption_refuses_without_repair() {
+    for fault in [
+        "workspace_quota",
+        "mixed_record",
+        "mixed_operation",
+        "cleanup_schema",
+    ] {
+        with_fixture("terminal-g124-strict-original-refusal", true, |f| Box::pin(async move {
+            // These GET assertions exercise the genuine missing-source 404 path.
+            // Armed/live or mixed rows alone have distinct closed 503/410 errors.
+            if fault != "cleanup_schema" {
+                hard_delete_original_message(f).await?;
+                read_is_404(f).await?;
+            }
+            let intent = terminal_prepare(f).await?;
+            let schema_metadata = if fault == "cleanup_schema" {
+                let original_metadata = f.application.execute(f.auth.clone(), AppCommand::GetArtifactMetadata(
+                    openbot_contracts::artifacts::GetArtifactMetadata { artifact_id: f.receipt.artifact_id.clone() },
+                )).await.map_err(|e| e.to_string())?;
+                require(matches!(&original_metadata, AppReply::ArtifactMetadata(
+                    openbot_contracts::artifacts::ArtifactMetadata::Available(_))),
+                    "G124 schema input lacked its genuine complete available metadata DTO")?;
+                Some(original_metadata)
+            } else {
+                None
+            };
+            let before = database_facts(&f.admin).await?;
+            let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+            let transaction = controller.transaction().await.map_err(|e| e.to_string())?;
+            let controller_pid: i32 = transaction.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|e| e.to_string())?.get(0);
+            let changed_table = match fault {
+                "workspace_quota" => {
+                    require(transaction.execute(
+                        "UPDATE openbot_internal.artifact_workspace_quotas SET charged_bytes=0 WHERE workspace_id=$1",
+                        &[&f.receipt.source_thread_id.as_str()],
+                    ).await.map_err(|e| e.to_string())? == 1, "G124 original insufficient quota input was not committed")?;
+                    "openbot_internal.artifact_workspace_quotas"
+                }
+                "mixed_record" => {
+                    // Legal available -> deleted transition with all eight payloads
+                    // cleared. Native identity guards remain fully enabled. Operation
+                    // is still live and fence is armed, so the terminal pair is mixed.
+                    require(transaction.execute(
+                        "UPDATE openbot_internal.artifact_records SET status='deleted',workspace_kind=NULL,workspace_id=NULL,media_type=NULL,byte_length=NULL,sha256=NULL,retention_class=NULL,saved_by=NULL,saved_at=NULL WHERE artifact_id=$1 AND status='available'",
+                        &[&f.receipt.artifact_id],
+                    ).await.map_err(|e| e.to_string())? == 1, "G124 legal controlled mixed record was not reached")?;
+                    "openbot_internal.artifact_records"
+                }
+                "mixed_operation" => {
+                    require(transaction.execute(
+                        "UPDATE openbot_internal.artifact_save_operations SET state='deleted',store_id=NULL,workspace_kind=NULL,workspace_id=NULL,expected_sha256=NULL,expected_bytes=NULL,charged_bytes=NULL,actual_absent=NULL,actual_byte_length=NULL,actual_sha256=NULL,actual_location=NULL,observation_phase=NULL,created_at=NULL WHERE operation_id=$1 AND state='available'",
+                        &[&f.receipt.operation_id],
+                    ).await.map_err(|e| e.to_string())? == 1, "G124 legal controlled mixed operation was not reached")?;
+                    "openbot_internal.artifact_save_operations"
+                }
+                _ => {
+                    transaction.batch_execute("ALTER TABLE openbot_internal.artifact_cleanup_fences RENAME CONSTRAINT artifact_cleanup_fences_phase TO owned_terminal_g124_phase_drift")
+                        .await.map_err(|e| e.to_string())?;
+                    ""
+                }
+            };
+            transaction.commit().await.map_err(|e| e.to_string())?;
+            drop(controller);
+            let controlled = database_facts(&f.admin).await?;
+            only_tables_changed(&before, &controlled,
+                if changed_table.is_empty() { &[] } else { std::slice::from_ref(&changed_table) })?;
+            match fault {
+                "workspace_quota" => controller_update_columns(&before, &controlled, changed_table,
+                    "workspace_id", f.receipt.source_thread_id.as_str(), &["charged_bytes"])?,
+                "mixed_record" => {
+                    let mut expected = terminal_original_row(&before, changed_table, "artifact_id", &f.receipt.artifact_id)?.clone();
+                    expected["status"] = Value::String("deleted".to_owned());
+                    for field in TERMINAL_RECORD_NULLS { expected[*field] = Value::Null; }
+                    terminal_exact_one_row_change(&before, &controlled, changed_table, "artifact_id", &f.receipt.artifact_id, &expected)?;
+                }
+                "mixed_operation" => {
+                    let mut expected = terminal_original_row(&before, changed_table, "operation_id", &f.receipt.operation_id)?.clone();
+                    expected["state"] = Value::String("deleted".to_owned());
+                    for field in TERMINAL_OPERATION_NULLS { expected[*field] = Value::Null; }
+                    terminal_exact_one_row_change(&before, &controlled, changed_table, "operation_id", &f.receipt.operation_id, &expected)?;
+                }
+                _ => {}
+            }
+            let (pid, connection, socket) = f.original().await?;
+            clear_transaction_facts(&socket);
+            let observer = Arc::new(TerminalObserverFacts::default());
+            let refused = f.actual.finalize_armed_explicit_saved_before_with_observer(
+                &f.auth, &intent, Instant::now() + Duration::from_secs(5),
+                Some(Arc::clone(&observer) as Arc<dyn ArtifactCleanupTerminalObserver>),
+            ).await;
+            match fault {
+                "workspace_quota" => require(matches!(refused, Err(TerminalError::Corrupt { field: "workspace_quota" })),
+                    "G124 strict terminal did not refuse its actual insufficient original aggregate")?,
+                "mixed_record" | "mixed_operation" => require(matches!(refused, Err(TerminalError::Conflict)),
+                    "G124 strict terminal coerced a legal but mixed live/completed pair")?,
+                _ => require(matches!(refused, Err(TerminalError::Corrupt { field: "schema" })),
+                    "G124 actual cleanup catalog drift was not a schema refusal")?,
+            }
+            observer.no_worker()?;
+            if fault == "cleanup_schema" {
+                require(socket.entered.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT | ROLLBACK_BIT) == 0,
+                    "G124 schema refusal ran an original terminal transaction")?;
+                retired_original(f, pid, &connection, &socket).await?;
+                let after_metadata = f.application.execute(f.auth.clone(), AppCommand::GetArtifactMetadata(
+                    openbot_contracts::artifacts::GetArtifactMetadata { artifact_id: f.receipt.artifact_id.clone() },
+                )).await.map_err(|e| e.to_string())?;
+                require(schema_metadata.as_ref() == Some(&after_metadata),
+                    "G124 cleanup-only schema drift changed the full original registration-bound metadata DTO")?;
+                require(matches!(f.actual.observe_read_record(&f.auth, &f.receipt.artifact_id).await,
+                    Err(openbot_application::ArtifactAdministrationError::Corrupt { field: "read_cleanup_schema" })),
+                    "G124 actual reader schema observer did not reject the original cleanup catalog drift")?;
+                require(matches!(f.application.read_current_artifact_chunk(f.auth.clone(), f.receipt.artifact_id.clone()).await,
+                    Err(AppError::DependencyUnavailable { dependency: "host_request_binding" })),
+                    "G124 closed-body current Host/source schema observation did not return its exact refusal")?;
+            } else {
+                terminal_original_ack(f, pid, &socket, false).await?;
+                read_is_404(f).await?;
+            }
+            require(database_facts(&f.admin).await? == controlled && physical_absent(&f.path())
+                && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id)),
+                "G124 refused terminal or GET repaired pair, receipt, charge, seven identities, Run32, audit or actual absence")?;
+            drop(intent);
+            eprintln!("ARTIFACT_TERMINAL_G124_STRICT fault={fault} original_pid={pid} controller_pid={controller_pid} controlled_legal_row_or_actual_catalog_input=true sql_guards_not_disabled=true real_original_refusal=true normal_worker_false=true original_terminal_commit_false=true original_business_rows_and_positive_receipt_kept=true get_no_repair=true");
+            Ok(())
+        })).await;
+    }
+
+    // Missing/mismatched positive receipts can be legally inserted in a NEW
+    // namespace. A genuine current arm rejects each before it can mint an
+    // ArmedIntent. This is explicit arm coverage, not fabricated terminal reach.
+    for receipt_mode in [0, 2] {
+        with_fixture("terminal-g124-legal-strict-receipt-input", true, |f| Box::pin(async move {
+            let live = database_facts(&f.admin).await?;
+            let original_object = object_fact(&f.path())?;
+            let alternate = terminal_g124_alternate_namespace(f, &live, receipt_mode).await?;
+            let controlled = database_facts(&f.admin).await?;
+            let (pid, _, socket) = f.original().await?;
+            clear_transaction_facts(&socket);
+            let refused = alternate.actual.arm_explicit_saved_delete_before(&alternate.auth, &f.receipt.artifact_id,
+                Instant::now() + Duration::from_secs(5)).await;
+            require(matches!(refused, Err(Error::Corrupt { field: "positive_receipt" })),
+                "G124 actual arm manufactured a valid intent from legal missing/mismatched receipt input")?;
+            terminal_original_ack(f, pid, &socket, false).await?;
+            require(database_facts(&f.admin).await? == controlled && object_fact(&f.path())? == original_object,
+                "G124 strict receipt refusal repaired either namespace or original saved object")?;
+            let original_receipt = terminal_original_row(&live, "openbot_internal.artifact_saved_receipts", "operation_id", &f.receipt.operation_id)?;
+            let retained = controlled["openbot_internal.artifact_saved_receipts"].as_array().ok_or("G124 receipt physical facts absent")?
+                .iter().any(|entry| &entry["row"] == original_receipt);
+            require(retained, "G124 original append-only positive receipt was changed by alternate input")?;
+            alternate.close();
+            eprintln!("ARTIFACT_TERMINAL_G124_RECEIPT receipt_mode={receipt_mode} original_pid={pid} controlled_legal_new_namespace_same_ids=true original_append_only_receipt_unchanged=true real_arm_positive_receipt_refused=true arm_original_rollback_ack=true valid_terminal_intent_minted=false terminal_bad_receipt_decoder_runtime=NOT_REACHED_SQL_AND_ARM_GUARDS_RETAINED");
+            Ok(())
+        })).await;
+    }
+}
+
+// G03/G05 use only original wire packets, owned SQL controllers and actual owner destruction.
+// Observer cutpoints enlarge a controlled race; they never serve as an ACK or FD-end oracle.
+fn terminal_g35_is_original_audit_fault(packet: &[u8]) -> bool {
+    if packet.first() != Some(&b'E') || packet.len() < 6 {
+        return false;
+    }
+    let declared = u32::from_be_bytes([packet[1], packet[2], packet[3], packet[4]]) as usize;
+    if declared.checked_add(1) != Some(packet.len()) {
+        return false;
+    }
+    let mut offset = 5;
+    let mut code = false;
+    let mut message = false;
+    while offset < packet.len() && packet[offset] != 0 {
+        let field = packet[offset];
+        offset += 1;
+        let Some(end) = packet[offset..].iter().position(|byte| *byte == 0) else {
+            return false;
+        };
+        let value = &packet[offset..offset + end];
+        if field == b'C' {
+            code = value == b"P0001";
+        } else if field == b'M' {
+            message = value == b"owned terminal cleanup audit insert fault";
+        }
+        offset += end + 1;
+    }
+    code && message && offset + 1 == packet.len() && packet[offset] == 0
+}
+
+#[derive(Default)]
+struct TerminalG35PhaseFacts {
+    phases: Vec<TerminalPhase>,
+    phase_times: Vec<(TerminalPhase, Instant)>,
+    released: bool,
+    invalid_observation: bool,
+    controller_expired: bool,
+    original_runtime: Option<(tokio::runtime::Handle, std::thread::ThreadId)>,
+}
+struct TerminalG35Gate {
+    artifact_id: Uuid,
+    pause: Option<TerminalPhase>,
+    panic_after_original_ack: bool,
+    controller_deadline: Instant,
+    facts: Mutex<TerminalG35PhaseFacts>,
+    changed: Condvar,
+}
+impl TerminalG35Gate {
+    fn terminal_g35_new(
+        f: &Fixture,
+        pause: Option<TerminalPhase>,
+        panic_after_original_ack: bool,
+    ) -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Self {
+            artifact_id: Uuid::parse_str(&f.receipt.artifact_id).map_err(|e| e.to_string())?,
+            pause,
+            panic_after_original_ack,
+            // This bounds a test callback's cleanup only; it never changes the producer's five seconds.
+            controller_deadline: Instant::now() + Duration::from_secs(9),
+            facts: Mutex::new(TerminalG35PhaseFacts::default()),
+            changed: Condvar::new(),
+        }))
+    }
+    fn terminal_g35_saw(&self, phase: TerminalPhase) -> bool {
+        self.facts
+            .lock()
+            .is_ok_and(|facts| facts.phases.contains(&phase))
+    }
+    fn terminal_g35_release(&self) {
+        let mut facts = self.facts.lock().unwrap_or_else(|error| error.into_inner());
+        facts.released = true;
+        self.changed.notify_all();
+    }
+    fn terminal_g35_check(&self) -> Result<(), String> {
+        let facts = self
+            .facts
+            .lock()
+            .map_err(|_| "terminal G35 observation poisoned")?;
+        require(
+            !facts.invalid_observation && !facts.controller_expired,
+            "terminal G35 observer saw a foreign artifact/leaf FD or its cleanup controller expired",
+        )
+    }
+    fn terminal_g35_no_worker(&self) -> Result<(), String> {
+        self.terminal_g35_check()?;
+        require(
+            self.facts
+                .lock()
+                .map_err(|_| "terminal G35 observation poisoned")?
+                .phases
+                .is_empty(),
+            "terminal G35 preworker refusal reserved a worker or claimed resource end",
+        )
+    }
+    fn terminal_g35_runtime(
+        &self,
+    ) -> Result<(tokio::runtime::Handle, std::thread::ThreadId), String> {
+        self.facts
+            .lock()
+            .map_err(|_| "terminal G35 runtime observation poisoned")?
+            .original_runtime
+            .clone()
+            .ok_or_else(|| "terminal G35 original BeforeCommit runtime not reached".to_owned())
+    }
+}
+impl ArtifactCleanupTerminalObserver for TerminalG35Gate {
+    fn on_phase(&self, phase: TerminalPhase, artifact_id: Uuid, original_leaf_fd: Option<i32>) {
+        let mut facts = self
+            .facts
+            .lock()
+            .expect("terminal G35 original observations");
+        facts.invalid_observation |= artifact_id != self.artifact_id || original_leaf_fd.is_some();
+        facts.phases.push(phase);
+        facts.phase_times.push((phase, Instant::now()));
+        if phase == TerminalPhase::BeforeCommit {
+            facts.original_runtime = Some((
+                tokio::runtime::Handle::current(),
+                std::thread::current().id(),
+            ));
+        }
+        self.changed.notify_all();
+        drop(facts);
+        if self.panic_after_original_ack && phase == TerminalPhase::AfterCommitAckBeforeWorkerEnd {
+            // Actual panic destroys the independently owned main supervisor. It does not abort the caller.
+            panic!("owned terminal G35 original post-ACK main observer panic");
+        }
+        if self.pause == Some(phase) {
+            // Only the existing multi-thread post-ACK pause legs enter this branch. Let
+            // that executor hand off its core while this same synchronous callback waits;
+            // the dedicated current-thread late-poll leg has pause=None and never enters.
+            tokio::task::block_in_place(|| {
+                let mut facts = self
+                    .facts
+                    .lock()
+                    .expect("terminal G35 original phase controller");
+                while !facts.released {
+                    let Some(wait) = self
+                        .controller_deadline
+                        .checked_duration_since(Instant::now())
+                    else {
+                        facts.controller_expired = true;
+                        break;
+                    };
+                    let (next, _) = self
+                        .changed
+                        .wait_timeout(facts, wait)
+                        .expect("terminal G35 original phase controller");
+                    facts = next;
+                }
+            });
+        }
+    }
+}
+struct TerminalG35Release(Arc<TerminalG35Gate>);
+impl Drop for TerminalG35Release {
+    fn drop(&mut self) {
+        self.0.terminal_g35_release();
+    }
+}
+async fn terminal_g35_wait_phase(
+    gate: &TerminalG35Gate,
+    phase: TerminalPhase,
+    deadline: Instant,
+) -> Result<(), String> {
+    wait_fact(
+        || gate.terminal_g35_saw(phase),
+        deadline,
+        "terminal G35 actual original phase did not occur before its controlled deadline",
+    )
+    .await?;
+    require(
+        Instant::now() < deadline,
+        "terminal G35 controller observed the original phase only after its controlled deadline",
+    )
+}
+fn terminal_g35_log_controller(
+    gate: &TerminalG35Gate,
+    pid: i32,
+    socket: &SocketFacts,
+    phase: TerminalPhase,
+    started: Instant,
+    deadline: Instant,
+    label: &'static str,
+) -> Result<(), String> {
+    let phase_at = gate
+        .facts
+        .lock()
+        .map_err(|_| "terminal G35 controller observation poisoned")?
+        .phase_times
+        .iter()
+        .find_map(|(observed, at)| (*observed == phase).then_some(*at));
+    let now = Instant::now();
+    eprintln!(
+        "ARTIFACT_TERMINAL_G35_CONTROLLER label={label} original_pid={pid} actual_socket_pid={} entered={} server_ack={} forwarded_ack={} withheld={} release_request={} original_eof={} phase={phase:?} phase_at={phase_at:?} phase_elapsed_us={:?} controller_elapsed_us={} original_budget_remaining_us={:?}",
+        socket.pid.load(Ordering::SeqCst),
+        socket.entered.load(Ordering::SeqCst),
+        socket.server_ack.load(Ordering::SeqCst),
+        socket.forwarded_ack.load(Ordering::SeqCst),
+        socket.withheld.load(Ordering::SeqCst),
+        socket.release_original_ack.load(Ordering::SeqCst),
+        socket.frontend_eof.load(Ordering::SeqCst),
+        phase_at
+            .and_then(|at| at.checked_duration_since(started))
+            .map(|elapsed| elapsed.as_micros()),
+        now.saturating_duration_since(started).as_micros(),
+        deadline
+            .checked_duration_since(now)
+            .map(|remaining| remaining.as_micros()),
+    );
+    Ok(())
+}
+async fn terminal_g35_worker_resources_ended(
+    gate: &TerminalG35Gate,
+    original_leaf: &ObjectFact,
+) -> Result<(), String> {
+    terminal_g35_wait_phase(
+        gate,
+        TerminalPhase::WorkerEnded,
+        Instant::now() + Duration::from_secs(2),
+    )
+    .await?;
+    // Actual process-scoped inode FD enumeration complements the producer's reviewed IO-first scope.
+    require(
+        physical_inode_fds(original_leaf)?.is_empty(),
+        "terminal G35 original leaf inode retained a real descriptor after worker resource end",
+    )?;
+    gate.terminal_g35_check()
+}
+async fn terminal_g35_original_normal_ack(
+    f: &Fixture,
+    pid: i32,
+    socket: &SocketFacts,
+    commit: bool,
+    original_hold: Option<Hold>,
+) -> Result<(), String> {
+    let bit = if commit { COMMIT_BIT } else { ROLLBACK_BIT };
+    require(
+        socket.pid.load(Ordering::SeqCst) == pid
+            && socket.entered.load(Ordering::SeqCst) & (BEGIN_BIT | bit) == (BEGIN_BIT | bit)
+            && socket.server_ack.load(Ordering::SeqCst) & (BEGIN_BIT | bit) == (BEGIN_BIT | bit)
+            && socket.forwarded_ack.load(Ordering::SeqCst) & (BEGIN_BIT | bit) == (BEGIN_BIT | bit)
+            && socket.withheld.load(Ordering::SeqCst) == original_hold.map_or(0, |hold| hold as u8)
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !socket.frontend_eof.load(Ordering::SeqCst),
+        "terminal G35 normal disposition lacked its same true original unmodified packets",
+    )?;
+    if !commit {
+        require(
+            socket.entered.load(Ordering::SeqCst) & COMMIT_BIT == 0,
+            "terminal G35 known refused transaction actually entered COMMIT",
+        )?;
+    }
+    let client = f.pool.get().await.map_err(|e| e.to_string())?;
+    require(
+        client
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .map_err(|e| e.to_string())?
+            .get::<_, i32>(0)
+            == pid,
+        "terminal G35 normal original disposition did not leave the actual original connection reusable",
+    )
+}
+async fn terminal_g35_fresh_valid_auth(f: &Fixture) -> Result<AuthContext, String> {
+    let fresh = resolve(f.resolver.as_ref(), COOKIE_B).await?;
+    require(
+        fresh == f.auth
+            && !fresh
+                .request_binding()
+                .ok_or("terminal G35 fresh original Session binding missing")?
+                .identity()
+                .same_binding(
+                    f.auth
+                        .request_binding()
+                        .ok_or("terminal G35 old original Session binding missing")?
+                        .identity(),
+                ),
+        "terminal G35 retry did not use a new genuine Session with the same saving owner",
+    )?;
+    fresh
+        .request_binding()
+        .ok_or("terminal G35 fresh original Session binding missing")?
+        .verify_current_before(&fresh, Instant::now() + Duration::from_secs(5))
+        .await
+        .map_err(|e| format!("terminal G35 independent genuine Session validity: {e:?}"))?;
+    Ok(fresh)
+}
+async fn terminal_g35_poison_refuses_without_mutation(
+    f: &Fixture,
+    intent: &ArmedArtifactCleanupIntent,
+    original_effects: &BTreeMap<String, Value>,
+) -> Result<(), String> {
+    let fresh = terminal_g35_fresh_valid_auth(f).await?;
+    let after_auth = database_facts(&f.admin).await?;
+    physical_session_b_idle_only(original_effects, &after_auth)?;
+    let observer = Arc::new(TerminalObserverFacts::default());
+    require(
+        matches!(
+            f.actual
+                .finalize_armed_explicit_saved_before_with_observer(
+                    &fresh,
+                    intent,
+                    Instant::now() + Duration::from_secs(2),
+                    Some(observer.clone())
+                )
+                .await,
+            Err(TerminalError::ReadsUnproven)
+        ),
+        "terminal G35 same live Store/key permanent uncertainty was cleared by new valid Session or completed DB rows",
+    )?;
+    observer.no_worker()?;
+    require(
+        database_facts(&f.admin).await? == after_auth,
+        "terminal G35 permanently unproved retry wrote a row, repeated a refund or appended another audit",
+    )
+}
+async fn terminal_g35_wait_true_held_commit(
+    socket: &SocketFacts,
+    deadline: Instant,
+) -> Result<(), String> {
+    wait_fact(
+        || socket.withheld.load(Ordering::SeqCst) == Hold::Commit as u8,
+        deadline,
+        "terminal G35 actual original COMMIT CommandComplete was not held",
+    )
+    .await?;
+    require(
+        socket.entered.load(Ordering::SeqCst) & COMMIT_BIT != 0
+            && socket.server_ack.load(Ordering::SeqCst) & COMMIT_BIT != 0
+            && socket.forwarded_ack.load(Ordering::SeqCst) & COMMIT_BIT == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+        "terminal G35 held disposition lacked a true upstream original COMMIT or had already been forwarded",
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires true original quota/audit waits, owned current Session/deny controllers and real rollback ACK"]
+async fn actual_terminal_current_host_loss_after_quota_and_audit_wait_rolls_back() {
+    for wait in ["quota", "audit"] {
+        for mutation in [
+            "session_deleted",
+            "session_epoch",
+            "session_generation",
+            "deny",
+        ] {
+            with_fixture("terminal-g35-current-after-real-wait", true, |f| Box::pin(async move {
+                let leaf = object_fact(&f.path())?;
+                let intent = Arc::new(terminal_prepare(f).await?);
+                let before = database_facts(&f.admin).await?;
+                let (pid, _, socket) = f.original().await?;
+                clear_transaction_facts(&socket);
+                let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+                let tx = controller.transaction().await.map_err(|e| e.to_string())?;
+                let controller_pid: i32 = tx.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|e| e.to_string())?.get(0);
+                let fragment = if wait == "quota" {
+                    tx.query_one("SELECT charged_bytes FROM openbot_internal.artifact_workspace_quotas WHERE workspace_id=$1 FOR UPDATE",
+                        &[&f.receipt.source_thread_id.as_str()]).await.map_err(|e| e.to_string())?;
+                    "artifact_workspace_quotas"
+                } else {
+                    tx.query_one("SELECT pg_advisory_xact_lock($1)", &[&AUDIT_LOCK]).await.map_err(|e| e.to_string())?;
+                    "pg_advisory_xact_lock"
+                };
+                let observer = TerminalG35Gate::terminal_g35_new(f, None, false)?;
+                let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+                let started = Instant::now();
+                let task = tokio::spawn(async move {
+                    actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                        started + Duration::from_secs(5), Some(original_observer)).await
+                });
+                let controlled = async {
+                    wait_blocked(&f.admin, pid, fragment, controller_pid).await?;
+                    // The actor/role rows are already locked by the original producer. These
+                    // independently writable original Session/deny rows require no bypass of them.
+                    let changed = match mutation {
+                        "session_deleted" => tx.execute("DELETE FROM public.sessions WHERE id=$1", &[&A_ID]).await,
+                        "session_epoch" => tx.execute("UPDATE public.sessions SET token='owned-terminal-g35-replaced-session-epoch' WHERE id=$1", &[&A_ID]).await,
+                        "session_generation" => tx.execute("UPDATE public.sessions SET auth_generation=1 WHERE id=$1", &[&A_ID]).await,
+                        _ => tx.execute("INSERT INTO public.revoked_access(email,revoked_by) VALUES('cleanup-owner@example.test','owned-terminal-g35-controller')", &[]).await,
+                    }.map_err(|e| e.to_string())?;
+                    require(changed == 1, "terminal G35 current controller did not change its unique owned original row")
+                }.await;
+                let controller_ack = tx.commit().await.map_err(|e| e.to_string());
+                drop(controller);
+                let outcome = task.await.map_err(|e| e.to_string())?;
+                controlled?; controller_ack?;
+                require(started.elapsed() < Duration::from_secs(5)
+                    && matches!(outcome, Err(TerminalError::NotVisible) | Err(TerminalError::Host(HostRequestBindingError::NotCurrent))),
+                    "terminal G35 quota/audit wait reused stale permitted Host or relabelled explicit refusal as infrastructure uncertainty")?;
+                terminal_g35_original_normal_ack(f, pid, &socket, false, None).await?;
+                if wait == "quota" {
+                    observer.terminal_g35_no_worker()?;
+                } else {
+                    require(observer.terminal_g35_saw(TerminalPhase::AbsenceGuarded)
+                        && !observer.terminal_g35_saw(TerminalPhase::BeforeCommit)
+                        && !observer.terminal_g35_saw(TerminalPhase::AfterCommitAckBeforeWorkerEnd),
+                        "terminal G35 audit wait did not retain its actual guarded worker or reached COMMIT despite current refusal")?;
+                    terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+                }
+                let after = database_facts(&f.admin).await?;
+                let table = if mutation == "deny" { "public.revoked_access" } else { "public.sessions" };
+                only_tables_changed(&before, &after, &[table])?;
+                match mutation {
+                    "session_deleted" => controller_removed_row(&before, &after, table, "id", A_ID)?,
+                    "session_epoch" => controller_update_columns(&before, &after, table, "id", A_ID, &["token"])?,
+                    "session_generation" => controller_update_columns(&before, &after, table, "id", A_ID, &["auth_generation"])?,
+                    _ => controller_inserted_row(&before, &after, table, "email", "cleanup-owner@example.test")?,
+                }
+                require(physical_absent(&f.path())
+                    && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id))
+                    && physical_inode_fds(&leaf)?.is_empty(),
+                    "terminal G35 current refusal recreated a saved body/staging name or retained original leaf FD")?;
+                eprintln!("ARTIFACT_TERMINAL_G03_CURRENT wait={wait} mutation={mutation} original_pid={pid} controller_pid={controller_pid} actual_pg_blocking_pid=true controller_commit_ack=true original_rollback_ack=true producer_business_and_physical_rows_unchanged=true original_charge_kept=true actor_role_locks_not_bypassed=true");
+                drop(intent);
+                Ok(())
+            })).await;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires reached true cleanup_completed INSERT fault, genuine P0001 wire response and original rollback"]
+async fn actual_terminal_reached_audit_insert_fault_rolls_back_original_mutations() {
+    with_fixture("terminal-g35-actual-audit-insert-fault", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        require(!socket.terminal_g35_audit_fault_p0001.load(Ordering::SeqCst)
+            && !socket.terminal_g35_audit_fault_error_forwarded.load(Ordering::SeqCst),
+            "terminal G35 audit fault evidence existed before actual terminal entry")?;
+        f.relay.as_ref().ok_or("terminal G35 original relay missing")?.arm(Hold::Begin);
+        let observer = TerminalG35Gate::terminal_g35_new(f, None, false)?;
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move {
+            actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                started + Duration::from_secs(5), Some(original_observer)).await
+        });
+        wait_fact(|| socket.withheld.load(Ordering::SeqCst) == Hold::Begin as u8,
+            started + Duration::from_secs(2), "terminal G35 audit fault did not hold the true original post-schema BEGIN ACK").await?;
+        require(socket.entered.load(Ordering::SeqCst) & BEGIN_BIT != 0
+            && socket.server_ack.load(Ordering::SeqCst) & BEGIN_BIT != 0
+            && socket.forwarded_ack.load(Ordering::SeqCst) & BEGIN_BIT == 0,
+            "terminal G35 fault was installed before original schema validation or after its delivered BEGIN")?;
+        let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+        let tx = controller.transaction().await.map_err(|e| e.to_string())?;
+        tx.batch_execute("CREATE SEQUENCE public.terminal_g35_audit_fault_seen; CREATE FUNCTION public.terminal_g35_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type='artifact.cleanup_completed' THEN PERFORM nextval('public.terminal_g35_audit_fault_seen'); RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='owned terminal cleanup audit insert fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER terminal_g35_audit_fault BEFORE INSERT ON public.audit_events FOR EACH ROW EXECUTE FUNCTION public.terminal_g35_audit_fault();")
+            .await.map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        drop(controller);
+        require(database_facts(&f.admin).await? == before,
+            "terminal G35 owned fault instrumentation changed a business row")?;
+        f.relay.as_ref().ok_or("terminal G35 original relay missing")?.release_original_ack(&socket, Hold::Begin)?;
+        let result = task.await.map_err(|e| e.to_string())?;
+        require(started.elapsed() < Duration::from_secs(5) && matches!(result, Err(TerminalError::Unavailable)),
+            "terminal G35 reached actual audit fault was accepted or misreported as a schema refusal")?;
+        terminal_g35_original_normal_ack(f, pid, &socket, false, Some(Hold::Begin)).await?;
+        require(socket.terminal_g35_audit_fault_p0001.load(Ordering::SeqCst)
+            && socket.terminal_g35_audit_fault_error_forwarded.load(Ordering::SeqCst),
+            "terminal G35 audit INSERT fault had no actual original P0001/ErrorResponse or it was not forwarded unchanged")?;
+        let controller = f.admin.get().await.map_err(|e| e.to_string())?;
+        let seen = controller.query_one("SELECT last_value,is_called FROM public.terminal_g35_audit_fault_seen", &[])
+            .await.map_err(|e| e.to_string())?;
+        require(seen.get::<_, i64>(0) == 1 && seen.get::<_, bool>(1),
+            "terminal G35 audit fault was inferred from its trigger name instead of a reached real INSERT")?;
+        require(observer.terminal_g35_saw(TerminalPhase::AbsenceGuarded)
+            && !observer.terminal_g35_saw(TerminalPhase::BeforeCommit)
+            && !observer.terminal_g35_saw(TerminalPhase::AfterCommitAckBeforeWorkerEnd),
+            "terminal G35 fault failed before its guarded worker or got as far as terminal COMMIT")?;
+        terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+        require(database_facts(&f.admin).await? == before && physical_absent(&f.path())
+            && physical_absent(&f.root.0.join("staging").join(&f.receipt.artifact_id)),
+            "terminal G35 true original rollback did not restore all record/operation/fence/quota/audit physical rows")?;
+        controller.batch_execute("DROP TRIGGER terminal_g35_audit_fault ON public.audit_events; DROP FUNCTION public.terminal_g35_audit_fault(); DROP SEQUENCE public.terminal_g35_audit_fault_seen;")
+            .await.map_err(|e| e.to_string())?;
+        drop(controller);
+        require(database_facts(&f.admin).await? == before,
+            "terminal G35 owned fault teardown changed original business facts")?;
+        eprintln!("ARTIFACT_TERMINAL_G03_AUDIT_FAULT original_pid={pid} schema_passed_before_actual_begin=true controller_install_commit_ack=true genuine_cleanup_completed_insert_sequence1=true original_errorresponse_p0001_forwarded=true original_rollback_ack=true all_original_business_physical_rows_restored=true no_refund_or_audit_committed=true");
+        drop(intent);
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires actual durable COMMIT with lost original ACK, real driver/EOF/backend closure and new valid Session"]
+async fn actual_terminal_commit_ack_loss_preserves_effects_and_refuses_completed_retry() {
+    with_fixture("terminal-g35-original-commit-ack-loss", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        let (pid, connection, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        f.relay.as_ref().ok_or("terminal G35 original relay missing")?.arm(Hold::Commit);
+        let observer = TerminalG35Gate::terminal_g35_new(f, None, false)?;
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move {
+            actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                started + Duration::from_secs(5), Some(original_observer)).await
+        });
+        terminal_g35_wait_true_held_commit(&socket, started + Duration::from_secs(2)).await?;
+        let committed = database_facts(&f.admin).await?;
+        let event_id = terminal_verify_once(f, &before, &committed)?;
+        let result = task.await.map_err(|e| e.to_string())?;
+        require(matches!(result, Err(TerminalError::CommitUnknown) | Err(TerminalError::DeadlineExpired)),
+            "terminal G35 lost true original COMMIT ACK produced a normal result or a known normal ACK")?;
+        original_five_seconds(started)?;
+        terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+        require(!observer.terminal_g35_saw(TerminalPhase::AfterCommitAckBeforeWorkerEnd)
+            && socket.forwarded_ack.load(Ordering::SeqCst) & COMMIT_BIT == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+            "terminal G35 lost original ACK was manufactured by observer, trace or cleanup")?;
+        retired_original(f, pid, &connection, &socket).await?;
+        require(database_facts(&f.admin).await? == committed && physical_absent(&f.path()),
+            "terminal G35 unknown original disposition erased true already committed rows/refund/audit")?;
+        terminal_g35_poison_refuses_without_mutation(f, &intent, &committed).await?;
+        eprintln!("ARTIFACT_TERMINAL_G05_LOST_ACK original_pid={pid} actual_audit_event_id={event_id} durable_original_commit_effects=true original_upstream_commit_ack=true forwarded_original_ack=false original_budget5s=true actual_worker_resources_ended=true original_driver_destroyed_eof_backend_gone=true new_valid_session_same_store_permanent_unproven=true repeat_refund_audit=false normal_result=false");
+        drop(intent);
+        Ok(())
+    })).await;
+}
+
+struct TerminalG35RuntimeBlock {
+    thread: std::thread::ThreadId,
+    entered: AtomicBool,
+    released: Mutex<bool>,
+    changed: Condvar,
+}
+impl TerminalG35RuntimeBlock {
+    fn terminal_g35_block_here(&self) {
+        assert_eq!(
+            std::thread::current().id(),
+            self.thread,
+            "terminal G35 controlled task did not run on the original single supervisor thread"
+        );
+        let mut released = self.released.lock().expect("terminal G35 runtime control");
+        self.entered.store(true, Ordering::SeqCst);
+        let cleanup_deadline = Instant::now() + Duration::from_secs(8);
+        while !*released {
+            let Some(wait) = cleanup_deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            released = self
+                .changed
+                .wait_timeout(released, wait)
+                .expect("terminal G35 runtime control")
+                .0;
+        }
+    }
+    fn terminal_g35_release(&self) {
+        *self
+            .released
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = true;
+        self.changed.notify_all();
+    }
+}
+struct TerminalG35RuntimeRelease(Arc<TerminalG35RuntimeBlock>);
+impl Drop for TerminalG35RuntimeRelease {
+    fn drop(&mut self) {
+        self.0.terminal_g35_release();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires real original COMMIT packets, parent-runtime driver and a controlled original supervisor thread stall"]
+async fn actual_terminal_commit_ack_held_then_late_never_becomes_grant() {
+    with_fixture("terminal-g35-original-commit-late-poll", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        // Checkout occurs in THIS parent runtime. The same original driver and relay remain here.
+        let (pid, connection, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        f.relay.as_ref().ok_or("terminal G35 original relay missing")?.arm(Hold::Commit);
+        let observer = TerminalG35Gate::terminal_g35_new(f, None, false)?;
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+        let original_connection = connection.clone();
+        let started = Instant::now();
+        let original_deadline = started + Duration::from_secs(5);
+        let thread = std::thread::spawn(move || -> Result<Result<TerminalState, TerminalError>, String> {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            runtime.block_on(async move {
+                let result = actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                    original_deadline, Some(original_observer)).await.map(|observation| observation.state());
+                // Keep this exact runtime alive until the real original query owner/driver ends.
+                // Returning from the public wait alone must not manufacture supervisor Drop.
+                let destruction = original_connection.wait_for_destruction_before(Instant::now() + Duration::from_secs(2))
+                    .await.map_err(|e| e.to_string())?;
+                require(destruction == ConnectionDestruction::ConnectionDestroyed,
+                    "terminal G35 late-poll runtime ended without actual original driver destruction")?;
+                Ok(result)
+            })
+        });
+        let controlled = async {
+            terminal_g35_wait_true_held_commit(&socket, started + Duration::from_secs(2)).await?;
+            let committed = database_facts(&f.admin).await?;
+            let event_id = terminal_verify_once(f, &before, &committed)?;
+            let (runtime, runtime_thread) = observer.terminal_g35_runtime()?;
+            let blocker = Arc::new(TerminalG35RuntimeBlock {
+                thread: runtime_thread, entered: AtomicBool::new(false), released: Mutex::new(false), changed: Condvar::new(),
+            });
+            let release = TerminalG35RuntimeRelease(blocker.clone());
+            let actual_blocker = blocker.clone();
+            let blocking_task = runtime.spawn(async move { actual_blocker.terminal_g35_block_here(); });
+            wait_fact(|| blocker.entered.load(Ordering::SeqCst), started + Duration::from_secs(3),
+                "terminal G35 original supervisor thread never entered its post-COMMIT controlled stall").await?;
+            require(Instant::now() < original_deadline,
+                "terminal G35 controlled stall or ACK release started after original budget already expired")?;
+            f.relay.as_ref().ok_or("terminal G35 original relay missing")?.release_original_ack(&socket, Hold::Commit)?;
+            wait_fact(|| socket.forwarded_ack.load(Ordering::SeqCst) & COMMIT_BIT != 0
+                && socket.release_original_ack.load(Ordering::SeqCst) == 0,
+                original_deadline, "terminal G35 same original C/Ready packets did not actually write before deadline").await?;
+            require(!socket.frontend_eof.load(Ordering::SeqCst),
+                "terminal G35 original driver retired before its actual on-time unmodified packet forwarding")?;
+            tokio::time::sleep_until(tokio::time::Instant::from_std(original_deadline + Duration::from_millis(100))).await;
+            // Only this original supervisor thread resumes late. The parent driver was never blocked.
+            drop(release);
+            blocking_task.await.map_err(|e| e.to_string())?;
+            Ok::<_, String>((committed, event_id))
+        }.await;
+        let result = tokio::task::spawn_blocking(move || thread.join())
+            .await.map_err(|e| e.to_string())?.map_err(|_| "terminal G35 original runtime thread panicked")??;
+        let (committed, event_id) = controlled?;
+        require(matches!(result, Err(TerminalError::DeadlineExpired) | Err(TerminalError::CommitAcknowledgedAfterDeadline)),
+            "terminal G35 late original supervisor polling minted a normal terminal grant")?;
+        original_five_seconds(started)?;
+        terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+        require(!observer.terminal_g35_saw(TerminalPhase::AfterCommitAckBeforeWorkerEnd),
+            "terminal G35 late acknowledgement was registered as a normal committed fact/grant")?;
+        retired_original(f, pid, &connection, &socket).await?;
+        require(database_facts(&f.admin).await? == committed,
+            "terminal G35 late polling changed true original committed terminal effects")?;
+        terminal_g35_poison_refuses_without_mutation(f, &intent, &committed).await?;
+        // The public caller checks its absolute clock before forwarding an inner error. Its
+        // DeadlineExpired does not expose Pool's private late disposition. The locked Tokio
+        // Timeout polls the ready original future first; that inner classification stays a
+        // reviewed Source inference, not a runtime ACK enum assertion or a manufactured getter.
+        eprintln!("ARTIFACT_TERMINAL_G05_LATE_POLL original_pid={pid} actual_audit_event_id={event_id} actual_original_commit=true original_packets_forwarded_before_deadline=true original_supervisor_thread_really_blocked_after_commit=true original_thread_resumed_after5s=true public_result={result:?} pool_private_late_classification=SOURCE_INFERENCE_ONLY actual_original_driver_destroyed_eof_backend_gone=true same_store_permanent_unproven=true normal_result=false repeat_refund_audit=false");
+        drop(intent);
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires caller-only abort and separate actual main-runtime Drop/post-normal-ACK panic"]
+async fn actual_terminal_waiter_cancel_keeps_supervisor_but_main_loss_is_unproven() {
+    with_fixture("terminal-g35-caller-only-post-started-cancel", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        f.relay.as_ref().ok_or("terminal G35 original relay missing")?.arm(Hold::Commit);
+        let observer = TerminalG35Gate::terminal_g35_new(f, None, false)?;
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move {
+            actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                started + Duration::from_secs(5), Some(original_observer)).await
+        });
+        terminal_g35_wait_true_held_commit(&socket, started + Duration::from_secs(2)).await?;
+        let committed = database_facts(&f.admin).await?;
+        let event_id = terminal_verify_once(f, &before, &committed)?;
+        task.abort();
+        let cancelled = task.await;
+        require(cancelled.is_err_and(|e| e.is_cancelled()),
+            "terminal G35 public waiter was not actually cancelled and reaped")?;
+        f.relay.as_ref().ok_or("terminal G35 original relay missing")?.release_original_ack(&socket, Hold::Commit)?;
+        terminal_g35_wait_phase(&observer, TerminalPhase::AfterCommitAckBeforeWorkerEnd, started + Duration::from_secs(5)).await?;
+        terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+        terminal_g35_original_normal_ack(f, pid, &socket, true, Some(Hold::Commit)).await?;
+        require(started.elapsed() < Duration::from_secs(5) && database_facts(&f.admin).await? == committed,
+            "terminal G35 caller-only cancellation undid a started COMMIT or poisoned an on-time original acknowledgement")?;
+        clear_transaction_facts(&socket);
+        let retry_observer = Arc::new(TerminalObserverFacts::default());
+        let retry = f.actual.finalize_armed_explicit_saved_before_with_observer(&f.auth, &intent,
+            Instant::now() + Duration::from_secs(2), Some(retry_observer.clone())).await.map_err(|e| format!("{e:?}"))?;
+        require(retry.state() == TerminalState::AlreadyCompleted,
+            "terminal G35 retained supervisor did not preserve original exact audit fact after caller-only cancel")?;
+        terminal_g35_original_normal_ack(f, pid, &socket, false, None).await?;
+        retry_observer.no_worker()?;
+        require(database_facts(&f.admin).await? == committed,
+            "terminal G35 completed retry after caller cancel changed rows/refund/audit")?;
+        drop(retry); drop(intent);
+        eprintln!("ARTIFACT_TERMINAL_G05_CALLER_CANCEL original_pid={pid} actual_audit_event_id={event_id} actual_public_waiter_aborted_reaped=true original_commit_already_started=true independently_owned_main_retained=true original_on_time_commit_ack=true actual_worker_resources_ended=true exact_audit_fact_completed_retry=true completed_own_rollback_ack=true repeat_refund_audit=false");
+        Ok(())
+    })).await;
+    with_fixture("terminal-g35-real-main-runtime-drop", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        physical_connection_check_interval(f).await?;
+        let (pid, connection, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let mut controller = f.admin.get().await.map_err(|e| e.to_string())?;
+        let tx = controller.transaction().await.map_err(|e| e.to_string())?;
+        let controller_pid: i32 = tx.query_one("SELECT pg_backend_pid()", &[]).await.map_err(|e| e.to_string())?.get(0);
+        tx.batch_execute("LOCK TABLE openbot_internal.schema_migrations IN ACCESS EXCLUSIVE MODE").await.map_err(|e| e.to_string())?;
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| e.to_string())?;
+        let observer = TerminalG35Gate::terminal_g35_new(f, None, false)?;
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+        let original = runtime.spawn(async move {
+            actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                Instant::now() + Duration::from_secs(5), Some(original_observer)).await
+        });
+        let controlled = physical_schema_wait(f, pid, controller_pid).await;
+        // The actual independently owned main supervisor lives in this owned runtime.
+        tokio::task::spawn_blocking(move || drop(runtime)).await.map_err(|e| e.to_string())?;
+        let cancelled = original.await;
+        let controller_ack = tx.rollback().await.map_err(|e| e.to_string());
+        drop(controller);
+        controlled?; controller_ack?;
+        require(cancelled.is_err_and(|e| e.is_cancelled()),
+            "terminal G35 main-runtime Drop did not actually destroy and reap the original task")?;
+        observer.terminal_g35_no_worker()?;
+        retired_original(f, pid, &connection, &socket).await?;
+        require(socket.entered.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT | ROLLBACK_BIT) == 0
+            && socket.forwarded_ack.load(Ordering::SeqCst) & (COMMIT_BIT | ROLLBACK_BIT) == 0
+            && physical_inode_fds(&leaf)?.is_empty()
+            && database_facts(&f.admin).await? == before,
+            "terminal G35 real main loss fabricated an original ACK/end or changed original business rows")?;
+        terminal_g35_poison_refuses_without_mutation(f, &intent, &before).await?;
+        eprintln!("ARTIFACT_TERMINAL_G05_MAIN_RUNTIME_DROP original_pid={pid} controller_pid={controller_pid} actual_original_schema_wait=true owned_main_runtime_dropped=true original_task_cancelled_reaped=true original_query_ack=false original_driver_destroyed_eof_backend_gone=true original_worker_not_reserved=true new_valid_session_permanent_unproven=true original_business_physical_rows_unchanged=true");
+        drop(intent);
+        Ok(())
+    })).await;
+    with_fixture("terminal-g35-real-main-post-normal-ack-panic", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = terminal_prepare(f).await?;
+        let before = database_facts(&f.admin).await?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let observer = TerminalG35Gate::terminal_g35_new(f, None, true)?;
+        let result = f.actual.finalize_armed_explicit_saved_before_with_observer(&f.auth, &intent,
+            Instant::now() + Duration::from_secs(5), Some(observer.clone())).await;
+        require(matches!(result, Err(TerminalError::ReadsUnproven)),
+            "terminal G35 actual main observer panic after true ACK returned a normal terminal result")?;
+        require(observer.terminal_g35_saw(TerminalPhase::AfterCommitAckBeforeWorkerEnd),
+            "terminal G35 main panic occurred before actual original normal ACK/fact registration")?;
+        terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+        // The normal original COMMIT was already known; do not require or invent its retirement.
+        terminal_g35_original_normal_ack(f, pid, &socket, true, None).await?;
+        let committed = database_facts(&f.admin).await?;
+        let event_id = terminal_verify_once(f, &before, &committed)?;
+        terminal_g35_poison_refuses_without_mutation(f, &intent, &committed).await?;
+        eprintln!("ARTIFACT_TERMINAL_G05_POST_ACK_MAIN_PANIC original_pid={pid} actual_audit_event_id={event_id} real_owned_supervisor_observer_panicked=true original_normal_commit_ack_preserved=true true_original_committed_effects_kept=true real_worker_resources_ended=true normal_original_driver_reusable=true new_valid_session_same_store_permanent_unproven=true second_refund_audit=false caller_abort_used=false");
+        drop(intent);
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires actual on-time original ACK/fact then genuine Host owner closure or original clock loss"]
+async fn actual_terminal_on_time_ack_then_host_or_tail_loss_keeps_fact_and_effects() {
+    with_fixture("terminal-g35-post-ack-known-host-loss", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let observer = TerminalG35Gate::terminal_g35_new(f, Some(TerminalPhase::AfterCommitAckBeforeWorkerEnd), false)?;
+        let release = TerminalG35Release(observer.clone());
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move {
+            actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                started + Duration::from_secs(5), Some(original_observer)).await
+        });
+        let phase_wait = terminal_g35_wait_phase(&observer, TerminalPhase::AfterCommitAckBeforeWorkerEnd, started + Duration::from_secs(2)).await;
+        terminal_g35_log_controller(&observer, pid, &socket, TerminalPhase::AfterCommitAckBeforeWorkerEnd,
+            started, started + Duration::from_secs(5), "known_host_loss")?;
+        phase_wait?;
+        require(socket.pid.load(Ordering::SeqCst) == pid
+            && socket.entered.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.server_ack.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.forwarded_ack.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.withheld.load(Ordering::SeqCst) == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !socket.frontend_eof.load(Ordering::SeqCst),
+            "terminal G35 known Host loss preceded actual normal original COMMIT ACK")?;
+        require(Instant::now() < started + Duration::from_secs(5),
+            "terminal G35 known Host loss controller reached its cutpoint after the original five seconds")?;
+        let committed = database_facts(&f.admin).await?;
+        let event_id = terminal_verify_once(f, &before, &committed)?;
+        f.resolver.close_request_bindings();
+        drop(release);
+        let result = task.await.map_err(|e| e.to_string())?;
+        require(matches!(result, Err(TerminalError::Host(HostRequestBindingError::NotCurrent))),
+            "terminal G35 true normal ACK then actual owner closure produced a grant or was relabelled CommitUnknown")?;
+        terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+        terminal_g35_original_normal_ack(f, pid, &socket, true, None).await?;
+        require(database_facts(&f.admin).await? == committed,
+            "terminal G35 known post-ACK Host refusal changed actual terminal effects")?;
+        let fresh_resolver = PostgresSessionAuthResolver::new(f.pool.clone(), SESSION_KEY, default_session_lifetime(),
+            DeploymentId::new(DEPLOYMENT), TenantId::new(TENANT)).map_err(|e| e.to_string())?;
+        fresh_resolver.install_artifact_read_authority(&f.actual.read_authority())
+            .map_err(|_| "terminal G35 fresh genuine owner authority enrollment failed")?;
+        let recovery = async {
+            let fresh = resolve(&fresh_resolver, COOKIE_B).await?;
+            require(fresh == f.auth
+                && !fresh.request_binding().ok_or("terminal G35 fresh owner binding missing")?.identity()
+                    .same_binding(f.auth.request_binding().ok_or("terminal G35 old owner binding missing")?.identity()),
+                "terminal G35 recovery did not change the actual closed owner/session")?;
+            fresh.request_binding().ok_or("terminal G35 fresh owner binding missing")?
+                .verify_current_before(&fresh, Instant::now() + Duration::from_secs(5)).await.map_err(|e| format!("{e:?}"))?;
+            let after_auth = database_facts(&f.admin).await?;
+            physical_session_b_idle_only(&committed, &after_auth)?;
+            clear_transaction_facts(&socket);
+            let retry_observer = Arc::new(TerminalObserverFacts::default());
+            let retry = f.actual.finalize_armed_explicit_saved_before_with_observer(&fresh, &intent,
+                Instant::now() + Duration::from_secs(2), Some(retry_observer.clone())).await.map_err(|e| format!("{e:?}"))?;
+            require(retry.state() == TerminalState::AlreadyCompleted,
+                "terminal G35 exact committed audit fact was lost or known Host rejection poisoned the original key")?;
+            terminal_g35_original_normal_ack(f, pid, &socket, false, None).await?;
+            retry_observer.no_worker()?;
+            require(database_facts(&f.admin).await? == after_auth,
+                "terminal G35 completed retry after known Host refusal changed any business physical row/refund/audit")?;
+            drop(retry);
+            Ok::<_, String>(())
+        }.await;
+        fresh_resolver.close_request_bindings();
+        recovery?;
+        eprintln!("ARTIFACT_TERMINAL_G05_KNOWN_POST_ACK_HOST_LOSS original_pid={pid} actual_audit_event_id={event_id} real_original_normal_commit_ack_then_host_owner_closed=true known_commit_not_relabelled_unknown=true true_effects_and_exact_audit_fact_preserved=true actual_worker_resources_ended=true new_valid_owner_same_store_completed=true completed_own_rollback_ack_no_worker=true repeat_refund_audit=false");
+        drop(intent);
+        Ok(())
+    })).await;
+    with_fixture("terminal-g35-post-ack-original-clock-loss", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        let (pid, connection, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let observer = TerminalG35Gate::terminal_g35_new(f, Some(TerminalPhase::AfterCommitAckBeforeWorkerEnd), false)?;
+        let release = TerminalG35Release(observer.clone());
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+        let started = Instant::now();
+        let original_deadline = started + Duration::from_secs(5);
+        let task = tokio::spawn(async move {
+            actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                original_deadline, Some(original_observer)).await
+        });
+        let phase_wait = terminal_g35_wait_phase(&observer, TerminalPhase::AfterCommitAckBeforeWorkerEnd, started + Duration::from_secs(2)).await;
+        terminal_g35_log_controller(&observer, pid, &socket, TerminalPhase::AfterCommitAckBeforeWorkerEnd,
+            started, original_deadline, "original_clock_loss")?;
+        phase_wait?;
+        require(socket.pid.load(Ordering::SeqCst) == pid
+            && socket.entered.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.server_ack.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.forwarded_ack.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.withheld.load(Ordering::SeqCst) == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !socket.frontend_eof.load(Ordering::SeqCst),
+            "terminal G35 clock-loss leg lacked actual normal on-time ACK before the controlled clock wait")?;
+        require(Instant::now() < original_deadline,
+            "terminal G35 clock-loss controller reached its ACK cutpoint after the original five seconds")?;
+        let committed = database_facts(&f.admin).await?;
+        let event_id = terminal_verify_once(f, &before, &committed)?;
+        tokio::time::sleep_until(tokio::time::Instant::from_std(original_deadline + Duration::from_millis(75))).await;
+        drop(release);
+        let result = task.await.map_err(|e| e.to_string())?;
+        require(matches!(result, Err(TerminalError::DeadlineExpired)),
+            "terminal G35 post-normal-ACK clock loss yielded a grant or changed real acknowledged truth to CommitUnknown")?;
+        original_five_seconds(started)?;
+        terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+        retired_original(f, pid, &connection, &socket).await?;
+        require(database_facts(&f.admin).await? == committed
+            && socket.forwarded_ack.load(Ordering::SeqCst) & COMMIT_BIT != 0
+            && socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT == 0,
+            "terminal G35 post-ACK late cleanup erased real original ACK/committed rows or manufactured rollback")?;
+        terminal_g35_poison_refuses_without_mutation(f, &intent, &committed).await?;
+        eprintln!("ARTIFACT_TERMINAL_G05_KNOWN_POST_ACK_CLOCK_LOSS original_pid={pid} actual_audit_event_id={event_id} real_normal_original_ack_fact_before5s=true actual_original_clock_exhausted=true acknowledged_truth_not_unknown=true true_effects_kept=true original_driver_destroyed_eof_backend_gone=true real_worker_resources_ended=true new_valid_session_permanent_unproven=true second_refund_audit=false normal_result=false");
+        drop(intent);
+        Ok(())
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires same original IO guard through true COMMIT ACK then controlled actual child inode drift"]
+async fn actual_terminal_original_guard_final_root_drift_refuses_without_ack_relabelling() {
+    with_fixture("terminal-g35-post-ack-final-original-root-child-drift", true, |f| Box::pin(async move {
+        let leaf = object_fact(&f.path())?;
+        let intent = Arc::new(terminal_prepare(f).await?);
+        let before = database_facts(&f.admin).await?;
+        let (pid, _, socket) = f.original().await?;
+        clear_transaction_facts(&socket);
+        let observer = TerminalG35Gate::terminal_g35_new(f, Some(TerminalPhase::AfterCommitAckBeforeWorkerEnd), false)?;
+        let release = TerminalG35Release(observer.clone());
+        let actual = f.actual.clone(); let auth = f.auth.clone(); let original_intent = intent.clone(); let original_observer = observer.clone();
+        let started = Instant::now();
+        let task = tokio::spawn(async move {
+            actual.finalize_armed_explicit_saved_before_with_observer(&auth, &original_intent,
+                started + Duration::from_secs(5), Some(original_observer)).await
+        });
+        let phase_wait = terminal_g35_wait_phase(&observer, TerminalPhase::AfterCommitAckBeforeWorkerEnd, started + Duration::from_secs(2)).await;
+        terminal_g35_log_controller(&observer, pid, &socket, TerminalPhase::AfterCommitAckBeforeWorkerEnd,
+            started, started + Duration::from_secs(5), "final_original_child_drift")?;
+        phase_wait?;
+        require(socket.pid.load(Ordering::SeqCst) == pid
+            && socket.entered.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.server_ack.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.forwarded_ack.load(Ordering::SeqCst) & (BEGIN_BIT | COMMIT_BIT) == (BEGIN_BIT | COMMIT_BIT)
+            && socket.withheld.load(Ordering::SeqCst) == 0
+            && socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !socket.frontend_eof.load(Ordering::SeqCst),
+            "terminal G35 child-drift controller ran before a genuine normal original COMMIT ACK")?;
+        require(Instant::now() < started + Duration::from_secs(5),
+            "terminal G35 child-drift controller reached its cutpoint after the original five seconds")?;
+        let committed = database_facts(&f.admin).await?;
+        let event_id = terminal_verify_once(f, &before, &committed)?;
+        let objects = f.root.0.join("objects");
+        let retained = f.root.0.join("terminal_g35_original_objects_retained");
+        let original_child = std::fs::symlink_metadata(&objects).map_err(|e| e.to_string())?;
+        require(original_child.is_dir() && physical_absent(&retained),
+            "terminal G35 controlled original child or unique retained name was invalid")?;
+        std::fs::rename(&objects, &retained).map_err(|e| e.to_string())?;
+        std::fs::DirBuilder::new().mode(0o700).create(&objects).map_err(|e| e.to_string())?;
+        let replacement = std::fs::symlink_metadata(&objects).map_err(|e| e.to_string())?;
+        require(replacement.is_dir() && (replacement.dev(), replacement.ino()) != (original_child.dev(), original_child.ino()),
+            "terminal G35 controller did not produce a real new root child inode")?;
+        drop(release);
+        let result = task.await.map_err(|e| e.to_string())?;
+        terminal_g35_worker_resources_ended(&observer, &leaf).await?;
+        // Restore only the two owned test names. Restoration cannot clear the original key's poison.
+        std::fs::remove_dir(&objects).map_err(|e| e.to_string())?;
+        std::fs::rename(&retained, &objects).map_err(|e| e.to_string())?;
+        let restored = std::fs::symlink_metadata(&objects).map_err(|e| e.to_string())?;
+        require((restored.dev(), restored.ino()) == (original_child.dev(), original_child.ino()) && physical_absent(&retained),
+            "terminal G35 controller did not restore its exact retained original child")?;
+        require(matches!(result, Err(TerminalError::PhysicalUnproven) | Err(TerminalError::ReadsUnproven)),
+            "terminal G35 actual final original guard accepted child drift or relabelled already normal ACK as Unknown")?;
+        terminal_g35_original_normal_ack(f, pid, &socket, true, None).await?;
+        require(started.elapsed() < Duration::from_secs(5)
+            && socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && database_facts(&f.admin).await? == committed,
+            "terminal G35 final IO refusal changed original normal ACK or durable terminal effects/refund/audit")?;
+        terminal_g35_poison_refuses_without_mutation(f, &intent, &committed).await?;
+        eprintln!("ARTIFACT_TERMINAL_G05_FINAL_GUARD_DRIFT original_pid={pid} actual_audit_event_id={event_id} original_normal_commit_ack=true actual_objects_child_inode_replaced=true same_original_continuous_io_guard_final_probe_refused=true real_worker_resources_ended=true exact_original_child_restored=true true_committed_effects_kept=true new_valid_session_same_store_permanent_unproven=true normal_ack_not_unknown=true repeat_refund_audit=false");
+        drop(intent);
         Ok(())
     })).await;
 }

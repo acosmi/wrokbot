@@ -106,6 +106,15 @@ impl OwnedCleanupPhysicalBinding {
 }
 
 impl ArmedArtifactCleanupIntent {
+    // The terminal producer borrows only the same checked mechanical locator. The original
+    // armed confirmation supplies neither current permission nor a terminal/IO grant.
+    pub(super) fn validated_terminal_binding(
+        &self,
+        administration: &PostgresArtifactAdministration,
+    ) -> Result<OwnedCleanupPhysicalBinding, ArtifactStoreError> {
+        self.validated_physical_binding(administration)
+    }
+
     pub(super) fn validated_physical_binding(
         &self,
         administration: &PostgresArtifactAdministration,
@@ -254,6 +263,117 @@ struct CurrentRequest<'a> {
     administration: &'a PostgresArtifactAdministration,
     auth: &'a AuthContext,
     host: ArtifactCleanupHostObservation<'a>,
+}
+
+/// Only the existing enrolled original Host factory is borrowed. Terminal decoding and quota
+/// access remain in its sibling producer, without changing the original available-only arm.
+pub(super) struct TerminalCurrentRequest<'a> {
+    current: CurrentRequest<'a>,
+}
+
+pub(super) struct TerminalCurrentFailure {
+    pub(super) error: ArtifactCleanupArmError,
+    pub(super) query_unproven: bool,
+}
+
+impl TerminalCurrentFailure {
+    fn known(error: ArtifactCleanupArmError) -> Self {
+        Self {
+            error,
+            query_unproven: false,
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            error: Error::Unavailable,
+            query_unproven: true,
+        }
+    }
+}
+
+impl<'a> TerminalCurrentRequest<'a> {
+    pub(super) fn borrow_before(
+        administration: &'a PostgresArtifactAdministration,
+        auth: &'a AuthContext,
+        target: &'a dyn ArtifactCleanupHostTarget,
+        deadline: Instant,
+    ) -> Result<Self, Error> {
+        PhysicalCurrentRequest::borrow_before(administration, auth, target, deadline).map(
+            |original| Self {
+                current: original.current,
+            },
+        )
+    }
+
+    // Exactly one registered terminal joint statement, never caller-provided SQL. In particular
+    // it never joins quota, so a completed tombstone cannot reconstruct/access its old payload.
+    pub(super) async fn observe_before(
+        &self,
+        tx: &Transaction<'_>,
+        key: &ArtifactCleanupFenceKey,
+        deadline: Instant,
+    ) -> Result<(Row, Box<dyn ArtifactCleanupHostTailWitness>), TerminalCurrentFailure> {
+        remaining(deadline).map_err(|_| TerminalCurrentFailure::unavailable())?;
+        self.current
+            .check_attachment(deadline)
+            .map_err(TerminalCurrentFailure::known)?;
+        let administration = self.current.administration;
+        let binding = administration.registry.binding();
+        let physical = administration.store.physical_binding();
+        let epoch = self.current.host.server_session_epoch();
+        let session_lookup = epoch.as_ref().map(|value| value.lookup_id());
+        let store_id = administration.store.store_id().to_string();
+        let result = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            tx.query_one(
+                super::cleanup_terminal::current_joint_sql(
+                    self.current.host.kind() == HostRequestBindingKind::DesktopWindow,
+                ),
+                &[
+                    &binding.deployment_id(),
+                    &binding.tenant_id(),
+                    &binding.dataset_id(),
+                    &key.artifact_id(),
+                    &self.current.auth.actor().as_str(),
+                    &session_lookup,
+                    &binding.binding_schema(),
+                    &binding.initial_origin(),
+                    &binding.created_at(),
+                    &store_id,
+                    &physical.device(),
+                    &physical.inode(),
+                    &physical.uid(),
+                ],
+            ),
+        )
+        .await
+        .map_err(|_| TerminalCurrentFailure::unavailable())?;
+        remaining(deadline).map_err(|_| TerminalCurrentFailure::unavailable())?;
+        let row = result.map_err(|error| TerminalCurrentFailure {
+            error: Error::Unavailable,
+            // A true server ErrorResponse is known statement failure; its original transaction
+            // must still really rollback. Connection/driver/protocol loss is never that proof.
+            query_unproven: error.as_db_error().is_none(),
+        })?;
+        self.current
+            .check_attachment(deadline)
+            .map_err(TerminalCurrentFailure::known)?;
+        let facts = self
+            .current
+            .decode_host(&row)
+            .map_err(TerminalCurrentFailure::known)?;
+        let witness = self
+            .current
+            .host
+            .witness(self.current.auth, facts, deadline)
+            .map_err(|error| TerminalCurrentFailure::known(Error::Host(error)))?;
+        witness
+            .verify_current(self.current.auth, deadline)
+            .map_err(|error| TerminalCurrentFailure::known(Error::Host(error)))?;
+        remaining(deadline).map_err(|_| TerminalCurrentFailure::unavailable())?;
+        Ok((row, witness))
+    }
 }
 
 /// Borrowed original factory; its explicit original target lives in the owned supervisor.
