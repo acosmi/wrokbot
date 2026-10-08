@@ -611,7 +611,7 @@ async fn genuine_prepared_local_raw_v2_snapshot_and_repeated_sampling() {
         checked_eq!(client.query_one("SELECT count(*) FROM public.outbox WHERE outbox_id=$1",&[&"owned-local-v2-run:agent_run_dispatch"]).await.map_err(|e|e.to_string())?.get::<_,i64>(0),1);
         checked_eq!(client.query_one("SELECT count(*) FROM public.run_model_selections WHERE run_id=$1",&[&"owned-local-v2-run"]).await.map_err(|e|e.to_string())?.get::<_,i64>(0),0);
         checked_eq!(client.query_one("SELECT count(*) FROM public.remember_effect_receipts WHERE run_id=$1",&[&"owned-local-v2-run"]).await.map_err(|e|e.to_string())?.get::<_,i64>(0),1); drop(client);
-        let replay=protocol.handle("main",v2_request(Method::POST,&path,raw)).await;
+        let replay=protocol.handle("main",v2_request(Method::POST,&path,raw.clone())).await;
         checked_eq!(replay.status(),StatusCode::OK);
         checked_eq!(serde_json::from_slice::<Value>(replay.body()).map_err(|e|e.to_string())?["replayed"],true);
         let captures=tls.captures()?;
@@ -636,6 +636,8 @@ async fn genuine_prepared_local_raw_v2_snapshot_and_repeated_sampling() {
         client.execute("UPDATE openbot_internal.desktop_vault_canaries SET encrypted_canary=$1 WHERE deployment_id=$2 AND tenant_id=$3",&[&encrypted_canary,&auth.deployment().as_str(),&auth.tenant().as_str()]).await.map_err(|e|e.to_string())?;
         checked!(!canary_denied.status().is_success()); checked_eq!(tls.captures()?.len(),2);
         checked_eq!(client.query_one("SELECT count(*) FROM public.runs WHERE run_id IN ('owned-local-malformed-run','owned-local-large-run','owned-local-disabled-run','owned-local-canary-drift-run')",&[]).await.map_err(|e|e.to_string())?.get::<_,i64>(0),0);
+        drop(client);
+        local_m04_original_lineage_faults(prepared,&tls,&path,&raw,&selection).await?;
         Ok(())
     }.await;
     // Ordinary assertions return Result so both actual owners close even on a failure.
@@ -649,6 +651,384 @@ async fn genuine_prepared_local_raw_v2_snapshot_and_repeated_sampling() {
     result.expect("genuine Local raw-to-provider chain");
     tls_closed.expect("owned TLS normal child closure");
     local_closed.expect("genuine Prepared PG normal shutdown and original PID closure");
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LocalM04Fault {
+    DatasetDeployment,
+    DatasetTenant,
+    DatasetIdentity,
+    DatasetOrigin,
+    DatasetCreatedAt,
+    DatasetBindingSchemaCheck,
+    CanaryDataset,
+    CanaryDeployment,
+    CanaryTenant,
+    CanaryKeyId,
+    CanaryKeyVersion,
+    CanarySchemaCheck,
+    CanaryDigest,
+    NativeChecksum,
+    NativeMissingVersion,
+    SnapshotColumnShape,
+    CanaryColumnShape,
+    NamespaceShape,
+}
+impl LocalM04Fault {
+    const ALL: [Self; 18] = [
+        Self::DatasetDeployment,
+        Self::DatasetTenant,
+        Self::DatasetIdentity,
+        Self::DatasetOrigin,
+        Self::DatasetCreatedAt,
+        Self::DatasetBindingSchemaCheck,
+        Self::CanaryDataset,
+        Self::CanaryDeployment,
+        Self::CanaryTenant,
+        Self::CanaryKeyId,
+        Self::CanaryKeyVersion,
+        Self::CanarySchemaCheck,
+        Self::CanaryDigest,
+        Self::NativeChecksum,
+        Self::NativeMissingVersion,
+        Self::SnapshotColumnShape,
+        Self::CanaryColumnShape,
+        Self::NamespaceShape,
+    ];
+    fn original_check(self) -> bool {
+        matches!(
+            self,
+            Self::DatasetBindingSchemaCheck | Self::CanarySchemaCheck
+        )
+    }
+    fn dataset_row(self) -> bool {
+        matches!(
+            self,
+            Self::DatasetDeployment
+                | Self::DatasetTenant
+                | Self::DatasetIdentity
+                | Self::DatasetOrigin
+                | Self::DatasetCreatedAt
+                | Self::DatasetBindingSchemaCheck
+        )
+    }
+}
+
+// Only values read from this genuine Prepared startup are retained for restoration.
+// None of these row values constructs a canary proof, DB owner or dataset grant.
+#[derive(PartialEq)]
+struct OriginalLocalLineage {
+    deployment: String,
+    tenant: String,
+    dataset: String,
+    binding_schema: i16,
+    initial_origin: String,
+    binding_created_at: time::OffsetDateTime,
+    canary_dataset: String,
+    canary_deployment: String,
+    canary_tenant: String,
+    key_id: String,
+    key_version: i32,
+    canary_schema: i16,
+    encrypted_canary: String,
+    canary_created_at: time::OffsetDateTime,
+    native_version: i32,
+    native_name: String,
+    native_checksum: String,
+    native_applied_at: time::OffsetDateTime,
+}
+impl OriginalLocalLineage {
+    async fn read(pool: &openbot_infra::db::pool::DatabasePool) -> Result<Self, String> {
+        let c = pool.get().await.map_err(|e| e.to_string())?;
+        let bindings=c.query("SELECT deployment_id,tenant_id,dataset_id,binding_schema,initial_origin,created_at FROM openbot_internal.artifact_dataset_bindings",&[]).await.map_err(|e|e.to_string())?;
+        require(
+            bindings.len() == 1,
+            "owned Local fixture must have exactly one original dataset binding",
+        )?;
+        let d = &bindings[0];
+        let canaries=c.query("SELECT dataset_id,deployment_id,tenant_id,key_id,key_version,canary_schema,encrypted_canary,created_at FROM openbot_internal.desktop_vault_canaries",&[]).await.map_err(|e|e.to_string())?;
+        require(
+            canaries.len() == 1,
+            "owned Local fixture must have exactly one original canary",
+        )?;
+        let a = &canaries[0];
+        let migration=c.query_one("SELECT version,name,checksum,applied_at FROM openbot_internal.schema_migrations WHERE version=47",&[]).await.map_err(|e|e.to_string())?;
+        Ok(Self {
+            deployment: d.try_get(0).map_err(|e| e.to_string())?,
+            tenant: d.try_get(1).map_err(|e| e.to_string())?,
+            dataset: d.try_get(2).map_err(|e| e.to_string())?,
+            binding_schema: d.try_get(3).map_err(|e| e.to_string())?,
+            initial_origin: d.try_get(4).map_err(|e| e.to_string())?,
+            binding_created_at: d.try_get(5).map_err(|e| e.to_string())?,
+            canary_dataset: a.try_get(0).map_err(|e| e.to_string())?,
+            canary_deployment: a.try_get(1).map_err(|e| e.to_string())?,
+            canary_tenant: a.try_get(2).map_err(|e| e.to_string())?,
+            key_id: a.try_get(3).map_err(|e| e.to_string())?,
+            key_version: a.try_get(4).map_err(|e| e.to_string())?,
+            canary_schema: a.try_get(5).map_err(|e| e.to_string())?,
+            encrypted_canary: a.try_get(6).map_err(|e| e.to_string())?,
+            canary_created_at: a.try_get(7).map_err(|e| e.to_string())?,
+            native_version: migration.try_get(0).map_err(|e| e.to_string())?,
+            native_name: migration.try_get(1).map_err(|e| e.to_string())?,
+            native_checksum: migration.try_get(2).map_err(|e| e.to_string())?,
+            native_applied_at: migration.try_get(3).map_err(|e| e.to_string())?,
+        })
+    }
+    async fn inject(
+        &self,
+        c: &openbot_infra::db::pool::PooledClient,
+        fault: LocalM04Fault,
+    ) -> Result<(), String> {
+        // Validate all saved mutation inputs before temporarily changing the
+        // append-only trigger. An invalid fixture must not bypass restoration.
+        let changed_dataset = different_hex(&self.dataset)?;
+        let changed_canary_dataset = different_hex(&self.canary_dataset)?;
+        let changed_key_id = different_hex(&self.key_id)?;
+        let changed_canary = different_first_ascii(&self.encrypted_canary)?;
+        let changed_checksum = different_hex(&self.native_checksum)?;
+        if fault.dataset_row() {
+            c.batch_execute("ALTER TABLE openbot_internal.artifact_dataset_bindings DISABLE TRIGGER artifact_dataset_bindings_append_only").await.map_err(|e|e.to_string())?;
+        }
+        let changed=match fault {
+            LocalM04Fault::DatasetDeployment=>c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET deployment_id=$1",&[&format!("{}-owned-drift",self.deployment)]).await,
+            LocalM04Fault::DatasetTenant=>c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET tenant_id=$1",&[&format!("{}-owned-drift",self.tenant)]).await,
+            LocalM04Fault::DatasetIdentity=>c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET dataset_id=$1",&[&changed_dataset]).await,
+            LocalM04Fault::DatasetOrigin=>c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET initial_origin='server_first_adoption'",&[]).await,
+            LocalM04Fault::DatasetCreatedAt=>c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET created_at=$1",&[&(self.binding_created_at+time::Duration::seconds(1))]).await,
+            LocalM04Fault::DatasetBindingSchemaCheck=>c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET binding_schema=2",&[]).await,
+            LocalM04Fault::CanaryDataset=>c.execute("UPDATE openbot_internal.desktop_vault_canaries SET dataset_id=$1",&[&changed_canary_dataset]).await,
+            LocalM04Fault::CanaryDeployment=>c.execute("UPDATE openbot_internal.desktop_vault_canaries SET deployment_id=$1",&[&format!("{}-owned-drift",self.canary_deployment)]).await,
+            LocalM04Fault::CanaryTenant=>c.execute("UPDATE openbot_internal.desktop_vault_canaries SET tenant_id=$1",&[&format!("{}-owned-drift",self.canary_tenant)]).await,
+            LocalM04Fault::CanaryKeyId=>c.execute("UPDATE openbot_internal.desktop_vault_canaries SET key_id=$1",&[&changed_key_id]).await,
+            LocalM04Fault::CanaryKeyVersion=>c.execute("UPDATE openbot_internal.desktop_vault_canaries SET key_version=2",&[]).await,
+            LocalM04Fault::CanarySchemaCheck=>c.execute("UPDATE openbot_internal.desktop_vault_canaries SET canary_schema=2",&[]).await,
+            LocalM04Fault::CanaryDigest=>c.execute("UPDATE openbot_internal.desktop_vault_canaries SET encrypted_canary=$1",&[&changed_canary]).await,
+            LocalM04Fault::NativeChecksum=>c.execute("UPDATE openbot_internal.schema_migrations SET checksum=$1 WHERE version=$2",&[&changed_checksum,&self.native_version]).await,
+            LocalM04Fault::NativeMissingVersion=>c.execute("DELETE FROM openbot_internal.schema_migrations WHERE version=$1",&[&self.native_version]).await,
+            LocalM04Fault::SnapshotColumnShape=>{
+                c.batch_execute("ALTER TABLE openbot_internal.run_model_selection_v2_snapshots RENAME COLUMN credential_policy TO owned_fault_credential_policy").await.map_err(|e|e.to_string())?;return Ok(());
+            }
+            LocalM04Fault::CanaryColumnShape=>{
+                c.batch_execute("ALTER TABLE openbot_internal.desktop_vault_canaries RENAME COLUMN encrypted_canary TO owned_fault_encrypted_canary").await.map_err(|e|e.to_string())?;return Ok(());
+            }
+            LocalM04Fault::NamespaceShape=>{
+                c.batch_execute("ALTER SCHEMA openbot_internal RENAME TO owned_local_m04_namespace_fault").await.map_err(|e|e.to_string())?;return Ok(());
+            }
+        };
+        if fault.dataset_row() {
+            // Restore the precise original trigger before inspecting a mutation
+            // result or invoking the real consumer. Never leave a disabled guard
+            // as the reason a tuple fault is rejected by its shape validator.
+            c.batch_execute("ALTER TABLE openbot_internal.artifact_dataset_bindings ENABLE TRIGGER artifact_dataset_bindings_append_only").await.map_err(|e|e.to_string())?;
+            let enabled:String=c.query_one("SELECT tgenabled::text FROM pg_catalog.pg_trigger WHERE tgrelid='openbot_internal.artifact_dataset_bindings'::regclass AND tgname='artifact_dataset_bindings_append_only'",&[]).await.map_err(|e|e.to_string())?.get(0);
+            require(
+                enabled == "O",
+                "owned dataset append-only trigger was not restored",
+            )?;
+        }
+        if fault.original_check() {
+            // Under the real validated CHECK (=1), a schema=2 row cannot exist.
+            // This is an actual DB refusal, separately labelled from a consumer
+            // rejecting an injected row. No CHECK is dropped or forged valid.
+            let error = changed
+                .err()
+                .ok_or("original Local schema CHECK unexpectedly accepted2")?;
+            require(
+                error.code().is_some_and(|code| code.code() == "23514"),
+                "original Local schema CHECK did not issue check_violation",
+            )?;
+        } else {
+            require(
+                changed.map_err(|e| e.to_string())? == 1,
+                "owned Local fault did not affect exactly one saved row",
+            )?;
+        }
+        Ok(())
+    }
+    async fn restore(
+        &self,
+        c: &openbot_infra::db::pool::PooledClient,
+        fault: LocalM04Fault,
+    ) -> Result<(), String> {
+        match fault {
+            LocalM04Fault::SnapshotColumnShape=>c.batch_execute("ALTER TABLE openbot_internal.run_model_selection_v2_snapshots RENAME COLUMN owned_fault_credential_policy TO credential_policy").await.map_err(|e|e.to_string())?,
+            LocalM04Fault::CanaryColumnShape=>c.batch_execute("ALTER TABLE openbot_internal.desktop_vault_canaries RENAME COLUMN owned_fault_encrypted_canary TO encrypted_canary").await.map_err(|e|e.to_string())?,
+            LocalM04Fault::NamespaceShape=>c.batch_execute("ALTER SCHEMA owned_local_m04_namespace_fault RENAME TO openbot_internal").await.map_err(|e|e.to_string())?,
+            _=>{}
+        }
+        c.batch_execute("ALTER TABLE openbot_internal.artifact_dataset_bindings DISABLE TRIGGER artifact_dataset_bindings_append_only").await.map_err(|e|e.to_string())?;
+        let restored=c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET deployment_id=$1,tenant_id=$2,dataset_id=$3,binding_schema=$4,initial_origin=$5,created_at=$6",&[&self.deployment,&self.tenant,&self.dataset,&self.binding_schema,&self.initial_origin,&self.binding_created_at]).await;
+        c.batch_execute("ALTER TABLE openbot_internal.artifact_dataset_bindings ENABLE TRIGGER artifact_dataset_bindings_append_only").await.map_err(|e|e.to_string())?;
+        require(
+            restored.map_err(|e| e.to_string())? == 1,
+            "owned Local original dataset restore row count",
+        )?;
+        require(c.execute("UPDATE openbot_internal.desktop_vault_canaries SET dataset_id=$1,deployment_id=$2,tenant_id=$3,key_id=$4,key_version=$5,canary_schema=$6,encrypted_canary=$7,created_at=$8",&[&self.canary_dataset,&self.canary_deployment,&self.canary_tenant,&self.key_id,&self.key_version,&self.canary_schema,&self.encrypted_canary,&self.canary_created_at]).await.map_err(|e|e.to_string())?==1,"owned Local original canary restore row count")?;
+        c.execute("INSERT INTO openbot_internal.schema_migrations(version,name,checksum,applied_at) VALUES($1,$2,$3,$4) ON CONFLICT(version) DO UPDATE SET name=excluded.name,checksum=excluded.checksum,applied_at=excluded.applied_at",&[&self.native_version,&self.native_name,&self.native_checksum,&self.native_applied_at]).await.map_err(|e|e.to_string())?;
+        Ok(())
+    }
+}
+fn different_hex(original: &str) -> Result<String, String> {
+    require(
+        !original.is_empty()
+            && original
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+        "owned original hex fixture value invalid",
+    )?;
+    let mut bytes = original.as_bytes().to_vec();
+    bytes[0] = if bytes[0] == b'0' { b'1' } else { b'0' };
+    String::from_utf8(bytes).map_err(|_| "owned changed hex fixture value invalid".to_owned())
+}
+fn different_first_ascii(original: &str) -> Result<String, String> {
+    require(
+        !original.is_empty() && original.is_ascii(),
+        "owned original canary envelope invalid",
+    )?;
+    let mut bytes = original.as_bytes().to_vec();
+    bytes[0] = if bytes[0] == b'x' { b'y' } else { b'x' };
+    String::from_utf8(bytes).map_err(|_| "owned changed envelope invalid".to_owned())
+}
+async fn local_m04_business_counts(
+    pool: &openbot_infra::db::pool::DatabasePool,
+) -> Result<Vec<i64>, String> {
+    let c = pool.get().await.map_err(|e| e.to_string())?;
+    let mut counts = Vec::new();
+    for table in [
+        "public.threads",
+        "public.thread_memberships",
+        "public.thread_leases",
+        "public.runs",
+        "public.messages",
+        "public.run_events",
+        "public.outbox",
+        "public.run_model_selections",
+        "openbot_internal.run_model_selection_v2_snapshots",
+    ] {
+        counts.push(
+            c.query_one(&format!("SELECT count(*) FROM {table}"), &[])
+                .await
+                .map_err(|e| e.to_string())?
+                .get(0),
+        );
+    }
+    Ok(counts)
+}
+async fn local_m04_original_lineage_faults(
+    prepared: &PreparedDesktopLocalRuntime,
+    tls: &OwnedTls,
+    path: &str,
+    original_body: &[u8],
+    selection: &Value,
+) -> Result<(), String> {
+    let original = OriginalLocalLineage::read(prepared.pool()).await?;
+    require(
+        original.initial_origin == "desktop_canary"
+            && original.binding_schema == 1
+            && original.canary_schema == 1
+            && original.key_version == 1,
+        "owned Local baseline lineage was not the genuine current tuple",
+    )?;
+    let counts = local_m04_business_counts(prepared.pool()).await?;
+    for (index, fault) in LocalM04Fault::ALL.into_iter().enumerate() {
+        let c = prepared.pool().get().await.map_err(|e| e.to_string())?;
+        let injected = original.inject(&c, fault).await;
+        drop(c);
+        let check_row_unchanged = if injected.is_ok() && fault.original_check() {
+            Some(
+                OriginalLocalLineage::read(prepared.pool())
+                    .await
+                    .map(|actual| actual == original),
+            )
+        } else {
+            None
+        };
+        let denied = if injected.is_ok() && !fault.original_check() {
+            Some(
+                prepared
+                    .protocol()
+                    .handle(
+                        "main",
+                        v2_request(
+                            Method::POST,
+                            path,
+                            v2_body(&format!("owned-local-m04-{index}"), selection),
+                        ),
+                    )
+                    .await,
+            )
+        } else {
+            None
+        };
+        // Always attempt restoration before returning an injection/refusal error.
+        let c = prepared.pool().get().await.map_err(|e| e.to_string())?;
+        let restored = original.restore(&c, fault).await;
+        drop(c);
+        restored?;
+        injected?;
+        if let Some(unchanged) = check_row_unchanged {
+            require(
+                unchanged?,
+                "original Local CHECK refusal changed the saved typed row",
+            )?;
+        }
+        require(
+            OriginalLocalLineage::read(prepared.pool()).await? == original,
+            "owned original Local typed lineage was not restored exactly",
+        )?;
+        if let Some(denied) = denied {
+            // Do not count an expired/unbound window's401, parser400 or unrelated
+            // permission refusal as a model/dataset fault producer.
+            require(
+                denied.status() == StatusCode::SERVICE_UNAVAILABLE,
+                "owned Local lineage fault did not reach the production dependency rejection",
+            )?;
+            let error: Value = serde_json::from_slice(denied.body()).map_err(|e| e.to_string())?;
+            require(
+                error["code"] == "dependency_unavailable",
+                "owned Local lineage fault returned an unrelated error",
+            )?;
+        }
+        require(
+            local_m04_business_counts(prepared.pool()).await? == counts,
+            "owned Local denied fault committed business rows",
+        )?;
+        require(
+            tls.captures()?.len() == 2,
+            "owned Local denied fault reached an extra provider request",
+        )?;
+        let replay = prepared
+            .protocol()
+            .handle(
+                "main",
+                v2_request(Method::POST, path, original_body.to_vec()),
+            )
+            .await;
+        require(
+            replay.status() == StatusCode::OK,
+            "restored original Local receipt was not usable",
+        )?;
+        let receipt: ThreadRunStarted =
+            serde_json::from_slice(replay.body()).map_err(|e| e.to_string())?;
+        require(
+            receipt.replayed && receipt.run_id.as_str() == "owned-local-v2-run",
+            "restored Local reply was not the original exact receipt",
+        )?;
+        require(
+            local_m04_business_counts(prepared.pool()).await? == counts
+                && tls.captures()?.len() == 2,
+            "restored Local exact replay changed business counts or sampled again",
+        )?;
+        eprintln!(
+            "CUSTOM_V2_LOCAL_M04 branch={fault:?} observation={} original_typed_values_restored=true original_receipt_replayed=true business_counts_unchanged=true tls_requests=2",
+            if fault.original_check() {
+                "original_check_violation"
+            } else {
+                "actual_URI_dependency_rejection"
+            }
+        );
+    }
+    Ok(())
 }
 
 async fn wait_local_completed(

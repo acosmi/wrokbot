@@ -222,13 +222,13 @@ impl Fixture {
         .with_model_dataset_binding(self.binding.clone())
         .unwrap()
     }
-    async fn begin(
+    async fn pending(
         &self,
         index: u64,
         protocol: CustomModelProtocol,
         endpoint: &str,
         channel: bool,
-    ) -> (ModelConnection, BeginThreadRunV2Request, ProviderRequest) {
+    ) -> (ModelConnection, BeginThreadRunV2Request) {
         let model = self
             .models
             .create(
@@ -274,6 +274,16 @@ impl Fixture {
                 .unwrap(),
             },
         };
+        (model, req)
+    }
+    async fn begin(
+        &self,
+        index: u64,
+        protocol: CustomModelProtocol,
+        endpoint: &str,
+        channel: bool,
+    ) -> (ModelConnection, BeginThreadRunV2Request, ProviderRequest) {
+        let (model, req) = self.pending(index, protocol, endpoint, channel).await;
         self.directory
             .begin_thread_run_v2(req.clone())
             .await
@@ -790,7 +800,18 @@ async fn v2_snapshot_half_dual_policy_catalog_and_dataset_drift_never_reach_tls(
                 3=>{c.execute("UPDATE public.custom_model_catalogs SET catalog_revision=catalog_revision+1 WHERE connection_id=$1",&[&id]).await.unwrap();},
                 4=>{c.execute("UPDATE public.model_connections SET enabled=false WHERE id=$1",&[&id]).await.unwrap();},
                 5=>{c.execute("UPDATE public.model_connection_secrets SET encrypted_value='owned-invalid-Vault-envelope' WHERE connection_id=$1",&[&id]).await.unwrap();},
-                _=>{c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET dataset_id='owned-dataset-drift' WHERE deployment_id=$1 AND tenant_id=$2",&[&DEP,&TENANT]).await.unwrap();},
+                _=>{
+                    // Native0041 is append-only. This explicitly owned negative
+                    // fixture changes the row only while its exact trigger is
+                    // disabled, then restores the real original schema before
+                    // asking the production model consumer to reject the drift.
+                    c.batch_execute("ALTER TABLE openbot_internal.artifact_dataset_bindings DISABLE TRIGGER artifact_dataset_bindings_append_only").await.unwrap();
+                    let changed=c.execute("UPDATE openbot_internal.artifact_dataset_bindings SET dataset_id='owned-dataset-drift' WHERE deployment_id=$1 AND tenant_id=$2",&[&DEP,&TENANT]).await;
+                    let restored=c.batch_execute("ALTER TABLE openbot_internal.artifact_dataset_bindings ENABLE TRIGGER artifact_dataset_bindings_append_only").await;
+                    restored.unwrap();changed.unwrap();
+                    let enabled:String=c.query_one("SELECT tgenabled::text FROM pg_catalog.pg_trigger WHERE tgrelid='openbot_internal.artifact_dataset_bindings'::regclass AND tgname='artifact_dataset_bindings_append_only'",&[]).await.unwrap().get(0);
+                    assert_eq!(enabled,"O");
+                },
             }drop(c);
             if mode!=5{assert!(f.context().load(&lease(&req)).await.is_err());}
             refused(f.adapter(tls.dialer(),Duration::from_secs(5)).start(request).await);assert_eq!(tls.count(),0);
@@ -1212,6 +1233,944 @@ async fn unconfigured_constructor_closes_v2_and_keeps_actual_legacy_v1_route() {
         drop(old_context);
         tls.stop().await;
         f.finish().await;
+        Ok(())
+    })
+    .await;
+}
+
+// These producers change fixture IO and scheduling only. The real original Pool,
+// owner, absolute production deadlines and transaction implementation are unchanged.
+#[derive(Clone, Copy, Debug)]
+enum TerminalStage {
+    NewCommit,
+    ExactReplayRollback,
+    ClassifierRollback,
+}
+impl TerminalStage {
+    fn command(self) -> &'static [u8] {
+        match self {
+            Self::NewCommit => b"COMMIT\0",
+            Self::ExactReplayRollback | Self::ClassifierRollback => b"ROLLBACK\0",
+        }
+    }
+    fn sql_bits(self, sql: &[u8]) -> u8 {
+        let Ok(sql) = std::str::from_utf8(sql) else {
+            return 0;
+        };
+        match self {
+            Self::NewCommit => u8::from(sql.contains("INSERT INTO openbot_internal.run_model_selection_v2_snapshots(")),
+            Self::ExactReplayRollback => {
+                u8::from(sql.contains("e.event_seq,o.outbox_id"))
+                    | (u8::from(sql.contains("SELECT * FROM openbot_internal.run_model_selection_v2_snapshots WHERE run_id=$1")) << 1)
+            }
+            Self::ClassifierRollback => {
+                u8::from(sql.contains("coalesce(m.content ? 'modelSelection',false) AS has_intent"))
+                    | (u8::from(sql.contains("SELECT EXISTS(SELECT 1 FROM openbot_internal.run_model_selection_v2_snapshots WHERE run_id=$1)")) << 1)
+            }
+        }
+    }
+    fn complete_bits(self) -> u8 {
+        match self {
+            Self::NewCommit => 1,
+            _ => 3,
+        }
+    }
+}
+struct TerminalGateState {
+    stage: TerminalStage,
+    discard: bool,
+    armed: std::sync::atomic::AtomicBool,
+    claimed: std::sync::atomic::AtomicBool,
+    original_backend_pid: AtomicUsize,
+    selected_backend_pid: AtomicUsize,
+    stage_seen: AtomicUsize,
+    begins: AtomicUsize,
+    commits: AtomicUsize,
+    rollbacks: AtomicUsize,
+    command_acks: AtomicUsize,
+    ready_acks: AtomicUsize,
+    forwarded_acks: AtomicUsize,
+    accepted: AtomicUsize,
+    joined: AtomicUsize,
+    held: Semaphore,
+    release: Semaphore,
+    forwarded: Semaphore,
+}
+struct PgTerminalAckGate {
+    config: DatabaseConfig,
+    state: Arc<TerminalGateState>,
+    stop: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<Result<(), String>>>,
+}
+impl PgTerminalAckGate {
+    async fn new(config: &DatabaseConfig, stage: TerminalStage, discard: bool) -> Self {
+        assert_eq!(config.host, "127.0.0.1");
+        let upstream = SocketAddr::from(([127, 0, 0, 1], config.port));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut routed = config.clone();
+        routed.port = listener.local_addr().unwrap().port();
+        assert!(![39025, 39027].contains(&routed.port));
+        let state = Arc::new(TerminalGateState {
+            stage,
+            discard,
+            armed: std::sync::atomic::AtomicBool::new(false),
+            claimed: std::sync::atomic::AtomicBool::new(false),
+            original_backend_pid: AtomicUsize::new(0),
+            selected_backend_pid: AtomicUsize::new(0),
+            stage_seen: AtomicUsize::new(0),
+            begins: AtomicUsize::new(0),
+            commits: AtomicUsize::new(0),
+            rollbacks: AtomicUsize::new(0),
+            command_acks: AtomicUsize::new(0),
+            ready_acks: AtomicUsize::new(0),
+            forwarded_acks: AtomicUsize::new(0),
+            accepted: AtomicUsize::new(0),
+            joined: AtomicUsize::new(0),
+            held: Semaphore::new(0),
+            release: Semaphore::new(0),
+            forwarded: Semaphore::new(0),
+        });
+        eprintln!(
+            "CUSTOM_V2_TERMINAL_RELAY_START owned_process_pid={} stage={stage:?} relay_port={} upstream_port={}",
+            std::process::id(),
+            routed.port,
+            config.port
+        );
+        let shared = state.clone();
+        let (stop, mut stopped) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut children = JoinSet::new();
+            loop {
+                tokio::select! {
+                    _ = &mut stopped => break,
+                    accepted = listener.accept() => {
+                        let (downstream, _) = accepted.map_err(|_| "terminal relay accept")?;
+                        let count = shared.accepted.fetch_add(1, Ordering::SeqCst) + 1;
+                        if count > 64 || children.len() >= 32 {
+                            return Err("terminal relay bounded connection limit".into());
+                        }
+                        children.spawn(terminal_relay_connection(downstream, upstream, shared.clone()));
+                    },
+                    Some(child) = children.join_next(), if !children.is_empty() => {
+                        child.map_err(|_| "terminal relay child join")??;
+                        shared.joined.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+            drop(listener);
+            // The Pool/assembly are closed before stop. Normal success must reap
+            // every owned relay child, without abort_all or a synthetic join ACK.
+            tokio::time::timeout(Duration::from_secs(8), async {
+                while let Some(child) = children.join_next().await {
+                    child.map_err(|_| "terminal relay tail child join")??;
+                    shared.joined.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok::<(), String>(())
+            })
+            .await
+            .map_err(|_| "terminal relay normal tail deadline")??;
+            Ok(())
+        });
+        Self {
+            config: routed,
+            state,
+            stop: Some(stop),
+            task: Some(task),
+        }
+    }
+    async fn arm_original(&self, f: &Fixture) -> pool::ConnectionObservation {
+        assert_eq!(f.pool.status().max_size, 1);
+        let client = f.pool.get().await.unwrap();
+        let backend: i32 = client
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(backend > 0);
+        let original = client.observation();
+        assert!(!original.snapshot().retirement_requested);
+        assert!(!original.snapshot().connection_destroyed);
+        self.state
+            .original_backend_pid
+            .store(backend as usize, Ordering::SeqCst);
+        drop(client);
+        self.state.armed.store(true, Ordering::SeqCst);
+        original
+    }
+    async fn held(&self) {
+        tokio::time::timeout(Duration::from_secs(6), self.state.held.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+    }
+    async fn release_original_ack(&self) {
+        assert!(!self.state.discard);
+        self.state.release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(2), self.state.forwarded.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        // A successful socket write is not driver receipt or join. Allow the
+        // real driver to run while the original business future stays unpolled;
+        // only its later real owner result can establish known-late state.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+    }
+    fn assert_target(&self, expected_forwarded: usize) {
+        assert_eq!(
+            self.state.selected_backend_pid.load(Ordering::SeqCst),
+            self.state.original_backend_pid.load(Ordering::SeqCst)
+        );
+        assert_ne!(self.state.selected_backend_pid.load(Ordering::SeqCst), 0);
+        assert_eq!(self.state.stage_seen.load(Ordering::SeqCst), 1);
+        assert_eq!(self.state.command_acks.load(Ordering::SeqCst), 1);
+        assert_eq!(self.state.ready_acks.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            self.state.forwarded_acks.load(Ordering::SeqCst),
+            expected_forwarded
+        );
+        assert_eq!(self.state.begins.load(Ordering::SeqCst), 1);
+        match self.state.stage {
+            TerminalStage::NewCommit => {
+                assert_eq!(self.state.commits.load(Ordering::SeqCst), 1);
+                assert_eq!(self.state.rollbacks.load(Ordering::SeqCst), 0);
+            }
+            _ => {
+                assert_eq!(self.state.commits.load(Ordering::SeqCst), 0);
+                assert_eq!(self.state.rollbacks.load(Ordering::SeqCst), 1);
+            }
+        }
+    }
+    async fn stop(mut self) {
+        self.state.armed.store(false, Ordering::SeqCst);
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        let mut task = self.task.take().unwrap();
+        match tokio::time::timeout(Duration::from_secs(10), &mut task).await {
+            Ok(result) => result.unwrap().unwrap(),
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                panic!("terminal relay did not naturally join");
+            }
+        }
+        let accepted = self.state.accepted.load(Ordering::SeqCst);
+        let joined = self.state.joined.load(Ordering::SeqCst);
+        assert_eq!(accepted, joined);
+        eprintln!(
+            "CUSTOM_V2_TERMINAL_RELAY stage={:?} backend_pid={} accepted={} naturally_joined={} command_ack={} ready_ack={} forwarded_ack={} listener_closed=true",
+            self.state.stage,
+            self.state.selected_backend_pid.load(Ordering::SeqCst),
+            accepted,
+            joined,
+            self.state.command_acks.load(Ordering::SeqCst),
+            self.state.ready_acks.load(Ordering::SeqCst),
+            self.state.forwarded_acks.load(Ordering::SeqCst)
+        );
+    }
+}
+impl Drop for PgTerminalAckGate {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(task) = self.task.take() {
+            eprintln!("CUSTOM_V2_TERMINAL_RELAY fallback_abort=true normal_join_unproven=true");
+            task.abort();
+        }
+    }
+}
+fn pg_statement(tag: u8, bytes: &[u8]) -> Option<&[u8]> {
+    let sql = match tag {
+        b'Q' => bytes,
+        b'P' => &bytes[bytes.iter().position(|b| *b == 0)? + 1..],
+        _ => return None,
+    };
+    Some(&sql[..sql.iter().position(|b| *b == 0)?])
+}
+async fn terminal_relay_connection(
+    mut downstream: TcpStream,
+    upstream_address: SocketAddr,
+    state: Arc<TerminalGateState>,
+) -> Result<(), String> {
+    let mut upstream = TcpStream::connect(upstream_address)
+        .await
+        .map_err(|_| "terminal upstream connect")?;
+    let len = downstream
+        .read_u32()
+        .await
+        .map_err(|_| "terminal startup length")?;
+    if !(8..=65536).contains(&len) {
+        return Err("terminal startup bound".into());
+    }
+    let mut startup = vec![0; len as usize - 4];
+    downstream
+        .read_exact(&mut startup)
+        .await
+        .map_err(|_| "terminal startup read")?;
+    upstream
+        .write_u32(len)
+        .await
+        .map_err(|_| "terminal startup header")?;
+    upstream
+        .write_all(&startup)
+        .await
+        .map_err(|_| "terminal startup forwarding")?;
+    if startup[..4] != 196608_u32.to_be_bytes() {
+        return Err("terminal relay requires original NoTls protocol3 startup".into());
+    }
+    let (mut down_read, mut down_write) = downstream.into_split();
+    let (mut up_read, mut up_write) = upstream.into_split();
+    let backend = Arc::new(AtomicUsize::new(0));
+    let selected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let client_state = state.clone();
+    let client_backend = backend.clone();
+    let client_selected = selected.clone();
+    let client = async move {
+        let mut stage_bits = 0;
+        let mut seen_stage = false;
+        let mut original_begin = false;
+        let mut original_read_only = false;
+        while let Some((tag, bytes)) = terminal_frame(&mut down_read).await? {
+            if client_state.armed.load(Ordering::SeqCst)
+                && client_backend.load(Ordering::SeqCst)
+                    == client_state.original_backend_pid.load(Ordering::SeqCst)
+                && client_backend.load(Ordering::SeqCst) != 0
+            {
+                if tag == b'Q'
+                    && (bytes.starts_with(b"START TRANSACTION") || bytes.starts_with(b"BEGIN"))
+                {
+                    stage_bits = 0;
+                    seen_stage = false;
+                    let query = std::str::from_utf8(&bytes).map_err(|_| "terminal BEGIN UTF8")?;
+                    original_begin = query.contains("ISOLATION LEVEL READ COMMITTED");
+                    original_read_only = query.contains("READ ONLY");
+                }
+                if let Some(sql) = pg_statement(tag, &bytes) {
+                    stage_bits |= client_state.stage.sql_bits(sql);
+                    if stage_bits == client_state.stage.complete_bits() && !seen_stage {
+                        if !original_begin
+                            || original_read_only
+                                != matches!(client_state.stage, TerminalStage::ClassifierRollback)
+                        {
+                            return Err(
+                                "terminal original business RC/read-only mode mismatch".into()
+                            );
+                        }
+                        seen_stage = true;
+                        client_state.begins.fetch_add(1, Ordering::SeqCst);
+                        client_state.stage_seen.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+                if tag == b'Q' && seen_stage {
+                    if bytes.eq_ignore_ascii_case(b"COMMIT\0") {
+                        client_state.commits.fetch_add(1, Ordering::SeqCst);
+                    }
+                    if bytes.eq_ignore_ascii_case(b"ROLLBACK\0") {
+                        client_state.rollbacks.fetch_add(1, Ordering::SeqCst);
+                    }
+                    if seen_stage
+                        && bytes.eq_ignore_ascii_case(client_state.stage.command())
+                        && client_state
+                            .claimed
+                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                    {
+                        client_state
+                            .selected_backend_pid
+                            .store(client_backend.load(Ordering::SeqCst), Ordering::SeqCst);
+                        client_selected.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+            up_write
+                .write_u8(tag)
+                .await
+                .map_err(|_| "terminal frontend tag write")?;
+            up_write
+                .write_u32(bytes.len() as u32 + 4)
+                .await
+                .map_err(|_| "terminal frontend length write")?;
+            up_write
+                .write_all(&bytes)
+                .await
+                .map_err(|_| "terminal frontend body write")?;
+            if tag == b'Q'
+                && (bytes.eq_ignore_ascii_case(b"COMMIT\0")
+                    || bytes.eq_ignore_ascii_case(b"ROLLBACK\0"))
+            {
+                stage_bits = 0;
+                seen_stage = false;
+                original_begin = false;
+                original_read_only = false;
+            }
+        }
+        Ok::<(), String>(())
+    };
+    let server = async move {
+        let mut command_complete = None;
+        while let Some((tag, bytes)) = terminal_frame(&mut up_read).await? {
+            if tag == b'K' {
+                if bytes.len() != 8 {
+                    return Err("terminal BackendKeyData shape".into());
+                }
+                backend.store(
+                    u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize,
+                    Ordering::SeqCst,
+                );
+            }
+            if selected.load(Ordering::SeqCst) {
+                if tag == b'C' && bytes == state.stage.command() {
+                    if command_complete.is_some() {
+                        return Err("terminal original CommandComplete mismatch".into());
+                    }
+                    state.command_acks.fetch_add(1, Ordering::SeqCst);
+                    command_complete = Some(bytes);
+                    continue;
+                }
+                if tag == b'Z' && command_complete.is_some() {
+                    let completion = command_complete
+                        .take()
+                        .ok_or("terminal ReadyForQuery without original C")?;
+                    if bytes != b"I" {
+                        return Err("terminal original ACK did not leave idle".into());
+                    }
+                    state.ready_acks.fetch_add(1, Ordering::SeqCst);
+                    state.held.add_permits(1);
+                    if state.discard {
+                        return Ok(());
+                    }
+                    tokio::time::timeout(Duration::from_secs(8), state.release.acquire())
+                        .await
+                        .map_err(|_| "terminal original ACK release deadline")?
+                        .map_err(|_| "terminal original ACK release closed")?
+                        .forget();
+                    down_write
+                        .write_u8(b'C')
+                        .await
+                        .map_err(|_| "terminal C write")?;
+                    down_write
+                        .write_u32(completion.len() as u32 + 4)
+                        .await
+                        .map_err(|_| "terminal C length")?;
+                    down_write
+                        .write_all(&completion)
+                        .await
+                        .map_err(|_| "terminal C body")?;
+                    down_write
+                        .write_u8(b'Z')
+                        .await
+                        .map_err(|_| "terminal Z write")?;
+                    down_write
+                        .write_u32(bytes.len() as u32 + 4)
+                        .await
+                        .map_err(|_| "terminal Z length")?;
+                    down_write
+                        .write_all(&bytes)
+                        .await
+                        .map_err(|_| "terminal Z body")?;
+                    state.forwarded_acks.fetch_add(1, Ordering::SeqCst);
+                    state.forwarded.add_permits(1);
+                    selected.store(false, Ordering::SeqCst);
+                    continue;
+                }
+                // An earlier prepared Statement Drop can still have CloseComplete/
+                // ReadyForQuery on this same socket. Forward those until the exact
+                // target C is seen; they never count as the target terminal ACK.
+                if tag == b'E' || (command_complete.is_some() && tag != b'N') {
+                    return Err("terminal unexpected backend frame around original ACK".into());
+                }
+            }
+            down_write
+                .write_u8(tag)
+                .await
+                .map_err(|_| "terminal backend tag write")?;
+            down_write
+                .write_u32(bytes.len() as u32 + 4)
+                .await
+                .map_err(|_| "terminal backend length write")?;
+            down_write
+                .write_all(&bytes)
+                .await
+                .map_err(|_| "terminal backend body write")?;
+        }
+        Ok::<(), String>(())
+    };
+    tokio::select! { result = client => result, result = server => result }
+}
+async fn terminal_frame<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<Option<(u8, Vec<u8>)>, String> {
+    let tag = match reader.read_u8().await {
+        Ok(tag) => tag,
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(_) => return Err("terminal frame tag IO".into()),
+    };
+    let len = reader
+        .read_u32()
+        .await
+        .map_err(|_| "terminal partial frame length")?;
+    if !(4..=8 * 1024 * 1024).contains(&len) {
+        return Err("terminal frame bound".into());
+    }
+    let mut bytes = vec![0; len as usize - 4];
+    reader
+        .read_exact(&mut bytes)
+        .await
+        .map_err(|_| "terminal partial frame body")?;
+    Ok(Some((tag, bytes)))
+}
+
+// Only actual production events from the attached original business future are
+// retained. In particular Unavailable is never substituted for a private late state.
+#[derive(Clone, Default)]
+struct OriginalTransactionStates {
+    states: Arc<Mutex<Vec<String>>>,
+    next_span: Arc<AtomicUsize>,
+}
+impl tracing::Subscriber for OriginalTransactionStates {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().starts_with("openbot_infra::")
+            && metadata.fields().field("state").is_some()
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(self.next_span.fetch_add(1, Ordering::SeqCst) as u64 + 1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        if !self.enabled(event.metadata()) {
+            return;
+        }
+        struct StateField(Option<String>);
+        impl tracing::field::Visit for StateField {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "state" {
+                    self.0 = Some(format!("{value:?}"));
+                }
+            }
+        }
+        let mut field = StateField(None);
+        event.record(&mut field);
+        if let Some(value) = field.0 {
+            assert!(value.len() <= 128);
+            let mut states = self.states.lock().unwrap();
+            assert!(states.len() < 32);
+            states.push(value);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+impl OriginalTransactionStates {
+    fn assert_only(&self, actual_state: &str) {
+        let states = self.states.lock().unwrap();
+        assert_eq!(states.as_slice(), &[actual_state.to_owned()]);
+        // Printed from the captured production event only after exact equality.
+        eprintln!(
+            "CUSTOM_V2_ORIGINAL_TRANSACTION_STATE captured_count={} state={}",
+            states.len(),
+            states[0]
+        );
+    }
+}
+async fn original_retired_before_pool_close(original: &pool::ConnectionObservation) {
+    assert!(original.snapshot().retirement_requested);
+    assert_eq!(
+        original
+            .wait_for_destruction_before(std::time::Instant::now() + Duration::from_secs(3))
+            .await
+            .unwrap(),
+        pool::ConnectionDestruction::ConnectionDestroyed
+    );
+    assert!(original.snapshot().connection_destroyed);
+    eprintln!(
+        "CUSTOM_V2_TERMINAL_OWNER retirement_requested={} connection_destroyed={} before_pool_close=true",
+        original.snapshot().retirement_requested,
+        original.snapshot().connection_destroyed
+    );
+}
+async fn pause_original_until_ack_is_late<F: std::future::Future>(
+    future: std::pin::Pin<&mut F>,
+    proxy: &PgTerminalAckGate,
+    original: &pool::ConnectionObservation,
+) {
+    tokio::select! {
+        _ = future => panic!("original business future ended before its actual terminal ACK was held"),
+        () = proxy.held() => {}
+    }
+    assert!(!original.snapshot().retirement_requested);
+    assert!(!original.snapshot().connection_destroyed);
+    // This is real elapsed time after the original ACK reached the relay, which
+    // necessarily follows the entry's deadline sample. No paused Tokio clock or
+    // production deadline override is used. The business future is not polled.
+    tokio::time::sleep(Duration::from_millis(5250)).await;
+    proxy.release_original_ack().await;
+}
+async fn assert_one_original_business_commit(f: &Fixture, req: &BeginThreadRunV2Request) {
+    let c = f.pool.get().await.unwrap();
+    let run = req.command.run_id.as_str();
+    let counts = c.query_one("SELECT
+        (SELECT count(*) FROM public.runs WHERE run_id=$1) AS runs,
+        (SELECT count(*) FROM public.messages WHERE message_id=$1||':input' AND run_id=$1) AS inputs,
+        (SELECT count(*) FROM public.run_events WHERE run_id=$1 AND seq=0 AND event_type='started') AS events,
+        (SELECT count(*) FROM public.outbox WHERE outbox_id=$1||':agent_run_dispatch') AS dispatch,
+        (SELECT count(*) FROM openbot_internal.run_model_selection_v2_snapshots WHERE run_id=$1) AS snapshots,
+        (SELECT count(*) FROM public.run_model_selections WHERE run_id=$1) AS legacy", &[&run]).await.unwrap();
+    for field in ["runs", "inputs", "events", "dispatch", "snapshots"] {
+        assert_eq!(counts.get::<_, i64>(field), 1, "original durable {field}");
+    }
+    assert_eq!(counts.get::<_, i64>("legacy"), 0);
+    let row = c
+        .query_one(
+            "SELECT r.thread_id,m.content,s.* FROM public.runs r
+        JOIN public.messages m ON m.message_id=r.run_id||':input' AND m.run_id=r.run_id
+        JOIN openbot_internal.run_model_selection_v2_snapshots s ON s.run_id=r.run_id
+        WHERE r.run_id=$1",
+            &[&run],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        row.get::<_, String>("thread_id"),
+        req.command.thread_id.as_str()
+    );
+    assert_eq!(
+        row.get::<_, Value>("content"),
+        json!({"text": req.command.message, "modelSelection": req.command.model_selection, "runAnchor": req.command.anchor})
+    );
+    let snapshot =
+        openbot_infra::db::tables::run_model_selection_v2_snapshots::Row::try_from(&row).unwrap();
+    assert_eq!(snapshot.run_id, run);
+    assert_eq!(snapshot.snapshot_schema, 2);
+    assert_eq!(
+        snapshot.connection_id,
+        Uuid::parse_str(req.command.model_selection.connection_id()).unwrap()
+    );
+    assert_eq!(snapshot.model_id, req.command.model_selection.model_id());
+}
+async fn original_business_image(f: &Fixture, req: &BeginThreadRunV2Request) -> Value {
+    let c = f.pool.get().await.unwrap();
+    c.query_one("SELECT jsonb_build_object(
+        'run',(SELECT to_jsonb(r) FROM public.runs r WHERE r.run_id=$1),
+        'thread',(SELECT to_jsonb(t) FROM public.threads t WHERE t.thread_id=$2),
+        'input',(SELECT to_jsonb(m) FROM public.messages m WHERE m.message_id=$1||':input'),
+        'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY e.seq) FROM public.run_events e WHERE e.run_id=$1),
+        'dispatch',(SELECT to_jsonb(o) FROM public.outbox o WHERE o.outbox_id=$1||':agent_run_dispatch'),
+        'snapshot',(SELECT to_jsonb(s) FROM openbot_internal.run_model_selection_v2_snapshots s WHERE s.run_id=$1))",
+        &[&req.command.run_id.as_str(), &req.command.thread_id.as_str()]).await.unwrap().get(0)
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly owned PG and terminal relay; selected include-ignored only"]
+async fn v2_accept_original_commit_ack_loss_is_unknown_with_one_durable_commit() {
+    use tracing::instrument::WithSubscriber;
+    let admin = harness::admin_config("v2_accept_commit_ack_loss");
+    harness::with_temp_database(&admin, "v2acceptcommitackloss", |config| async move {
+        let proxy = PgTerminalAckGate::new(&config, TerminalStage::NewCommit, true).await;
+        let f = Fixture::new_size(proxy.config.clone(), 1).await;
+        let (_, req) = f
+            .pending(
+                130,
+                CustomModelProtocol::OpenaiChatCompletions,
+                "https://idp.test/v1/chat/completions",
+                false,
+            )
+            .await;
+        let original = proxy.arm_original(&f).await;
+        let states = OriginalTransactionStates::default();
+        let result = f
+            .directory
+            .begin_thread_run_v2(req.clone())
+            .with_subscriber(states.clone())
+            .await;
+        assert_eq!(
+            result,
+            Err(openbot_application::ThreadDirectoryError::CommitUnknown)
+        );
+        states.assert_only("CommitUnknown");
+        proxy.assert_target(0);
+        original_retired_before_pool_close(&original).await;
+        proxy.state.armed.store(false, Ordering::SeqCst);
+        assert_one_original_business_commit(&f, &req).await;
+        let committed = original_business_image(&f, &req).await;
+        assert!(
+            f.directory
+                .begin_thread_run_v2(req.clone())
+                .await
+                .unwrap()
+                .replayed
+        );
+        assert_one_original_business_commit(&f, &req).await;
+        assert_eq!(original_business_image(&f, &req).await, committed);
+        f.finish().await;
+        proxy.stop().await;
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly owned PG and terminal relay; selected include-ignored only"]
+async fn v2_accept_original_commit_ack_after_deadline_is_known_late_with_durable_receipt() {
+    use tracing::instrument::WithSubscriber;
+    let admin = harness::admin_config("v2_accept_commit_ack_late");
+    harness::with_temp_database(&admin, "v2acceptcommitacklate", |config| async move {
+        let proxy = PgTerminalAckGate::new(&config, TerminalStage::NewCommit, false).await;
+        let f = Fixture::new_size(proxy.config.clone(), 1).await;
+        let (_, req) = f
+            .pending(
+                140,
+                CustomModelProtocol::OpenaiChatCompletions,
+                "https://idp.test/v1/chat/completions",
+                false,
+            )
+            .await;
+        let original = proxy.arm_original(&f).await;
+        let states = OriginalTransactionStates::default();
+        let mut future = Box::pin(
+            f.directory
+                .begin_thread_run_v2(req.clone())
+                .with_subscriber(states.clone()),
+        );
+        pause_original_until_ack_is_late(future.as_mut(), &proxy, &original).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), &mut future)
+            .await
+            .unwrap();
+        drop(future);
+        assert_eq!(
+            result,
+            Err(openbot_application::ThreadDirectoryError::AcknowledgedAfterDeadline)
+        );
+        states.assert_only("CommitAcknowledgedAfterDeadline");
+        assert!(matches!(
+            result.unwrap_err().into_app_error(),
+            openbot_contracts::error::AppError::ReconciliationRequired { accepted: true }
+        ));
+        proxy.assert_target(1);
+        original_retired_before_pool_close(&original).await;
+        proxy.state.armed.store(false, Ordering::SeqCst);
+        assert_one_original_business_commit(&f, &req).await;
+        let committed = original_business_image(&f, &req).await;
+        assert!(
+            f.directory
+                .begin_thread_run_v2(req.clone())
+                .await
+                .unwrap()
+                .replayed
+        );
+        assert_one_original_business_commit(&f, &req).await;
+        assert_eq!(original_business_image(&f, &req).await, committed);
+        f.finish().await;
+        proxy.stop().await;
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly owned PG and terminal relay; selected include-ignored only"]
+async fn v2_exact_durable_replay_original_rollback_ack_after_deadline_is_known_late() {
+    use tracing::instrument::WithSubscriber;
+    let admin = harness::admin_config("v2_replay_rollback_ack_late");
+    harness::with_temp_database(&admin, "v2replayrollbackacklate", |config| async move {
+        let proxy =
+            PgTerminalAckGate::new(&config, TerminalStage::ExactReplayRollback, false).await;
+        let f = Fixture::new_size(proxy.config.clone(), 1).await;
+        let (_, req) = f
+            .pending(
+                150,
+                CustomModelProtocol::OpenaiChatCompletions,
+                "https://idp.test/v1/chat/completions",
+                false,
+            )
+            .await;
+        assert!(
+            !f.directory
+                .begin_thread_run_v2(req.clone())
+                .await
+                .unwrap()
+                .replayed
+        );
+        assert_one_original_business_commit(&f, &req).await;
+        let committed = original_business_image(&f, &req).await;
+        let original = proxy.arm_original(&f).await;
+        let states = OriginalTransactionStates::default();
+        let mut future = Box::pin(
+            f.directory
+                .begin_thread_run_v2(req.clone())
+                .with_subscriber(states.clone()),
+        );
+        pause_original_until_ack_is_late(future.as_mut(), &proxy, &original).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), &mut future)
+            .await
+            .unwrap();
+        drop(future);
+        assert_eq!(
+            result,
+            Err(openbot_application::ThreadDirectoryError::AcknowledgedAfterDeadline)
+        );
+        states.assert_only("RollbackAcknowledgedAfterDeadline");
+        assert!(matches!(
+            result.unwrap_err().into_app_error(),
+            openbot_contracts::error::AppError::ReconciliationRequired { accepted: true }
+        ));
+        proxy.assert_target(1);
+        original_retired_before_pool_close(&original).await;
+        proxy.state.armed.store(false, Ordering::SeqCst);
+        assert_one_original_business_commit(&f, &req).await;
+        assert_eq!(original_business_image(&f, &req).await, committed);
+        f.finish().await;
+        proxy.stop().await;
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly owned PG and terminal relay; selected include-ignored only"]
+async fn v2_configured_classification_original_rollback_ack_after_deadline_is_known_late_and_closed()
+ {
+    use tracing::instrument::WithSubscriber;
+    let admin = harness::admin_config("v2_probe_rollback_ack_late");
+    harness::with_temp_database(&admin, "v2proberollbackacklate", |config| async move {
+        let proxy = PgTerminalAckGate::new(&config, TerminalStage::ClassifierRollback, false).await;
+        let f = Fixture::new_size(proxy.config.clone(), 1).await;
+        let (_, req) = f
+            .pending(
+                160,
+                CustomModelProtocol::OpenaiChatCompletions,
+                "https://idp.test/v1/chat/completions",
+                false,
+            )
+            .await;
+        f.directory.begin_thread_run_v2(req.clone()).await.unwrap();
+        assert_one_original_business_commit(&f, &req).await;
+        let committed = original_business_image(&f, &req).await;
+        let original = proxy.arm_original(&f).await;
+        let states = OriginalTransactionStates::default();
+        let context = f.context();
+        let execution = lease(&req);
+        let mut future = Box::pin(context.load(&execution).with_subscriber(states.clone()));
+        pause_original_until_ack_is_late(future.as_mut(), &proxy, &original).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), &mut future)
+            .await
+            .unwrap();
+        drop(future);
+        assert!(matches!(
+            result,
+            Err(openbot_application::AgentContextError::Unavailable)
+        ));
+        // This is a captured original private state, never inferred from Unavailable.
+        states.assert_only("RollbackAcknowledgedAfterDeadline");
+        proxy.assert_target(1);
+        original_retired_before_pool_close(&original).await;
+        proxy.state.armed.store(false, Ordering::SeqCst);
+        assert_one_original_business_commit(&f, &req).await;
+        assert_eq!(original_business_image(&f, &req).await, committed);
+        drop(context);
+        f.finish().await;
+        proxy.stop().await;
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly owned PostgreSQL; selected include-ignored only"]
+async fn v2_cross_thread_concurrent_same_run_id_commits_one_original_business_set() {
+    let admin = harness::admin_config("v2_cross_thread_run_unique");
+    harness::with_temp_database(&admin, "v2crossthreadunique", |config| async move {
+        let f = Fixture::new(config).await;
+        let (_, a) = f.pending(170, CustomModelProtocol::OpenaiChatCompletions, "https://idp.test/v1/chat/completions", false).await;
+        let mut b = a.clone();
+        let mut entropy = [0u8; 16];
+        entropy[8..].copy_from_slice(&171u64.to_be_bytes());
+        b.command.thread_id = ThreadIdentity::new(&DeploymentId::new(DEP)).mint_from_entropy(entropy);
+        assert_ne!(a.command.thread_id, b.command.thread_id);
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let directory_a = f.directory.clone();
+        let directory_b = f.directory.clone();
+        let request_a = a.clone();
+        let request_b = b.clone();
+        let ready_a = barrier.clone();
+        let ready_b = barrier.clone();
+        let task_a = tokio::spawn(async move { ready_a.wait().await; directory_a.begin_thread_run_v2(request_a).await });
+        let task_b = tokio::spawn(async move { ready_b.wait().await; directory_b.begin_thread_run_v2(request_b).await });
+        barrier.wait().await;
+        let (result_a, result_b) = tokio::time::timeout(Duration::from_secs(7), async { (task_a.await.unwrap(), task_b.await.unwrap()) }).await.unwrap();
+        let winner = match (&result_a, &result_b) {
+            (Ok(receipt), Err(openbot_application::ThreadDirectoryError::RequestConflict)) if !receipt.replayed => &a,
+            (Err(openbot_application::ThreadDirectoryError::RequestConflict), Ok(receipt)) if !receipt.replayed => &b,
+            _ => panic!("expected exactly one commit and one run identity conflict: {result_a:?} {result_b:?}"),
+        };
+        assert_one_original_business_commit(&f, winner).await;
+        let committed = original_business_image(&f, winner).await;
+        let loser = if winner.command.thread_id == a.command.thread_id { &b } else { &a };
+        let c = f.pool.get().await.unwrap();
+        for table in ["public.threads", "public.thread_memberships", "public.thread_leases"] {
+            let count: i64 = c.query_one(&format!("SELECT count(*) FROM {table} WHERE thread_id=$1"), &[&loser.command.thread_id.as_str()]).await.unwrap().get(0);
+            assert_eq!(count, 0, "losing transaction has no durable {table}");
+        }
+        drop(c);
+        assert!(f.directory.begin_thread_run_v2(winner.clone()).await.unwrap().replayed);
+        assert_one_original_business_commit(&f, winner).await;
+        assert_eq!(original_business_image(&f, winner).await, committed);
+        f.finish().await;
+        Ok(())
+    }).await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly owned PG and terminal relay; selected include-ignored only"]
+async fn v2_exact_durable_replay_original_rollback_ack_loss_is_closure_unproven() {
+    use tracing::instrument::WithSubscriber;
+    let admin = harness::admin_config("v2_replay_rollback_ack_loss");
+    harness::with_temp_database(&admin, "v2replayrollbackackloss", |config| async move {
+        let proxy = PgTerminalAckGate::new(&config, TerminalStage::ExactReplayRollback, true).await;
+        let f = Fixture::new_size(proxy.config.clone(), 1).await;
+        let (_, req) = f
+            .pending(
+                180,
+                CustomModelProtocol::OpenaiChatCompletions,
+                "https://idp.test/v1/chat/completions",
+                false,
+            )
+            .await;
+        assert!(
+            !f.directory
+                .begin_thread_run_v2(req.clone())
+                .await
+                .unwrap()
+                .replayed
+        );
+        assert_one_original_business_commit(&f, &req).await;
+        let committed = original_business_image(&f, &req).await;
+        let original = proxy.arm_original(&f).await;
+        let states = OriginalTransactionStates::default();
+        let result = f
+            .directory
+            .begin_thread_run_v2(req.clone())
+            .with_subscriber(states.clone())
+            .await;
+        assert_eq!(
+            result,
+            Err(openbot_application::ThreadDirectoryError::ReplayClosureUnproven)
+        );
+        states.assert_only("RollbackUnproven");
+        assert!(matches!(
+            result.unwrap_err().into_app_error(),
+            openbot_contracts::error::AppError::ReconciliationRequired { accepted: true }
+        ));
+        proxy.assert_target(0);
+        original_retired_before_pool_close(&original).await;
+        proxy.state.armed.store(false, Ordering::SeqCst);
+        assert_one_original_business_commit(&f, &req).await;
+        assert_eq!(original_business_image(&f, &req).await, committed);
+        f.finish().await;
+        proxy.stop().await;
         Ok(())
     })
     .await;

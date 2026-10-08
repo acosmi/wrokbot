@@ -46,6 +46,27 @@ fn all_standard_json_boundary_whitespace_counts_in_original_span() {
 }
 
 #[test]
+fn interior_json_whitespace_counts_without_changing_the_original_v2_intent() {
+    let expected = decode_begin_thread_run_body(body(V2).as_bytes()).unwrap();
+    let remaining = 4096 - V2.len();
+    for whitespace in [b' ', b'\t', b'\r', b'\n'] {
+        let padding = String::from_utf8(vec![whitespace; remaining]).unwrap();
+        let exact_selection = format!("{{{padding}{}", &V2[1..]);
+        assert_eq!(exact_selection.len(), 4096);
+        assert_eq!(
+            decode_begin_thread_run_body(body(&exact_selection).as_bytes()),
+            Ok(expected.clone())
+        );
+        let oversized_selection = format!("{{ {padding}{}", &V2[1..]);
+        assert_eq!(oversized_selection.len(), 4097);
+        assert_eq!(
+            decode_begin_thread_run_body(body(&oversized_selection).as_bytes()),
+            Err(BeginThreadRunDecodeError::ModelSelectionTooLarge)
+        );
+    }
+}
+
+#[test]
 fn identical_text_in_another_field_never_selects_the_wrong_span() {
     let long = format!("{}{}", " ".repeat(4097 - V2.len()), V2);
     let original = format!(

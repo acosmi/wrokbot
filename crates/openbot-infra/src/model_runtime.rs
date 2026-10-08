@@ -511,6 +511,11 @@ pub(crate) async fn classify_selection_storage<C: tokio_postgres::GenericClient 
     };
     let has_v1: bool = row.try_get("has_v1").map_err(|_| bad())?;
     let has_intent: bool = row.try_get("has_intent").map_err(|_| bad())?;
+    // Old unselected runs can carry their real user input under any message ID.
+    // Only explicit-selection storage requires the new exact run_id:input identity.
+    if !has_intent && !has_v1 && !has_v2 {
+        return Ok(StoredSelectionKind::None);
+    }
     if row
         .try_get::<_, Option<String>>("input_role")
         .map_err(|_| bad())?
@@ -533,9 +538,6 @@ pub(crate) async fn classify_selection_storage<C: tokio_postgres::GenericClient 
             != Some(lease.actor_id().as_str())
     {
         return Err(bad());
-    }
-    if !has_intent && !has_v1 && !has_v2 {
-        return Ok(StoredSelectionKind::None);
     }
     if !has_intent || has_v1 == has_v2 {
         return Err(bad());

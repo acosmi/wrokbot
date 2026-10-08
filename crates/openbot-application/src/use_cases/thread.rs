@@ -667,6 +667,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn begin_v2_default_port_closes_without_invoking_a_working_legacy_port() {
+        struct LegacyOnlyDirectory(BeginDirectory);
+
+        #[async_trait]
+        impl ThreadDirectory for LegacyOnlyDirectory {
+            async fn mint_thread_id(
+                &self,
+                _deployment: &DeploymentId,
+            ) -> Result<ThreadId, ThreadDirectoryError> {
+                Err(ThreadDirectoryError::Unavailable)
+            }
+
+            async fn thread_known(
+                &self,
+                _deployment: &DeploymentId,
+                _tenant: &TenantId,
+                _actor: &ActorId,
+                _thread: &ThreadId,
+            ) -> Result<bool, ThreadDirectoryError> {
+                Err(ThreadDirectoryError::Unavailable)
+            }
+
+            async fn begin_thread_run(
+                &self,
+                request: BeginThreadRunRequest,
+            ) -> Result<ThreadRunStarted, ThreadDirectoryError> {
+                self.0.begin_thread_run(request).await
+            }
+        }
+
+        let old_command = begin_command();
+        let expected = ThreadRunStarted {
+            thread_id: old_command.thread_id.clone(),
+            run_id: old_command.run_id.clone(),
+            message_sequence: 0,
+            event_sequence: 0,
+            replayed: false,
+        };
+        let directory = LegacyOnlyDirectory(begin_directory(Ok(expected.clone())));
+        let closed = Err(AppError::DependencyUnavailable {
+            dependency: "thread_directory",
+        });
+        assert_eq!(
+            begin_thread_run_v2(&directory, &auth(), begin_v2_command()).await,
+            closed
+        );
+        assert!(directory.0.calls.lock().unwrap().is_empty());
+        assert!(directory.0.v2_calls.lock().unwrap().is_empty());
+        assert_eq!(
+            begin_thread_run_v2(
+                &crate::ports::NoThreadDirectory,
+                &auth(),
+                begin_v2_command()
+            )
+            .await,
+            closed
+        );
+        assert_eq!(
+            begin_thread_run(&directory, &auth(), old_command)
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(directory.0.calls.lock().unwrap().len(), 1);
+        assert!(directory.0.v2_calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn begin_v2_rejects_unsupported_source_and_original_budgets_before_port() {
         use openbot_contracts::versioned_model_selection::{
             ModelSelectionIntentSource, RunModelSelectionV2,
@@ -697,6 +765,31 @@ mod tests {
         let mut oversized = good;
         oversized.message = "x".repeat(MAX_THREAD_MESSAGE_BYTES + 1);
         commands.push(oversized);
+        let mut nul_message = begin_v2_command();
+        nul_message.message = "bad\0message".to_owned();
+        commands.push(nul_message);
+        let mut bad_thread = begin_v2_command();
+        bad_thread.thread_id = ThreadId::new("bad");
+        commands.push(bad_thread);
+        let mut empty_run = begin_v2_command();
+        empty_run.run_id = openbot_contracts::ids::RunId::new("");
+        commands.push(empty_run);
+        let mut empty_bot = begin_v2_command();
+        empty_bot.bot_id = openbot_contracts::ids::BotId::new("");
+        commands.push(empty_bot);
+        let mut empty_channel = begin_v2_command();
+        empty_channel.anchor = ThreadRunAnchor::Channel {
+            channel_id: openbot_contracts::ids::ChannelId::new(""),
+        };
+        commands.push(empty_channel);
+        for slugs in [
+            vec!["missing/grammar".to_owned()],
+            (0..17).map(|index| format!("skill-{index}")).collect(),
+        ] {
+            let mut command = begin_v2_command();
+            command.selected_skill_slugs = slugs;
+            commands.push(command);
+        }
         for command in commands {
             let directory = begin_directory(Err(ThreadDirectoryError::Unavailable));
             assert!(matches!(

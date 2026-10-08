@@ -1295,6 +1295,7 @@ mod tests {
             .chain(statement_lines(NATIVE_0037_SQL))
             .chain(statement_lines(NATIVE_0038_SQL))
             .chain(statement_lines(NATIVE_0045_SQL))
+            .chain(statement_lines(NATIVE_0047_SQL))
             // Only the exact registered catalog trigger body is excluded from top-level checks.
             .chain(
                 catalog_sql_parts
@@ -1440,6 +1441,7 @@ mod tests {
                 .chain(statement_lines(NATIVE_0035_SQL))
                 .chain(statement_lines(NATIVE_0037_SQL))
                 .chain(statement_lines(NATIVE_0038_SQL))
+                .chain(statement_lines(NATIVE_0047_SQL))
                 .chain(
                     NATIVE_0036_SQL
                         .split("$$")
