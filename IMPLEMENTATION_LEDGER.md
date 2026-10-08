@@ -1808,3 +1808,8 @@ Limits: Server body checks can reject after headers; allocation ownership is not
 
 
 2026-10-08 — UI5-P4 Agent profile explicit retry Source implementation: failed detail reads now offer the existing localized Retry button. Activation immediately marks the read pending and notifies the original same-Agent read Effect; existing generation rejection, scoped cancellation, permissions, management writes and route identity remain unchanged. This Source checkpoint has no new test or runtime acceptance; directed build and real offline/online keyboard retry validation remain NOTRUN. No new backend capability is added.
+
+
+### Agent profile read cancellation
+
+The selected Agent profile panel now owns a browser cancellation signal through its original detail response decoding. Retiring that panel synchronously aborts a pending GET, while generation checks continue to reject stale updates. Retry deduplication, management permissions and the original detail reader used by NewChannel, Bot and Conversation remain unchanged. This change adds no backend endpoint or dependency; exact-candidate verification is recorded separately.
