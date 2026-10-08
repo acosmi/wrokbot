@@ -376,7 +376,7 @@ impl openbot_contracts::HostRequestBindingGuard for PostgresLocalConfirmationAut
         let factory = LocalCustomModelCatalogTail {
             repository: std::sync::Arc::downgrade(&repository),
             original: auth.clone(),
-            observed_wall: time::OffsetDateTime::now_utc(),
+            observed_wall: std::time::SystemTime::now(),
             observed_monotonic: std::time::Instant::now(),
         };
         openbot_contracts::request_binding::CustomModelCatalogHostTailWitness::verify_current(
@@ -595,7 +595,7 @@ struct LocalCustomModelCatalogTail {
     repository:
         std::sync::Weak<openbot_infra::custom_model_catalog::PostgresCustomModelCatalogInventory>,
     original: AuthContext,
-    observed_wall: time::OffsetDateTime,
+    observed_wall: std::time::SystemTime,
     observed_monotonic: std::time::Instant,
 }
 #[cfg(feature = "desktop-local-runtime")]
@@ -630,7 +630,7 @@ impl openbot_contracts::request_binding::CustomModelCatalogHostTailWitness
         deadline: std::time::Instant,
     ) -> Result<(), openbot_contracts::HostRequestBindingError> {
         use openbot_contracts::request_binding::{HostRequestBindingError, HostRequestBindingKind};
-        if time::OffsetDateTime::now_utc() < self.observed_wall
+        if std::time::SystemTime::now() < self.observed_wall
             || std::time::Instant::now() < self.observed_monotonic
             || auth != &self.original
             || !self

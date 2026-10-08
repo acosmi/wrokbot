@@ -25,6 +25,7 @@ use crate::auth::OriginAuthenticated;
 use crate::error::HttpError;
 use crate::http::ServerState;
 
+/// The authenticated current-owner custom model catalogue's sole HTTP route.
 pub const PATH: &str = "/api/me/custom-model-catalog";
 
 /// Enclose transport/extractor/authentication and owned 404/405 responses as well.
