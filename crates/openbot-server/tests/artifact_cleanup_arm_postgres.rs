@@ -4486,12 +4486,39 @@ async fn actual_terminal_original_allocation_clone_and_control_tail_block_precom
         terminal_g124_unlink_owned_original(f, &original)?;
         require(terminal_g124_unlinked_inode_still_owned(&original)? == original_fds,
             "G124 controller absence closed old reader/allocation owners instead of unlinking owned names")?;
-        // Reset only disposition bit evidence while the actual old control ACK is
-        // still held. Preserve the real held/release state. The subsequent terminal
-        // BEGIN/COMMIT cannot be inherited from the earlier read transaction.
-        old.socket.entered.store(0, Ordering::SeqCst);
-        old.socket.server_ack.store(0, Ordering::SeqCst);
-        old.socket.forwarded_ack.store(0, Ordering::SeqCst);
+        let relay = f.relay.as_ref().ok_or("G124 control relay absent")?;
+        let registered_old_socket = relay.socket_for_pid(old.original_pid)?;
+        require(Arc::ptr_eq(&old.socket, &registered_old_socket)
+            && old.socket.pid.load(Ordering::SeqCst) == old.original_pid
+            && old.socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8
+            && old.socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !old.socket.frontend_eof.load(Ordering::SeqCst) && !old.task.is_finished(),
+            "G124 rebase did not retain the same actual pending old control ROLLBACK socket")?;
+        // Terminal has not been spawned. Remove only inherited BEGIN/COMMIT bits;
+        // keep the old ROLLBACK that the original upstream C packet actually set.
+        let old_entered_before = old.socket.entered.fetch_and(ROLLBACK_BIT, Ordering::SeqCst);
+        let old_server_ack_before = old.socket.server_ack.fetch_and(ROLLBACK_BIT, Ordering::SeqCst);
+        let old_forwarded_ack_before = old.socket.forwarded_ack.swap(0, Ordering::SeqCst);
+        let old_entered_after = old.socket.entered.load(Ordering::SeqCst);
+        let old_server_ack_after = old.socket.server_ack.load(Ordering::SeqCst);
+        let old_forwarded_ack_after = old.socket.forwarded_ack.load(Ordering::SeqCst);
+        require(old_entered_before & ROLLBACK_BIT != 0 && old_entered_before & COMMIT_BIT == 0
+            && old_server_ack_before & ROLLBACK_BIT != 0 && old_server_ack_before & COMMIT_BIT == 0
+            && old_forwarded_ack_before & (ROLLBACK_BIT | COMMIT_BIT) == 0
+            && old_entered_after == ROLLBACK_BIT && old_server_ack_after == ROLLBACK_BIT
+            && old_forwarded_ack_after == 0
+            && old.socket.pid.load(Ordering::SeqCst) == old.original_pid
+            && old.socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !old.socket.frontend_eof.load(Ordering::SeqCst) && !old.task.is_finished(),
+            "G124 old upstream ROLLBACK evidence changed while clearing only inherited transaction bits")?;
+        eprintln!("ARTIFACT_TERMINAL_G124_CONTROL_REBASE original_pid={} same_registered_socket={} entered_before={old_entered_before} entered_after={old_entered_after} server_ack_before={old_server_ack_before} server_ack_after={old_server_ack_after} forwarded_ack_before={old_forwarded_ack_before} forwarded_ack_after={old_forwarded_ack_after} withheld={} release={} frontend_eof={} old_task_finished={}",
+            old.original_pid, Arc::ptr_eq(&old.socket, &registered_old_socket),
+            old.socket.withheld.load(Ordering::SeqCst), old.socket.release_original_ack.load(Ordering::SeqCst),
+            old.socket.frontend_eof.load(Ordering::SeqCst), old.task.is_finished());
         let observer = Arc::new(TerminalObserverFacts::default());
         let started = Instant::now(); let deadline = started + Duration::from_secs(5);
         let actual = Arc::clone(&f.actual); let auth = f.auth.clone(); let original_intent = Arc::clone(&intent);
@@ -4504,17 +4531,45 @@ async fn actual_terminal_original_allocation_clone_and_control_tail_block_precom
             && old.socket.entered.load(Ordering::SeqCst) & COMMIT_BIT == 0
             && database_facts(&f.admin).await? == armed,
             "G124 terminal permission ignored the original outstanding public control-tail query")?;
-        f.relay.as_ref().ok_or("G124 control relay absent")?.release_original_ack(&old.socket, Hold::Rollback)?;
+        require(Arc::ptr_eq(&old.socket, &relay.socket_for_pid(old.original_pid)?)
+            && old.socket.pid.load(Ordering::SeqCst) == old.original_pid
+            && old.socket.withheld.load(Ordering::SeqCst) == Hold::Rollback as u8
+            && old.socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
+            && old.socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT == 0
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !old.socket.frontend_eof.load(Ordering::SeqCst) && !old.task.is_finished(),
+            "G124 release no longer addressed the same actual unforwarded old ROLLBACK")?;
+        relay.release_original_ack(&old.socket, Hold::Rollback)?;
         let old_result = old.task.await.map_err(|e| e.to_string())?;
+        wait_fact(|| old.socket.release_original_ack.load(Ordering::SeqCst) == 0,
+            deadline, "G124 original held ROLLBACK C/Z release was not consumed inside the original terminal budget").await?;
         eprintln!("ARTIFACT_TERMINAL_G124_KNOWN_CONTROL original_pid={} actual_error={:?} terminal_elapsed_us={} original_terminal_deadline_elapsed={} relay_entered={} relay_server_ack={} relay_forwarded_ack={} relay_release={}",
             old.original_pid, old_result.as_ref().err(), started.elapsed().as_micros(), Instant::now() >= deadline,
             old.socket.entered.load(Ordering::SeqCst), old.socket.server_ack.load(Ordering::SeqCst),
             old.socket.forwarded_ack.load(Ordering::SeqCst), old.socket.release_original_ack.load(Ordering::SeqCst));
         require(matches!(old_result, Err(AppError::DependencyUnavailable { dependency: "artifacts" }))
+            && Arc::ptr_eq(&old.socket, &relay.socket_for_pid(old.original_pid)?)
+            && old.socket.pid.load(Ordering::SeqCst) == old.original_pid
+            && old.socket.entered.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
             && old.socket.server_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
             && old.socket.forwarded_ack.load(Ordering::SeqCst) & ROLLBACK_BIT != 0
-            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0,
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0
+            && !old.socket.frontend_eof.load(Ordering::SeqCst) && Instant::now() < deadline,
             "G124 original public Close refusal did not consume its real in-budget source ROLLBACK ACK")?;
+        // The real old task has completed and its original C/Z release is consumed.
+        // Retire only that old fixture latch; a new terminal BEGIN may already exist.
+        let consumed_old_hold = old.socket.withheld.compare_exchange(
+            Hold::Rollback as u8, 0, Ordering::SeqCst, Ordering::SeqCst,
+        ).map_err(|actual| format!("G124 consumed old ROLLBACK latch changed before retirement: {actual}"))?;
+        require(consumed_old_hold == Hold::Rollback as u8
+            && old.socket.withheld.load(Ordering::SeqCst) == 0
+            && old.socket.release_original_ack.load(Ordering::SeqCst) == 0,
+            "G124 consumed old control latch remained live after its real ACK and task completion")?;
+        eprintln!("ARTIFACT_TERMINAL_G124_CONTROL_CONSUMED original_pid={} consumed_old_hold={consumed_old_hold} entered={} server_ack={} forwarded_ack={} withheld={} release={} terminal_elapsed_us={}",
+            old.original_pid, old.socket.entered.load(Ordering::SeqCst), old.socket.server_ack.load(Ordering::SeqCst),
+            old.socket.forwarded_ack.load(Ordering::SeqCst), old.socket.withheld.load(Ordering::SeqCst),
+            old.socket.release_original_ack.load(Ordering::SeqCst), started.elapsed().as_micros());
         wait_fact(|| old.socket.forwarded_ack.load(Ordering::SeqCst) & BEGIN_BIT != 0,
             Instant::now() + Duration::from_secs(2), "G124 terminal did not obtain its own original BEGIN after actual old query drain").await?;
         let barrier = f.actual.close_armed_artifact_reads(&intent).map_err(|e| e.to_string())?;
