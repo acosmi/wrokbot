@@ -74,6 +74,7 @@ pub struct CredentialRecordVault {
 }
 
 impl CredentialRecordVault {
+    #[cfg(feature = "server-runtime")]
     pub(crate) fn matches_tenant(&self, tenant: &TenantId) -> bool {
         &self.tenant == tenant
     }
