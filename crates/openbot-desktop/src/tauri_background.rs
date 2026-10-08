@@ -1620,6 +1620,15 @@ pub(crate) async fn prepare_desktop_local_runtime(
             );
         }
     };
+    if assembly
+        .model_dataset_binding
+        .enroll_original_registry(&data_plane.artifact_dataset_owner())
+        .is_err()
+    {
+        return Err(
+            cleanup_assembly(data_plane, assembly, DesktopLocalRuntimeError::Application).await,
+        );
+    }
     if !custom_model_catalog_provenance.matches_installation(data_plane.authority())
         || assembly
             .custom_model_catalog_inventory
@@ -1632,6 +1641,7 @@ pub(crate) async fn prepare_desktop_local_runtime(
     }
     let agent_host = match start_desktop_agent_host(DesktopAgentHostInput {
         pool,
+        model_dataset_binding: Arc::clone(&assembly.model_dataset_binding),
         listener_database: agent_listener_database,
         deployment: auth.deployment().clone(),
         tenant: auth.tenant().clone(),

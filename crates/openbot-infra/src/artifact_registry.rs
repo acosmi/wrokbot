@@ -478,6 +478,110 @@ impl ArtifactDatasetRegistry {
     pub(crate) fn owner(&self) -> Arc<()> {
         Arc::clone(&self.binding._owner)
     }
+
+    /// Reobserve only storage lineage on the model factory's original transaction.
+    /// This private bridge neither accepts another pool nor grants artifact/user authority.
+    #[cfg(feature = "server-runtime")]
+    pub(crate) async fn verify_model_dataset_in_transaction(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+    ) -> Result<(), ArtifactRegistryError> {
+        fn infra(error: crate::db::InfraError) -> ArtifactRegistryError {
+            match error {
+                crate::db::InfraError::Connect { .. }
+                | crate::db::InfraError::Query { .. }
+                | crate::db::InfraError::RepositoryInvariant {
+                    code: "custom_model_v2_schema_observation_unavailable",
+                } => ArtifactRegistryError::Unavailable,
+                _ => corrupt("model_dataset_schema"),
+            }
+        }
+        if self.pool.is_closed() {
+            return Err(corrupt("model_dataset_pool"));
+        }
+        native::validate_custom_model_v2_in_transaction(tx)
+            .await
+            .map_err(infra)?;
+        let public: schema_facts::SchemaFacts = serde_json::from_str(REGISTERED_PUBLIC_SCHEMA)
+            .map_err(|_| corrupt("public_schema_oracle"))?;
+        let payload: String = tx
+            .query_one(schema_facts::SCHEMA_FACTS_SQL, &[])
+            .await
+            .map_err(|_| ArtifactRegistryError::Unavailable)?
+            .try_get(0)
+            .map_err(|_| corrupt("public_schema"))?;
+        let actual: schema_facts::SchemaFacts =
+            serde_json::from_str(&payload).map_err(|_| corrupt("public_schema"))?;
+        if actual != public {
+            return Err(corrupt("public_schema"));
+        }
+        let expected: ArtifactRegistrySchemaFacts =
+            serde_json::from_str(REGISTERED_INTERNAL_SCHEMA)
+                .map_err(|_| corrupt("internal_schema_oracle"))?;
+        if capture_schema_on_generic(tx).await? != expected {
+            return Err(corrupt("internal_schema"));
+        }
+        crate::db::desktop_vault_canary::verify_model_dataset_shape_in_transaction(tx)
+            .await
+            .map_err(infra)?;
+
+        // This is the shared final lineage stage, after consumer user/target/model locks.
+        // Keep the actual immutable tuple and the canary absence/current row stable through ACK.
+        let actual = decode_binding(
+            tx.query_opt(
+                &format!("{READ_NAMESPACE} FOR SHARE"),
+                &[&self.binding.deployment_id, &self.binding.tenant_id],
+            )
+            .await
+            .map_err(|_| ArtifactRegistryError::Unavailable)?
+            .ok_or_else(|| corrupt("dataset_binding"))?,
+        )?;
+        if actual.deployment_id != self.binding.deployment_id
+            || actual.tenant_id != self.binding.tenant_id
+            || actual.dataset_id != self.binding.dataset_id
+            || actual.binding_schema != self.binding.binding_schema
+            || actual.initial_origin != self.binding.initial_origin
+            || actual.created_at != self.binding.created_at
+        {
+            return Err(corrupt("dataset_binding"));
+        }
+        tx.batch_execute("LOCK TABLE openbot_internal.desktop_vault_canaries IN SHARE MODE")
+            .await
+            .map_err(|_| ArtifactRegistryError::Unavailable)?;
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(proof) = &self.desktop_read_provenance {
+            let row = tx.query_one(
+                "SELECT pcs.system_identifier::text AS read_database_system_identifier, d.oid AS read_database_oid, \
+                 CASE WHEN octet_length(c.dataset_id)=32 THEN c.dataset_id END AS read_canary_dataset, \
+                 CASE WHEN octet_length(c.deployment_id) BETWEEN 1 AND 512 THEN c.deployment_id END AS read_canary_deployment, \
+                 CASE WHEN octet_length(c.tenant_id) BETWEEN 1 AND 512 THEN c.tenant_id END AS read_canary_tenant, \
+                 CASE WHEN octet_length(c.key_id)=32 THEN c.key_id END AS read_canary_key, \
+                 c.key_version AS read_canary_key_version, c.canary_schema AS read_canary_schema, \
+                 CASE WHEN octet_length(c.encrypted_canary) BETWEEN 1 AND 4096 THEN c.encrypted_canary END AS read_canary_encrypted \
+                 FROM (SELECT 1) anchor LEFT JOIN pg_control_system() pcs ON true \
+                 LEFT JOIN pg_database d ON d.datname=current_database() \
+                 LEFT JOIN openbot_internal.desktop_vault_canaries c \
+                 ON c.deployment_id=$1 AND c.tenant_id=$2 AND c.key_version=1",
+                &[&self.binding.deployment_id, &self.binding.tenant_id],
+            ).await.map_err(|_| ArtifactRegistryError::Unavailable)?;
+            if !proof
+                .matches_current_row(&row)
+                .map_err(|_| corrupt("model_dataset_canary"))?
+            {
+                return Err(corrupt("model_dataset_canary"));
+            }
+            return Ok(());
+        }
+        let has_canary: bool = tx.query_one(
+            "SELECT EXISTS(SELECT 1 FROM openbot_internal.desktop_vault_canaries WHERE deployment_id=$1 AND tenant_id=$2)",
+            &[&self.binding.deployment_id, &self.binding.tenant_id],
+        ).await.map_err(|_| ArtifactRegistryError::Unavailable)?
+            .try_get(0).map_err(|_| corrupt("model_dataset_canary"))?;
+        if has_canary {
+            return Err(ArtifactRegistryError::ProofRequired);
+        }
+        Ok(())
+    }
 }
 
 /// Extract actual internal facts independently, including disabled hooks and guard body changes.
@@ -531,6 +635,12 @@ pub(crate) async fn verify_artifact_registry_schema_on(
 
 async fn capture_schema_on(
     client: &tokio_postgres::Client,
+) -> Result<ArtifactRegistrySchemaFacts, ArtifactRegistryError> {
+    capture_schema_on_generic(client).await
+}
+
+async fn capture_schema_on_generic<C: tokio_postgres::GenericClient + Sync>(
+    client: &C,
 ) -> Result<ArtifactRegistrySchemaFacts, ArtifactRegistryError> {
     let payload: String = client
         .query_one(ARTIFACT_REGISTRY_SCHEMA_SQL, &[])

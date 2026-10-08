@@ -46,6 +46,7 @@ const PROVENANCE_GUIDANCE: &str = concat!(
 pub const MAX_AGENT_CONTEXT_MESSAGES: i64 = 4096;
 /// Bounded plaintext context bytes；JSON framing/tool schema still faces safe HTTP 8MiB cap。
 pub const MAX_AGENT_CONTEXT_BYTES: usize = 6 * 1024 * 1024;
+const CUSTOM_MODEL_V2_CONTEXT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Production PostgreSQL context source。
 #[derive(Clone, Debug)]
@@ -62,6 +63,8 @@ pub struct PostgresAgentContextSource {
     components: Option<std::sync::Arc<PostgresComponentAdministration>>,
     sandboxed_components: Option<std::sync::Arc<PostgresSandboxedComponentAdministration>>,
     agent_credential_vault: Option<CredentialRecordVault>,
+    model_dataset_binding:
+        Option<std::sync::Arc<crate::model_dataset::PostgresModelDatasetBinding>>,
 }
 
 impl PostgresAgentContextSource {
@@ -90,6 +93,7 @@ impl PostgresAgentContextSource {
             components: None,
             sandboxed_components: None,
             agent_credential_vault: None,
+            model_dataset_binding: None,
         })
     }
 
@@ -155,11 +159,187 @@ impl PostgresAgentContextSource {
         self.agent_credential_vault = Some(vault);
         self
     }
+
+    /// Configure the same original-Pool dataset producer once; enrollment is a host step.
+    pub fn with_model_dataset_binding(
+        mut self,
+        binding: std::sync::Arc<crate::model_dataset::PostgresModelDatasetBinding>,
+    ) -> Result<Self, AgentContextError> {
+        if self.model_dataset_binding.is_some()
+            || !binding.matches_pool_scope(&self.pool, &self.deployment, &self.tenant)
+        {
+            return Err(AgentContextError::Corrupt {
+                field: "model_dataset_binding",
+            });
+        }
+        self.model_dataset_binding = Some(binding);
+        Ok(self)
+    }
 }
 
-#[async_trait]
-impl AgentContextSource for PostgresAgentContextSource {
-    async fn load(&self, lease: &RunExecutionLease) -> Result<ProviderRequest, AgentContextError> {
+impl PostgresAgentContextSource {
+    // The unconfigured constructor retains its full legacy load and its old budget behavior.
+    async fn load_configured(
+        &self,
+        lease: &RunExecutionLease,
+    ) -> Result<ProviderRequest, AgentContextError> {
+        let deadline = std::time::Instant::now() + CUSTOM_MODEL_V2_CONTEXT_TIMEOUT;
+        let binding = self
+            .model_dataset_binding
+            .as_ref()
+            .ok_or(AgentContextError::Unavailable)?;
+        if !binding.matches_pool_scope(&self.pool, &self.deployment, &self.tenant) {
+            return Err(AgentContextError::Corrupt {
+                field: "model_dataset_binding",
+            });
+        }
+        let kind = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            self.classify_on_original_read_only(lease, deadline),
+        )
+        .await
+        .map_err(|_| AgentContextError::Unavailable)??;
+        match kind {
+            crate::model_runtime::StoredSelectionKind::None
+            | crate::model_runtime::StoredSelectionKind::Legacy => {
+                // This new preliminary stage affects configured hosts only. The complete
+                // legacy load follows and is not truncated to the v2 five-second budget.
+                self.load_legacy(lease).await
+            }
+            crate::model_runtime::StoredSelectionKind::V2 => tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                self.load_v2(lease, binding, deadline),
+            )
+            .await
+            .map_err(|_| AgentContextError::Unavailable)?,
+        }
+    }
+
+    async fn classify_on_original_read_only(
+        &self,
+        lease: &RunExecutionLease,
+        deadline: std::time::Instant,
+    ) -> Result<crate::model_runtime::StoredSelectionKind, AgentContextError> {
+        let mut client = self
+            .pool
+            .get_guarded(deadline)
+            .await
+            .map_err(|_| AgentContextError::Unavailable)?;
+        let transaction = client
+            .begin_read_committed_read_only()
+            .await
+            .map_err(map_context_transaction)?;
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis()
+            .max(1)
+            .to_string();
+        let result=async {
+            transaction.as_transaction().query_one(
+                "SELECT set_config('statement_timeout',$1,true),set_config('lock_timeout',$1,true)",&[&remaining])
+                .await.map_err(|_|AgentContextError::Unavailable)?;
+            crate::model_runtime::classify_selection_storage(transaction.as_transaction(),
+                &self.deployment,&self.tenant,lease).await
+        }.await;
+        let ended = transaction.rollback().await;
+        // The first checkout must be physically released before selecting a second one.
+        drop(client);
+        match result {
+            Err(error) => {
+                if let Err(end) = ended {
+                    tracing::warn!(state=?end,"custom model classification rejected with unproved closure");
+                }
+                Err(error)
+            }
+            Ok(kind) => {
+                ended.map_err(map_context_transaction)?;
+                if std::time::Instant::now() >= deadline {
+                    return Err(AgentContextError::Unavailable);
+                }
+                Ok(kind)
+            }
+        }
+    }
+
+    async fn load_v2(
+        &self,
+        lease: &RunExecutionLease,
+        binding: &crate::model_dataset::PostgresModelDatasetBinding,
+        deadline: std::time::Instant,
+    ) -> Result<ProviderRequest, AgentContextError> {
+        let selection = {
+            let mut checkout = binding
+                .checkout(deadline)
+                .await
+                .map_err(map_context_dataset)?;
+            let transaction = checkout
+                .begin_read_committed()
+                .await
+                .map_err(map_context_transaction)?;
+            let remaining = deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis()
+                .max(1)
+                .to_string();
+            let result=async {
+                // This authoritative projection performs no business writes. D03 retains
+                // the original RW guard so dataset/canary SHARE locks remain legitimate.
+                transaction.as_transaction().query_one(
+                    "SELECT set_config('statement_timeout',$1,true),set_config('lock_timeout',$1,true)",&[&remaining])
+                    .await.map_err(|_|AgentContextError::Unavailable)?;
+                crate::model_runtime::load_v2_for_context(&transaction,&self.deployment,&self.tenant,lease).await
+            }.await;
+            let ended = transaction.rollback().await;
+            drop(checkout);
+            match result {
+                Err(error) => {
+                    if let Err(end) = ended {
+                        tracing::warn!(state=?end,"custom model projection rejected with unproved closure");
+                    }
+                    return Err(error);
+                }
+                Ok(value) => {
+                    ended.map_err(map_context_transaction)?;
+                    if std::time::Instant::now() >= deadline {
+                        return Err(AgentContextError::Unavailable);
+                    }
+                    value
+                }
+            }
+        };
+        // Neither earlier checkout is retained. Common metadata/history is nonauthorizing
+        // and has only the remainder of the same original deadline.
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| AgentContextError::Unavailable)?;
+        let mut connection = V2ContextProjectionConnection {
+            client: Some(client),
+            clean: false,
+            deadline,
+        };
+        let result = self
+            .load_common(
+                lease,
+                connection
+                    .client
+                    .as_ref()
+                    .expect("owned context projection"),
+                Some(selection),
+            )
+            .await;
+        connection.clean = true;
+        if std::time::Instant::now() >= deadline {
+            return Err(AgentContextError::Unavailable);
+        }
+        result
+    }
+
+    async fn load_legacy(
+        &self,
+        lease: &RunExecutionLease,
+    ) -> Result<ProviderRequest, AgentContextError> {
         let client = self
             .pool
             .get()
@@ -174,6 +354,15 @@ impl AgentContextSource for PostgresAgentContextSource {
             lease,
         )
         .await?;
+        self.load_common(lease, &client, selection).await
+    }
+
+    async fn load_common(
+        &self,
+        lease: &RunExecutionLease,
+        client: &tokio_postgres::Client,
+        selection: Option<openbot_application::RunModelBinding>,
+    ) -> Result<ProviderRequest, AgentContextError> {
         let has_custom_selection = selection.is_some();
         let visible = client
             .query_opt(
@@ -622,6 +811,72 @@ impl AgentContextSource for PostgresAgentContextSource {
             rate_card,
             cost_cap,
         })
+    }
+}
+
+fn map_context_dataset(error: crate::model_dataset::ModelDatasetError) -> AgentContextError {
+    match error {
+        crate::model_dataset::ModelDatasetError::InvalidBinding => AgentContextError::Corrupt {
+            field: "model_dataset_binding",
+        },
+        crate::model_dataset::ModelDatasetError::Unavailable => AgentContextError::Unavailable,
+    }
+}
+fn map_context_transaction(error: crate::db::pool::TransactionOwnerError) -> AgentContextError {
+    use crate::db::pool::TransactionOwnerError as E;
+    tracing::warn!(state=?error,"custom model original context transaction state");
+    match error {
+        E::AlreadyStarted => AgentContextError::Corrupt {
+            field: "model_dataset_transaction",
+        },
+        E::DeadlineExceeded
+        | E::BeginUnavailable
+        | E::CommitUnknown
+        | E::RollbackUnproven
+        | E::CommitAcknowledgedAfterDeadline
+        | E::RollbackAcknowledgedAfterDeadline => AgentContextError::Unavailable,
+    }
+}
+
+// Common projection uses existing Client-only helper ports. Cancellation retires only this
+// separate legacy checkout; it never detaches or cancels either original guarded owner.
+struct V2ContextProjectionConnection {
+    client: Option<crate::db::pool::PooledClient>,
+    clean: bool,
+    deadline: std::time::Instant,
+}
+impl Drop for V2ContextProjectionConnection {
+    fn drop(&mut self) {
+        if self.clean {
+            return;
+        }
+        let Some(client) = self.client.take() else {
+            return;
+        };
+        let owned = crate::db::pool::PooledClient::take(client);
+        let cancel = owned.cancel_token();
+        let deadline = self.deadline;
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    cancel.cancel_query(tokio_postgres::NoTls),
+                )
+                .await;
+                drop(owned);
+            });
+        }
+    }
+}
+
+#[async_trait]
+impl AgentContextSource for PostgresAgentContextSource {
+    async fn load(&self, lease: &RunExecutionLease) -> Result<ProviderRequest, AgentContextError> {
+        if self.model_dataset_binding.is_some() {
+            self.load_configured(lease).await
+        } else {
+            self.load_legacy(lease).await
+        }
     }
 }
 

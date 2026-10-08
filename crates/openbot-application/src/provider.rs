@@ -270,6 +270,253 @@ pub enum ProviderRoute {
     CustomModel(RunModelBinding),
 }
 
+/// 当前 dataset 最初登记来源的纯值；不证明本次读取或恢复授权。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RunModelDatasetInitialOrigin {
+    /// 原 Desktop canary 登记。
+    DesktopCanary,
+    /// 原 Server 首次接纳登记。
+    ServerFirstAdoption,
+}
+
+impl RunModelDatasetInitialOrigin {
+    /// 返回唯一持久化拼写。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DesktopCanary => "desktop_canary",
+            Self::ServerFirstAdoption => "server_first_adoption",
+        }
+    }
+}
+
+impl core::fmt::Debug for RunModelDatasetInitialOrigin {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RunModelDatasetInitialOrigin([redacted])")
+    }
+}
+
+/// v2 的冻结凭据策略纯值，不开放动态刷新。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RunModelCredentialPolicy {
+    /// 使用接受时冻结的原 custom secret revision。
+    CustomFixedSecretRevisionV1,
+}
+
+impl RunModelCredentialPolicy {
+    /// 返回唯一持久化拼写。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CustomFixedSecretRevisionV1 => "custom_fixed_secret_revision_v1",
+        }
+    }
+}
+
+impl core::fmt::Debug for RunModelCredentialPolicy {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RunModelCredentialPolicy([redacted])")
+    }
+}
+
+/// 同原 dataset 的不可变纯值快照；构造不授予 current grant。
+#[derive(Clone, PartialEq, Eq)]
+pub struct RunModelDatasetSnapshot {
+    dataset_id: String,
+    binding_schema: i16,
+    initial_origin: RunModelDatasetInitialOrigin,
+    created_at: time::OffsetDateTime,
+}
+
+impl RunModelDatasetSnapshot {
+    /// 只核 dataset 有限值与 schema，原事务负责证明其来源。
+    pub fn new(
+        dataset_id: String,
+        binding_schema: i16,
+        initial_origin: RunModelDatasetInitialOrigin,
+        created_at: time::OffsetDateTime,
+    ) -> Result<Self, AgentContextError> {
+        if dataset_id.is_empty()
+            || dataset_id.len() > 512
+            || dataset_id
+                .chars()
+                .any(|c| matches!(u32::from(c), 0..=0x1f | 0x7f..=0x9f))
+            || binding_schema != 1
+        {
+            return Err(AgentContextError::Corrupt {
+                field: "run_model_dataset",
+            });
+        }
+        Ok(Self {
+            dataset_id,
+            binding_schema,
+            initial_origin,
+            created_at,
+        })
+    }
+
+    /// 原 dataset 标识，未作归一化。
+    pub fn dataset_id(&self) -> &str {
+        &self.dataset_id
+    }
+    /// 固定绑定 schema。
+    pub fn binding_schema(&self) -> i16 {
+        self.binding_schema
+    }
+    /// 原首次登记来源；不是可重建的 grant。
+    pub fn initial_origin(&self) -> RunModelDatasetInitialOrigin {
+        self.initial_origin
+    }
+    /// 原登记时间，不是本次读取时间。
+    pub fn created_at(&self) -> time::OffsetDateTime {
+        self.created_at
+    }
+}
+
+impl core::fmt::Debug for RunModelDatasetSnapshot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RunModelDatasetSnapshot([redacted])")
+    }
+}
+
+/// 完整原 v2 选择、dataset 和冻结 policy；保留 UUID 大小写。
+#[derive(Clone, PartialEq, Eq)]
+pub struct RunModelV2Snapshot {
+    selection: openbot_contracts::versioned_model_selection::RunModelSelectionV2,
+    dataset: RunModelDatasetSnapshot,
+    credential_policy: RunModelCredentialPolicy,
+}
+
+impl RunModelV2Snapshot {
+    /// 有限值校验；该桥不访问数据库、Vault 或网络。
+    pub fn new(
+        selection: openbot_contracts::versioned_model_selection::RunModelSelectionV2,
+        dataset: RunModelDatasetSnapshot,
+        credential_policy: RunModelCredentialPolicy,
+    ) -> Result<Self, AgentContextError> {
+        use openbot_contracts::versioned_model_selection::{
+            ModelSelectionIntentSource, VersionedRunModelSelection,
+        };
+        if !VersionedRunModelSelection::V2(selection.clone()).is_valid()
+            || selection.source() != ModelSelectionIntentSource::Custom
+        {
+            return Err(AgentContextError::Corrupt {
+                field: "run_model_v2_snapshot",
+            });
+        }
+        Ok(Self {
+            selection,
+            dataset,
+            credential_policy,
+        })
+    }
+    /// 借用完整原选择意图。
+    pub fn selection(&self) -> &openbot_contracts::versioned_model_selection::RunModelSelectionV2 {
+        &self.selection
+    }
+    /// 借用完整原 dataset tuple。
+    pub fn dataset(&self) -> &RunModelDatasetSnapshot {
+        &self.dataset
+    }
+    /// 返回固定凭据策略。
+    pub fn credential_policy(&self) -> RunModelCredentialPolicy {
+        self.credential_policy
+    }
+}
+
+impl core::fmt::Debug for RunModelV2Snapshot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RunModelV2Snapshot([redacted])")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum RunModelBindingDetails {
+    V1,
+    V2(RunModelV2Snapshot),
+}
+
+#[cfg(test)]
+mod custom_model_v2_value_tests {
+    use super::*;
+
+    #[test]
+    fn dataset_snapshot_enforces_utf8_bytes_c0_c1_and_schema_without_trimming() {
+        let origin = RunModelDatasetInitialOrigin::ServerFirstAdoption;
+        let time = time::OffsetDateTime::UNIX_EPOCH;
+        for valid in ["é".repeat(256), " historical dataset ".to_owned()] {
+            let value = RunModelDatasetSnapshot::new(valid.clone(), 1, origin, time).unwrap();
+            assert_eq!(value.dataset_id(), valid);
+            assert_eq!(value.created_at(), time);
+            assert_eq!(value.initial_origin().as_str(), "server_first_adoption");
+        }
+        for invalid in [
+            String::new(),
+            "é".repeat(257),
+            format!("dataset{}", char::from_u32(0x1f).unwrap()),
+            format!("dataset{}", char::from_u32(0x7f).unwrap()),
+            format!("dataset{}", char::from_u32(0x9f).unwrap()),
+        ] {
+            assert!(RunModelDatasetSnapshot::new(invalid, 1, origin, time).is_err());
+        }
+        assert!(RunModelDatasetSnapshot::new("dataset".to_owned(), 2, origin, time).is_err());
+        let original = RunModelDatasetSnapshot::new("dataset".to_owned(), 1, origin, time).unwrap();
+        assert!(!format!("{original:?}").contains("dataset"));
+    }
+
+    #[test]
+    fn v2_pure_snapshot_rejects_unsupported_source_and_retains_complete_values() {
+        use openbot_contracts::versioned_model_selection::{
+            ModelSelectionIntentSource, RunModelSelectionV2,
+        };
+        let dataset = RunModelDatasetSnapshot::new(
+            "original-dataset".to_owned(),
+            1,
+            RunModelDatasetInitialOrigin::DesktopCanary,
+            time::OffsetDateTime::UNIX_EPOCH,
+        )
+        .unwrap();
+        let selection = |source| {
+            RunModelSelectionV2::new(
+                source,
+                "ABCDEF12-ABCD-4BCD-8ABC-ABCDEF123456".to_owned(),
+                7,
+                "custom:abcdef12-abcd-4bcd-8abc-abcdef123456".to_owned(),
+                9,
+            )
+            .unwrap()
+        };
+        for source in [
+            ModelSelectionIntentSource::SdkGateway,
+            ModelSelectionIntentSource::AccountBridge,
+        ] {
+            assert!(
+                RunModelV2Snapshot::new(
+                    selection(source),
+                    dataset.clone(),
+                    RunModelCredentialPolicy::CustomFixedSecretRevisionV1
+                )
+                .is_err()
+            );
+        }
+        let value = RunModelV2Snapshot::new(
+            selection(ModelSelectionIntentSource::Custom),
+            dataset.clone(),
+            RunModelCredentialPolicy::CustomFixedSecretRevisionV1,
+        )
+        .unwrap();
+        assert_eq!(
+            value.selection().connection_id(),
+            "ABCDEF12-ABCD-4BCD-8ABC-ABCDEF123456"
+        );
+        assert_eq!(value.selection().expected_catalog_revision(), 9);
+        assert_eq!(value.dataset(), &dataset);
+        assert_eq!(
+            value.credential_policy().as_str(),
+            "custom_fixed_secret_revision_v1"
+        );
+        assert!(!format!("{value:?}").contains("original-dataset"));
+    }
+}
+
 /// Immutable Rust-only routing evidence. This is not a credential or an authorization substitute.
 /// Infra must validate current database authority again before opening any provider request.
 #[derive(Clone, PartialEq, Eq)]
@@ -288,6 +535,7 @@ pub struct RunModelBinding {
     protocol: openbot_contracts::model_connections::CustomModelProtocol,
     endpoint: String,
     model: String,
+    details: RunModelBindingDetails,
 }
 
 impl RunModelBinding {
@@ -353,7 +601,43 @@ impl RunModelBinding {
             protocol: configuration.protocol,
             endpoint: configuration.endpoint,
             model: configuration.model,
+            details: RunModelBindingDetails::V1,
         })
+    }
+
+    /// 从原事务已核事实桥接完整 v2；构造本身不是当前权限证明。
+    pub fn from_verified_v2_snapshot(
+        lease: &RunExecutionLease,
+        deployment: openbot_contracts::ids::DeploymentId,
+        tenant: openbot_contracts::ids::TenantId,
+        auth_generation: openbot_contracts::auth::AuthGeneration,
+        snapshot: RunModelV2Snapshot,
+        secret_id: String,
+        configuration: crate::model_connections::NormalizedModelConnection,
+    ) -> Result<Self, AgentContextError> {
+        let common_selection = openbot_contracts::model_connections::RunModelSelection {
+            connection_id: snapshot.selection().connection_id().to_owned(),
+            expected_revision: snapshot.selection().expected_connection_revision(),
+        };
+        let mut binding = Self::from_verified_snapshot(
+            lease,
+            deployment,
+            tenant,
+            auth_generation,
+            common_selection,
+            secret_id,
+            configuration,
+        )?;
+        binding.details = RunModelBindingDetails::V2(snapshot);
+        Ok(binding)
+    }
+
+    /// Some 只表示此纯值是完整 v2；None 精确表示原 v1 binding。
+    pub fn v2_snapshot(&self) -> Option<&RunModelV2Snapshot> {
+        match &self.details {
+            RunModelBindingDetails::V1 => None,
+            RunModelBindingDetails::V2(snapshot) => Some(snapshot),
+        }
     }
 
     /// Compare immutable run identity only; journal sequence advances across sampling rounds.

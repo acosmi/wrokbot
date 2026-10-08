@@ -521,6 +521,7 @@ fn http_route_of(command: &AppCommand) -> Option<String> {
         | AppCommand::MintThreadId
         | AppCommand::GetThreadStatus { .. }
         | AppCommand::BeginThreadRun(_)
+        | AppCommand::BeginThreadRunV2(_)
         | AppCommand::CancelThreadRun(_)
         | AppCommand::GetThreadHistory { .. }
         | AppCommand::GetThreadConversation { .. }

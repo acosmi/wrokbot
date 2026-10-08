@@ -61,6 +61,8 @@ pub struct DesktopOpenAiProviderInput {
     base_url: Url,
     egress_allow_cidrs: Vec<String>,
     egress: CidrAllowlist,
+    #[cfg(test)]
+    custom_model_dialer: Option<SafeDialer>,
 }
 
 impl DesktopOpenAiProviderInput {
@@ -89,6 +91,8 @@ impl DesktopOpenAiProviderInput {
             base_url,
             egress_allow_cidrs,
             egress,
+            #[cfg(test)]
+            custom_model_dialer: None,
         })
     }
 
@@ -115,6 +119,20 @@ impl DesktopOpenAiProviderInput {
 
     fn dialer(&self) -> SafeDialer {
         SafeDialer::new(EgressPolicy::new(self.egress.clone()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_custom_model_dialer(mut self, dialer: SafeDialer) -> Self {
+        self.custom_model_dialer = Some(dialer);
+        self
+    }
+
+    fn custom_model_dialer(&self) -> SafeDialer {
+        #[cfg(test)]
+        if let Some(dialer) = &self.custom_model_dialer {
+            return dialer.clone();
+        }
+        self.dialer()
     }
 
     pub(crate) fn remote_transport(
@@ -174,6 +192,8 @@ impl DesktopAgentBudgets {
 
 pub(crate) struct DesktopAgentHostInput {
     pub(crate) pool: DatabasePool,
+    pub(crate) model_dataset_binding:
+        Arc<openbot_infra::model_dataset::PostgresModelDatasetBinding>,
     pub(crate) listener_database: ThreadListenerDatabase,
     pub(crate) deployment: DeploymentId,
     pub(crate) tenant: TenantId,
@@ -215,6 +235,7 @@ pub(crate) fn start_desktop_agent_host(
 ) -> Result<DesktopAgentHost, DesktopAgentRuntimeError> {
     let DesktopAgentHostInput {
         pool,
+        model_dataset_binding,
         listener_database,
         deployment,
         tenant,
@@ -305,11 +326,13 @@ pub(crate) fn start_desktop_agent_host(
                 credential_vault.clone(),
                 deployment.clone(),
                 tenant.clone(),
-                provider.dialer(),
+                provider.custom_model_dialer(),
                 SafeHttpBudget::new(PROVIDER_RESPONSE_MAX_BYTES, PROVIDER_CONNECT_TIMEOUT)
                     .map_err(|_| DesktopAgentRuntimeError::Configuration)?,
                 budgets.stall_timeout,
             )
+            .map_err(|_| DesktopAgentRuntimeError::Assembly)?
+            .with_model_dataset_binding(Arc::clone(&model_dataset_binding))
             .map_err(|_| DesktopAgentRuntimeError::Assembly)?,
         );
         let provider = Arc::new(
@@ -330,6 +353,8 @@ pub(crate) fn start_desktop_agent_host(
                 tenant,
                 Some(budgets.max_output_tokens),
             )
+            .map_err(|_| DesktopAgentRuntimeError::Assembly)?
+            .with_model_dataset_binding(model_dataset_binding)
             .map_err(|_| DesktopAgentRuntimeError::Assembly)?
             .with_rate_cards(package.package.model.rate_card.clone(), None)
             .with_tools(vec![remember_provider_tool()])

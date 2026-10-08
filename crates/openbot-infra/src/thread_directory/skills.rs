@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use openbot_application::{BeginThreadRunRequest, ThreadDirectoryError};
-use openbot_contracts::command::{BeginThreadRun, valid_selected_skill_slugs};
+use openbot_application::{BeginThreadRunRequest, BeginThreadRunV2Request, ThreadDirectoryError};
+use openbot_contracts::command::{BeginThreadRun, BeginThreadRunV2, valid_selected_skill_slugs};
 use openbot_contracts::mcp::MAX_SKILL_INSTRUCTIONS_BYTES;
 use serde_json::{Value, json};
 use tokio_postgres::Transaction;
@@ -24,6 +24,30 @@ pub(super) fn input_content(command: &BeginThreadRun) -> Value {
         content["modelSelection"] = json!(selection);
     }
     content
+}
+
+/// V2 persists the complete accepted intent. The original v1 representation stays unchanged.
+pub(super) fn input_content_v2(command: &BeginThreadRunV2) -> Value {
+    let mut content = json!({
+        "text": command.message,
+        "modelSelection": command.model_selection,
+        "runAnchor": command.anchor,
+    });
+    if !command.selected_skill_slugs.is_empty() {
+        content["selectedSkillSlugs"] = json!(command.selected_skill_slugs);
+    }
+    content
+}
+
+pub(super) fn validate_v2_slugs(
+    request: &BeginThreadRunV2Request,
+) -> Result<(), ThreadDirectoryError> {
+    if !valid_selected_skill_slugs(&request.command.selected_skill_slugs) {
+        return Err(ThreadDirectoryError::InvalidInput {
+            field: "selected_skill_slugs",
+        });
+    }
+    Ok(())
 }
 
 pub(super) async fn validate_actor(
@@ -61,6 +85,37 @@ pub(super) async fn resolve(
     request: &BeginThreadRunRequest,
 ) -> Result<Vec<Snapshot>, ThreadDirectoryError> {
     let slugs = &request.command.selected_skill_slugs;
+    resolve_authority(
+        transaction,
+        request.command.bot_id.as_str(),
+        request.tenant.as_str(),
+        request.actor.as_str(),
+        slugs,
+    )
+    .await
+}
+
+pub(super) async fn resolve_v2(
+    transaction: &Transaction<'_>,
+    request: &BeginThreadRunV2Request,
+) -> Result<Vec<Snapshot>, ThreadDirectoryError> {
+    resolve_authority(
+        transaction,
+        request.command.bot_id.as_str(),
+        request.tenant.as_str(),
+        request.actor.as_str(),
+        &request.command.selected_skill_slugs,
+    )
+    .await
+}
+
+async fn resolve_authority(
+    transaction: &Transaction<'_>,
+    bot: &str,
+    tenant: &str,
+    actor: &str,
+    slugs: &[String],
+) -> Result<Vec<Snapshot>, ThreadDirectoryError> {
     if slugs.is_empty() {
         return Ok(Vec::new());
     }
@@ -80,12 +135,7 @@ pub(super) async fn resolve(
             AND (p.visibility='public' OR p.owner_user_id=$4 OR EXISTS( \
                   SELECT 1 FROM public.user_roles ur WHERE ur.user_id=$4 AND ur.role='admin')) \
           ORDER BY s.slug FOR SHARE OF s,g,a,p",
-            &[
-                &request.command.bot_id.as_str(),
-                slugs,
-                &request.tenant.as_str(),
-                &request.actor.as_str(),
-            ],
+            &[&bot, &slugs, &tenant, &actor],
         )
         .await
         .map_err(|error| unavailable("读取 selected skill snapshot 失败", error))?;

@@ -31,7 +31,7 @@ time = { workspace = true, features = ["serde-well-known"] }
 
 # tool invocation 的参数是封闭 command 里的一个 JSON 对象，不是自由 method/SQL。保留结构而不
 # 先 stringify，application 才能对同一组字节做 schema、大小与 canonical hash 校验。
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 # ThreadIdentity 的 deployment fingerprint 是纯 SHA-256；不读随机数、不做 I/O，mint 所需的
 # 16 字节 entropy 由 infra 注入，因此继续满足 WASM-safe contracts 边界。
 sha2 = { workspace = true }

@@ -19,8 +19,9 @@ use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
 use futures_core::Stream;
 use openbot_application::AppEventStream;
+use openbot_contracts::begin_thread_run_wire::DecodedBeginThreadRunBody;
 use openbot_contracts::command::{
-    AppCommand, AppEvent, AppReply, BeginThreadRun, BeginThreadRunBody, CancelThreadRun,
+    AppCommand, AppEvent, AppReply, BeginThreadRun, BeginThreadRunV2, CancelThreadRun,
     SubscriptionRequest, ThreadConversationSnapshot, ThreadHistory, ThreadMinted,
     ThreadRunCancellation, ThreadRunCancellationState, ThreadRunStarted, ThreadStatus,
 };
@@ -30,6 +31,9 @@ use openbot_contracts::reconciliation::{
     MAX_RUN_RECONCILIATION_RESPONSE_BYTES, RunReconciliationQuery,
 };
 use serde::Deserialize;
+
+#[cfg(test)]
+use openbot_contracts::command::BeginThreadRunBody;
 
 use crate::auth::{Authenticated, OriginAuthenticated};
 use crate::error::HttpError;
@@ -244,28 +248,36 @@ pub async fn begin_run(
     State(state): State<ServerState>,
     OriginAuthenticated(auth): OriginAuthenticated,
     Path(thread_id): Path<String>,
-    body: Result<Json<BeginThreadRunBody>, JsonRejection>,
+    body: Result<Json<DecodedBeginThreadRunBody>, JsonRejection>,
 ) -> Result<(StatusCode, HeaderMap, Json<ThreadRunStarted>), HttpError> {
     let Json(body) = body.map_err(|rejection| {
-        tracing::debug!(rejection = %rejection, "begin thread run body parsing failed");
+        let _ = rejection;
         AppError::MalformedPayload { field: "body" }
     })?;
-    match state
-        .application()
-        .execute(
-            auth,
-            AppCommand::BeginThreadRun(BeginThreadRun {
-                model_selection: body.model_selection,
-                selected_skill_slugs: body.selected_skill_slugs,
-                thread_id: ThreadId::new(thread_id),
-                run_id: body.run_id,
-                bot_id: body.bot_id,
-                anchor: body.anchor,
-                message: body.message,
-            }),
-        )
-        .await?
-    {
+    // Keep the original Json extractor's exact media-type and global body-limit behavior.
+    // Its borrowed RawValue decoder checks the original selection lexeme before this dispatch.
+    let thread_id = ThreadId::new(thread_id);
+    let command = match body {
+        DecodedBeginThreadRunBody::Legacy(body) => AppCommand::BeginThreadRun(BeginThreadRun {
+            model_selection: body.model_selection,
+            selected_skill_slugs: body.selected_skill_slugs,
+            thread_id,
+            run_id: body.run_id,
+            bot_id: body.bot_id,
+            anchor: body.anchor,
+            message: body.message,
+        }),
+        DecodedBeginThreadRunBody::V2(body) => AppCommand::BeginThreadRunV2(BeginThreadRunV2 {
+            model_selection: body.model_selection,
+            selected_skill_slugs: body.selected_skill_slugs,
+            thread_id,
+            run_id: body.run_id,
+            bot_id: body.bot_id,
+            anchor: body.anchor,
+            message: body.message,
+        }),
+    };
+    match state.application().execute(auth, command).await? {
         AppReply::ThreadRunStarted(started) => {
             let status = if started.replayed {
                 StatusCode::OK

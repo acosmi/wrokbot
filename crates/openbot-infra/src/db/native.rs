@@ -194,7 +194,7 @@ pub const NATIVE_0030_NAME: &str = "native_0030_personal_model_connections";
 pub const NATIVE_0030_SQL: &str = include_str!("../../sql/native_0030.sql");
 
 /// 当前二进制认识的最新 native schema 版本。
-pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0046_VERSION;
+pub const NATIVE_LATEST_VERSION: i32 = NATIVE_0047_VERSION;
 
 /// Immutable explicit custom-model run binding version.
 pub const NATIVE_0031_VERSION: i32 = 31;
@@ -305,6 +305,13 @@ pub const NATIVE_0046_VERSION: i32 = 46;
 pub const NATIVE_0046_NAME: &str = "native_0046_custom_model_catalogs";
 /// Exact catalog schema, legacy backfill and original-transaction synchronization trigger.
 pub const NATIVE_0046_SQL: &str = include_str!("../../sql/native_0046.sql");
+
+/// Immutable private custom-V2 snapshots, additive after the original catalog.
+pub const NATIVE_0047_VERSION: i32 = 47;
+/// Stable migration ledger identity.
+pub const NATIVE_0047_NAME: &str = "native_0047_run_model_selection_v2_snapshots";
+/// Exact immutable V2 snapshot DDL; no historical selection backfill.
+pub const NATIVE_0047_SQL: &str = include_str!("../../sql/native_0047.sql");
 
 /// 当前二进制钉住的 native migration 数量。
 pub const NATIVE_MIGRATION_COUNT: usize = MIGRATIONS.len();
@@ -490,6 +497,11 @@ const MIGRATIONS: &[MigrationSpec] = &[
         version: NATIVE_0046_VERSION,
         name: NATIVE_0046_NAME,
         sql: NATIVE_0046_SQL,
+    },
+    MigrationSpec {
+        version: NATIVE_0047_VERSION,
+        name: NATIVE_0047_NAME,
+        sql: NATIVE_0047_SQL,
     },
 ];
 
@@ -740,6 +752,12 @@ pub fn native_0045_checksum() -> String {
 #[must_use]
 pub fn native_0046_checksum() -> String {
     Sha256Digest::of(NATIVE_0046_SQL.as_bytes()).to_hex()
+}
+
+/// Checksum of the exact additive private V2 snapshot migration bytes.
+#[must_use]
+pub fn native_0047_checksum() -> String {
+    Sha256Digest::of(NATIVE_0047_SQL.as_bytes()).to_hex()
 }
 
 /// SHA-256 of the registered sandbox editing migration.
@@ -1107,6 +1125,9 @@ pub(crate) async fn apply_through_in_transaction(
     if max_version >= NATIVE_0046_VERSION {
         validate_custom_model_catalog_in_transaction(transaction).await?;
     }
+    if max_version >= NATIVE_0047_VERSION {
+        validate_custom_model_v2_in_transaction(transaction).await?;
+    }
     Ok(if applied == 0 {
         ApplyOutcome::AlreadyApplied
     } else {
@@ -1161,6 +1182,62 @@ pub(crate) async fn validate_custom_model_catalog_in_transaction(
     super::custom_model_catalog_schema::verify_in_transaction(transaction)
         .await
         .map_err(|_| invalid())
+}
+
+/// Full actual known prefix and both model schemas on the caller's original transaction.
+/// No client checkout, migration, repair, commit or rollback occurs in this observer.
+pub(crate) async fn validate_custom_model_v2_in_transaction(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<(), InfraError> {
+    let invalid = || InfraError::repository_invariant("custom_model_v2_native_prefix_invalid");
+    let limit = NATIVE_MIGRATION_COUNT
+        .checked_add(1)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(invalid)?;
+    let rows = tx
+        .query(
+            "SELECT version,name,checksum FROM openbot_internal.schema_migrations ORDER BY version,name,checksum LIMIT $1",
+            &[&limit],
+        )
+        .await
+        .map_err(|source| InfraError::query("核验原事务模型 V2 native 前缀", source))?;
+    if rows.len() != NATIVE_MIGRATION_COUNT {
+        return Err(invalid());
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let version: i32 = row
+            .try_get("version")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "version", source))?;
+        let name: String = row
+            .try_get("name")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "name", source))?;
+        let checksum: String = row
+            .try_get("checksum")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "checksum", source))?;
+        let expected = MIGRATIONS.get(index).ok_or_else(invalid)?;
+        let contiguous = NATIVE_0013_VERSION
+            .checked_add(i32::try_from(index).map_err(|_| invalid())?)
+            .ok_or_else(invalid)?;
+        if version != contiguous
+            || expected.version != contiguous
+            || name != expected.name
+            || checksum != Sha256Digest::of(expected.sql.as_bytes()).to_hex()
+        {
+            return Err(invalid());
+        }
+    }
+    if MIGRATIONS.last().map(|migration| migration.version) != Some(NATIVE_0047_VERSION) {
+        return Err(invalid());
+    }
+    super::custom_model_catalog_schema::verify_in_transaction(tx)
+        .await
+        .map_err(|error| match error {
+            super::custom_model_catalog_schema::CustomModelCatalogSchemaError::Unavailable => {
+                InfraError::repository_invariant("custom_model_v2_schema_observation_unavailable")
+            }
+            _ => InfraError::repository_invariant("custom_model_v2_catalog_schema_invalid"),
+        })?;
+    super::custom_model_v2_schema::verify_in_transaction(tx).await
 }
 
 pub(crate) async fn lock_migrations(
@@ -1452,7 +1529,7 @@ mod tests {
         assert_ne!(native_0035_checksum(), native_0036_checksum());
         assert_eq!(native_0037_checksum().len(), 64);
         assert_ne!(native_0036_checksum(), native_0037_checksum());
-        assert_eq!(MIGRATIONS.len(), 34);
+        assert_eq!(MIGRATIONS.len(), 35);
         assert_eq!(native_0038_checksum().len(), 64);
         assert_ne!(native_0037_checksum(), native_0038_checksum());
         assert_eq!(native_0039_checksum().len(), 64);
@@ -1475,6 +1552,8 @@ mod tests {
             native_0046_checksum(),
             "ec9cdbb01b2a09524b92fe6494f160df58c68f976a6ba1163dc41515c0495ed8",
         );
-        assert_eq!(MIGRATIONS[33].version, NATIVE_LATEST_VERSION);
+        assert_eq!(native_0047_checksum().len(), 64);
+        assert_ne!(native_0046_checksum(), native_0047_checksum());
+        assert_eq!(MIGRATIONS[34].version, NATIVE_LATEST_VERSION);
     }
 }

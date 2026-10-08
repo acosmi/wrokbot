@@ -2,17 +2,18 @@
 
 use openbot_contracts::auth::AuthContext;
 use openbot_contracts::command::{
-    BeginThreadRun, CancelThreadRun, MAX_THREAD_MESSAGE_BYTES, ThreadConversationSnapshot,
-    ThreadHistory, ThreadMinted, ThreadRunAnchor, ThreadRunCancellation, ThreadRunStarted,
-    ThreadStatus,
+    BeginThreadRun, BeginThreadRunV2, CancelThreadRun, MAX_THREAD_MESSAGE_BYTES,
+    ThreadConversationSnapshot, ThreadHistory, ThreadMinted, ThreadRunAnchor,
+    ThreadRunCancellation, ThreadRunStarted, ThreadStatus,
 };
 use openbot_contracts::error::AppError;
 use openbot_contracts::ids::ThreadId;
 use openbot_contracts::ids::thread::ThreadIdentity;
 
 use crate::ports::{
-    BeginThreadRunRequest, CancelThreadRunRequest, ChannelActivitySubscription,
-    ThreadConversationRequest, ThreadDirectory, ThreadEventSubscription, ThreadHistoryRequest,
+    BeginThreadRunRequest, BeginThreadRunV2Request, CancelThreadRunRequest,
+    ChannelActivitySubscription, ThreadConversationRequest, ThreadDirectory,
+    ThreadEventSubscription, ThreadHistoryRequest,
 };
 use crate::service::AppEventStream;
 
@@ -92,6 +93,60 @@ pub async fn begin_thread_run<D: ThreadDirectory>(
     }
     directory
         .begin_thread_run(BeginThreadRunRequest {
+            auth_generation: auth.auth_generation(),
+            deployment: auth.deployment().clone(),
+            tenant: auth.tenant().clone(),
+            actor: auth.actor().clone(),
+            command,
+        })
+        .await
+        .map_err(|error| error.into_app_error())
+}
+
+/// 核验 v2 原值、消息及技能预算，再交唯一真实事务端口；不降为 v1。
+pub async fn begin_thread_run_v2<D: ThreadDirectory>(
+    directory: &D,
+    auth: &AuthContext,
+    command: BeginThreadRunV2,
+) -> Result<ThreadRunStarted, AppError> {
+    if !ThreadIdentity::is_plausible(&command.thread_id) {
+        return Err(AppError::MalformedPayload { field: "thread_id" });
+    }
+    if command.run_id.as_str().is_empty() {
+        return Err(AppError::MalformedPayload { field: "run_id" });
+    }
+    if command.bot_id.as_str().is_empty() {
+        return Err(AppError::MalformedPayload { field: "bot_id" });
+    }
+    if matches!(&command.anchor, ThreadRunAnchor::Channel { channel_id } if channel_id.as_str().is_empty())
+    {
+        return Err(AppError::MalformedPayload {
+            field: "channel_id",
+        });
+    }
+    if command.message.is_empty()
+        || command.message.as_bytes().contains(&0)
+        || command.message.len() > MAX_THREAD_MESSAGE_BYTES
+    {
+        return Err(AppError::MalformedPayload { field: "message" });
+    }
+    if !openbot_contracts::command::valid_selected_skill_slugs(&command.selected_skill_slugs) {
+        return Err(AppError::MalformedPayload {
+            field: "selected_skill_slugs",
+        });
+    }
+    use openbot_contracts::versioned_model_selection::{
+        ModelSelectionIntentSource, VersionedRunModelSelection,
+    };
+    if !VersionedRunModelSelection::V2(command.model_selection.clone()).is_valid()
+        || command.model_selection.source() != ModelSelectionIntentSource::Custom
+    {
+        return Err(AppError::MalformedPayload {
+            field: "model_selection",
+        });
+    }
+    directory
+        .begin_thread_run_v2(BeginThreadRunV2Request {
             auth_generation: auth.auth_generation(),
             deployment: auth.deployment().clone(),
             tenant: auth.tenant().clone(),
@@ -506,6 +561,7 @@ mod tests {
     struct BeginDirectory {
         result: Result<ThreadRunStarted, ThreadDirectoryError>,
         calls: Mutex<Vec<BeginThreadRunRequest>>,
+        v2_calls: Mutex<Vec<BeginThreadRunV2Request>>,
     }
 
     #[async_trait]
@@ -534,6 +590,14 @@ mod tests {
             self.calls.lock().expect("fake lock").push(request);
             self.result.clone()
         }
+
+        async fn begin_thread_run_v2(
+            &self,
+            request: BeginThreadRunV2Request,
+        ) -> Result<ThreadRunStarted, ThreadDirectoryError> {
+            self.v2_calls.lock().expect("fake v2 lock").push(request);
+            self.result.clone()
+        }
     }
 
     fn begin_command() -> BeginThreadRun {
@@ -552,7 +616,121 @@ mod tests {
         BeginDirectory {
             result,
             calls: Mutex::new(Vec::new()),
+            v2_calls: Mutex::new(Vec::new()),
         }
+    }
+
+    fn begin_v2_command() -> BeginThreadRunV2 {
+        use openbot_contracts::versioned_model_selection::{
+            ModelSelectionIntentSource, RunModelSelectionV2,
+        };
+        let old = begin_command();
+        BeginThreadRunV2 {
+            model_selection: RunModelSelectionV2::new(
+                ModelSelectionIntentSource::Custom,
+                "abcdef12-abcd-4bcd-8abc-abcdef123456".to_owned(),
+                7,
+                "custom:abcdef12-abcd-4bcd-8abc-abcdef123456".to_owned(),
+                9,
+            )
+            .unwrap(),
+            thread_id: old.thread_id,
+            run_id: old.run_id,
+            bot_id: old.bot_id,
+            anchor: old.anchor,
+            message: old.message,
+            selected_skill_slugs: vec!["one".to_owned(), "two".to_owned()],
+        }
+    }
+
+    #[tokio::test]
+    async fn begin_v2_injects_original_auth_without_using_legacy_port() {
+        let directory = begin_directory(Err(ThreadDirectoryError::Unavailable));
+        let command = begin_v2_command();
+        assert_eq!(
+            begin_thread_run_v2(&directory, &auth(), command.clone()).await,
+            Err(AppError::DependencyUnavailable {
+                dependency: "thread_directory"
+            })
+        );
+        assert!(directory.calls.lock().unwrap().is_empty());
+        assert_eq!(
+            *directory.v2_calls.lock().unwrap(),
+            vec![BeginThreadRunV2Request {
+                auth_generation: auth().auth_generation(),
+                deployment: auth().deployment().clone(),
+                tenant: auth().tenant().clone(),
+                actor: auth().actor().clone(),
+                command,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn begin_v2_rejects_unsupported_source_and_original_budgets_before_port() {
+        use openbot_contracts::versioned_model_selection::{
+            ModelSelectionIntentSource, RunModelSelectionV2,
+        };
+        let good = begin_v2_command();
+        let mut commands = Vec::new();
+        for source in [
+            ModelSelectionIntentSource::SdkGateway,
+            ModelSelectionIntentSource::AccountBridge,
+        ] {
+            let mut command = good.clone();
+            command.model_selection = RunModelSelectionV2::new(
+                source,
+                command.model_selection.connection_id().to_owned(),
+                7,
+                command.model_selection.model_id().to_owned(),
+                9,
+            )
+            .unwrap();
+            commands.push(command);
+        }
+        let mut no_message = good.clone();
+        no_message.message.clear();
+        commands.push(no_message);
+        let mut duplicate_skills = good.clone();
+        duplicate_skills.selected_skill_slugs = vec!["one".to_owned(), "one".to_owned()];
+        commands.push(duplicate_skills);
+        let mut oversized = good;
+        oversized.message = "x".repeat(MAX_THREAD_MESSAGE_BYTES + 1);
+        commands.push(oversized);
+        for command in commands {
+            let directory = begin_directory(Err(ThreadDirectoryError::Unavailable));
+            assert!(matches!(
+                begin_thread_run_v2(&directory, &auth(), command).await,
+                Err(AppError::MalformedPayload { .. })
+            ));
+            assert!(directory.calls.lock().unwrap().is_empty());
+            assert!(directory.v2_calls.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn begin_v2_known_late_and_exact_replay_unproven_map_to_reconciliation() {
+        for error in [
+            ThreadDirectoryError::AcknowledgedAfterDeadline,
+            ThreadDirectoryError::ReplayClosureUnproven,
+            ThreadDirectoryError::CommitUnknown,
+        ] {
+            let directory = begin_directory(Err(error));
+            assert_eq!(
+                begin_thread_run_v2(&directory, &auth(), begin_v2_command()).await,
+                Err(AppError::ReconciliationRequired { accepted: true })
+            );
+            assert!(directory.calls.lock().unwrap().is_empty());
+            assert_eq!(directory.v2_calls.lock().unwrap().len(), 1);
+        }
+        assert_eq!(
+            ThreadDirectoryError::AcknowledgedAfterDeadline.to_string(),
+            "thread_acknowledged_after_deadline"
+        );
+        assert_eq!(
+            ThreadDirectoryError::ReplayClosureUnproven.to_string(),
+            "thread_replay_closure_unproven"
+        );
     }
 
     #[tokio::test]
@@ -680,6 +858,14 @@ mod tests {
             ),
             (
                 ThreadDirectoryError::CommitUnknown,
+                AppError::ReconciliationRequired { accepted: true },
+            ),
+            (
+                ThreadDirectoryError::AcknowledgedAfterDeadline,
+                AppError::ReconciliationRequired { accepted: true },
+            ),
+            (
+                ThreadDirectoryError::ReplayClosureUnproven,
                 AppError::ReconciliationRequired { accepted: true },
             ),
         ] {

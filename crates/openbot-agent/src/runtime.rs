@@ -4769,4 +4769,159 @@ mod tests {
         assert!(bind_custom_model(&mut first_legacy, &legacy, &run));
         assert!(!bind_custom_model(&mut first_legacy, &request, &run));
     }
+
+    #[tokio::test]
+    async fn custom_v2_sampling_sticks_to_full_selection_dataset_policy_and_version() {
+        use openbot_application::{
+            RunModelBinding, RunModelCredentialPolicy, RunModelDatasetInitialOrigin,
+            RunModelDatasetSnapshot, RunModelV2Snapshot,
+        };
+        use openbot_contracts::{
+            auth::AuthGeneration,
+            ids::{DeploymentId, TenantId},
+            model_connections::{CustomModelProtocol, RunModelSelection},
+            versioned_model_selection::{ModelSelectionIntentSource, RunModelSelectionV2},
+        };
+        let run = lease("custom-v2-consistency");
+        let configuration = || {
+            openbot_application::model_connections::normalize_model_configuration(
+                "name",
+                CustomModelProtocol::OpenaiResponses,
+                "https://models.example.test/v1",
+                "one",
+                true,
+            )
+            .unwrap()
+        };
+        let v2 = |catalog_revision, dataset: &str, origin, created_seconds, connection: &str| {
+            let snapshot = RunModelV2Snapshot::new(
+                RunModelSelectionV2::new(
+                    ModelSelectionIntentSource::Custom,
+                    connection.to_owned(),
+                    1,
+                    "custom:abcdef12-abcd-4bcd-8abc-abcdef123456".to_owned(),
+                    catalog_revision,
+                )
+                .unwrap(),
+                RunModelDatasetSnapshot::new(
+                    dataset.to_owned(),
+                    1,
+                    origin,
+                    time::OffsetDateTime::from_unix_timestamp(created_seconds).unwrap(),
+                )
+                .unwrap(),
+                RunModelCredentialPolicy::CustomFixedSecretRevisionV1,
+            )
+            .unwrap();
+            RunModelBinding::from_verified_v2_snapshot(
+                &run,
+                DeploymentId::new("deployment"),
+                TenantId::new("tenant"),
+                AuthGeneration::new(7),
+                snapshot,
+                "22222222-2222-2222-2222-222222222222".to_owned(),
+                configuration(),
+            )
+            .unwrap()
+        };
+        let connection = "abcdef12-abcd-4bcd-8abc-abcdef123456";
+        let origin = RunModelDatasetInitialOrigin::ServerFirstAdoption;
+        let original = v2(2, "dataset-original", origin, 1, connection);
+        let mut request = FakeContext.load(&run).await.unwrap();
+        request.route = ProviderRoute::CustomModel(original.clone());
+        let mut bound = None;
+        assert!(bind_custom_model(&mut bound, &request, &run));
+        assert!(bind_custom_model(&mut bound, &request, &run));
+        let legacy = RunModelBinding::from_verified_snapshot(
+            &run,
+            DeploymentId::new("deployment"),
+            TenantId::new("tenant"),
+            AuthGeneration::new(7),
+            RunModelSelection {
+                connection_id: connection.to_owned(),
+                expected_revision: 1,
+            },
+            "22222222-2222-2222-2222-222222222222".to_owned(),
+            configuration(),
+        )
+        .unwrap();
+        let changed_definition = |model_id: &str, model: &str| {
+            let snapshot = RunModelV2Snapshot::new(
+                RunModelSelectionV2::new(
+                    ModelSelectionIntentSource::Custom,
+                    connection.to_owned(),
+                    1,
+                    model_id.to_owned(),
+                    2,
+                )
+                .unwrap(),
+                original.v2_snapshot().unwrap().dataset().clone(),
+                RunModelCredentialPolicy::CustomFixedSecretRevisionV1,
+            )
+            .unwrap();
+            let changed_configuration =
+                openbot_application::model_connections::normalize_model_configuration(
+                    "name",
+                    CustomModelProtocol::OpenaiResponses,
+                    "https://models.example.test/v1",
+                    model,
+                    true,
+                )
+                .unwrap();
+            RunModelBinding::from_verified_v2_snapshot(
+                &run,
+                DeploymentId::new("deployment"),
+                TenantId::new("tenant"),
+                AuthGeneration::new(7),
+                snapshot,
+                "22222222-2222-2222-2222-222222222222".to_owned(),
+                changed_configuration,
+            )
+            .unwrap()
+        };
+        for drift in [
+            v2(3, "dataset-original", origin, 1, connection),
+            v2(2, "dataset-other", origin, 1, connection),
+            v2(
+                2,
+                "dataset-original",
+                RunModelDatasetInitialOrigin::DesktopCanary,
+                1,
+                connection,
+            ),
+            v2(2, "dataset-original", origin, 2, connection),
+            v2(
+                2,
+                "dataset-original",
+                origin,
+                1,
+                "ABCDEF12-ABCD-4BCD-8ABC-ABCDEF123456",
+            ),
+            changed_definition("custom:different-intent", "one"),
+            changed_definition("custom:abcdef12-abcd-4bcd-8abc-abcdef123456", "two"),
+            legacy,
+        ] {
+            assert_eq!(original.connection_id(), drift.connection_id());
+            assert_eq!(original.connection_revision(), drift.connection_revision());
+            let mut changed = request.clone();
+            changed.route = ProviderRoute::CustomModel(drift);
+            assert!(!bind_custom_model(&mut bound, &changed, &run));
+        }
+        request.rate_card = Some(
+            openbot_application::ProviderRateCard::new(
+                openbot_application::ProviderRateCardInput {
+                    family: openbot_application::ProviderBillingFamily::OpenAiCompatible,
+                    model: "one".to_owned(),
+                    currency: "USD".to_owned(),
+                    max_input_micro_units_per_million_tokens: 1,
+                    max_output_micro_units_per_million_tokens: 1,
+                    source_url: "https://prices.example.test/attestation".to_owned(),
+                    source_sha256: "a".repeat(64),
+                    observed_at: time::OffsetDateTime::UNIX_EPOCH,
+                },
+            )
+            .unwrap(),
+        );
+        assert!(!bind_custom_model(&mut bound, &request, &run));
+    }
 }

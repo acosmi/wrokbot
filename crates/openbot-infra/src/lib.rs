@@ -159,6 +159,8 @@ pub mod memory_admin;
 #[cfg(feature = "server-runtime")]
 pub mod model_connections;
 #[cfg(feature = "server-runtime")]
+pub mod model_dataset;
+#[cfg(feature = "server-runtime")]
 mod model_runtime;
 #[cfg(feature = "server-runtime")]
 pub mod net;
