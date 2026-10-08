@@ -1204,6 +1204,57 @@ mod physical_lineage_tests {
             ))
             .await
             .unwrap();
+        // Replay the three original internal BETWEEN CHECKs for this owned fixture.
+        let internal_schema = include_str!("../sql/native_0041.sql");
+        for constraint in [
+            "artifact_dataset_bindings_deployment_shape",
+            "artifact_dataset_bindings_tenant_shape",
+            "artifact_dataset_bindings_dataset_shape",
+        ] {
+            let anchor = format!("    CONSTRAINT {constraint} CHECK (\n");
+            assert_eq!(internal_schema.matches(anchor.as_str()).count(), 1);
+            let predicate = internal_schema
+                .split_once(anchor.as_str())
+                .unwrap()
+                .1
+                .split_once("\n    ),\n")
+                .unwrap()
+                .0;
+            transaction
+                .batch_execute(&format!(
+                    "ALTER TABLE openbot_internal.artifact_dataset_bindings \
+                     DROP CONSTRAINT {constraint}; \
+                     ALTER TABLE openbot_internal.artifact_dataset_bindings \
+                     ADD CONSTRAINT {constraint} CHECK ({predicate});"
+                ))
+                .await
+                .unwrap();
+        }
+        // Replay the two original V2 snapshot BETWEEN CHECKs for this owned fixture.
+        let snapshot_schema = include_str!("../sql/native_0047.sql");
+        for constraint in [
+            "run_model_selection_v2_snapshots_scope_check",
+            "run_model_selection_v2_snapshots_dataset_id_check",
+        ] {
+            let anchor = format!("    CONSTRAINT {constraint}\n        CHECK (");
+            assert_eq!(snapshot_schema.matches(anchor.as_str()).count(), 1);
+            let predicate = snapshot_schema
+                .split_once(anchor.as_str())
+                .unwrap()
+                .1
+                .split_once("),\n    CONSTRAINT ")
+                .unwrap()
+                .0;
+            transaction
+                .batch_execute(&format!(
+                    "ALTER TABLE openbot_internal.run_model_selection_v2_snapshots \
+                     DROP CONSTRAINT {constraint}; \
+                     ALTER TABLE openbot_internal.run_model_selection_v2_snapshots \
+                     ADD CONSTRAINT {constraint} CHECK ({predicate});"
+                ))
+                .await
+                .unwrap();
+        }
         transaction.commit().await.unwrap();
         drop(client);
         assert!(std::ptr::eq(
