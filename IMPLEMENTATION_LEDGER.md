@@ -1806,4 +1806,14 @@ Limits: Server body checks can reject after headers; allocation ownership is not
 
 2026-10-08 — UI5-P2 ModelPicker testkit Source follow-up: six regression tests were added for absent or exact opt-in, rejected fixture modes, the default Missing dependency, all five methods’ actor boundaries, the three ordered safe DTOs, and unchanged Unavailable writes. Only the three ModelPicker Rust source files received targeted Rust 1.98 formatting in edition 2024 with child-module traversal disabled. The six fixture tests, four existing model-selection tests, library and build checks, fixture Host build and browser acceptance remain NOTRUN. No production inventory, credentials, provider connectivity or run readiness is established.
 
+
+2026-10-08 — UI5-P4 Agent profile explicit retry Source implementation: failed detail reads now offer the existing localized Retry button. Activation immediately marks the read pending and notifies the original same-Agent read Effect; existing generation rejection, scoped cancellation, permissions, management writes and route identity remain unchanged. This Source checkpoint has no new test or runtime acceptance; directed build and real offline/online keyboard retry validation remain NOTRUN. No new backend capability is added.
+
+
+### Agent profile read cancellation
+
+The selected Agent profile panel now owns a browser cancellation signal through its original detail response decoding. Retiring that panel synchronously aborts a pending GET, while generation checks continue to reject stale updates. Retry deduplication, management permissions and the original detail reader used by NewChannel, Bot and Conversation remain unchanged. This change adds no backend endpoint or dependency; exact-candidate verification is recorded separately.
+
 2026-10-08 — UI5-P2 Conversation ModelPicker fixture Source preparation: the existing testkit-only, explicitly enabled synthetic ModelPicker fixture now includes one empty active channel for the owned public assistant. The existing authenticated channel-detail read can mount its Conversation model picker without creating a thread or run. The default fixture, model write rejection and production capability boundaries are unchanged. Targeted Rust 1.98 formatting of this fixture file completed without further byte changes. Directed tests, build checks, fixture Host build and browser acceptance for this change are NOTRUN.
+
+2026-10-08 — UI5-P4 Agent detail Retry and scope cancellation were delivered by PR #170, normally merged as 4b93e7e87efb7f9be1c670110604e7962e098104 from b31cd9e47efc357673923af6cb0054aefbfcd0e9 after finite independent acceptance. Full UI, production, native OS, PostgreSQL, visual oracle and pixel acceptance remain open.

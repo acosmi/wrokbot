@@ -1518,6 +1518,25 @@ pub async fn load_agent(agent_id: &str) -> Result<AgentProfile, ApiError> {
     }
 }
 
+/// The selected profile panel owns this read's browser cancellation signal.
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn load_agent_with_abort_signal(
+    agent_id: &str,
+    signal: &web_sys::AbortSignal,
+) -> Result<AgentProfile, ApiError> {
+    use crate::api::request::Request;
+
+    let path = agent_detail_path(agent_id)?;
+    let response = Request::send(Request::get(&path).abort_signal(Some(signal))).await?;
+    if !response.ok() {
+        return Err(status_error(response.status()));
+    }
+    crate::api::request::Request::decode::<AgentProfileResponse>(&response)
+        .await
+        .map(|response| response.agent)
+        .map_err(|_| ApiError::InvalidResponse)
+}
+
 /// Create one caller-owned Agent; response is the authoritative profile.
 pub async fn create_agent(request: AgentMutationRequest) -> Result<AgentProfile, ApiError> {
     crate::configuration_writes::track(
