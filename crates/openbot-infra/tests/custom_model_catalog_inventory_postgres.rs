@@ -1196,7 +1196,8 @@ async fn inventory_original_deadline_includes_checkout_and_cancellation_is_unpro
             }
             // Actual future Drop, not timeout relabelled as a rollback acknowledgement.
         }
-        relay.facts.schema_release.notify_one();
+        // Keep the real held schema C/Z behind the gate after cancellation;
+        // the original downstream closure ends the relay frontend naturally.
         require(original.snapshot().retirement_requested, "cancelled original transaction stayed reusable")?;
         require(original.wait_for_destruction_before(Instant::now() + CLOSE_BUDGET).await.map_err(|e| e.to_string())?
             == pool::ConnectionDestruction::ConnectionDestroyed, "cancelled original connection did not retire")?;
