@@ -1116,7 +1116,7 @@ pub(crate) async fn apply_through_in_transaction(
 
 /// Prove the complete known ledger prefix and catalog facts on the original migration transaction.
 /// An exact replay has the same proof; no separate connection, repair or commit occurs here.
-async fn validate_custom_model_catalog_in_transaction(
+pub(crate) async fn validate_custom_model_catalog_in_transaction(
     transaction: &tokio_postgres::Transaction<'_>,
 ) -> Result<(), InfraError> {
     let invalid = || InfraError::repository_invariant("custom_model_catalog_schema_invalid");

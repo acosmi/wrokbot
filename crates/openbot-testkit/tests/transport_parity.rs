@@ -473,10 +473,13 @@ fn http_route_of(command: &AppCommand) -> Option<String> {
         // /api/me/model-connections/{connection_id}`）覆盖。
         // Artifact has dedicated transport_artifact_parity.rs framing evidence.
         // Runtime capabilities have separate current-host fact transport tests.
+        // Custom catalog uses dedicated Server/Local custom_model_catalog_tests; this
+        // channel-only matrix does not claim its current-host delivery acceptance.
         // InvokeTool 尚无公开 HTTP 路由。仍逐变体列出且无 wildcard：新增命令必须在这里明确
         // 选择“channel 矩阵有 route”或“由哪一份专项证据承担”。
         AppCommand::GetCurrentUser
         | AppCommand::ListModelConnections(_)
+        | AppCommand::ListCustomModelCatalog(_)
         | AppCommand::GetModelConnection { .. }
         | AppCommand::CreateModelConnection(_)
         | AppCommand::UpdateModelConnection { .. }
