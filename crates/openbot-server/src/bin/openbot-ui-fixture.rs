@@ -2,6 +2,8 @@
 
 #[path = "ui_fixture/credentials.rs"]
 mod fixture_credentials;
+#[path = "ui_fixture/model_connections.rs"]
+mod fixture_model_connections;
 #[path = "ui_fixture/plugins.rs"]
 mod fixture_plugins;
 
@@ -3774,9 +3776,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let auth_journey = auth_journey_enabled()?;
     let home_skills_fixture =
         home_skills_fixture_enabled(std::env::var_os(FIXTURE_HOME_SKILLS_ENV).as_deref())?;
+    let model_picker_fixture = fixture_model_connections::enabled(
+        std::env::var_os(fixture_model_connections::ENV).as_deref(),
+    )?;
     // Reject the opt-in before PostgreSQL assembly or any listening socket.
     validate_home_skills_fixture_mode(
         home_skills_fixture,
+        if std::env::var_os(FIXTURE_APPROVAL_DATABASE_URL).is_some() {
+            "postgres"
+        } else {
+            "memory"
+        },
+        "fixed",
+        auth_journey,
+    )?;
+    // Reject this synthetic opt-in before PostgreSQL assembly or a listening socket.
+    fixture_model_connections::validate_mode(
+        model_picker_fixture,
         if std::env::var_os(FIXTURE_APPROVAL_DATABASE_URL).is_some() {
             "postgres"
         } else {
@@ -3810,6 +3826,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         auth_mode,
     } = assemble_approval_fixture(now, &context).await?;
     validate_home_skills_fixture_mode(home_skills_fixture, approval_mode, auth_mode, auth_journey)?;
+    fixture_model_connections::validate_mode(
+        model_picker_fixture,
+        approval_mode,
+        auth_mode,
+        auth_journey,
+    )?;
     let home_skills_context = home_skills_fixture.then(|| context.clone());
     let lifetime = default_session_lifetime();
     let resolver: Arc<dyn AuthResolver> = match auth_resolver {
@@ -3848,25 +3870,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None => plugins,
     };
     let credentials = fixture_credentials::assemble(postgres_probe.as_ref())?;
-    let application: Arc<dyn ApplicationService> = Arc::new(
-        OpenBotApplication::new(channels.clone())
-            .with_channel_administration(Arc::new(channels))
-            .with_audit(FixtureAudit::new(now))
-            .with_agent_callback_tokens((*agents).clone())
-            .with_agent_directory(agents.clone())
-            .with_agent_administration(agents)
-            .with_channel_routing(Arc::new(routing))
-            .with_component_administration(Arc::new(components))
-            .with_sandboxed_component_administration(Arc::new(sandboxed))
-            .with_people(people)
-            .with_policy(policy)
-            .with_threads(threads)
-            .with_memory(memory)
-            .with_mcp_connections(Arc::new(plugins.clone()))
-            .with_credentials(credentials)
-            .with_tool_approvals(approvals)
-            .with_ui_preferences(Arc::new(FixturePreferences::default())),
-    );
+    let mut application = OpenBotApplication::new(channels.clone())
+        .with_channel_administration(Arc::new(channels))
+        .with_audit(FixtureAudit::new(now))
+        .with_agent_callback_tokens((*agents).clone())
+        .with_agent_directory(agents.clone())
+        .with_agent_administration(agents)
+        .with_channel_routing(Arc::new(routing))
+        .with_component_administration(Arc::new(components))
+        .with_sandboxed_component_administration(Arc::new(sandboxed))
+        .with_people(people)
+        .with_policy(policy)
+        .with_threads(threads)
+        .with_memory(memory)
+        .with_mcp_connections(Arc::new(plugins.clone()))
+        .with_credentials(credentials)
+        .with_tool_approvals(approvals)
+        .with_ui_preferences(Arc::new(FixturePreferences::default()));
+    if model_picker_fixture {
+        application = application.with_model_connections(Arc::new(
+            fixture_model_connections::FixtureModelConnections::new(),
+        ));
+    }
+    let application: Arc<dyn ApplicationService> = Arc::new(application);
     let origin = format!("http://127.0.0.1:{port}");
     let mut builder = ServerBuilder::new(application, resolver)
         .with_sensitive_write_security(SensitiveWriteSecurity::new(
@@ -4007,6 +4033,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if home_skills_fixture {
         println!("OPENBOT_UI_HOME_SKILLS_FIXTURE=1");
         println!("OPENBOT_UI_HOME_SKILLS_PROVENANCE=Synthetic");
+    }
+    if model_picker_fixture {
+        println!("OPENBOT_UI_MODEL_PICKER_FIXTURE=1");
+        println!("OPENBOT_UI_MODEL_PICKER_PROVENANCE=Synthetic");
     }
     println!("OPENBOT_UI_FIXTURE_URL={origin}/approvals");
     axum::serve(listener, router).await?;
