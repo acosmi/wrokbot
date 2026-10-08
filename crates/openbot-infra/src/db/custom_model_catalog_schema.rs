@@ -1,9 +1,9 @@
 //! Read-only checks for custom model catalog shape and connection mapping.
 //! Catalog facts use the original model connection owner as their portable anchor.
 
+use super::{InfraError, native};
 use serde_json::{Value, json};
 use tokio_postgres::{Client, GenericClient, Transaction};
-use super::{InfraError, native};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CustomModelCatalogSchemaError {
@@ -505,8 +505,12 @@ END;
 const fn corrupt(field: &'static str) -> CustomModelCatalogSchemaError {
     CustomModelCatalogSchemaError::Corrupt { field }
 }
-fn facts<T>() -> Result<T, CustomModelCatalogSchemaError> { Err(corrupt("catalog_facts")) }
-fn shape<T>() -> Result<T, CustomModelCatalogSchemaError> { Err(corrupt("catalog_schema")) }
+fn facts<T>() -> Result<T, CustomModelCatalogSchemaError> {
+    Err(corrupt("catalog_facts"))
+}
+fn shape<T>() -> Result<T, CustomModelCatalogSchemaError> {
+    Err(corrupt("catalog_schema"))
+}
 fn require(value: bool) -> Result<(), CustomModelCatalogSchemaError> {
     if value { Ok(()) } else { shape() }
 }
@@ -514,7 +518,9 @@ fn obj(v: &Value) -> Result<&serde_json::Map<String, Value>, CustomModelCatalogS
     v.as_object().ok_or_else(|| corrupt("catalog_facts"))
 }
 fn arr(v: &Value) -> Result<&[Value], CustomModelCatalogSchemaError> {
-    v.as_array().map(Vec::as_slice).ok_or_else(|| corrupt("catalog_facts"))
+    v.as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| corrupt("catalog_facts"))
 }
 fn text(v: &Value) -> Result<&str, CustomModelCatalogSchemaError> {
     v.as_str().ok_or_else(|| corrupt("catalog_facts"))
@@ -523,18 +529,22 @@ fn flag(v: &Value) -> Result<bool, CustomModelCatalogSchemaError> {
     v.as_bool().ok_or_else(|| corrupt("catalog_facts"))
 }
 fn oid(v: &Value) -> Result<u32, CustomModelCatalogSchemaError> {
-    let s=text(v)?;
-    if s.is_empty() || !s.bytes().all(|x| x.is_ascii_digit()) { return facts(); }
+    let s = text(v)?;
+    if s.is_empty() || !s.bytes().all(|x| x.is_ascii_digit()) {
+        return facts();
+    }
     s.parse::<u32>().map_err(|_| corrupt("catalog_facts"))
 }
 fn same_identity(v: &Value, schema: &str, name: &str) -> bool {
-    v.get("schema").and_then(Value::as_str)==Some(schema)
-        && v.get("name").and_then(Value::as_str)==Some(name)
+    v.get("schema").and_then(Value::as_str) == Some(schema)
+        && v.get("name").and_then(Value::as_str) == Some(name)
 }
-fn unique(values: &[Value], mut pred: impl FnMut(&Value)->bool)
- -> Result<&Value, CustomModelCatalogSchemaError> {
-    let mut rows=values.iter().filter(|v| pred(v));
-    let first=rows.next().ok_or_else(|| corrupt("catalog_schema"))?;
+fn unique(
+    values: &[Value],
+    mut pred: impl FnMut(&Value) -> bool,
+) -> Result<&Value, CustomModelCatalogSchemaError> {
+    let mut rows = values.iter().filter(|v| pred(v));
+    let first = rows.next().ok_or_else(|| corrupt("catalog_schema"))?;
     require(rows.next().is_none())?;
     Ok(first)
 }
@@ -546,315 +556,727 @@ fn ordered_names(columns: &Value) -> Result<Vec<&str>, CustomModelCatalogSchemaE
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Acl { grantor:u32, grantee:u32, privilege:String, grantable:bool }
+struct Acl {
+    grantor: u32,
+    grantee: u32,
+    privilege: String,
+    grantable: bool,
+}
 fn acl_rows(v: &Value) -> Result<Vec<Acl>, CustomModelCatalogSchemaError> {
-    let mut out=Vec::new();
+    let mut out = Vec::new();
     for row in arr(v)? {
         // Exact multiset: never deduplicate, ignore grantor, or discard grant options.
-        let keys=obj(row)?.keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>();
-        require(keys==["grantorOidRaw","granteeOidRaw","privilege","grantable"].into_iter().collect())?;
-        out.push(Acl { grantor:oid(&row["grantorOidRaw"])? ,grantee:oid(&row["granteeOidRaw"])? ,
-            privilege:text(&row["privilege"])?.to_owned(),grantable:flag(&row["grantable"])? });
+        let keys = obj(row)?
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        require(
+            keys == ["grantorOidRaw", "granteeOidRaw", "privilege", "grantable"]
+                .into_iter()
+                .collect(),
+        )?;
+        out.push(Acl {
+            grantor: oid(&row["grantorOidRaw"])?,
+            grantee: oid(&row["granteeOidRaw"])?,
+            privilege: text(&row["privilege"])?.to_owned(),
+            grantable: flag(&row["grantable"])?,
+        });
     }
-    out.sort(); Ok(out)
+    out.sort();
+    Ok(out)
 }
-fn relative_acl(v: &Value, owner:u32) -> Result<Value, CustomModelCatalogSchemaError> {
-    let rows=acl_rows(v)?;
-    require(rows.iter().all(|r|r.grantor==owner && r.grantee==owner && !r.grantable))?;
+fn relative_acl(v: &Value, owner: u32) -> Result<Value, CustomModelCatalogSchemaError> {
+    let rows = acl_rows(v)?;
+    require(
+        rows.iter()
+            .all(|r| r.grantor == owner && r.grantee == owner && !r.grantable),
+    )?;
     Ok(Value::Array(rows.into_iter().map(|r|json!({
         "grantor":"original_model_connections_owner", "grantee":"original_model_connections_owner",
         "privilege":r.privilege,"grantable":r.grantable
     })).collect()))
 }
 
-fn storage_values(encoding:&str, block:i32, server:i32) -> Result<(),CustomModelCatalogSchemaError> {
-    if encoding!="UTF8" || block!=8192 || !(170_000..180_000).contains(&server) {
+fn storage_values(
+    encoding: &str,
+    block: i32,
+    server: i32,
+) -> Result<(), CustomModelCatalogSchemaError> {
+    if encoding != "UTF8" || block != 8192 || !(170_000..180_000).contains(&server) {
         return Err(CustomModelCatalogSchemaError::IncompatibleStorage);
     }
     Ok(())
 }
-async fn storage_on<C:GenericClient+Sync>(client:&C) -> Result<(),CustomModelCatalogSchemaError> {
-    let row=client.query_one(STORAGE_SQL,&[]).await.map_err(|_|CustomModelCatalogSchemaError::Unavailable)?;
-    let encoding:String=row.try_get(0).map_err(|_|corrupt("server_encoding"))?;
-    let block:i32=row.try_get(1).map_err(|_|corrupt("block_size"))?;
-    let server:i32=row.try_get(2).map_err(|_|corrupt("server_version"))?;
-    storage_values(&encoding,block,server)
+async fn storage_on<C: GenericClient + Sync>(
+    client: &C,
+) -> Result<(), CustomModelCatalogSchemaError> {
+    let row = client
+        .query_one(STORAGE_SQL, &[])
+        .await
+        .map_err(|_| CustomModelCatalogSchemaError::Unavailable)?;
+    let encoding: String = row.try_get(0).map_err(|_| corrupt("server_encoding"))?;
+    let block: i32 = row.try_get(1).map_err(|_| corrupt("block_size"))?;
+    let server: i32 = row.try_get(2).map_err(|_| corrupt("server_version"))?;
+    storage_values(&encoding, block, server)
 }
-fn storage_in_raw(raw:&Value)->Result<(),CustomModelCatalogSchemaError>{
-    let e=text(&raw["storage"]["serverEncoding"])?;
-    let b=raw["storage"]["blockSize"].as_i64().and_then(|v|i32::try_from(v).ok()).ok_or_else(||corrupt("block_size"))?;
-    let s=raw["storage"]["serverVersion"].as_i64().and_then(|v|i32::try_from(v).ok()).ok_or_else(||corrupt("server_version"))?;
-    storage_values(e,b,s)
+fn storage_in_raw(raw: &Value) -> Result<(), CustomModelCatalogSchemaError> {
+    let e = text(&raw["storage"]["serverEncoding"])?;
+    let b = raw["storage"]["blockSize"]
+        .as_i64()
+        .and_then(|v| i32::try_from(v).ok())
+        .ok_or_else(|| corrupt("block_size"))?;
+    let s = raw["storage"]["serverVersion"]
+        .as_i64()
+        .and_then(|v| i32::try_from(v).ok())
+        .ok_or_else(|| corrupt("server_version"))?;
+    storage_values(e, b, s)
 }
 
-fn check_new_catalog_contract(raw:&Value, owner:u32)->Result<(),CustomModelCatalogSchemaError>{
-    let relations=arr(&raw["relations"])?;
-    require(relations.len()==3)?;
+fn check_new_catalog_contract(
+    raw: &Value,
+    owner: u32,
+) -> Result<(), CustomModelCatalogSchemaError> {
+    let relations = arr(&raw["relations"])?;
+    require(relations.len() == 3)?;
     // RLS flags do not prove the absence of dormant policies. All three registered
     // relation baselines require an actually observed empty pg_policy collection.
-    for relation in relations { require(arr(&relation["policies"])?.is_empty())?; }
-    let old=unique(relations,|v|same_identity(&v["identity"],"public","model_connections"))?;
-    require(oid(&old["identity"]["oidRaw"])?==oid(&raw["ownerAnchorRaw"]["relationOidRaw"])?)?;
-    require(oid(&old["ownerOidRaw"])?==owner)?;
-    let _secret=unique(relations,|v|same_identity(&v["identity"],"public","model_connection_secrets"))?;
-    let cat=unique(relations,|v|same_identity(&v["identity"],"public","custom_model_catalogs"))?;
-    require(oid(&cat["ownerOidRaw"])?==owner)?;
-    require(cat["kind"]=="r" && cat["persistence"]=="p" && cat["accessMethod"]=="heap")?;
-    require(cat["partition"]==false && cat["rowSecurity"]==false && cat["forceRowSecurity"]==false)?;
-    require(cat["options"].is_null() && arr(&cat["rules"])?.is_empty() && arr(&cat["droppedAttributes"])?.is_empty())?;
-    require(arr(&cat["inheritanceParents"])?.is_empty() && arr(&cat["inheritanceChildren"])?.is_empty())?;
-    let names=["connection_id","deployment_id","tenant_id","owner_user_id","model_id","catalog_revision",
-        "protocol","endpoint","model","enabled","retired"];
-    let types=["uuid","text","text","text","text","int8","text","text","text","bool","bool"];
-    let columns=arr(&cat["columns"])?; require(columns.len()==11)?;
-    for (index,col) in columns.iter().enumerate(){
-        require(text(&col["name"])?==names[index] && col["ordinal"].as_u64()==Some((index+1) as u64))?;
-        require(same_identity(&col["type"],"pg_catalog",types[index]))?;
-        require(col["notNull"]==true && col["default"].is_null() && col["identity"]=="" && col["generated"]=="")?;
-        require(col["aclIsNull"]==true && arr(&col["acl"])?.is_empty())?;
-        if names[index]=="model_id" {require(same_identity(&col["collation"],"pg_catalog","C"))?;}
+    for relation in relations {
+        require(arr(&relation["policies"])?.is_empty())?;
     }
-    let expected_acl=acl_rows(&raw["ownerAnchorRaw"]["builtinTableDefaultAcl"])?;
-    require(!expected_acl.is_empty() && expected_acl.iter().all(|r|r.grantor==owner && r.grantee==owner && !r.grantable))?;
+    let old = unique(relations, |v| {
+        same_identity(&v["identity"], "public", "model_connections")
+    })?;
+    require(oid(&old["identity"]["oidRaw"])? == oid(&raw["ownerAnchorRaw"]["relationOidRaw"])?)?;
+    require(oid(&old["ownerOidRaw"])? == owner)?;
+    let _secret = unique(relations, |v| {
+        same_identity(&v["identity"], "public", "model_connection_secrets")
+    })?;
+    let cat = unique(relations, |v| {
+        same_identity(&v["identity"], "public", "custom_model_catalogs")
+    })?;
+    require(oid(&cat["ownerOidRaw"])? == owner)?;
+    require(cat["kind"] == "r" && cat["persistence"] == "p" && cat["accessMethod"] == "heap")?;
+    require(
+        cat["partition"] == false
+            && cat["rowSecurity"] == false
+            && cat["forceRowSecurity"] == false,
+    )?;
+    require(
+        cat["options"].is_null()
+            && arr(&cat["rules"])?.is_empty()
+            && arr(&cat["droppedAttributes"])?.is_empty(),
+    )?;
+    require(
+        arr(&cat["inheritanceParents"])?.is_empty() && arr(&cat["inheritanceChildren"])?.is_empty(),
+    )?;
+    let names = [
+        "connection_id",
+        "deployment_id",
+        "tenant_id",
+        "owner_user_id",
+        "model_id",
+        "catalog_revision",
+        "protocol",
+        "endpoint",
+        "model",
+        "enabled",
+        "retired",
+    ];
+    let types = [
+        "uuid", "text", "text", "text", "text", "int8", "text", "text", "text", "bool", "bool",
+    ];
+    let columns = arr(&cat["columns"])?;
+    require(columns.len() == 11)?;
+    for (index, col) in columns.iter().enumerate() {
+        require(
+            text(&col["name"])? == names[index]
+                && col["ordinal"].as_u64() == Some((index + 1) as u64),
+        )?;
+        require(same_identity(&col["type"], "pg_catalog", types[index]))?;
+        require(
+            col["notNull"] == true
+                && col["default"].is_null()
+                && col["identity"] == ""
+                && col["generated"] == "",
+        )?;
+        require(col["aclIsNull"] == true && arr(&col["acl"])?.is_empty())?;
+        if names[index] == "model_id" {
+            require(same_identity(&col["collation"], "pg_catalog", "C"))?;
+        }
+    }
+    let expected_acl = acl_rows(&raw["ownerAnchorRaw"]["builtinTableDefaultAcl"])?;
+    require(
+        !expected_acl.is_empty()
+            && expected_acl
+                .iter()
+                .all(|r| r.grantor == owner && r.grantee == owner && !r.grantable),
+    )?;
     // PG17 MAINTAIN is observed through acldefault, not omitted by a seven-privilege list.
-    require(expected_acl.iter().any(|r|r.privilege=="MAINTAIN"))?;
-    require(acl_rows(&cat["acl"])?==expected_acl)?;
-    let all_constraints=arr(&raw["constraints"])?;
-    let constraints=all_constraints.iter().filter(|v|same_identity(&v["relation"],"public","custom_model_catalogs")).collect::<Vec<_>>();
-    require(constraints.len()==8)?;
-    let mut actual_names=constraints.iter().map(|v|text(&v["name"])).collect::<Result<Vec<_>,_>>()?;
+    require(expected_acl.iter().any(|r| r.privilege == "MAINTAIN"))?;
+    require(acl_rows(&cat["acl"])? == expected_acl)?;
+    let all_constraints = arr(&raw["constraints"])?;
+    let constraints = all_constraints
+        .iter()
+        .filter(|v| same_identity(&v["relation"], "public", "custom_model_catalogs"))
+        .collect::<Vec<_>>();
+    require(constraints.len() == 8)?;
+    let mut actual_names = constraints
+        .iter()
+        .map(|v| text(&v["name"]))
+        .collect::<Result<Vec<_>, _>>()?;
     actual_names.sort_unstable();
-    let mut wanted_names=vec!["custom_model_catalogs_pkey","custom_model_catalogs_model_id_key",
-        "custom_model_catalogs_model_id_shape","custom_model_catalogs_catalog_revision_positive",
-        "custom_model_catalogs_protocol_check","custom_model_catalogs_endpoint_check",
-        "custom_model_catalogs_model_check","custom_model_catalogs_connection_scope_fkey"];
-    wanted_names.sort_unstable(); require(actual_names==wanted_names)?;
-    let indexes=arr(&raw["indexes"])?;
-    let own=indexes.iter().filter(|v|same_identity(&v["relation"],"public","custom_model_catalogs")).collect::<Vec<_>>();
-    require(own.len()==2)?;
-    for (name,primary,keys) in [("custom_model_catalogs_pkey",true,"1"),("custom_model_catalogs_model_id_key",false,"5")] {
-        let idx=unique(indexes,|v|same_identity(&v["identity"],"public",name))?;
-        require(same_identity(&idx["relation"],"public","custom_model_catalogs") && oid(&idx["ownerOidRaw"])?==owner)?;
-        require(idx["kind"]=="i" && idx["accessMethod"]=="btree" && idx["primary"]==primary && idx["unique"]==true)?;
-        require(idx["immediate"]==true && idx["valid"]==true && idx["ready"]==true && idx["live"]==true && idx["nullsNotDistinct"]==false)?;
-        require(idx["keyCount"]==1 && idx["attributeCount"]==1 && idx["keys"]==keys && idx["predicate"].is_null() && idx["expressions"].is_null())?;
+    let mut wanted_names = vec![
+        "custom_model_catalogs_pkey",
+        "custom_model_catalogs_model_id_key",
+        "custom_model_catalogs_model_id_shape",
+        "custom_model_catalogs_catalog_revision_positive",
+        "custom_model_catalogs_protocol_check",
+        "custom_model_catalogs_endpoint_check",
+        "custom_model_catalogs_model_check",
+        "custom_model_catalogs_connection_scope_fkey",
+    ];
+    wanted_names.sort_unstable();
+    require(actual_names == wanted_names)?;
+    let indexes = arr(&raw["indexes"])?;
+    let own = indexes
+        .iter()
+        .filter(|v| same_identity(&v["relation"], "public", "custom_model_catalogs"))
+        .collect::<Vec<_>>();
+    require(own.len() == 2)?;
+    for (name, primary, keys) in [
+        ("custom_model_catalogs_pkey", true, "1"),
+        ("custom_model_catalogs_model_id_key", false, "5"),
+    ] {
+        let idx = unique(indexes, |v| same_identity(&v["identity"], "public", name))?;
+        require(
+            same_identity(&idx["relation"], "public", "custom_model_catalogs")
+                && oid(&idx["ownerOidRaw"])? == owner,
+        )?;
+        require(
+            idx["kind"] == "i"
+                && idx["accessMethod"] == "btree"
+                && idx["primary"] == primary
+                && idx["unique"] == true,
+        )?;
+        require(
+            idx["immediate"] == true
+                && idx["valid"] == true
+                && idx["ready"] == true
+                && idx["live"] == true
+                && idx["nullsNotDistinct"] == false,
+        )?;
+        require(
+            idx["keyCount"] == 1
+                && idx["attributeCount"] == 1
+                && idx["keys"] == keys
+                && idx["predicate"].is_null()
+                && idx["expressions"].is_null(),
+        )?;
     }
-    let fk=unique(all_constraints,|v|same_identity(&v["relation"],"public","custom_model_catalogs") && v["name"]=="custom_model_catalogs_connection_scope_fkey")?;
-    require(fk["kind"]=="f" && fk["validated"]==true && fk["deferrable"]==false && fk["deferred"]==false)?;
-    require(ordered_names(&fk["columns"])?==["connection_id","deployment_id","tenant_id","owner_user_id"])?;
-    require(same_identity(&fk["reference"]["relation"],"public","model_connections"))?;
-    require(ordered_names(&fk["reference"]["columns"])?==["id","deployment_id","tenant_id","owner_user_id"])?;
-    require(fk["reference"]["updateAction"]=="r" && fk["reference"]["deleteAction"]=="c" && fk["reference"]["match"]=="s" && fk["reference"]["deleteSetColumns"].is_null())?;
-    let old_key_name="model_connections_id_deployment_id_tenant_id_owner_user_id_key";
-    require(same_identity(&fk["supportingIndex"],"public",old_key_name))?;
-    let keys=arr(&fk["reference"]["referencedKeys"])?;require(keys.len()==1)?;
-    require(keys[0]["name"]==old_key_name && keys[0]["kind"]=="u" && keys[0]["validated"]==true && keys[0]["deferrable"]==false && keys[0]["deferred"]==false)?;
-    require(oid(&keys[0]["indexOidRaw"])?==oid(&fk["supportingIndex"]["oidRaw"])?)?;
-    let supporting=unique(indexes,|v|v["identity"]["oidRaw"]==fk["supportingIndex"]["oidRaw"])?;
-    require(same_identity(&supporting["relation"],"public","model_connections"))?;
-    require(supporting["primary"]==false && supporting["unique"]==true && supporting["immediate"]==true && supporting["valid"]==true && supporting["ready"]==true && supporting["live"]==true)?;
-    require(supporting["keyCount"]==4 && supporting["attributeCount"]==4 && supporting["keys"]=="1 2 3 4")?;
+    let fk = unique(all_constraints, |v| {
+        same_identity(&v["relation"], "public", "custom_model_catalogs")
+            && v["name"] == "custom_model_catalogs_connection_scope_fkey"
+    })?;
+    require(
+        fk["kind"] == "f"
+            && fk["validated"] == true
+            && fk["deferrable"] == false
+            && fk["deferred"] == false,
+    )?;
+    require(
+        ordered_names(&fk["columns"])?
+            == [
+                "connection_id",
+                "deployment_id",
+                "tenant_id",
+                "owner_user_id",
+            ],
+    )?;
+    require(same_identity(
+        &fk["reference"]["relation"],
+        "public",
+        "model_connections",
+    ))?;
+    require(
+        ordered_names(&fk["reference"]["columns"])?
+            == ["id", "deployment_id", "tenant_id", "owner_user_id"],
+    )?;
+    require(
+        fk["reference"]["updateAction"] == "r"
+            && fk["reference"]["deleteAction"] == "c"
+            && fk["reference"]["match"] == "s"
+            && fk["reference"]["deleteSetColumns"].is_null(),
+    )?;
+    let old_key_name = "model_connections_id_deployment_id_tenant_id_owner_user_id_key";
+    require(same_identity(
+        &fk["supportingIndex"],
+        "public",
+        old_key_name,
+    ))?;
+    let keys = arr(&fk["reference"]["referencedKeys"])?;
+    require(keys.len() == 1)?;
+    require(
+        keys[0]["name"] == old_key_name
+            && keys[0]["kind"] == "u"
+            && keys[0]["validated"] == true
+            && keys[0]["deferrable"] == false
+            && keys[0]["deferred"] == false,
+    )?;
+    require(oid(&keys[0]["indexOidRaw"])? == oid(&fk["supportingIndex"]["oidRaw"])?)?;
+    let supporting = unique(indexes, |v| {
+        v["identity"]["oidRaw"] == fk["supportingIndex"]["oidRaw"]
+    })?;
+    require(same_identity(
+        &supporting["relation"],
+        "public",
+        "model_connections",
+    ))?;
+    require(
+        supporting["primary"] == false
+            && supporting["unique"] == true
+            && supporting["immediate"] == true
+            && supporting["valid"] == true
+            && supporting["ready"] == true
+            && supporting["live"] == true,
+    )?;
+    require(
+        supporting["keyCount"] == 4
+            && supporting["attributeCount"] == 4
+            && supporting["keys"] == "1 2 3 4",
+    )?;
     Ok(())
 }
 
-fn check_function_and_trigger_binding(raw:&Value,owner:u32)->Result<(),CustomModelCatalogSchemaError>{
-    let functions=arr(&raw["functions"])?;
-    let same_name=functions.iter().filter(|v|v["isSyncFunction"]==true).collect::<Vec<_>>();
-    require(same_name.len()==1)?; let f=same_name[0];
-    require(same_identity(identity(f)?,"openbot_internal","sync_custom_model_catalog"))?;
-    require(f["identity"]["arguments"]=="" && f["inputArgumentCount"]==0 && f["defaultArgumentCount"]==0)?;
-    require(f["kind"]=="f" && f["language"]=="plpgsql" && f["securityDefiner"]==false && f["strict"]==false && f["leakproof"]==false && f["setReturning"]==false)?;
-    require(f["volatility"]=="v" && f["parallel"]=="u" && f["configuration"]==json!(["search_path=pg_catalog"]))?;
-    require(same_identity(&f["returnType"],"pg_catalog","trigger"))?;
-    require(f["source"].as_str()==Some(FUNCTION_SOURCE_BODY) && f["binary"].is_null() && f["sqlBody"].is_null())?;
-    require(f["variadicType"].is_null() && f["supportFunction"].is_null() && f["argumentDefaults"].is_null())?;
-    require(f["allArgumentTypesIsNull"]==true && arr(&f["inputTypes"])?.is_empty() && arr(&f["allArgumentTypes"])?.is_empty())?;
-    require(f["argumentModes"].is_null() && f["argumentNames"].is_null() && f["transformTypesIsNull"]==true && arr(&f["transformTypes"])?.is_empty())?;
-    require(oid(&f["ownerOidRaw"])?==owner)?;
-    require(acl_rows(&f["acl"])?==vec![Acl{grantor:owner,grantee:owner,privilege:"EXECUTE".to_owned(),grantable:false}])?;
-    let triggers=arr(&raw["triggers"])?;
-    let t=unique(triggers,|v|same_identity(&v["relation"],"public","model_connections") && v["name"]=="model_connections_custom_catalog_sync")?;
-    require(t["internal"]==false && t["enabled"]=="O" && t["type"]==21 && t["hasParent"]==false)?;
-    require(t["deferrable"]==false && t["deferred"]==false && t["argumentCount"]==0 && t["columns"]=="" && t["argumentsHex"]=="")?;
-    require(t["conditionIsNull"]==true && t["conditionTreeRaw"].is_null() && t["oldTransition"].is_null() && t["newTransition"].is_null())?;
-    require(oid(&t["constraintOidRaw"])?==0 && t["constraint"].is_null() && t["constraintRelation"].is_null() && t["constraintIndex"].is_null())?;
-    require(t["function"]["oidRaw"]==f["identity"]["oidRaw"] && t["function"]["arguments"]=="" && t["function"]["kind"]=="f")?;
+fn check_function_and_trigger_binding(
+    raw: &Value,
+    owner: u32,
+) -> Result<(), CustomModelCatalogSchemaError> {
+    let functions = arr(&raw["functions"])?;
+    let same_name = functions
+        .iter()
+        .filter(|v| v["isSyncFunction"] == true)
+        .collect::<Vec<_>>();
+    require(same_name.len() == 1)?;
+    let f = same_name[0];
+    require(same_identity(
+        identity(f)?,
+        "openbot_internal",
+        "sync_custom_model_catalog",
+    ))?;
+    require(
+        f["identity"]["arguments"] == ""
+            && f["inputArgumentCount"] == 0
+            && f["defaultArgumentCount"] == 0,
+    )?;
+    require(
+        f["kind"] == "f"
+            && f["language"] == "plpgsql"
+            && f["securityDefiner"] == false
+            && f["strict"] == false
+            && f["leakproof"] == false
+            && f["setReturning"] == false,
+    )?;
+    require(
+        f["volatility"] == "v"
+            && f["parallel"] == "u"
+            && f["configuration"] == json!(["search_path=pg_catalog"]),
+    )?;
+    require(same_identity(&f["returnType"], "pg_catalog", "trigger"))?;
+    require(
+        f["source"].as_str() == Some(FUNCTION_SOURCE_BODY)
+            && f["binary"].is_null()
+            && f["sqlBody"].is_null(),
+    )?;
+    require(
+        f["variadicType"].is_null()
+            && f["supportFunction"].is_null()
+            && f["argumentDefaults"].is_null(),
+    )?;
+    require(
+        f["allArgumentTypesIsNull"] == true
+            && arr(&f["inputTypes"])?.is_empty()
+            && arr(&f["allArgumentTypes"])?.is_empty(),
+    )?;
+    require(
+        f["argumentModes"].is_null()
+            && f["argumentNames"].is_null()
+            && f["transformTypesIsNull"] == true
+            && arr(&f["transformTypes"])?.is_empty(),
+    )?;
+    require(oid(&f["ownerOidRaw"])? == owner)?;
+    require(
+        acl_rows(&f["acl"])?
+            == vec![Acl {
+                grantor: owner,
+                grantee: owner,
+                privilege: "EXECUTE".to_owned(),
+                grantable: false,
+            }],
+    )?;
+    let triggers = arr(&raw["triggers"])?;
+    let t = unique(triggers, |v| {
+        same_identity(&v["relation"], "public", "model_connections")
+            && v["name"] == "model_connections_custom_catalog_sync"
+    })?;
+    require(
+        t["internal"] == false && t["enabled"] == "O" && t["type"] == 21 && t["hasParent"] == false,
+    )?;
+    require(
+        t["deferrable"] == false
+            && t["deferred"] == false
+            && t["argumentCount"] == 0
+            && t["columns"] == ""
+            && t["argumentsHex"] == "",
+    )?;
+    require(
+        t["conditionIsNull"] == true
+            && t["conditionTreeRaw"].is_null()
+            && t["oldTransition"].is_null()
+            && t["newTransition"].is_null(),
+    )?;
+    require(
+        oid(&t["constraintOidRaw"])? == 0
+            && t["constraint"].is_null()
+            && t["constraintRelation"].is_null()
+            && t["constraintIndex"].is_null(),
+    )?;
+    require(
+        t["function"]["oidRaw"] == f["identity"]["oidRaw"]
+            && t["function"]["arguments"] == ""
+            && t["function"]["kind"] == "f",
+    )?;
     // Wrong or extra user hooks remain in canonical arrays and differ from the real oracle.
     Ok(())
 }
 
-fn check_foreign_key_hooks(raw:&Value)->Result<(),CustomModelCatalogSchemaError>{
-    let constraints=arr(&raw["constraints"])?;
-    let fk=unique(constraints,|v|same_identity(&v["relation"],"public","custom_model_catalogs") && v["name"]=="custom_model_catalogs_connection_scope_fkey")?;
-    let mut signatures=Vec::new();
+fn check_foreign_key_hooks(raw: &Value) -> Result<(), CustomModelCatalogSchemaError> {
+    let constraints = arr(&raw["constraints"])?;
+    let fk = unique(constraints, |v| {
+        same_identity(&v["relation"], "public", "custom_model_catalogs")
+            && v["name"] == "custom_model_catalogs_connection_scope_fkey"
+    })?;
+    let mut signatures = Vec::new();
     for t in arr(&raw["triggers"])? {
-        if t["internal"]==true {
+        if t["internal"] == true {
             // Every captured internal hook must retain its actual constraint binding,
             // not merely a generated name. Other old constraints have their own genuine
             // mixed deferral properties; do not force all old hooks to equal the FK flag.
-            require(t["constraint"]["kind"]=="f")?;
-            let _bound=unique(constraints,|c|c["oidRaw"]==t["constraintOidRaw"])?;
+            require(t["constraint"]["kind"] == "f")?;
+            let _bound = unique(constraints, |c| c["oidRaw"] == t["constraintOidRaw"])?;
         }
-        if t["constraintOidRaw"]!=fk["oidRaw"] {continue;}
-        require(t["internal"]==true && t["enabled"]=="O" && t["hasParent"]==false && t["deferrable"]==false && t["deferred"]==false)?;
-        require(t["argumentCount"]==0 && t["columns"]=="" && t["argumentsHex"]=="" && t["conditionIsNull"]==true && t["conditionTreeRaw"].is_null() && t["oldTransition"].is_null() && t["newTransition"].is_null())?;
-        require(t["constraint"]["oidRaw"]==fk["oidRaw"] && t["constraint"]["relation"]==fk["relation"])?;
-        require(t["constraintIndex"]["oidRaw"]==fk["supportingIndex"]["oidRaw"])?;
-        require(t["function"]["schema"]=="pg_catalog" && t["function"]["arguments"]=="" && t["function"]["kind"]=="f")?;
-        let rel=text(&t["relation"]["name"])?;
-        let other=if rel=="custom_model_catalogs" {"model_connections"} else {"custom_model_catalogs"};
-        require(same_identity(&t["relation"],"public",rel) && same_identity(&t["constraintRelation"],"public",other))?;
-        signatures.push((rel.to_owned(),text(&t["function"]["name"])?.to_owned(),t["type"].as_i64().ok_or_else(||corrupt("catalog_facts"))?));
+        if t["constraintOidRaw"] != fk["oidRaw"] {
+            continue;
+        }
+        require(
+            t["internal"] == true
+                && t["enabled"] == "O"
+                && t["hasParent"] == false
+                && t["deferrable"] == false
+                && t["deferred"] == false,
+        )?;
+        require(
+            t["argumentCount"] == 0
+                && t["columns"] == ""
+                && t["argumentsHex"] == ""
+                && t["conditionIsNull"] == true
+                && t["conditionTreeRaw"].is_null()
+                && t["oldTransition"].is_null()
+                && t["newTransition"].is_null(),
+        )?;
+        require(
+            t["constraint"]["oidRaw"] == fk["oidRaw"]
+                && t["constraint"]["relation"] == fk["relation"],
+        )?;
+        require(t["constraintIndex"]["oidRaw"] == fk["supportingIndex"]["oidRaw"])?;
+        require(
+            t["function"]["schema"] == "pg_catalog"
+                && t["function"]["arguments"] == ""
+                && t["function"]["kind"] == "f",
+        )?;
+        let rel = text(&t["relation"]["name"])?;
+        let other = if rel == "custom_model_catalogs" {
+            "model_connections"
+        } else {
+            "custom_model_catalogs"
+        };
+        require(
+            same_identity(&t["relation"], "public", rel)
+                && same_identity(&t["constraintRelation"], "public", other),
+        )?;
+        signatures.push((
+            rel.to_owned(),
+            text(&t["function"]["name"])?.to_owned(),
+            t["type"].as_i64().ok_or_else(|| corrupt("catalog_facts"))?,
+        ));
     }
     signatures.sort();
     // These are DDL-required PG17 hook identities, NOT actual-capture JSON.
-    let mut wanted=vec![
-        ("custom_model_catalogs".to_owned(),"RI_FKey_check_ins".to_owned(),5),
-        ("custom_model_catalogs".to_owned(),"RI_FKey_check_upd".to_owned(),17),
-        ("model_connections".to_owned(),"RI_FKey_cascade_del".to_owned(),9),
-        ("model_connections".to_owned(),"RI_FKey_restrict_upd".to_owned(),17)];
-    wanted.sort(); require(signatures==wanted)
+    let mut wanted = vec![
+        (
+            "custom_model_catalogs".to_owned(),
+            "RI_FKey_check_ins".to_owned(),
+            5,
+        ),
+        (
+            "custom_model_catalogs".to_owned(),
+            "RI_FKey_check_upd".to_owned(),
+            17,
+        ),
+        (
+            "model_connections".to_owned(),
+            "RI_FKey_cascade_del".to_owned(),
+            9,
+        ),
+        (
+            "model_connections".to_owned(),
+            "RI_FKey_restrict_upd".to_owned(),
+            17,
+        ),
+    ];
+    wanted.sort();
+    require(signatures == wanted)
 }
 
 // OIDs are erased only after their actual owner/binding checks above; all retained
 // qualified identities and full semantic fields still undergo whole-oracle equality.
 // This exact key allowlist is not ends_with("Raw") and never strips unknown fields.
-fn erase_checked_oid_fields(v:&mut Value){
+fn erase_checked_oid_fields(v: &mut Value) {
     match v {
-        Value::Object(o)=>{
-            for key in ["oidRaw","ownerOidRaw","indexOidRaw","constraintOidRaw"] {o.remove(key);}
-            for child in o.values_mut(){erase_checked_oid_fields(child);}
+        Value::Object(o) => {
+            for key in ["oidRaw", "ownerOidRaw", "indexOidRaw", "constraintOidRaw"] {
+                o.remove(key);
+            }
+            for child in o.values_mut() {
+                erase_checked_oid_fields(child);
+            }
         }
-        Value::Array(a)=>for child in a {erase_checked_oid_fields(child);},
-        _=>{}
+        Value::Array(a) => {
+            for child in a {
+                erase_checked_oid_fields(child);
+            }
+        }
+        _ => {}
     }
 }
-fn sort_top_level_multisets(v:&mut Value)->Result<(),CustomModelCatalogSchemaError>{
+fn sort_top_level_multisets(v: &mut Value) -> Result<(), CustomModelCatalogSchemaError> {
     // Never sort column order, conkey/confkey, opclasses/collations, argument order
     // or proconfig. Only unordered top-level object multisets are canonically sorted.
-    for key in ["relations","constraints","indexes","triggers","functions"] {
-        let a=v.get_mut(key).and_then(Value::as_array_mut).ok_or_else(||corrupt("catalog_facts"))?;
-        let mut keyed=std::mem::take(a).into_iter()
-            .map(|value|canonical_bytes(&value).map(|key|(key,value)))
-            .collect::<Result<Vec<_>,_>>()?;
-        keyed.sort_by(|left,right|left.0.cmp(&right.0));
-        *a=keyed.into_iter().map(|(_,value)|value).collect(); // duplicates retained
+    for key in [
+        "relations",
+        "constraints",
+        "indexes",
+        "triggers",
+        "functions",
+    ] {
+        let a = v
+            .get_mut(key)
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| corrupt("catalog_facts"))?;
+        let mut keyed = std::mem::take(a)
+            .into_iter()
+            .map(|value| canonical_bytes(&value).map(|key| (key, value)))
+            .collect::<Result<Vec<_>, _>>()?;
+        keyed.sort_by(|left, right| left.0.cmp(&right.0));
+        *a = keyed.into_iter().map(|(_, value)| value).collect(); // duplicates retained
     }
     Ok(())
 }
-fn canonical_value(v:&Value)->Value{
+fn canonical_value(v: &Value) -> Value {
     match v {
-        Value::Object(o)=>{
-            let mut pairs=o.iter().collect::<Vec<_>>(); pairs.sort_by_key(|(a,_)| *a);
-            let mut out=serde_json::Map::new();
-            for (key,value) in pairs {out.insert(key.clone(),canonical_value(value));}
+        Value::Object(o) => {
+            let mut pairs = o.iter().collect::<Vec<_>>();
+            pairs.sort_by_key(|(a, _)| *a);
+            let mut out = serde_json::Map::new();
+            for (key, value) in pairs {
+                out.insert(key.clone(), canonical_value(value));
+            }
             Value::Object(out)
         }
-        Value::Array(a)=>Value::Array(a.iter().map(canonical_value).collect()),
-        _=>v.clone()
+        Value::Array(a) => Value::Array(a.iter().map(canonical_value).collect()),
+        _ => v.clone(),
     }
 }
-fn canonical_bytes(v:&Value)->Result<Vec<u8>,CustomModelCatalogSchemaError>{
-    serde_json::to_vec(&canonical_value(v)).map_err(|_|corrupt("catalog_facts"))
+fn canonical_bytes(v: &Value) -> Result<Vec<u8>, CustomModelCatalogSchemaError> {
+    serde_json::to_vec(&canonical_value(v)).map_err(|_| corrupt("catalog_facts"))
 }
-fn normalize_owner_relative(mut raw:Value)->Result<Value,CustomModelCatalogSchemaError>{
-    require(raw["format"]=="custom-model-catalog-raw-v1")?;
+fn normalize_owner_relative(mut raw: Value) -> Result<Value, CustomModelCatalogSchemaError> {
+    require(raw["format"] == "custom-model-catalog-raw-v1")?;
     storage_in_raw(&raw)?;
-    let owner=oid(&raw["ownerAnchorRaw"]["ownerOidRaw"])?;require(owner!=0)?;
-    check_new_catalog_contract(&raw,owner)?;
-    check_function_and_trigger_binding(&raw,owner)?;
+    let owner = oid(&raw["ownerAnchorRaw"]["ownerOidRaw"])?;
+    require(owner != 0)?;
+    check_new_catalog_contract(&raw, owner)?;
+    check_function_and_trigger_binding(&raw, owner)?;
     check_foreign_key_hooks(&raw)?;
-    for r in raw["relations"].as_array_mut().ok_or_else(||corrupt("catalog_facts"))? {
-        let new=same_identity(&r["identity"],"public","custom_model_catalogs");
-        let o=r.as_object_mut().ok_or_else(||corrupt("catalog_facts"))?;
+    for r in raw["relations"]
+        .as_array_mut()
+        .ok_or_else(|| corrupt("catalog_facts"))?
+    {
+        let new = same_identity(&r["identity"], "public", "custom_model_catalogs");
+        let o = r.as_object_mut().ok_or_else(|| corrupt("catalog_facts"))?;
         if new {
-            let acl=relative_acl(o.get("acl").ok_or_else(||corrupt("catalog_facts"))?,owner)?;
-            o.insert("acl".to_owned(),acl);
-            o.insert("ownerIsOriginal".to_owned(),Value::Bool(true));
+            let acl = relative_acl(o.get("acl").ok_or_else(|| corrupt("catalog_facts"))?, owner)?;
+            o.insert("acl".to_owned(), acl);
+            o.insert("ownerIsOriginal".to_owned(), Value::Bool(true));
             o.remove("aclIsNull"); // semantic NULL/default equality was checked against old-O builtin default
-        } else {o.remove("acl");o.remove("aclIsNull");}
+        } else {
+            o.remove("acl");
+            o.remove("aclIsNull");
+        }
         if !new {
             // Legacy ACLs are retained in private raw capture and compared pre/post
             // on the same DB; no fresh-oracle assumption about their actual roles.
-            for col in o.get_mut("columns").and_then(Value::as_array_mut).ok_or_else(||corrupt("catalog_facts"))? {
-                let co=col.as_object_mut().ok_or_else(||corrupt("catalog_facts"))?;co.remove("acl");co.remove("aclIsNull");
+            for col in o
+                .get_mut("columns")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| corrupt("catalog_facts"))?
+            {
+                let co = col
+                    .as_object_mut()
+                    .ok_or_else(|| corrupt("catalog_facts"))?;
+                co.remove("acl");
+                co.remove("aclIsNull");
             }
         }
     }
-    for idx in raw["indexes"].as_array_mut().ok_or_else(||corrupt("catalog_facts"))? {
+    for idx in raw["indexes"]
+        .as_array_mut()
+        .ok_or_else(|| corrupt("catalog_facts"))?
+    {
         // indcheckxmin is HOT/query-safety runtime state, retained only in raw facts.
         // It is excluded from portable oracle comparison.
-        idx.as_object_mut().ok_or_else(||corrupt("catalog_facts"))?.remove("checkXmin");
-        if same_identity(&idx["relation"],"public","custom_model_catalogs") {
-            require(oid(&idx["ownerOidRaw"])?==owner)?;
-            require(idx["aclIsNull"]==true)?;
-            idx.as_object_mut().ok_or_else(||corrupt("catalog_facts"))?.insert("ownerIsOriginal".to_owned(),Value::Bool(true));
+        idx.as_object_mut()
+            .ok_or_else(|| corrupt("catalog_facts"))?
+            .remove("checkXmin");
+        if same_identity(&idx["relation"], "public", "custom_model_catalogs") {
+            require(oid(&idx["ownerOidRaw"])? == owner)?;
+            require(idx["aclIsNull"] == true)?;
+            idx.as_object_mut()
+                .ok_or_else(|| corrupt("catalog_facts"))?
+                .insert("ownerIsOriginal".to_owned(), Value::Bool(true));
         } else {
             // Existing index ownership/ACL is only a same-database raw preservation fact.
-            idx.as_object_mut().ok_or_else(||corrupt("catalog_facts"))?.remove("aclIsNull");
+            idx.as_object_mut()
+                .ok_or_else(|| corrupt("catalog_facts"))?
+                .remove("aclIsNull");
         }
     }
-    for f in raw["functions"].as_array_mut().ok_or_else(||corrupt("catalog_facts"))? {
-        let sync=f["isSyncFunction"]==true;
-        let o=f.as_object_mut().ok_or_else(||corrupt("catalog_facts"))?;
+    for f in raw["functions"]
+        .as_array_mut()
+        .ok_or_else(|| corrupt("catalog_facts"))?
+    {
+        let sync = f["isSyncFunction"] == true;
+        let o = f.as_object_mut().ok_or_else(|| corrupt("catalog_facts"))?;
         if sync {
-            let acl=relative_acl(o.get("acl").ok_or_else(||corrupt("catalog_facts"))?,owner)?;
-            o.insert("acl".to_owned(),acl);o.insert("ownerIsOriginal".to_owned(),Value::Bool(true));
-        } else {o.remove("acl");}
+            let acl = relative_acl(o.get("acl").ok_or_else(|| corrupt("catalog_facts"))?, owner)?;
+            o.insert("acl".to_owned(), acl);
+            o.insert("ownerIsOriginal".to_owned(), Value::Bool(true));
+        } else {
+            o.remove("acl");
+        }
         o.remove("aclIsNull"); // legacy pg_catalog owner/ACL remains raw; function content/attrs remain exact
     }
-    for t in raw["triggers"].as_array_mut().ok_or_else(||corrupt("catalog_facts"))? {
-        let internal=t["internal"]==true;
-        let o=t.as_object_mut().ok_or_else(||corrupt("catalog_facts"))?;
+    for t in raw["triggers"]
+        .as_array_mut()
+        .ok_or_else(|| corrupt("catalog_facts"))?
+    {
+        let internal = t["internal"] == true;
+        let o = t.as_object_mut().ok_or_else(|| corrupt("catalog_facts"))?;
         // The raw pg_node_tree can contain database-local OIDs; exact user WHEN
         // text remains in pg_get_triggerdef, and conditionIsNull stays canonical.
         o.remove("conditionTreeRaw");
         if internal {
-            o.remove("name");o.remove("definition"); // only proven bound internal auto-name text
+            o.remove("name");
+            o.remove("definition"); // only proven bound internal auto-name text
         }
     }
-    let o=raw.as_object_mut().ok_or_else(||corrupt("catalog_facts"))?;
-    for key in ["ownerAnchorRaw","legacyOwnershipRaw","deparseContextRaw","storage"] {o.remove(key);}
-    o.insert("format".to_owned(),Value::String("custom-model-catalog-schema-v1".to_owned()));
-    erase_checked_oid_fields(&mut raw);sort_top_level_multisets(&mut raw)?;
+    let o = raw
+        .as_object_mut()
+        .ok_or_else(|| corrupt("catalog_facts"))?;
+    for key in [
+        "ownerAnchorRaw",
+        "legacyOwnershipRaw",
+        "deparseContextRaw",
+        "storage",
+    ] {
+        o.remove(key);
+    }
+    o.insert(
+        "format".to_owned(),
+        Value::String("custom-model-catalog-schema-v1".to_owned()),
+    );
+    erase_checked_oid_fields(&mut raw);
+    sort_top_level_multisets(&mut raw)?;
     Ok(canonical_value(&raw))
 }
 
-async fn raw_on<C:GenericClient+Sync>(client:&C)->Result<Value,CustomModelCatalogSchemaError>{
-    let row=client.query_one(CAPTURE_SQL,&[&REGISTERED_NATIVE_FLOOR]).await.map_err(|_|CustomModelCatalogSchemaError::Unavailable)?;
-    let raw:String=row.try_get("custom_model_catalog_raw").map_err(|_|corrupt("catalog_facts"))?;
-    serde_json::from_str(&raw).map_err(|_|corrupt("catalog_facts"))
+async fn raw_on<C: GenericClient + Sync>(
+    client: &C,
+) -> Result<Value, CustomModelCatalogSchemaError> {
+    let row = client
+        .query_one(CAPTURE_SQL, &[&REGISTERED_NATIVE_FLOOR])
+        .await
+        .map_err(|_| CustomModelCatalogSchemaError::Unavailable)?;
+    let raw: String = row
+        .try_get("custom_model_catalog_raw")
+        .map_err(|_| corrupt("catalog_facts"))?;
+    serde_json::from_str(&raw).map_err(|_| corrupt("catalog_facts"))
 }
-async fn canonical_on<C:GenericClient+Sync>(client:&C)->Result<Value,CustomModelCatalogSchemaError>{
+async fn canonical_on<C: GenericClient + Sync>(
+    client: &C,
+) -> Result<Value, CustomModelCatalogSchemaError> {
     normalize_owner_relative(raw_on(client).await?)
 }
-fn compare_registered(actual:&Value)->Result<(),CustomModelCatalogSchemaError>{
-    let expected:Value=serde_json::from_str(REGISTERED_SCHEMA).map_err(|_|corrupt("schema_oracle"))?;
+fn compare_registered(actual: &Value) -> Result<(), CustomModelCatalogSchemaError> {
+    let expected: Value =
+        serde_json::from_str(REGISTERED_SCHEMA).map_err(|_| corrupt("schema_oracle"))?;
     // The include is frozen from independent raw owned-PG observations after registration.
     // No expected builder, database-derived widening, field subtraction or fallback.
-    if actual!=&expected {return shape();} Ok(())
+    if actual != &expected {
+        return shape();
+    }
+    Ok(())
 }
-async fn mapping_on<C:GenericClient+Sync>(client:&C)->Result<(),CustomModelCatalogSchemaError>{
-    let row=client.query_one(MAPPING_SQL,&[]).await.map_err(|_|CustomModelCatalogSchemaError::Unavailable)?;
-    let valid:bool=row.try_get("mapping_ok").map_err(|_|corrupt("catalog_mapping"))?;
-    if !valid {return Err(corrupt("catalog_mapping"));} Ok(())
+async fn mapping_on<C: GenericClient + Sync>(
+    client: &C,
+) -> Result<(), CustomModelCatalogSchemaError> {
+    let row = client
+        .query_one(MAPPING_SQL, &[])
+        .await
+        .map_err(|_| CustomModelCatalogSchemaError::Unavailable)?;
+    let valid: bool = row
+        .try_get("mapping_ok")
+        .map_err(|_| corrupt("catalog_mapping"))?;
+    if !valid {
+        return Err(corrupt("catalog_mapping"));
+    }
+    Ok(())
 }
 
 /// 在原连接读取实际目录形状并作固定owner相对规范化；不读取oracle、不写业务行、不授予权限。
-pub async fn capture(client:&Client)->Result<Value,CustomModelCatalogSchemaError>{
-    storage_on(client).await?; canonical_on(client).await
+pub async fn capture(client: &Client) -> Result<Value, CustomModelCatalogSchemaError> {
+    storage_on(client).await?;
+    canonical_on(client).await
 }
 /// 核原完整已知prefix、独立真实oracle与完整映射；不返回权限、Host或库存Ready。
-pub async fn verify(client:&Client)->Result<(),CustomModelCatalogSchemaError>{
+pub async fn verify(client: &Client) -> Result<(), CustomModelCatalogSchemaError> {
     storage_on(client).await?;
-    native::validate_known_prefix(client,REGISTERED_NATIVE_FLOOR).await.map_err(|error|match error {
-        InfraError::Connect{..}|InfraError::Query{..}=>CustomModelCatalogSchemaError::Unavailable,
-        _=>corrupt("native_prefix")
-    })?;
-    compare_registered(&canonical_on(client).await?)?; mapping_on(client).await
+    native::validate_known_prefix(client, REGISTERED_NATIVE_FLOOR)
+        .await
+        .map_err(|error| match error {
+            InfraError::Connect { .. } | InfraError::Query { .. } => {
+                CustomModelCatalogSchemaError::Unavailable
+            }
+            _ => corrupt("native_prefix"),
+        })?;
+    compare_registered(&canonical_on(client).await?)?;
+    mapping_on(client).await
 }
 /// 仅原native hook/未来具名原Tx调用；caller必须先在同一Tx完成bounded完整known-prefix。
 /// 不调用只接受Client的validator，不另取Pool，不开始第二Tx，不递归apply/repair。
-pub(crate) async fn verify_in_transaction(tx:&Transaction<'_>)->Result<(),CustomModelCatalogSchemaError>{
-    storage_on(tx).await?;compare_registered(&canonical_on(tx).await?)?;mapping_on(tx).await
+pub(crate) async fn verify_in_transaction(
+    tx: &Transaction<'_>,
+) -> Result<(), CustomModelCatalogSchemaError> {
+    storage_on(tx).await?;
+    compare_registered(&canonical_on(tx).await?)?;
+    mapping_on(tx).await
 }
