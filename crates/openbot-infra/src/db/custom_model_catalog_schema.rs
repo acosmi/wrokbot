@@ -531,14 +531,14 @@ fn same_identity(v: &Value, schema: &str, name: &str) -> bool {
     v.get("schema").and_then(Value::as_str)==Some(schema)
         && v.get("name").and_then(Value::as_str)==Some(name)
 }
-fn unique<'a>(values: &'a [Value], mut pred: impl FnMut(&Value)->bool)
- -> Result<&'a Value, CustomModelCatalogSchemaError> {
+fn unique(values: &[Value], mut pred: impl FnMut(&Value)->bool)
+ -> Result<&Value, CustomModelCatalogSchemaError> {
     let mut rows=values.iter().filter(|v| pred(v));
     let first=rows.next().ok_or_else(|| corrupt("catalog_schema"))?;
     require(rows.next().is_none())?;
     Ok(first)
 }
-fn identity<'a>(v: &'a Value) -> Result<&'a Value, CustomModelCatalogSchemaError> {
+fn identity(v: &Value) -> Result<&Value, CustomModelCatalogSchemaError> {
     v.get("identity").ok_or_else(|| corrupt("catalog_facts"))
 }
 fn ordered_names(columns: &Value) -> Result<Vec<&str>, CustomModelCatalogSchemaError> {
@@ -745,7 +745,7 @@ fn sort_top_level_multisets(v:&mut Value)->Result<(),CustomModelCatalogSchemaErr
 fn canonical_value(v:&Value)->Value{
     match v {
         Value::Object(o)=>{
-            let mut pairs=o.iter().collect::<Vec<_>>(); pairs.sort_by(|(a,_),(b,_)|a.cmp(b));
+            let mut pairs=o.iter().collect::<Vec<_>>(); pairs.sort_by_key(|(a,_)| *a);
             let mut out=serde_json::Map::new();
             for (key,value) in pairs {out.insert(key.clone(),canonical_value(value));}
             Value::Object(out)
