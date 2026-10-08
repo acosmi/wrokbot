@@ -858,7 +858,6 @@ async fn exact_instance_data_dir_bootstraps_fresh_then_rust_managed_membership()
     running.stop().unwrap();
 }
 
-
 async fn foundation_desktop_identity(database: &DesktopLocalDatabase) -> (String, u32) {
     let client = database.pool().get().await.unwrap();
     let row = client
@@ -922,7 +921,10 @@ async fn foundation_install_desktop_ddl_observer(database: &DesktopLocalDatabase
         .await
         .unwrap()
         .get(0);
-    assert!(superuser, "owned DDL observer requires the actual event-trigger capability");
+    assert!(
+        superuser,
+        "owned DDL observer requires the actual event-trigger capability"
+    );
     client
         .batch_execute(
             "CREATE SCHEMA foundation_canary_probe; \
@@ -953,7 +955,10 @@ async fn foundation_install_desktop_ddl_observer(database: &DesktopLocalDatabase
         .unwrap();
     drop(client);
     let after = foundation_desktop_ddl_facts(database).await;
-    assert_eq!(after["calls"].as_i64().unwrap(), before["calls"].as_i64().unwrap() + 2);
+    assert_eq!(
+        after["calls"].as_i64().unwrap(),
+        before["calls"].as_i64().unwrap() + 2
+    );
     let events = after["events"].as_array().unwrap();
     let added = &events[before["events"].as_array().unwrap().len()..];
     assert_eq!(added.len(), 2);
@@ -986,7 +991,9 @@ async fn foundation_remove_desktop_ddl_observer(database: &DesktopLocalDatabase)
 async fn foundation_desktop_refusal_facts(database: &DesktopLocalDatabase) -> serde_json::Value {
     let counts = bootstrap_write_counts(database).await;
     let client = database.pool().get().await.unwrap();
-    let public = openbot_infra::db::schema_facts::fetch(&client).await.unwrap();
+    let public = openbot_infra::db::schema_facts::fetch(&client)
+        .await
+        .unwrap();
     let canaries: serde_json::Value = client
         .query_one(
             "SELECT coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) \
@@ -1048,22 +1055,33 @@ async fn foundation_desktop_assert_canary_refusal(
 
 async fn foundation_desktop_current_facts(
     database: &DesktopLocalDatabase,
-) -> (openbot_infra::db::schema_facts::SchemaFacts, serde_json::Value) {
+) -> (
+    openbot_infra::db::schema_facts::SchemaFacts,
+    serde_json::Value,
+) {
     let client = database.pool().get().await.unwrap();
     native::validate_current(&client).await.unwrap();
-    let public = openbot_infra::db::schema_facts::fetch(&client).await.unwrap();
+    let public = openbot_infra::db::schema_facts::fetch(&client)
+        .await
+        .unwrap();
     let expected_public: openbot_infra::db::schema_facts::SchemaFacts =
         serde_json::from_str(include_str!("../../../fixtures/db/schema-0046.json")).unwrap();
     assert_eq!(public, expected_public);
-    openbot_infra::db::custom_model_catalog_schema::verify(&client).await.unwrap();
-    let dedicated = openbot_infra::db::custom_model_catalog_schema::capture(&client).await.unwrap();
+    openbot_infra::db::custom_model_catalog_schema::verify(&client)
+        .await
+        .unwrap();
+    let dedicated = openbot_infra::db::custom_model_catalog_schema::capture(&client)
+        .await
+        .unwrap();
     let expected_dedicated: serde_json::Value = serde_json::from_str(include_str!(
         "../../../fixtures/db/custom-model-catalogs-0046.json"
     ))
     .unwrap();
     assert_eq!(dedicated, expected_dedicated);
     drop(client);
-    desktop_vault_canary::verify_current_layout(database.pool()).await.unwrap();
+    desktop_vault_canary::verify_current_layout(database.pool())
+        .await
+        .unwrap();
     (public, dedicated)
 }
 
@@ -1080,12 +1098,19 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
     let mut client = database.pool().get().await.unwrap();
     baseline::apply(&client).await.unwrap();
     assert_eq!(
-        native::apply_through(&mut client, native::NATIVE_0045_VERSION).await.unwrap(),
+        native::apply_through(&mut client, native::NATIVE_0045_VERSION)
+            .await
+            .unwrap(),
         native::ApplyOutcome::Applied
     );
     let old_public: openbot_infra::db::schema_facts::SchemaFacts =
         serde_json::from_str(include_str!("../../../fixtures/db/schema-0040.json")).unwrap();
-    assert_eq!(openbot_infra::db::schema_facts::fetch(&client).await.unwrap(), old_public);
+    assert_eq!(
+        openbot_infra::db::schema_facts::fetch(&client)
+            .await
+            .unwrap(),
+        old_public
+    );
     drop(client);
     let old_ledger = foundation_desktop_ledger(&database).await;
     assert_eq!(
@@ -1093,9 +1118,18 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
         (13..=native::NATIVE_0045_VERSION).collect::<Vec<_>>()
     );
     let identity = foundation_desktop_identity(&database).await;
-    let deployment = installation.authority().auth_context().deployment().as_str();
+    let deployment = installation
+        .authority()
+        .auth_context()
+        .deployment()
+        .as_str();
     let tenant = installation.authority().auth_context().tenant().as_str();
-    assert!(desktop_vault_canary::read(database.pool(), deployment, tenant).await.unwrap().is_none());
+    assert!(
+        desktop_vault_canary::read(database.pool(), deployment, tenant)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let proof = verified_canary(&database, &installation).await;
     assert_eq!(proof.deployment_id(), deployment);
     assert_eq!(proof.tenant_id(), tenant);
@@ -1108,7 +1142,10 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
     assert_eq!(persisted.key_id(), proof.key_id());
     let master = SecretBytes::new(vec![0x5a; 32]);
     assert_eq!(
-        desktop_vault_canary::verify_pre_upgrade_layout(database.pool()).await.unwrap().native_version(),
+        desktop_vault_canary::verify_pre_upgrade_layout(database.pool())
+            .await
+            .unwrap()
+            .native_version(),
         native::NATIVE_0045_VERSION
     );
     let package = loaded_package(tenant);
@@ -1119,40 +1156,77 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
     let wrong_master = SecretBytes::new(vec![0xa5; 32]);
     assert!(matches!(
         desktop_vault_canary::verify_persisted(
-            &database, &wrong_master, proof.dataset_id(), deployment, tenant, proof.key_id()
-        ).await,
+            &database,
+            &wrong_master,
+            proof.dataset_id(),
+            deployment,
+            tenant,
+            proof.key_id()
+        )
+        .await,
         Err(desktop_vault_canary::DesktopVaultCanaryError::MaterialInvalid)
     ));
-    assert_eq!(foundation_desktop_refusal_facts(&database).await, before_failures);
+    assert_eq!(
+        foundation_desktop_refusal_facts(&database).await,
+        before_failures
+    );
 
     let wrong_key = "f".repeat(32);
     assert_ne!(wrong_key, proof.key_id());
     assert!(matches!(
         desktop_vault_canary::verify_persisted(
-            &database, &master, proof.dataset_id(), deployment, tenant, &wrong_key
-        ).await,
+            &database,
+            &master,
+            proof.dataset_id(),
+            deployment,
+            tenant,
+            &wrong_key
+        )
+        .await,
         Err(desktop_vault_canary::DesktopVaultCanaryError::ReconciliationRequired)
     ));
-    assert_eq!(foundation_desktop_refusal_facts(&database).await, before_failures);
+    assert_eq!(
+        foundation_desktop_refusal_facts(&database).await,
+        before_failures
+    );
     let client = database.pool().get().await.unwrap();
-    assert_eq!(client.execute(
-        "UPDATE openbot_internal.desktop_vault_canaries SET key_id=$1 WHERE dataset_id=$2",
-        &[&wrong_key, &proof.dataset_id()]
-    ).await.unwrap(), 1);
+    assert_eq!(
+        client
+            .execute(
+                "UPDATE openbot_internal.desktop_vault_canaries SET key_id=$1 WHERE dataset_id=$2",
+                &[&wrong_key, &proof.dataset_id()]
+            )
+            .await
+            .unwrap(),
+        1
+    );
     drop(client);
     foundation_desktop_assert_canary_refusal(&installation, &database, &package, &proof).await;
     let client = database.pool().get().await.unwrap();
-    assert_eq!(client.execute(
-        "UPDATE openbot_internal.desktop_vault_canaries SET key_id=$1 WHERE dataset_id=$2",
-        &[&proof.key_id(), &proof.dataset_id()]
-    ).await.unwrap(), 1);
+    assert_eq!(
+        client
+            .execute(
+                "UPDATE openbot_internal.desktop_vault_canaries SET key_id=$1 WHERE dataset_id=$2",
+                &[&proof.key_id(), &proof.dataset_id()]
+            )
+            .await
+            .unwrap(),
+        1
+    );
     drop(client);
-    assert_eq!(foundation_desktop_refusal_facts(&database).await, before_failures);
+    assert_eq!(
+        foundation_desktop_refusal_facts(&database).await,
+        before_failures
+    );
 
     // Each installation-tuple drift is on this synthetic fixture's real persisted row.
     for (column, wrong, original) in [
         ("dataset_id", "e".repeat(32), proof.dataset_id().to_owned()),
-        ("deployment_id", format!("{deployment}-changed"), deployment.to_owned()),
+        (
+            "deployment_id",
+            format!("{deployment}-changed"),
+            deployment.to_owned(),
+        ),
         ("tenant_id", format!("{tenant}-changed"), tenant.to_owned()),
     ] {
         assert_ne!(wrong, original);
@@ -1160,28 +1234,55 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
             "UPDATE openbot_internal.desktop_vault_canaries SET {column}=$1 WHERE key_id=$2"
         );
         let client = database.pool().get().await.unwrap();
-        assert_eq!(client.execute(&statement, &[&wrong, &proof.key_id()]).await.unwrap(), 1);
+        assert_eq!(
+            client
+                .execute(&statement, &[&wrong, &proof.key_id()])
+                .await
+                .unwrap(),
+            1
+        );
         drop(client);
         assert!(matches!(
             desktop_vault_canary::verify_persisted(
-                &database, &master, proof.dataset_id(), deployment, tenant, proof.key_id()
-            ).await,
+                &database,
+                &master,
+                proof.dataset_id(),
+                deployment,
+                tenant,
+                proof.key_id()
+            )
+            .await,
             Err(desktop_vault_canary::DesktopVaultCanaryError::ReconciliationRequired)
         ));
         foundation_desktop_assert_canary_refusal(&installation, &database, &package, &proof).await;
         let client = database.pool().get().await.unwrap();
-        assert_eq!(client.execute(&statement, &[&original, &proof.key_id()]).await.unwrap(), 1);
+        assert_eq!(
+            client
+                .execute(&statement, &[&original, &proof.key_id()])
+                .await
+                .unwrap(),
+            1
+        );
         drop(client);
-        assert_eq!(foundation_desktop_refusal_facts(&database).await, before_failures);
+        assert_eq!(
+            foundation_desktop_refusal_facts(&database).await,
+            before_failures
+        );
     }
 
     // Only this owned database receives a synthetic unknown suffix; no historical row is removed.
     let client = database.pool().get().await.unwrap();
-    assert_eq!(client.execute(
-        "INSERT INTO openbot_internal.schema_migrations(version,name,checksum,applied_at) \
+    assert_eq!(
+        client
+            .execute(
+                "INSERT INTO openbot_internal.schema_migrations(version,name,checksum,applied_at) \
          VALUES(999,'foundation_owned_unknown',repeat('f',64),'2020-01-01T00:00:00Z')",
-        &[]
-    ).await.unwrap(), 1);
+                &[]
+            )
+            .await
+            .unwrap(),
+        1
+    );
     drop(client);
     let unknown_before = foundation_desktop_refusal_facts(&database).await;
     assert!(matches!(
@@ -1189,20 +1290,34 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
         Err(desktop_vault_canary::DesktopVaultCanaryError::Infra(
             openbot_infra::db::InfraError::NativeMigration(
                 native::NativeMigrationViolation::MissingBeforeFuture {
-                    missing_version: native::NATIVE_0046_VERSION, future_version: 999
+                    missing_version: native::NATIVE_0046_VERSION,
+                    future_version: 999
                 }
             )
         ))
     ));
     foundation_desktop_assert_canary_refusal(&installation, &database, &package, &proof).await;
-    assert_eq!(foundation_desktop_refusal_facts(&database).await, unknown_before);
+    assert_eq!(
+        foundation_desktop_refusal_facts(&database).await,
+        unknown_before
+    );
     let client = database.pool().get().await.unwrap();
-    assert_eq!(client.execute(
-        "DELETE FROM openbot_internal.schema_migrations WHERE version=999 \
-         AND name='foundation_owned_unknown' AND checksum=repeat('f',64)", &[]
-    ).await.unwrap(), 1);
+    assert_eq!(
+        client
+            .execute(
+                "DELETE FROM openbot_internal.schema_migrations WHERE version=999 \
+         AND name='foundation_owned_unknown' AND checksum=repeat('f',64)",
+                &[]
+            )
+            .await
+            .unwrap(),
+        1
+    );
     drop(client);
-    assert_eq!(foundation_desktop_refusal_facts(&database).await, before_failures);
+    assert_eq!(
+        foundation_desktop_refusal_facts(&database).await,
+        before_failures
+    );
 
     // Equal installation/canary strings on a different physical PG cannot transfer the old proof.
     let DesktopFixture {
@@ -1211,34 +1326,89 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
         port: _,
         running: mut other_running,
     } = start_desktop_fixture(Some(&running.app_root)).await;
-    assert_eq!(other_installation.authority().instance_id(), installation.authority().instance_id());
-    assert_eq!(other_installation.authority().auth_context().deployment().as_str(), deployment);
-    assert_eq!(other_installation.authority().auth_context().tenant().as_str(), tenant);
+    assert_eq!(
+        other_installation.authority().instance_id(),
+        installation.authority().instance_id()
+    );
+    assert_eq!(
+        other_installation
+            .authority()
+            .auth_context()
+            .deployment()
+            .as_str(),
+        deployment
+    );
+    assert_eq!(
+        other_installation
+            .authority()
+            .auth_context()
+            .tenant()
+            .as_str(),
+        tenant
+    );
     let mut client = other_database.pool().get().await.unwrap();
     baseline::apply(&client).await.unwrap();
-    native::apply_through(&mut client, native::NATIVE_0045_VERSION).await.unwrap();
-    assert_eq!(openbot_infra::db::schema_facts::fetch(&client).await.unwrap(), old_public);
+    native::apply_through(&mut client, native::NATIVE_0045_VERSION)
+        .await
+        .unwrap();
+    assert_eq!(
+        openbot_infra::db::schema_facts::fetch(&client)
+            .await
+            .unwrap(),
+        old_public
+    );
     drop(client);
     let other_identity = foundation_desktop_identity(&other_database).await;
     assert_ne!(other_identity.0, identity.0);
     let copied_row = desktop_vault_canary::DesktopVaultCanaryRow::new(
-        persisted.dataset_id(), persisted.deployment_id(), persisted.tenant_id(),
-        persisted.key_id(), persisted.encrypted_canary().to_owned()
-    ).unwrap();
-    desktop_vault_canary::insert_once(other_database.pool(), &copied_row).await.unwrap();
+        persisted.dataset_id(),
+        persisted.deployment_id(),
+        persisted.tenant_id(),
+        persisted.key_id(),
+        persisted.encrypted_canary().to_owned(),
+    )
+    .unwrap();
+    desktop_vault_canary::insert_once(other_database.pool(), &copied_row)
+        .await
+        .unwrap();
     let other_proof = desktop_vault_canary::verify_persisted(
-        &other_database, &master, proof.dataset_id(), deployment, tenant, proof.key_id()
-    ).await.unwrap();
+        &other_database,
+        &master,
+        proof.dataset_id(),
+        deployment,
+        tenant,
+        proof.key_id(),
+    )
+    .await
+    .unwrap();
     assert_eq!(other_proof.dataset_id(), proof.dataset_id());
     assert_eq!(other_proof.key_id(), proof.key_id());
-    let other_package = loaded_package(other_installation.authority().auth_context().tenant().as_str());
+    let other_package = loaded_package(
+        other_installation
+            .authority()
+            .auth_context()
+            .tenant()
+            .as_str(),
+    );
     foundation_install_desktop_ddl_observer(&other_database).await;
     assert_eq!(
-        desktop_vault_canary::verify_pre_upgrade_layout(other_database.pool()).await.unwrap().native_version(),
+        desktop_vault_canary::verify_pre_upgrade_layout(other_database.pool())
+            .await
+            .unwrap()
+            .native_version(),
         native::NATIVE_0045_VERSION
     );
-    foundation_desktop_assert_canary_refusal(&other_installation, &other_database, &other_package, &proof).await;
-    assert_eq!(foundation_desktop_identity(&other_database).await, other_identity);
+    foundation_desktop_assert_canary_refusal(
+        &other_installation,
+        &other_database,
+        &other_package,
+        &proof,
+    )
+    .await;
+    assert_eq!(
+        foundation_desktop_identity(&other_database).await,
+        other_identity
+    );
     foundation_remove_desktop_ddl_observer(&other_database).await;
     drop(other_proof);
     other_database.close();
@@ -1248,8 +1418,19 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
 
     let ddl_before = foundation_desktop_ddl_facts(&database).await;
     let before_upgrade = bootstrap_write_counts(&database).await;
-    assert_eq!(before_upgrade.ledger, i64::from(native::NATIVE_0045_VERSION - 12));
-    assert_eq!((before_upgrade.users,before_upgrade.agents,before_upgrade.channels,before_upgrade.memberships), (0,0,0,0));
+    assert_eq!(
+        before_upgrade.ledger,
+        i64::from(native::NATIVE_0045_VERSION - 12)
+    );
+    assert_eq!(
+        (
+            before_upgrade.users,
+            before_upgrade.agents,
+            before_upgrade.channels,
+            before_upgrade.memberships
+        ),
+        (0, 0, 0, 0)
+    );
     let completion = installation
         .complete_postgres_after_vault(&database, &package, DatabaseOrigin::RustManaged, &proof)
         .await
@@ -1262,39 +1443,77 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
     let last = upgraded_ledger.last().unwrap();
     assert_eq!(last.0, native::NATIVE_0046_VERSION);
     assert_eq!(last.1, native::NATIVE_0046_NAME);
-    assert_eq!(last.2, openbot_domain::audit::hash::Sha256Digest::of(native::NATIVE_0046_SQL.as_bytes()).to_hex());
+    assert_eq!(
+        last.2,
+        openbot_domain::audit::hash::Sha256Digest::of(native::NATIVE_0046_SQL.as_bytes()).to_hex()
+    );
     let ddl_after = foundation_desktop_ddl_facts(&database).await;
-    let added = &ddl_after["events"].as_array().unwrap()[ddl_before["events"].as_array().unwrap().len()..];
-    assert!(!added.is_empty(), "real native46 upgrade must reach observed original DDL");
+    let added =
+        &ddl_after["events"].as_array().unwrap()[ddl_before["events"].as_array().unwrap().len()..];
+    assert!(
+        !added.is_empty(),
+        "real native46 upgrade must reach observed original DDL"
+    );
     assert!(added.iter().any(|event| event["tag"] == "CREATE TABLE"));
     let transactions: std::collections::BTreeSet<_> = added
-        .iter().map(|event| event["xid8"].as_str().unwrap()).collect();
-    assert_eq!(transactions.len(), 1, "native46 DDL must stay in one original transaction");
-    assert!(added.iter().all(|event| event["xid32"].as_str() == Some(last.4.as_str())));
+        .iter()
+        .map(|event| event["xid8"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        transactions.len(),
+        1,
+        "native46 DDL must stay in one original transaction"
+    );
+    assert!(
+        added
+            .iter()
+            .all(|event| event["xid32"].as_str() == Some(last.4.as_str()))
+    );
     assert_eq!(
         ddl_after["calls"].as_i64().unwrap() - ddl_before["calls"].as_i64().unwrap(),
         i64::try_from(added.len()).unwrap()
     );
     assert_eq!(foundation_desktop_identity(&database).await, identity);
     let upgraded_facts = foundation_desktop_current_facts(&database).await;
-    let persisted_after = desktop_vault_canary::read(database.pool(), deployment, tenant).await.unwrap().unwrap();
+    let persisted_after = desktop_vault_canary::read(database.pool(), deployment, tenant)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(persisted_after.dataset_id(), persisted.dataset_id());
     assert_eq!(persisted_after.key_id(), persisted.key_id());
-    assert_eq!(persisted_after.encrypted_canary(), persisted.encrypted_canary());
+    assert_eq!(
+        persisted_after.encrypted_canary(),
+        persisted.encrypted_canary()
+    );
     let reverified = desktop_vault_canary::verify_persisted(
-        &database, &master, proof.dataset_id(), deployment, tenant, proof.key_id()
-    ).await.unwrap();
+        &database,
+        &master,
+        proof.dataset_id(),
+        deployment,
+        tenant,
+        proof.key_id(),
+    )
+    .await
+    .unwrap();
     assert_eq!(reverified.dataset_id(), proof.dataset_id());
     let before_restart = bootstrap_write_counts(&database).await;
     let ddl_before_restart = foundation_desktop_ddl_facts(&database).await;
     let restarted = installation
-        .complete_postgres_after_vault(&database, &package, DatabaseOrigin::RustManaged, &reverified)
+        .complete_postgres_after_vault(
+            &database,
+            &package,
+            DatabaseOrigin::RustManaged,
+            &reverified,
+        )
         .await
         .unwrap();
     assert_eq!(restarted.package.memberships_granted, 0);
     assert_eq!(bootstrap_write_counts(&database).await, before_restart);
     assert_eq!(foundation_desktop_ledger(&database).await, upgraded_ledger);
-    assert_eq!(foundation_desktop_ddl_facts(&database).await, ddl_before_restart);
+    assert_eq!(
+        foundation_desktop_ddl_facts(&database).await,
+        ddl_before_restart
+    );
     foundation_remove_desktop_ddl_observer(&database).await;
     drop(reverified);
     drop(proof);
@@ -1310,33 +1529,70 @@ async fn foundation_original45_desktop_canary_upgrades_and_current_fresh_matches
         running: mut fresh_running,
     } = start_desktop_fixture(None).await;
     let client = fresh_database.pool().get().await.unwrap();
-    let public_tables: i64 = client.query_one(
-        "SELECT count(*)::bigint FROM pg_catalog.pg_class c \
+    let public_tables: i64 = client
+        .query_one(
+            "SELECT count(*)::bigint FROM pg_catalog.pg_class c \
          JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace \
-         WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f')", &[]
-    ).await.unwrap().get(0);
+         WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
     assert_eq!(public_tables, 0);
     drop(client);
-    let fresh_package = loaded_package(fresh_installation.authority().auth_context().tenant().as_str());
+    let fresh_package = loaded_package(
+        fresh_installation
+            .authority()
+            .auth_context()
+            .tenant()
+            .as_str(),
+    );
     let fresh_proof = fresh_database.fresh_initialization_proof().unwrap();
-    let fresh_origin = fresh_installation.initialize_postgres_schema(&fresh_database, &fresh_package, &fresh_proof)
-        .await.unwrap();
+    let fresh_origin = fresh_installation
+        .initialize_postgres_schema(&fresh_database, &fresh_package, &fresh_proof)
+        .await
+        .unwrap();
     assert_eq!(fresh_origin, DatabaseOrigin::Fresh);
     let fresh_canary = verified_canary(&fresh_database, &fresh_installation).await;
-    assert_eq!(fresh_canary.deployment_id(), fresh_installation.authority().auth_context().deployment().as_str());
-    assert_eq!(fresh_canary.tenant_id(), fresh_installation.authority().auth_context().tenant().as_str());
+    assert_eq!(
+        fresh_canary.deployment_id(),
+        fresh_installation
+            .authority()
+            .auth_context()
+            .deployment()
+            .as_str()
+    );
+    assert_eq!(
+        fresh_canary.tenant_id(),
+        fresh_installation
+            .authority()
+            .auth_context()
+            .tenant()
+            .as_str()
+    );
     assert_eq!(fresh_canary.key_version(), 1);
     let fresh_identity = foundation_desktop_identity(&fresh_database).await;
     assert_ne!(fresh_identity.0, identity.0);
-    let fresh_completion = fresh_installation.complete_postgres_after_vault(
-        &fresh_database, &fresh_package, fresh_origin, &fresh_canary
-    ).await.unwrap();
+    let fresh_completion = fresh_installation
+        .complete_postgres_after_vault(&fresh_database, &fresh_package, fresh_origin, &fresh_canary)
+        .await
+        .unwrap();
     assert_eq!(fresh_completion.database_origin, DatabaseOrigin::Fresh);
     assert_eq!(fresh_completion.package.memberships_granted, 1);
-    assert_eq!(foundation_desktop_current_facts(&fresh_database).await, upgraded_facts);
-    assert_eq!(foundation_desktop_identity(&fresh_database).await, fresh_identity);
+    assert_eq!(
+        foundation_desktop_current_facts(&fresh_database).await,
+        upgraded_facts
+    );
+    assert_eq!(
+        foundation_desktop_identity(&fresh_database).await,
+        fresh_identity
+    );
     let fresh_ledger = foundation_desktop_ledger(&fresh_database).await;
-    assert_eq!(fresh_ledger.iter().map(|row| row.0).collect::<Vec<_>>(), (13..=native::NATIVE_0046_VERSION).collect::<Vec<_>>());
+    assert_eq!(
+        fresh_ledger.iter().map(|row| row.0).collect::<Vec<_>>(),
+        (13..=native::NATIVE_0046_VERSION).collect::<Vec<_>>()
+    );
     assert_eq!(fresh_ledger.last().unwrap().1, native::NATIVE_0046_NAME);
     assert_eq!(fresh_ledger.last().unwrap().2, last.2);
     drop(fresh_canary);

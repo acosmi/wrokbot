@@ -1,8 +1,6 @@
 //! Current preference schema facts, old nullable fields and fixed baseline registry.
 mod harness;
-use openbot_infra::db::{
-    baseline, desktop_vault_canary, native, pool, schema_facts, tables,
-};
+use openbot_infra::db::{baseline, desktop_vault_canary, native, pool, schema_facts, tables};
 use tokio_postgres::error::SqlState;
 
 #[tokio::test]
