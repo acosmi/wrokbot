@@ -125,6 +125,8 @@ pub mod runtime_capability_facts;
 // the standalone Desktop Vault/bootstrap graph only needs the lower-level `vault` module.
 #[cfg(feature = "server-runtime")]
 pub mod credential_admin;
+#[cfg(feature = "server-runtime")]
+pub mod custom_model_catalog;
 pub mod db;
 #[cfg(feature = "server-runtime")]
 pub mod gateway_account;

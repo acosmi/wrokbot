@@ -45,6 +45,17 @@ pub type AppEventStream = Pin<Box<dyn Stream<Item = AppEvent> + Send>>;
 /// 不生成用户可见文案 —— 错误以 `AppError` 的稳定 code 穿越边界，由 GUI 本地化。
 #[async_trait]
 pub trait ApplicationService: Send + Sync {
+    /// 一次消费原目录应答及其原 key；未装配默认关闭。
+    fn take_custom_model_catalog_delivery(
+        &self,
+        _auth: AuthContext,
+        _reply: AppReply,
+    ) -> Result<crate::PublicCustomModelCatalogDelivery, AppError> {
+        Err(AppError::DependencyUnavailable {
+            dependency: "custom_model_catalog",
+        })
+    }
+
     /// Consume one real pending body selected by the original closed read command.
     fn take_artifact_read_delivery(
         &self,
@@ -231,6 +242,7 @@ pub const fn command_kind(command: &AppCommand) -> &'static str {
         AppCommand::RevokeAgentCallbackToken { .. } => "revoke_agent_callback_token",
         AppCommand::ListMcpConnections => "list_mcp_connections",
         AppCommand::ListModelConnections(_) => "list_model_connections",
+        AppCommand::ListCustomModelCatalog(_) => "list_custom_model_catalog",
         AppCommand::GetModelConnection { .. } => "get_model_connection",
         AppCommand::CreateModelConnection(_) => "create_model_connection",
         AppCommand::UpdateModelConnection { .. } => "update_model_connection",

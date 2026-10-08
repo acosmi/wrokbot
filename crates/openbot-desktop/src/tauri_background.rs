@@ -1445,6 +1445,17 @@ pub(crate) async fn prepare_desktop_local_runtime(
                 });
             }
         };
+    let custom_model_catalog_provenance =
+        match proof.custom_model_catalog_provenance(prepared_data_plane.database()) {
+            Some(provenance) => provenance,
+            None => {
+                return Err(if prepared_data_plane.shutdown().await.is_ok() {
+                    DesktopLocalRuntimeError::DataPlane
+                } else {
+                    DesktopLocalRuntimeError::FailureCleanup
+                });
+            }
+        };
     let data_plane = prepared_data_plane
         .complete_after_vault(
             &package,
@@ -1609,6 +1620,16 @@ pub(crate) async fn prepare_desktop_local_runtime(
             );
         }
     };
+    if !custom_model_catalog_provenance.matches_installation(data_plane.authority())
+        || assembly
+            .custom_model_catalog_inventory
+            .adopt_desktop_provenance(custom_model_catalog_provenance)
+            .is_err()
+    {
+        return Err(
+            cleanup_assembly(data_plane, assembly, DesktopLocalRuntimeError::Application).await,
+        );
+    }
     let agent_host = match start_desktop_agent_host(DesktopAgentHostInput {
         pool,
         listener_database: agent_listener_database,
@@ -1678,11 +1699,39 @@ pub(crate) async fn prepare_desktop_local_runtime(
         )
         .await);
     }
+    #[cfg(target_os = "macos")]
+    if current_identity_source
+        .install_custom_model_catalog_inventory(&assembly.custom_model_catalog_inventory)
+        .is_err()
+    {
+        return Err(cleanup_agent_host(
+            data_plane,
+            assembly,
+            agent_host,
+            DesktopLocalRuntimeError::Host,
+        )
+        .await);
+    }
     let protocol = match opened_protocol {
         Ok(protocol) => {
             #[cfg(target_os = "macos")]
+            let protocol = match protocol
+                .with_remember_preference_identity_source(current_identity_source.clone())
+            {
+                Ok(protocol) => protocol,
+                Err(_) => {
+                    return Err(cleanup_agent_host(
+                        data_plane,
+                        assembly,
+                        agent_host,
+                        DesktopLocalRuntimeError::Host,
+                    )
+                    .await);
+                }
+            };
+            #[cfg(target_os = "macos")]
             let protocol =
-                match protocol.with_remember_preference_identity_source(current_identity_source) {
+                match protocol.with_custom_model_catalog_identity_source(current_identity_source) {
                     Ok(protocol) => protocol,
                     Err(_) => {
                         return Err(cleanup_agent_host(

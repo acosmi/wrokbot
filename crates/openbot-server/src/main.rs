@@ -490,6 +490,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         app_url: server.app_url.clone(),
     })
     .await?;
+    if let Some(resolver) = &remember_session_resolver {
+        resolver
+            .install_custom_model_catalog_inventory(
+                &application_assembly.custom_model_catalog_inventory,
+            )
+            .map_err(|_| startup_error("custom_model_catalog"))?;
+    } else if let Some(resolver) = &remember_single_user_resolver {
+        resolver
+            .install_custom_model_catalog_inventory(
+                &application_assembly.custom_model_catalog_inventory,
+                &pool,
+            )
+            .map_err(|_| startup_error("custom_model_catalog"))?;
+    } else {
+        return Err(startup_error("custom_model_catalog").into());
+    }
     let application = application_assembly.application.clone();
     let runtime_capability_facts = application_assembly.runtime_capability_facts.clone();
     let run_runtime = application_assembly.run_runtime.clone();

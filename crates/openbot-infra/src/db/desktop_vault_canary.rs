@@ -67,6 +67,81 @@ pub struct VerifiedDesktopVaultCanary {
     encrypted_canary_digest: Sha256Digest,
 }
 
+/// Opaque catalogue enrollment from a verified canary and its actual Local DB owner.
+#[cfg(feature = "server-runtime")]
+pub struct VerifiedDesktopCustomModelCatalogProvenance {
+    pool: Pool,
+    system_identifier: String,
+    database_oid: u32,
+    dataset_id: String,
+    deployment_id: String,
+    tenant_id: String,
+    key_id: String,
+    key_version: i32,
+    encrypted_canary_digest: Sha256Digest,
+}
+
+#[cfg(feature = "server-runtime")]
+impl VerifiedDesktopCustomModelCatalogProvenance {
+    /// Compare the original actual manager and both verified namespace keys.
+    #[must_use]
+    pub fn matches_pool_scope(
+        &self,
+        pool: &Pool,
+        deployment: &openbot_contracts::ids::DeploymentId,
+        tenant: &openbot_contracts::ids::TenantId,
+    ) -> bool {
+        std::ptr::eq(self.pool.manager(), pool.manager())
+            && self.deployment_id == deployment.as_str()
+            && self.tenant_id == tenant.as_str()
+    }
+
+    /// Installation equality alone does not grant current window or DB authority.
+    #[must_use]
+    pub fn matches_installation(
+        &self,
+        installation: &crate::auth::single_user::desktop_local::DesktopLocalAuthority,
+    ) -> bool {
+        let auth = installation.auth_context();
+        self.deployment_id == auth.deployment().as_str() && self.tenant_id == auth.tenant().as_str()
+    }
+
+    /// Compare the physical and cryptographic tuple decoded by the final actual SQL.
+    pub(crate) fn matches_current_row(
+        &self,
+        row: &tokio_postgres::Row,
+    ) -> Result<bool, RowDecodeError> {
+        fn column<T: for<'a> tokio_postgres::types::FromSql<'a>>(
+            row: &tokio_postgres::Row,
+            name: &'static str,
+        ) -> Result<Option<T>, RowDecodeError> {
+            row.try_get(name)
+                .map_err(|source| RowDecodeError::column(TABLE, name, source))
+        }
+        let encrypted: Option<String> = column(row, "catalog_canary_encrypted")?;
+        Ok(
+            column::<String>(row, "catalog_database_system_identifier")?.as_deref()
+                == Some(self.system_identifier.as_str())
+                && column::<u32>(row, "catalog_database_oid")? == Some(self.database_oid)
+                && column::<String>(row, "catalog_canary_dataset")?.as_deref()
+                    == Some(self.dataset_id.as_str())
+                && column::<String>(row, "catalog_canary_deployment")?.as_deref()
+                    == Some(self.deployment_id.as_str())
+                && column::<String>(row, "catalog_canary_tenant")?.as_deref()
+                    == Some(self.tenant_id.as_str())
+                && column::<String>(row, "catalog_canary_key")?.as_deref()
+                    == Some(self.key_id.as_str())
+                && column::<i32>(row, "catalog_canary_key_version")? == Some(self.key_version)
+                && column::<i16>(row, "catalog_canary_schema")? == Some(1)
+                && encrypted.as_ref().is_some_and(|value| {
+                    !value.is_empty()
+                        && value.len() <= 4096
+                        && Sha256Digest::of(value.as_bytes()) == self.encrypted_canary_digest
+                }),
+        )
+    }
+}
+
 /// Sealed same-database facts copied only from a verified canary and its actual Local DB owner.
 /// This is neither an installation-string constructor nor an artifact authority.
 pub struct VerifiedDesktopRememberPreferenceProvenance {
@@ -218,6 +293,28 @@ impl ValidatedDesktopVaultLayout {
 }
 
 impl VerifiedDesktopVaultCanary {
+    /// Copy sealed facts only for the exact original verified database owner token.
+    #[cfg(feature = "server-runtime")]
+    #[must_use]
+    pub fn custom_model_catalog_provenance(
+        &self,
+        database: &DesktopLocalDatabase,
+    ) -> Option<VerifiedDesktopCustomModelCatalogProvenance> {
+        database.owns_token(&self.database_owner).then(|| {
+            VerifiedDesktopCustomModelCatalogProvenance {
+                pool: database.clone_pool(),
+                system_identifier: self.system_identifier.clone(),
+                database_oid: self.database_oid,
+                dataset_id: self.dataset_id.clone(),
+                deployment_id: self.deployment_id.clone(),
+                tenant_id: self.tenant_id.clone(),
+                key_id: self.key_id.clone(),
+                key_version: self.key_version,
+                encrypted_canary_digest: self.encrypted_canary_digest,
+            }
+        })
+    }
+
     /// Copy only after this exact verified proof is bound to the actual Local database owner.
     /// Runtime repository observations must still recheck the tuple in their own transaction.
     #[doc(hidden)]
