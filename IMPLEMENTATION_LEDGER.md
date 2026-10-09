@@ -1813,3 +1813,10 @@ Limits: Server body checks can reject after headers; allocation ownership is not
 ### Agent profile read cancellation
 
 The selected Agent profile panel now owns a browser cancellation signal through its original detail response decoding. Retiring that panel synchronously aborts a pending GET, while generation checks continue to reject stale updates. Retry deduplication, management permissions and the original detail reader used by NewChannel, Bot and Conversation remain unchanged. This change adds no backend endpoint or dependency; exact-candidate verification is recorded separately.
+
+
+2026-10-09 — V7-IMPL-025 finite product acceptance: ordinary trusted instances can consume a versioned custom model selection from the current database. Native 0047 persists the selected connection and catalog revisions in the durable run snapshot. Application, agent, HTTP and Desktop bindings construct the provider context and recheck the original dataset before each provider start or retry; stale selections detected by those checks are rejected before a provider request.
+
+The exact product candidate ceab5f7147cc03f6451cbfde5bc2e2d70f30a411, tree 8ce9bf27cee045a406975d3c3f25571b64056d35, passed 18 directed cases and one strict Infra check in three successful original execution sessions, with zero failed and zero ignored cases. These include real timely and late rollback acknowledgement regressions. A different author independently accepted the finite product scope. The unchanged scope retains 75 directed cases and six strict checks from the previous tested candidate; these are original-source results, not new executions. All 14 acceptance matrices and full typed schema checks were retained.
+
+The final publication candidate is composed separately with the latest main and this append-only public ledger entry. Delivery is not yet claimed by this product acceptance entry. SDK gateway, account bridge, general recovery and full model readiness remain open, as do individual production PG and HTTP driver join proofs. Earlier preparation failures, original warnings and the earlier Desktop native API UNKNOWN result retain their original records.
