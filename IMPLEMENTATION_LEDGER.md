@@ -1831,3 +1831,15 @@ The exact product candidate 238539ca8ce0e4d1ccab5633dfae05a81c088709, tree 07fbb
 History remains visible: the first owned-PostgreSQL attempt failed at preflight before Cargo ran; the second ten-case attempt produced two passes and eight failures during current-schema initialization. The new oracle includes an independently predicted four-character correction to two cast renderings from the pinned PostgreSQL deparser. Product SQL and strict comparison logic retain their previous bytes. Original libtest logfile deprecation and missing-LLVM debug-symbol stripping warnings remain recorded; compilation and tests completed. Earlier preparation failures and the original oracle seal also retain their records.
 
 The publication candidate and normal delivery are recorded separately; this entry claims finite product acceptance only. Journal data and schema establish no SDK sending, callback handling, account bridge, authorization scheduling, Host permission, recovery or model readiness. Individual production PG/HTTP driver joins remain unproven, and overall backend completion remains open.
+
+### V7-IMPL-027 — owned initial OAuth kernel
+
+Product candidate: `95553014c411b35d85b9a812fd175362fb685160`. A different author independently accepted this finite product scope; publication and merge are recorded separately.
+
+Adds a private kernel around the pinned SDK's registration and authorization-code helpers. It captures the complete original request, drops the owning helper future before transferring input ownership, and retains the original cancellation parent, clock and saved deadline. Replies have bounded headers/body and closed field sets; token expiry uses the original helper start. A continuous owner erases all six SDK token-set strings.
+
+Actual directed results: four strict checks passed; 40 unique tests passed, with 0 failed and 0 ignored. Another 477 tests were filtered out. The SDK dependency guard passed on its second attempt.
+
+Preserved history: the initial strict attempt failed on two lint findings. The first guard attempt failed because Python 3.9 lacked tomllib; selecting the existing Python 3.12.14 runtime resolved that environment failure without product changes. The Desktop and unit-test builds each reported rust-objcopy strip SIGABRT(6)/missing libLLVM.dylib; controlled Cargo and bound binary list/run commands exited 0.
+
+Host admission, dispatch, persistent send admission/acknowledgement, enrollment, SDK/bridge readiness and recovery remain open. Erasure evidence covers owned storage; allocator history, library copies and driver joins remain unproven.
