@@ -696,6 +696,7 @@ pub const NATIVE_0028_TABLES: &[TableSpec] = &[TableSpec {
 }];
 
 pub mod custom_model_catalogs;
+pub mod gateway_authorization_attempts;
 pub mod model_connection_secrets;
 pub mod model_connections;
 pub mod oauth_refresh_operations;
@@ -719,6 +720,13 @@ pub const NATIVE_0047_INTERNAL_TABLES: &[TableSpec] = &[TableSpec {
     name: run_model_selection_v2_snapshots::TABLE_NAME,
     columns: run_model_selection_v2_snapshots::COLUMNS,
     column_specs: run_model_selection_v2_snapshots::COLUMN_SPECS,
+}];
+
+/// Native0048 internal authorization-attempt data; never a public parity entry.
+pub const NATIVE_0048_INTERNAL_TABLES: &[TableSpec] = &[TableSpec {
+    name: gateway_authorization_attempts::TABLE_NAME,
+    columns: gateway_authorization_attempts::COLUMNS,
+    column_specs: gateway_authorization_attempts::COLUMN_SPECS,
 }];
 
 /// Native 0030 personal model connections and their scoped Vault ciphertext records.

@@ -30,6 +30,7 @@ pub mod custom_model_v2_schema;
 pub mod desktop_local;
 pub mod desktop_vault_canary;
 pub mod fresh;
+pub mod gateway_authorization_schema;
 pub mod initialization;
 pub mod native;
 pub(crate) mod occupancy;
