@@ -133,6 +133,8 @@ pub mod gateway_account;
 #[cfg(feature = "server-runtime")]
 pub mod gateway_authority;
 #[cfg(feature = "server-runtime")]
+mod gateway_authorization;
+#[cfg(feature = "server-runtime")]
 pub mod gateway_transport;
 #[cfg(feature = "server-runtime")]
 pub mod google_drive;
