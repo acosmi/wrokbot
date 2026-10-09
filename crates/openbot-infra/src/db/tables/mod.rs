@@ -700,6 +700,7 @@ pub mod model_connection_secrets;
 pub mod model_connections;
 pub mod oauth_refresh_operations;
 pub mod remember_effect_receipts;
+pub mod run_model_selection_v2_snapshots;
 pub mod run_model_selections;
 pub mod sdk_gateway_connections;
 pub mod sdk_gateway_operations;
@@ -711,6 +712,13 @@ pub const NATIVE_0031_TABLES: &[TableSpec] = &[TableSpec {
     name: run_model_selections::TABLE_NAME,
     columns: run_model_selections::COLUMNS,
     column_specs: run_model_selections::COLUMN_SPECS,
+}];
+
+/// Native0047 internal historical V2 snapshots; never a public-table parity entry.
+pub const NATIVE_0047_INTERNAL_TABLES: &[TableSpec] = &[TableSpec {
+    name: run_model_selection_v2_snapshots::TABLE_NAME,
+    columns: run_model_selection_v2_snapshots::COLUMNS,
+    column_specs: run_model_selection_v2_snapshots::COLUMN_SPECS,
 }];
 
 /// Native 0030 personal model connections and their scoped Vault ciphertext records.

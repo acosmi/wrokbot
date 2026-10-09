@@ -1,0 +1,1601 @@
+{
+  "allowedTableAclStates": [
+    {
+      "aclIsNull": true,
+      "rawAcl": null
+    },
+    {
+      "aclIsNull": false,
+      "rawAcl": [
+        {
+          "grantable": false,
+          "grantee": "original_model_connections_owner",
+          "grantor": "original_model_connections_owner",
+          "privilege": "DELETE"
+        },
+        {
+          "grantable": false,
+          "grantee": "original_model_connections_owner",
+          "grantor": "original_model_connections_owner",
+          "privilege": "INSERT"
+        },
+        {
+          "grantable": false,
+          "grantee": "original_model_connections_owner",
+          "grantor": "original_model_connections_owner",
+          "privilege": "MAINTAIN"
+        },
+        {
+          "grantable": false,
+          "grantee": "original_model_connections_owner",
+          "grantor": "original_model_connections_owner",
+          "privilege": "REFERENCES"
+        },
+        {
+          "grantable": false,
+          "grantee": "original_model_connections_owner",
+          "grantor": "original_model_connections_owner",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "original_model_connections_owner",
+          "grantor": "original_model_connections_owner",
+          "privilege": "TRIGGER"
+        },
+        {
+          "grantable": false,
+          "grantee": "original_model_connections_owner",
+          "grantor": "original_model_connections_owner",
+          "privilege": "TRUNCATE"
+        },
+        {
+          "grantable": false,
+          "grantee": "original_model_connections_owner",
+          "grantor": "original_model_connections_owner",
+          "privilege": "UPDATE"
+        }
+      ]
+    }
+  ],
+  "format": "custom-model-v2-snapshots-oracle-v1",
+  "schema": {
+    "constraints": [
+      {
+        "columns": [
+          {
+            "attributeNumber": 1,
+            "name": "run_id",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "FOREIGN KEY (run_id) REFERENCES runs(run_id) ON UPDATE RESTRICT ON DELETE CASCADE",
+        "foreignEqualityOperators": [
+          {
+            "family": "fkFk",
+            "function": {
+              "arguments": "text, text",
+              "name": "texteq",
+              "schema": "pg_catalog"
+            },
+            "leftType": "text",
+            "name": "=",
+            "ordinal": 1,
+            "resultType": "boolean",
+            "rightType": "text",
+            "schema": "pg_catalog"
+          },
+          {
+            "family": "pkFk",
+            "function": {
+              "arguments": "text, text",
+              "name": "texteq",
+              "schema": "pg_catalog"
+            },
+            "leftType": "text",
+            "name": "=",
+            "ordinal": 1,
+            "resultType": "boolean",
+            "rightType": "text",
+            "schema": "pg_catalog"
+          },
+          {
+            "family": "pkPk",
+            "function": {
+              "arguments": "text, text",
+              "name": "texteq",
+              "schema": "pg_catalog"
+            },
+            "leftType": "text",
+            "name": "=",
+            "ordinal": 1,
+            "resultType": "boolean",
+            "rightType": "text",
+            "schema": "pg_catalog"
+          }
+        ],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "f",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_run_fkey",
+        "namespace": "openbot_internal",
+        "noInherit": true,
+        "reference": {
+          "columns": [
+            {
+              "attributeNumber": 1,
+              "name": "run_id",
+              "ordinal": 1
+            }
+          ],
+          "deleteAction": "c",
+          "deleteSetColumns": null,
+          "match": "s",
+          "referencedKeys": [
+            {
+              "deferrable": false,
+              "deferred": false,
+              "definition": "PRIMARY KEY (run_id)",
+              "kind": "p",
+              "name": "runs_pkey",
+              "validated": true
+            }
+          ],
+          "relation": {
+            "name": "runs",
+            "schema": "public"
+          },
+          "updateAction": "r"
+        },
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": {
+          "name": "runs_pkey",
+          "schema": "public"
+        },
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 1,
+            "name": "run_id",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (run_id)",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "p",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_pkey",
+        "namespace": "openbot_internal",
+        "noInherit": true,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": {
+          "name": "run_model_selection_v2_snapshots_pkey",
+          "schema": "openbot_internal"
+        },
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 10,
+            "name": "endpoint",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((octet_length(endpoint) >= 1) AND (octet_length(endpoint) <= 2048)))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_endpoint_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 11,
+            "name": "model",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((octet_length(model) >= 1) AND (octet_length(model) <= 512)))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_model_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 13,
+            "name": "snapshot_schema",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((snapshot_schema = 2))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_snapshot_schema_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 14,
+            "name": "source",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((source = 'custom'::text))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_source_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 15,
+            "name": "model_id",
+            "ordinal": 1
+          },
+          {
+            "attributeNumber": 6,
+            "name": "connection_id",
+            "ordinal": 2
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((octet_length(model_id) = 43) AND (model_id = ('custom:'::text || (connection_id)::text))))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_model_id_shape",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 16,
+            "name": "catalog_revision",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((catalog_revision > 0))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_catalog_revision_positive",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 17,
+            "name": "dataset_id",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((octet_length(dataset_id) >= 1) AND (octet_length(dataset_id) <= 512)) AND (dataset_id !~ '[\u0001-\u001f-]'::text)))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_dataset_id_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 18,
+            "name": "dataset_binding_schema",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((dataset_binding_schema = 1))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_dataset_binding_schema_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 19,
+            "name": "dataset_initial_origin",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((dataset_initial_origin = ANY (ARRAY['desktop_canary'::text, 'server_first_adoption'::text])))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_dataset_initial_origin_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 2,
+            "name": "deployment_id",
+            "ordinal": 1
+          },
+          {
+            "attributeNumber": 3,
+            "name": "tenant_id",
+            "ordinal": 2
+          },
+          {
+            "attributeNumber": 4,
+            "name": "owner_user_id",
+            "ordinal": 3
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((((octet_length(deployment_id) >= 1) AND (octet_length(deployment_id) <= 512)) AND (deployment_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(tenant_id) >= 1) AND (octet_length(tenant_id) <= 512)) AND (tenant_id !~ '[\u0001-\u001f-]'::text) AND ((octet_length(owner_user_id) >= 1) AND (octet_length(owner_user_id) <= 512)) AND (owner_user_id !~ '[\u0001-\u001f-]'::text)))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_scope_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 21,
+            "name": "credential_policy",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((credential_policy = 'custom_fixed_secret_revision_v1'::text))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_credential_policy_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 5,
+            "name": "auth_generation",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((auth_generation >= 0))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_auth_generation_nonnegative",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 7,
+            "name": "connection_revision",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((connection_revision > 0))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_connection_revision_positive",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      },
+      {
+        "columns": [
+          {
+            "attributeNumber": 9,
+            "name": "protocol",
+            "ordinal": 1
+          }
+        ],
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((protocol = ANY (ARRAY['openai_chat_completions'::text, 'openai_responses'::text, 'anthropic_messages'::text])))",
+        "foreignEqualityOperators": [],
+        "hasParent": false,
+        "inheritanceCount": 0,
+        "kind": "c",
+        "local": true,
+        "name": "run_model_selection_v2_snapshots_protocol_check",
+        "namespace": "openbot_internal",
+        "noInherit": false,
+        "reference": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "supportingIndex": null,
+        "validated": true
+      }
+    ],
+    "format": "custom-model-v2-snapshots-schema-v1",
+    "functions": [
+      {
+        "allArgumentTypes": [],
+        "allArgumentTypesIsNull": true,
+        "argumentDefaults": null,
+        "argumentModes": null,
+        "argumentNames": null,
+        "binary": null,
+        "configuration": null,
+        "cost": 1,
+        "defaultArgumentCount": 0,
+        "definition": "CREATE OR REPLACE FUNCTION pg_catalog.\"RI_FKey_cascade_del\"()\n RETURNS trigger\n LANGUAGE internal\n PARALLEL SAFE STRICT\nAS $function$RI_FKey_cascade_del$function$\n",
+        "identity": {
+          "arguments": "",
+          "name": "RI_FKey_cascade_del",
+          "schema": "pg_catalog"
+        },
+        "inputArgumentCount": 0,
+        "inputTypes": [],
+        "isSyncFunction": false,
+        "kind": "f",
+        "language": "internal",
+        "leakproof": false,
+        "parallel": "s",
+        "returnType": {
+          "formatted": "trigger",
+          "name": "trigger",
+          "schema": "pg_catalog"
+        },
+        "rows": 0,
+        "securityDefiner": false,
+        "setReturning": false,
+        "source": "RI_FKey_cascade_del",
+        "sqlBody": null,
+        "strict": true,
+        "supportFunction": null,
+        "transformTypes": [],
+        "transformTypesIsNull": true,
+        "variadicType": null,
+        "volatility": "v"
+      },
+      {
+        "allArgumentTypes": [],
+        "allArgumentTypesIsNull": true,
+        "argumentDefaults": null,
+        "argumentModes": null,
+        "argumentNames": null,
+        "binary": null,
+        "configuration": null,
+        "cost": 1,
+        "defaultArgumentCount": 0,
+        "definition": "CREATE OR REPLACE FUNCTION pg_catalog.\"RI_FKey_check_ins\"()\n RETURNS trigger\n LANGUAGE internal\n PARALLEL SAFE STRICT\nAS $function$RI_FKey_check_ins$function$\n",
+        "identity": {
+          "arguments": "",
+          "name": "RI_FKey_check_ins",
+          "schema": "pg_catalog"
+        },
+        "inputArgumentCount": 0,
+        "inputTypes": [],
+        "isSyncFunction": false,
+        "kind": "f",
+        "language": "internal",
+        "leakproof": false,
+        "parallel": "s",
+        "returnType": {
+          "formatted": "trigger",
+          "name": "trigger",
+          "schema": "pg_catalog"
+        },
+        "rows": 0,
+        "securityDefiner": false,
+        "setReturning": false,
+        "source": "RI_FKey_check_ins",
+        "sqlBody": null,
+        "strict": true,
+        "supportFunction": null,
+        "transformTypes": [],
+        "transformTypesIsNull": true,
+        "variadicType": null,
+        "volatility": "v"
+      },
+      {
+        "allArgumentTypes": [],
+        "allArgumentTypesIsNull": true,
+        "argumentDefaults": null,
+        "argumentModes": null,
+        "argumentNames": null,
+        "binary": null,
+        "configuration": null,
+        "cost": 1,
+        "defaultArgumentCount": 0,
+        "definition": "CREATE OR REPLACE FUNCTION pg_catalog.\"RI_FKey_check_upd\"()\n RETURNS trigger\n LANGUAGE internal\n PARALLEL SAFE STRICT\nAS $function$RI_FKey_check_upd$function$\n",
+        "identity": {
+          "arguments": "",
+          "name": "RI_FKey_check_upd",
+          "schema": "pg_catalog"
+        },
+        "inputArgumentCount": 0,
+        "inputTypes": [],
+        "isSyncFunction": false,
+        "kind": "f",
+        "language": "internal",
+        "leakproof": false,
+        "parallel": "s",
+        "returnType": {
+          "formatted": "trigger",
+          "name": "trigger",
+          "schema": "pg_catalog"
+        },
+        "rows": 0,
+        "securityDefiner": false,
+        "setReturning": false,
+        "source": "RI_FKey_check_upd",
+        "sqlBody": null,
+        "strict": true,
+        "supportFunction": null,
+        "transformTypes": [],
+        "transformTypesIsNull": true,
+        "variadicType": null,
+        "volatility": "v"
+      },
+      {
+        "allArgumentTypes": [],
+        "allArgumentTypesIsNull": true,
+        "argumentDefaults": null,
+        "argumentModes": null,
+        "argumentNames": null,
+        "binary": null,
+        "configuration": null,
+        "cost": 1,
+        "defaultArgumentCount": 0,
+        "definition": "CREATE OR REPLACE FUNCTION pg_catalog.\"RI_FKey_restrict_upd\"()\n RETURNS trigger\n LANGUAGE internal\n PARALLEL SAFE STRICT\nAS $function$RI_FKey_restrict_upd$function$\n",
+        "identity": {
+          "arguments": "",
+          "name": "RI_FKey_restrict_upd",
+          "schema": "pg_catalog"
+        },
+        "inputArgumentCount": 0,
+        "inputTypes": [],
+        "isSyncFunction": false,
+        "kind": "f",
+        "language": "internal",
+        "leakproof": false,
+        "parallel": "s",
+        "returnType": {
+          "formatted": "trigger",
+          "name": "trigger",
+          "schema": "pg_catalog"
+        },
+        "rows": 0,
+        "securityDefiner": false,
+        "setReturning": false,
+        "source": "RI_FKey_restrict_upd",
+        "sqlBody": null,
+        "strict": true,
+        "supportFunction": null,
+        "transformTypes": [],
+        "transformTypesIsNull": true,
+        "variadicType": null,
+        "volatility": "v"
+      }
+    ],
+    "indexes": [
+      {
+        "accessMethod": "btree",
+        "aclIsNull": true,
+        "attributeCount": 1,
+        "clustered": false,
+        "collations": [
+          {
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "ordinal": 1
+          }
+        ],
+        "definition": "CREATE UNIQUE INDEX run_model_selection_v2_snapshots_pkey ON openbot_internal.run_model_selection_v2_snapshots USING btree (run_id)",
+        "exclusion": false,
+        "expressions": null,
+        "identity": {
+          "name": "run_model_selection_v2_snapshots_pkey",
+          "schema": "openbot_internal"
+        },
+        "immediate": true,
+        "keyCount": 1,
+        "keys": "1",
+        "kind": "i",
+        "live": true,
+        "nullsNotDistinct": false,
+        "operatorClasses": [
+          {
+            "accessMethod": "btree",
+            "default": true,
+            "family": {
+              "name": "text_ops",
+              "schema": "pg_catalog"
+            },
+            "inputType": "text",
+            "keyType": null,
+            "name": "text_ops",
+            "ordinal": 1,
+            "schema": "pg_catalog"
+          }
+        ],
+        "options": null,
+        "optionsPerKey": "0",
+        "ownerIsOriginal": true,
+        "persistence": "p",
+        "predicate": null,
+        "primary": true,
+        "ready": true,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "replicaIdentity": false,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "accessMethod": "btree",
+        "attributeCount": 1,
+        "clustered": false,
+        "collations": [
+          {
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "default",
+              "provider": "d",
+              "schema": "pg_catalog"
+            },
+            "ordinal": 1
+          }
+        ],
+        "definition": "CREATE UNIQUE INDEX runs_pkey ON public.runs USING btree (run_id)",
+        "exclusion": false,
+        "expressions": null,
+        "identity": {
+          "name": "runs_pkey",
+          "schema": "public"
+        },
+        "immediate": true,
+        "keyCount": 1,
+        "keys": "1",
+        "kind": "i",
+        "live": true,
+        "nullsNotDistinct": false,
+        "operatorClasses": [
+          {
+            "accessMethod": "btree",
+            "default": true,
+            "family": {
+              "name": "text_ops",
+              "schema": "pg_catalog"
+            },
+            "inputType": "text",
+            "keyType": null,
+            "name": "text_ops",
+            "ordinal": 1,
+            "schema": "pg_catalog"
+          }
+        ],
+        "options": null,
+        "optionsPerKey": "0",
+        "persistence": "p",
+        "predicate": null,
+        "primary": true,
+        "ready": true,
+        "relation": {
+          "name": "runs",
+          "schema": "public"
+        },
+        "replicaIdentity": false,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "relations": [
+      {
+        "accessMethod": "heap",
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "original_model_connections_owner",
+            "grantor": "original_model_connections_owner",
+            "privilege": "DELETE"
+          },
+          {
+            "grantable": false,
+            "grantee": "original_model_connections_owner",
+            "grantor": "original_model_connections_owner",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "original_model_connections_owner",
+            "grantor": "original_model_connections_owner",
+            "privilege": "MAINTAIN"
+          },
+          {
+            "grantable": false,
+            "grantee": "original_model_connections_owner",
+            "grantor": "original_model_connections_owner",
+            "privilege": "REFERENCES"
+          },
+          {
+            "grantable": false,
+            "grantee": "original_model_connections_owner",
+            "grantor": "original_model_connections_owner",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "original_model_connections_owner",
+            "grantor": "original_model_connections_owner",
+            "privilege": "TRIGGER"
+          },
+          {
+            "grantable": false,
+            "grantee": "original_model_connections_owner",
+            "grantor": "original_model_connections_owner",
+            "privilege": "TRUNCATE"
+          },
+          {
+            "grantable": false,
+            "grantee": "original_model_connections_owner",
+            "grantor": "original_model_connections_owner",
+            "privilege": "UPDATE"
+          }
+        ],
+        "attributeCount": 21,
+        "checkCount": 14,
+        "columns": [
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "run_id",
+            "notNull": true,
+            "ordinal": 1,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "deployment_id",
+            "notNull": true,
+            "ordinal": 2,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "tenant_id",
+            "notNull": true,
+            "ordinal": 3,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "owner_user_id",
+            "notNull": true,
+            "ordinal": 4,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "auth_generation",
+            "notNull": true,
+            "ordinal": 5,
+            "type": {
+              "formatted": "bigint",
+              "modifier": -1,
+              "name": "int8",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "connection_id",
+            "notNull": true,
+            "ordinal": 6,
+            "type": {
+              "formatted": "uuid",
+              "modifier": -1,
+              "name": "uuid",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "connection_revision",
+            "notNull": true,
+            "ordinal": 7,
+            "type": {
+              "formatted": "bigint",
+              "modifier": -1,
+              "name": "int8",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "secret_id",
+            "notNull": true,
+            "ordinal": 8,
+            "type": {
+              "formatted": "uuid",
+              "modifier": -1,
+              "name": "uuid",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "protocol",
+            "notNull": true,
+            "ordinal": 9,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "endpoint",
+            "notNull": true,
+            "ordinal": 10,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "model",
+            "notNull": true,
+            "ordinal": 11,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "created_at",
+            "notNull": true,
+            "ordinal": 12,
+            "type": {
+              "formatted": "timestamp with time zone",
+              "modifier": -1,
+              "name": "timestamptz",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "snapshot_schema",
+            "notNull": true,
+            "ordinal": 13,
+            "type": {
+              "formatted": "smallint",
+              "modifier": -1,
+              "name": "int2",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "source",
+            "notNull": true,
+            "ordinal": 14,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "model_id",
+            "notNull": true,
+            "ordinal": 15,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "catalog_revision",
+            "notNull": true,
+            "ordinal": 16,
+            "type": {
+              "formatted": "bigint",
+              "modifier": -1,
+              "name": "int8",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "dataset_id",
+            "notNull": true,
+            "ordinal": 17,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "dataset_binding_schema",
+            "notNull": true,
+            "ordinal": 18,
+            "type": {
+              "formatted": "smallint",
+              "modifier": -1,
+              "name": "int2",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "dataset_initial_origin",
+            "notNull": true,
+            "ordinal": 19,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": null,
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "dataset_binding_created_at",
+            "notNull": true,
+            "ordinal": 20,
+            "type": {
+              "formatted": "timestamp with time zone",
+              "modifier": -1,
+              "name": "timestamptz",
+              "schema": "pg_catalog"
+            }
+          },
+          {
+            "acl": [],
+            "aclIsNull": true,
+            "collation": {
+              "deterministic": true,
+              "encoding": -1,
+              "name": "C",
+              "provider": "c",
+              "schema": "pg_catalog"
+            },
+            "default": null,
+            "dimensions": 0,
+            "generated": "",
+            "identity": "",
+            "inheritanceCount": 0,
+            "local": true,
+            "name": "credential_policy",
+            "notNull": true,
+            "ordinal": 21,
+            "type": {
+              "formatted": "text",
+              "modifier": -1,
+              "name": "text",
+              "schema": "pg_catalog"
+            }
+          }
+        ],
+        "droppedAttributes": [],
+        "forceRowSecurity": false,
+        "identity": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "inheritanceChildren": [],
+        "inheritanceParents": [],
+        "kind": "r",
+        "options": null,
+        "ownerIsOriginal": true,
+        "partition": false,
+        "persistence": "p",
+        "policies": [],
+        "replicaIdentity": "d",
+        "rowSecurity": false,
+        "rules": []
+      }
+    ],
+    "triggers": [
+      {
+        "argumentCount": 0,
+        "argumentsHex": "",
+        "columns": "",
+        "conditionIsNull": true,
+        "constraint": {
+          "kind": "f",
+          "name": "run_model_selection_v2_snapshots_run_fkey",
+          "relation": {
+            "name": "run_model_selection_v2_snapshots",
+            "schema": "openbot_internal"
+          }
+        },
+        "constraintIndex": {
+          "name": "runs_pkey",
+          "schema": "public"
+        },
+        "constraintRelation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "deferrable": false,
+        "deferred": false,
+        "enabled": "O",
+        "function": {
+          "arguments": "",
+          "kind": "f",
+          "name": "RI_FKey_cascade_del",
+          "schema": "pg_catalog"
+        },
+        "hasParent": false,
+        "internal": true,
+        "newTransition": null,
+        "oldTransition": null,
+        "relation": {
+          "name": "runs",
+          "schema": "public"
+        },
+        "type": 9
+      },
+      {
+        "argumentCount": 0,
+        "argumentsHex": "",
+        "columns": "",
+        "conditionIsNull": true,
+        "constraint": {
+          "kind": "f",
+          "name": "run_model_selection_v2_snapshots_run_fkey",
+          "relation": {
+            "name": "run_model_selection_v2_snapshots",
+            "schema": "openbot_internal"
+          }
+        },
+        "constraintIndex": {
+          "name": "runs_pkey",
+          "schema": "public"
+        },
+        "constraintRelation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "deferrable": false,
+        "deferred": false,
+        "enabled": "O",
+        "function": {
+          "arguments": "",
+          "kind": "f",
+          "name": "RI_FKey_restrict_upd",
+          "schema": "pg_catalog"
+        },
+        "hasParent": false,
+        "internal": true,
+        "newTransition": null,
+        "oldTransition": null,
+        "relation": {
+          "name": "runs",
+          "schema": "public"
+        },
+        "type": 17
+      },
+      {
+        "argumentCount": 0,
+        "argumentsHex": "",
+        "columns": "",
+        "conditionIsNull": true,
+        "constraint": {
+          "kind": "f",
+          "name": "run_model_selection_v2_snapshots_run_fkey",
+          "relation": {
+            "name": "run_model_selection_v2_snapshots",
+            "schema": "openbot_internal"
+          }
+        },
+        "constraintIndex": {
+          "name": "runs_pkey",
+          "schema": "public"
+        },
+        "constraintRelation": {
+          "name": "runs",
+          "schema": "public"
+        },
+        "deferrable": false,
+        "deferred": false,
+        "enabled": "O",
+        "function": {
+          "arguments": "",
+          "kind": "f",
+          "name": "RI_FKey_check_ins",
+          "schema": "pg_catalog"
+        },
+        "hasParent": false,
+        "internal": true,
+        "newTransition": null,
+        "oldTransition": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "type": 5
+      },
+      {
+        "argumentCount": 0,
+        "argumentsHex": "",
+        "columns": "",
+        "conditionIsNull": true,
+        "constraint": {
+          "kind": "f",
+          "name": "run_model_selection_v2_snapshots_run_fkey",
+          "relation": {
+            "name": "run_model_selection_v2_snapshots",
+            "schema": "openbot_internal"
+          }
+        },
+        "constraintIndex": {
+          "name": "runs_pkey",
+          "schema": "public"
+        },
+        "constraintRelation": {
+          "name": "runs",
+          "schema": "public"
+        },
+        "deferrable": false,
+        "deferred": false,
+        "enabled": "O",
+        "function": {
+          "arguments": "",
+          "kind": "f",
+          "name": "RI_FKey_check_upd",
+          "schema": "pg_catalog"
+        },
+        "hasParent": false,
+        "internal": true,
+        "newTransition": null,
+        "oldTransition": null,
+        "relation": {
+          "name": "run_model_selection_v2_snapshots",
+          "schema": "openbot_internal"
+        },
+        "type": 17
+      }
+    ]
+  }
+}

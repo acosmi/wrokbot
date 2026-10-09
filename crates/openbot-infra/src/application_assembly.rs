@@ -33,6 +33,7 @@ use crate::mcp_connections::{McpRevocationReconciler, PostgresMcpConnections};
 use crate::mcp_credentials::PostgresMcpCredentialBroker;
 use crate::mcp_oauth::McpOAuthClient;
 use crate::memory_admin::PostgresMemoryAdministration;
+use crate::model_dataset::PostgresModelDatasetBinding;
 use crate::net::safe_http::{
     CidrAllowlist, EgressPolicy, SafeDialer, SafeHttpBudget, SchemePolicy,
 };
@@ -152,6 +153,8 @@ impl core::fmt::Debug for PostgresApplicationAssemblyInput {
 
 /// Shared assembly output plus the background/lifecycle adapters its host must retain.
 pub struct PostgresApplicationAssembly {
+    /// Same once-enrolled original dataset binding used by every V2 consumer.
+    pub model_dataset_binding: Arc<PostgresModelDatasetBinding>,
     pub custom_model_catalog_inventory: Arc<PostgresCustomModelCatalogInventory>,
     pub runtime_capability_facts: Option<Arc<PostgresRuntimeCapabilityFacts>>,
     pub application: Arc<dyn ApplicationService>,
@@ -170,6 +173,7 @@ impl core::fmt::Debug for PostgresApplicationAssembly {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("PostgresApplicationAssembly")
+            .field("model_dataset_binding", &self.model_dataset_binding)
             .field(
                 "custom_model_catalog_inventory",
                 &"PostgresCustomModelCatalogInventory",
@@ -282,6 +286,10 @@ pub async fn assemble_postgres_application(
         )
         .map_err(|_| fail("remote_interrupts"))?,
     );
+    let model_dataset_binding = Arc::new(
+        PostgresModelDatasetBinding::unbound(pool.clone(), deployment.clone(), tenant.clone())
+            .map_err(|_| fail("model_dataset_binding"))?,
+    );
     let thread_directory = PostgresThreadDirectory::with_runtime(
         pool.clone(),
         listener_database
@@ -290,7 +298,9 @@ pub async fn assemble_postgres_application(
         runtime_owner,
         DEFAULT_THREAD_LEASE_DURATION,
     )
-    .map_err(|_| fail("thread_directory"))?;
+    .map_err(|_| fail("thread_directory"))?
+    .with_model_dataset_binding(model_dataset_binding.clone())
+    .map_err(|_| fail("thread_directory_model_dataset"))?;
     let memory = PostgresMemoryAdministration::new(pool.clone())
         .with_effect_audit_key(audit_key.to_vec())
         .map_err(|_| fail("memory_effect_audit"))?;
@@ -514,6 +524,7 @@ pub async fn assemble_postgres_application(
     let application: Arc<dyn ApplicationService> = Arc::new(application);
     let mcp_revocation_reconciler = McpRevocationReconciler::start(mcp_connections.clone());
     Ok(PostgresApplicationAssembly {
+        model_dataset_binding,
         custom_model_catalog_inventory,
         runtime_capability_facts,
         application,

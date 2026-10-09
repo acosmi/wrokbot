@@ -7,9 +7,9 @@ use std::future::poll_fn;
 use async_trait::async_trait;
 use futures_core::Stream;
 use openbot_application::{
-    AppEventStream, BeginThreadRunRequest, CancelThreadRunRequest, ChannelActivitySubscription,
-    ThreadConversationRequest, ThreadDirectory, ThreadDirectoryError, ThreadEventSubscription,
-    ThreadHistoryRequest,
+    AppEventStream, BeginThreadRunRequest, BeginThreadRunV2Request, CancelThreadRunRequest,
+    ChannelActivitySubscription, ThreadConversationRequest, ThreadDirectory, ThreadDirectoryError,
+    ThreadEventSubscription, ThreadHistoryRequest,
 };
 use openbot_contracts::command::{
     AppEvent, ChannelActivityEvent, ThreadConversationSnapshot, ThreadForegroundRunState,
@@ -46,6 +46,57 @@ const THREAD_EVENT_BATCH: i64 = 256;
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 256;
 const THREAD_RECONNECT_DELAY: core::time::Duration = core::time::Duration::from_millis(100);
 const THREAD_CATCH_UP_PERIOD: core::time::Duration = core::time::Duration::from_secs(1);
+const CUSTOM_MODEL_V2_ACCEPT_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(5);
+const V2_REPLAY_VERIFIED: u8 = 1;
+const V2_COMMIT_ENTERED: u8 = 2;
+
+#[derive(Default)]
+struct V2BeginProgress {
+    stage: std::sync::atomic::AtomicU8,
+    failure: std::sync::Mutex<Option<ThreadDirectoryError>>,
+}
+
+fn map_dataset_error(error: crate::model_dataset::ModelDatasetError) -> ThreadDirectoryError {
+    match error {
+        crate::model_dataset::ModelDatasetError::InvalidBinding => ThreadDirectoryError::Corrupt {
+            field: "model_dataset_binding",
+        },
+        crate::model_dataset::ModelDatasetError::Unavailable => ThreadDirectoryError::Unavailable,
+    }
+}
+fn map_v2_begin_error(error: crate::db::pool::TransactionOwnerError) -> ThreadDirectoryError {
+    use crate::db::pool::TransactionOwnerError as E;
+    match error {
+        E::AlreadyStarted => ThreadDirectoryError::Corrupt {
+            field: "model_dataset_transaction",
+        },
+        E::DeadlineExceeded
+        | E::BeginUnavailable
+        | E::RollbackUnproven
+        | E::RollbackAcknowledgedAfterDeadline => ThreadDirectoryError::Unavailable,
+        E::CommitUnknown => ThreadDirectoryError::CommitUnknown,
+        E::CommitAcknowledgedAfterDeadline => ThreadDirectoryError::AcknowledgedAfterDeadline,
+    }
+}
+fn map_v2_commit_end_error(error: crate::db::pool::TransactionOwnerError) -> ThreadDirectoryError {
+    tracing::warn!(state=?error,"custom v2 original commit end state");
+    map_v2_begin_error(error)
+}
+fn map_v2_replay_end_error(error: crate::db::pool::TransactionOwnerError) -> ThreadDirectoryError {
+    use crate::db::pool::TransactionOwnerError as E;
+    tracing::warn!(state=?error,"custom v2 original replay end state");
+    match error {
+        E::AlreadyStarted => ThreadDirectoryError::Corrupt {
+            field: "model_dataset_transaction",
+        },
+        E::RollbackAcknowledgedAfterDeadline => ThreadDirectoryError::AcknowledgedAfterDeadline,
+        E::DeadlineExceeded
+        | E::BeginUnavailable
+        | E::RollbackUnproven
+        | E::CommitUnknown
+        | E::CommitAcknowledgedAfterDeadline => ThreadDirectoryError::ReplayClosureUnproven,
+    }
+}
 
 #[derive(Clone)]
 struct RuntimeLease {
@@ -59,6 +110,8 @@ struct RuntimeLease {
 pub struct PostgresThreadDirectory {
     pool: crate::db::pool::DatabasePool,
     runtime: Option<RuntimeLease>,
+    model_dataset_binding:
+        Option<std::sync::Arc<crate::model_dataset::PostgresModelDatasetBinding>>,
 }
 
 impl PostgresThreadDirectory {
@@ -68,6 +121,7 @@ impl PostgresThreadDirectory {
         Self {
             pool,
             runtime: None,
+            model_dataset_binding: None,
         }
     }
 
@@ -94,12 +148,150 @@ impl PostgresThreadDirectory {
                 owner_id,
                 duration,
             }),
+            model_dataset_binding: None,
         })
+    }
+
+    /// Attach the same original-Pool dataset producer once, before host admission.
+    pub fn with_model_dataset_binding(
+        mut self,
+        binding: std::sync::Arc<crate::model_dataset::PostgresModelDatasetBinding>,
+    ) -> Result<Self, ThreadDirectoryError> {
+        if self.model_dataset_binding.is_some() || !binding.matches_original_pool(&self.pool) {
+            return Err(ThreadDirectoryError::Corrupt {
+                field: "model_dataset_binding",
+            });
+        }
+        self.model_dataset_binding = Some(binding);
+        Ok(self)
+    }
+
+    async fn begin_v2_guarded(
+        &self,
+        request: &BeginThreadRunV2Request,
+        runtime: &RuntimeLease,
+        deadline: std::time::Instant,
+        progress: &V2BeginProgress,
+    ) -> Result<ThreadRunStarted, ThreadDirectoryError> {
+        let binding = self
+            .model_dataset_binding
+            .as_ref()
+            .ok_or(ThreadDirectoryError::Unavailable)?;
+        if !binding.matches_pool_scope(&self.pool, &request.deployment, &request.tenant) {
+            return Err(ThreadDirectoryError::Corrupt {
+                field: "model_dataset_binding",
+            });
+        }
+        let mut checkout = binding
+            .checkout(deadline)
+            .await
+            .map_err(map_dataset_error)?;
+        let transaction = checkout
+            .begin_read_committed()
+            .await
+            .map_err(map_v2_begin_error)?;
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis()
+            .max(1)
+            .to_string();
+        transaction
+            .as_transaction()
+            .query_one(
+                "SELECT set_config('statement_timeout',$1,true),set_config('lock_timeout',$1,true)",
+                &[&remaining],
+            )
+            .await
+            .map_err(|_| ThreadDirectoryError::Unavailable)?;
+        let outcome = apply_begin_v2(&transaction, runtime, request).await;
+        match outcome {
+            Ok(BeginOutcome::Replayed(receipt)) => {
+                progress
+                    .stage
+                    .store(V2_REPLAY_VERIFIED, std::sync::atomic::Ordering::SeqCst);
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(map_v2_replay_end_error)?;
+                if std::time::Instant::now() >= deadline {
+                    return Err(ThreadDirectoryError::AcknowledgedAfterDeadline);
+                }
+                Ok(receipt)
+            }
+            Ok(BeginOutcome::Created(receipt)) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ThreadDirectoryError::Unavailable);
+                }
+                // This observes entry into the possible COMMIT call, never a wire send or ACK.
+                progress
+                    .stage
+                    .store(V2_COMMIT_ENTERED, std::sync::atomic::Ordering::SeqCst);
+                transaction
+                    .commit()
+                    .await
+                    .map_err(map_v2_commit_end_error)?;
+                if std::time::Instant::now() >= deadline {
+                    return Err(ThreadDirectoryError::AcknowledgedAfterDeadline);
+                }
+                Ok(receipt)
+            }
+            Err(error) => {
+                if let Ok(mut failure) = progress.failure.lock() {
+                    *failure = Some(error);
+                }
+                if let Err(end) = transaction.rollback().await {
+                    tracing::warn!(state=?end,"custom v2 rejected transaction closure not timely");
+                }
+                Err(error)
+            }
+        }
     }
 }
 
 #[async_trait]
 impl ThreadDirectory for PostgresThreadDirectory {
+    async fn begin_thread_run_v2(
+        &self,
+        request: BeginThreadRunV2Request,
+    ) -> Result<ThreadRunStarted, ThreadDirectoryError> {
+        let deadline = std::time::Instant::now() + CUSTOM_MODEL_V2_ACCEPT_TIMEOUT;
+        use openbot_contracts::versioned_model_selection::{
+            ModelSelectionIntentSource, VersionedRunModelSelection,
+        };
+        if request.command.model_selection.source() != ModelSelectionIntentSource::Custom
+            || !VersionedRunModelSelection::V2(request.command.model_selection.clone()).is_valid()
+        {
+            return Err(ThreadDirectoryError::InvalidInput {
+                field: "model_selection",
+            });
+        }
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(ThreadDirectoryError::Unavailable)?;
+        let progress = V2BeginProgress::default();
+        match tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            self.begin_v2_guarded(&request, runtime, deadline, &progress),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                if let Some(error) = progress.failure.lock().ok().and_then(|failure| *failure) {
+                    return Err(error);
+                }
+                Err(
+                    match progress.stage.load(std::sync::atomic::Ordering::SeqCst) {
+                        V2_REPLAY_VERIFIED => ThreadDirectoryError::ReplayClosureUnproven,
+                        V2_COMMIT_ENTERED => ThreadDirectoryError::CommitUnknown,
+                        _ => ThreadDirectoryError::Unavailable,
+                    },
+                )
+            }
+        }
+    }
+
     async fn run_effect_receipts(
         &self,
         request: openbot_application::RunEffectReceiptsRequest,
@@ -1806,4 +1998,547 @@ fn write_error(context: &'static str, error: tokio_postgres::Error) -> ThreadDir
         Some(code) if code == &SqlState::FOREIGN_KEY_VIOLATION => ThreadDirectoryError::NotVisible,
         _ => ThreadDirectoryError::Unavailable,
     }
+}
+
+// V2 has its own accepted-intent/transaction path; no synthetic legacy request is built.
+async fn apply_begin_v2(
+    model_transaction: &crate::model_dataset::ModelDatasetTransaction<'_>,
+    runtime: &RuntimeLease,
+    request: &BeginThreadRunV2Request,
+) -> Result<BeginOutcome, ThreadDirectoryError> {
+    let transaction = model_transaction.as_transaction();
+    crate::model_runtime::validate_actor_v2(transaction, request).await?;
+    skills::validate_v2_slugs(request)?;
+    let command = &request.command;
+    transaction
+        .query_one(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+            &[&command.thread_id.as_str()],
+        )
+        .await
+        .map_err(|error| unavailable("获取 thread transaction lock 失败", error))?;
+
+    let existing_thread = load_thread_v2(transaction, request).await?;
+    if existing_thread
+        .as_ref()
+        .is_some_and(|state| state.status == "deleted")
+    {
+        return Err(ThreadDirectoryError::NotVisible);
+    }
+    if existing_thread.is_some() {
+        crate::model_runtime::validate_thread_v2(transaction, request).await?;
+    }
+    if let Some(receipt) = replay_existing_v2(model_transaction, request).await? {
+        // Preserve historical replay's original authority checks; still reject damaged occupancy.
+        checked_thread_occupancy(transaction, &command.thread_id).await?;
+        return Ok(BeginOutcome::Replayed(receipt));
+    }
+
+    let now = database_now(transaction).await?;
+    let state = match existing_thread {
+        Some(state) => {
+            if state.status != "active" {
+                return Err(ThreadDirectoryError::NotVisible);
+            }
+            crate::model_runtime::validate_target_v2(transaction, request).await?;
+            state
+        }
+        None => {
+            if !ThreadIdentity::new(&request.deployment).owns(&command.thread_id) {
+                return Err(ThreadDirectoryError::InvalidInput { field: "thread_id" });
+            }
+            crate::model_runtime::validate_target_v2(transaction, request).await?;
+            insert_thread_v2(transaction, request, now).await?;
+            ThreadState {
+                status: "active".to_owned(),
+                next_message_seq: 0,
+                next_event_seq: 0,
+            }
+        }
+    };
+
+    // Check visible state before a competing lease can hide a damaged projection.
+    let active = checked_thread_occupancy(transaction, &command.thread_id).await?;
+
+    if matches!(&command.anchor, ThreadRunAnchor::Channel { .. }) {
+        transaction
+            .execute(
+                "INSERT INTO public.thread_memberships(thread_id,user_id,created_at) \
+                 VALUES($1,$2,$3) ON CONFLICT(thread_id,user_id) DO NOTHING",
+                &[&command.thread_id.as_str(), &request.actor.as_str(), &now],
+            )
+            .await
+            .map_err(|error| write_error("materialize channel thread membership", error))?;
+    }
+
+    let expires_at = now
+        .checked_add(runtime.duration)
+        .ok_or(ThreadDirectoryError::Corrupt {
+            field: "thread_lease_expiry",
+        })?;
+    let fencing = acquire_lease_v2(transaction, request, runtime, now, expires_at).await?;
+
+    if active {
+        return Err(ThreadDirectoryError::LeaseConflict);
+    }
+
+    let skill_snapshots = skills::resolve_v2(transaction, request).await?;
+    let model_snapshot = crate::model_runtime::resolve_v2(transaction, request).await?;
+    let dataset = model_transaction
+        .verify_current_dataset()
+        .await
+        .map_err(map_dataset_error)?;
+    crate::model_runtime::verify_accept_v2_current(
+        transaction,
+        request,
+        &model_snapshot,
+        &dataset,
+        fencing,
+    )
+    .await?;
+    let user_message_seq = state
+        .next_message_seq
+        .checked_add(skill_snapshots.len() as i64)
+        .ok_or(ThreadDirectoryError::Corrupt {
+            field: "next_message_seq",
+        })?;
+    let message_sequence = checked_sequence(user_message_seq, "next_message_seq")?;
+    let event_sequence = checked_sequence(state.next_event_seq, "next_event_seq")?;
+    let next_message_seq =
+        user_message_seq
+            .checked_add(1)
+            .ok_or(ThreadDirectoryError::Corrupt {
+                field: "next_message_seq",
+            })?;
+    let next_event_seq =
+        state
+            .next_event_seq
+            .checked_add(1)
+            .ok_or(ThreadDirectoryError::Corrupt {
+                field: "next_event_seq",
+            })?;
+
+    let mut run = Run::queued(
+        command.run_id.clone(),
+        command.thread_id.clone(),
+        command.bot_id.clone(),
+        request.actor.clone(),
+        true,
+        FencingToken::new(fencing).map_err(|_| ThreadDirectoryError::Corrupt {
+            field: "fencing_token",
+        })?,
+        now,
+    );
+    run.start(now).map_err(|_| ThreadDirectoryError::Corrupt {
+        field: "run_transition",
+    })?;
+    let budget_row = transaction
+        .query_opt(
+            "SELECT currency,max_cost_micro_units FROM public.user_run_cost_budgets \
+             WHERE deployment_id=$1 AND tenant_id=$2 AND actor_user_id=$3",
+            &[
+                &request.deployment.as_str(),
+                &request.tenant.as_str(),
+                &request.actor.as_str(),
+            ],
+        )
+        .await
+        .map_err(|error| unavailable("读取 run cost budget snapshot 失败", error))?;
+    let (budget_currency, budget_max_cost_micro_units) = match budget_row {
+        Some(row) => {
+            let currency = row.try_get::<_, String>("currency").map_err(|_| {
+                ThreadDirectoryError::Corrupt {
+                    field: "budget_cost_currency",
+                }
+            })?;
+            let amount = row.try_get::<_, i64>("max_cost_micro_units").map_err(|_| {
+                ThreadDirectoryError::Corrupt {
+                    field: "budget_max_cost_micro_units",
+                }
+            })?;
+            if currency.len() != 3
+                || !currency.bytes().all(|byte| byte.is_ascii_uppercase())
+                || amount <= 0
+            {
+                return Err(ThreadDirectoryError::Corrupt {
+                    field: "run_cost_budget",
+                });
+            }
+            (Some(currency), Some(amount))
+        }
+        None => (None, None),
+    };
+    if budget_currency.is_some() || budget_max_cost_micro_units.is_some() {
+        return Err(ThreadDirectoryError::InvalidInput {
+            field: "custom_model_unpriced",
+        });
+    }
+    let message_id = input_message_id(command.run_id.as_str());
+    let content = skills::input_content_v2(command);
+    let message = Message::new(
+        MessageId::new(&message_id),
+        command.thread_id.clone(),
+        message_sequence,
+        MessageRole::User,
+        content.clone(),
+        command.message.clone(),
+        Some(command.run_id.clone()),
+        Some(request.actor.clone()),
+        now,
+    );
+    let event = RunEvent::new(
+        command.run_id.clone(),
+        0,
+        command.thread_id.clone(),
+        event_sequence,
+        RunEventKind::Started,
+        json!({
+            "runId": command.run_id,
+            "messageId": message_id,
+            "botId": command.bot_id,
+        }),
+        now,
+    );
+
+    transaction
+        .execute(
+            "UPDATE public.threads SET next_message_seq=$2,next_event_seq=$3,updated_at=$4 \
+             WHERE thread_id=$1",
+            &[
+                &command.thread_id.as_str(),
+                &next_message_seq,
+                &next_event_seq,
+                &now,
+            ],
+        )
+        .await
+        .map_err(|error| write_error("推进 thread sequence 失败", error))?;
+    transaction
+        .execute(
+            "INSERT INTO public.runs( \
+               run_id,thread_id,bot_id,actor_id,foreground,status,fencing_token,next_event_seq, \
+               terminal_event_seq,error_code,created_at,started_at,finished_at, \
+               budget_cost_currency,budget_max_cost_micro_units \
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,1,NULL,NULL,$8,$9,NULL,$10,$11)",
+            &[
+                &run.id().as_str(),
+                &run.thread().as_str(),
+                &run.bot().as_str(),
+                &run.actor().as_str(),
+                &run.foreground(),
+                &run.status().as_str(),
+                &run.fencing().get(),
+                &run.created_at(),
+                &run.started_at(),
+                &budget_currency,
+                &budget_max_cost_micro_units,
+            ],
+        )
+        .await
+        .map_err(|error| write_error("写 running run 失败", error))?;
+    crate::model_runtime::insert_v2(transaction, request, &model_snapshot, &dataset, now).await?;
+    for (index, snapshot) in skill_snapshots.iter().enumerate() {
+        let skill_message_id = format!("{}:selected_skill:{index}", command.run_id);
+        let content = json!({"text": snapshot.instructions, "selectedSkillSlug": snapshot.slug});
+        transaction
+            .execute(
+                "INSERT INTO public.messages( \
+               message_id,thread_id,seq,role,content,search_text,run_id,actor_id,created_at \
+             ) VALUES($1,$2,$3,'system',$4,$5,$6,$7,$8)",
+                &[
+                    &skill_message_id,
+                    &command.thread_id.as_str(),
+                    &(state.next_message_seq + index as i64),
+                    &content,
+                    &snapshot.instructions,
+                    &command.run_id.as_str(),
+                    &request.actor.as_str(),
+                    &now,
+                ],
+            )
+            .await
+            .map_err(|error| write_error("写 selected skill snapshot 失败", error))?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO public.messages( \
+               message_id,thread_id,seq,role,content,search_text,run_id,actor_id,created_at \
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            &[
+                &message.id().as_str(),
+                &message.thread().as_str(),
+                &(message.sequence() as i64),
+                &message.role().as_str(),
+                message.content(),
+                &message.search_text(),
+                &message.run().map(|value| value.as_str()),
+                &message.actor().map(|value| value.as_str()),
+                &message.created_at(),
+            ],
+        )
+        .await
+        .map_err(|error| write_error("写 initial message 失败", error))?;
+    transaction
+        .execute(
+            "INSERT INTO public.run_events( \
+               run_id,seq,thread_id,event_seq,event_type,payload,terminal,created_at \
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+            &[
+                &event.run().as_str(),
+                &(event.sequence() as i64),
+                &event.thread().as_str(),
+                &(event.thread_sequence() as i64),
+                &event.kind().as_str(),
+                event.payload(),
+                &event.kind().is_terminal(),
+                &event.created_at(),
+            ],
+        )
+        .await
+        .map_err(|error| write_error("写 run started event 失败", error))?;
+    let outbox_id = format!("{}:agent_run_dispatch", command.run_id);
+    let outbox_payload = json!({
+        "runId": command.run_id,
+        "threadId": command.thread_id,
+        "eventSequence": event_sequence,
+    });
+    transaction
+        .execute(
+            "INSERT INTO public.outbox( \
+               outbox_id,aggregate_kind,aggregate_id,seq,destination,delivery_class,payload, \
+               available_at,created_at,updated_at \
+             ) VALUES($1,'thread',$2,$3,'agent_run_dispatch','internal',$4,$5,$5,$5)",
+            &[
+                &outbox_id,
+                &command.thread_id.as_str(),
+                &(event_sequence as i64),
+                &outbox_payload,
+                &now,
+            ],
+        )
+        .await
+        .map_err(|error| write_error("写 replay-safe dispatch outbox 失败", error))?;
+    if let ThreadRunAnchor::Channel { channel_id } = &command.anchor {
+        crate::channel_activity::record_for_channel(
+            transaction,
+            channel_id,
+            &command.message,
+            None,
+            now,
+        )
+        .await
+        .map_err(|error| unavailable("更新 user channel activity 失败", error))?;
+    }
+    transaction
+        .query_one("SELECT pg_notify('openbot_thread_events','')", &[])
+        .await
+        .map_err(|error| unavailable("提交 thread wakeup 失败", error))?;
+
+    Ok(BeginOutcome::Created(ThreadRunStarted {
+        thread_id: command.thread_id.clone(),
+        run_id: command.run_id.clone(),
+        message_sequence,
+        event_sequence,
+        replayed: false,
+    }))
+}
+
+async fn load_thread_v2(
+    transaction: &Transaction<'_>,
+    request: &BeginThreadRunV2Request,
+) -> Result<Option<ThreadState>, ThreadDirectoryError> {
+    let command = &request.command;
+    let row = transaction
+        .query_opt(
+            "SELECT t.deployment_id,t.tenant_id,t.anchor_kind,t.anchor_id,t.status, \
+                    t.next_message_seq,t.next_event_seq, \
+                    CASE WHEN t.anchor_kind='channel' THEN EXISTS( \
+                      SELECT 1 FROM public.channel_memberships cm \
+                      WHERE cm.channel_id=t.anchor_id AND cm.user_id=$2 \
+                    ) ELSE EXISTS( \
+                      SELECT 1 FROM public.thread_memberships tm \
+                      WHERE tm.thread_id=t.thread_id AND tm.user_id=$2 \
+                    ) END AS member \
+             FROM public.threads t WHERE t.thread_id=$1 FOR UPDATE OF t",
+            &[&command.thread_id.as_str(), &request.actor.as_str()],
+        )
+        .await
+        .map_err(|error| unavailable("读取并锁定 thread 失败", error))?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let deployment: String = decode(&row, "deployment_id")?;
+    let tenant: String = decode(&row, "tenant_id")?;
+    let anchor_kind: String = decode(&row, "anchor_kind")?;
+    let anchor_id: String = decode(&row, "anchor_id")?;
+    let member: bool = decode(&row, "member")?;
+    if deployment != request.deployment.as_str() || tenant != request.tenant.as_str() || !member {
+        return Err(ThreadDirectoryError::NotVisible);
+    }
+    if !anchor_matches(
+        &command.anchor,
+        command.bot_id.as_str(),
+        &anchor_kind,
+        &anchor_id,
+    ) {
+        return Err(ThreadDirectoryError::RequestConflict);
+    }
+    Ok(Some(ThreadState {
+        status: decode(&row, "status")?,
+        next_message_seq: decode(&row, "next_message_seq")?,
+        next_event_seq: decode(&row, "next_event_seq")?,
+    }))
+}
+
+async fn insert_thread_v2(
+    transaction: &Transaction<'_>,
+    request: &BeginThreadRunV2Request,
+    now: OffsetDateTime,
+) -> Result<(), ThreadDirectoryError> {
+    let command = &request.command;
+    let (anchor_kind, anchor_id) = match &command.anchor {
+        ThreadRunAnchor::DirectBot => ("direct_bot", command.bot_id.as_str()),
+        ThreadRunAnchor::Channel { channel_id } => ("channel", channel_id.as_str()),
+    };
+    transaction
+        .execute(
+            "INSERT INTO public.threads( \
+               thread_id,tenant_id,deployment_id,created_by,anchor_kind,anchor_id,title,status, \
+               next_message_seq,next_event_seq,created_at,updated_at,deleted_at \
+             ) VALUES($1,$2,$3,$4,$5,$6,NULL,'active',0,0,$7,$7,NULL)",
+            &[
+                &command.thread_id.as_str(),
+                &request.tenant.as_str(),
+                &request.deployment.as_str(),
+                &request.actor.as_str(),
+                &anchor_kind,
+                &anchor_id,
+                &now,
+            ],
+        )
+        .await
+        .map_err(|error| write_error("创建 native thread 失败", error))?;
+    transaction
+        .execute(
+            "INSERT INTO public.thread_memberships(thread_id,user_id,created_at) \
+             VALUES($1,$2,$3)",
+            &[&command.thread_id.as_str(), &request.actor.as_str(), &now],
+        )
+        .await
+        .map_err(|error| write_error("创建 thread membership 失败", error))?;
+    Ok(())
+}
+
+async fn acquire_lease_v2(
+    transaction: &Transaction<'_>,
+    request: &BeginThreadRunV2Request,
+    runtime: &RuntimeLease,
+    now: OffsetDateTime,
+    expires_at: OffsetDateTime,
+) -> Result<i64, ThreadDirectoryError> {
+    let row = transaction
+        .query_opt(
+            "INSERT INTO public.thread_leases( \
+               thread_id,owner_id,fencing_token,acquired_at,expires_at,updated_at \
+             ) VALUES($1,$2,1,$3,$4,$3) \
+             ON CONFLICT(thread_id) DO UPDATE SET \
+               owner_id=excluded.owner_id, \
+               fencing_token=CASE WHEN thread_leases.expires_at<=$3 \
+                                  THEN thread_leases.fencing_token+1 \
+                                  ELSE thread_leases.fencing_token END, \
+               acquired_at=CASE WHEN thread_leases.expires_at<=$3 \
+                                THEN $3 ELSE thread_leases.acquired_at END, \
+               expires_at=$4,updated_at=$3 \
+             WHERE (thread_leases.owner_id=$2 AND thread_leases.expires_at>$3) \
+                OR (thread_leases.expires_at<=$3 \
+                    AND thread_leases.fencing_token<9223372036854775807) \
+             RETURNING fencing_token",
+            &[
+                &request.command.thread_id.as_str(),
+                &runtime.owner_id,
+                &now,
+                &expires_at,
+            ],
+        )
+        .await
+        .map_err(|error| write_error("获取 thread lease 失败", error))?;
+    let Some(row) = row else {
+        return Err(ThreadDirectoryError::LeaseConflict);
+    };
+    row.try_get(0).map_err(|_| ThreadDirectoryError::Corrupt {
+        field: "fencing_token",
+    })
+}
+
+async fn replay_existing_v2(
+    model_transaction: &crate::model_dataset::ModelDatasetTransaction<'_>,
+    request: &BeginThreadRunV2Request,
+) -> Result<Option<ThreadRunStarted>, ThreadDirectoryError> {
+    let transaction = model_transaction.as_transaction();
+    let command = &request.command;
+    let row=transaction.query_opt("SELECT r.thread_id,r.bot_id,r.actor_id,r.foreground,r.created_at,
+        m.seq AS message_seq,m.content,m.role,m.thread_id AS input_thread,m.actor_id AS input_actor,
+        e.event_seq,o.outbox_id
+        FROM public.runs r LEFT JOIN public.messages m ON m.message_id=$2 AND m.run_id=r.run_id
+        LEFT JOIN public.run_events e ON e.run_id=r.run_id AND e.seq=0 AND e.event_type='started'
+          AND e.thread_id=r.thread_id AND NOT e.terminal
+        LEFT JOIN public.outbox o ON o.outbox_id=r.run_id||':agent_run_dispatch' AND o.aggregate_kind='thread'
+          AND o.aggregate_id=r.thread_id AND o.destination='agent_run_dispatch' AND o.delivery_class='internal'
+        WHERE r.run_id=$1", &[&command.run_id.as_str(),&input_message_id(command.run_id.as_str())])
+        .await.map_err(|_|ThreadDirectoryError::Unavailable)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    if decode::<String>(&row, "thread_id")? != command.thread_id.as_str()
+        || decode::<String>(&row, "bot_id")? != command.bot_id.as_str()
+        || decode::<String>(&row, "actor_id")? != request.actor.as_str()
+        || !decode::<bool>(&row, "foreground")?
+        || decode::<Option<Value>>(&row, "content")?.as_ref()
+            != Some(&skills::input_content_v2(command))
+    {
+        return Err(ThreadDirectoryError::RequestConflict);
+    }
+    if decode::<Option<String>>(&row, "role")?.as_deref() != Some("user")
+        || decode::<Option<String>>(&row, "input_thread")?.as_deref()
+            != Some(command.thread_id.as_str())
+        || decode::<Option<String>>(&row, "input_actor")?.as_deref() != Some(request.actor.as_str())
+        || decode::<Option<String>>(&row, "outbox_id")?.is_none()
+    {
+        return Err(ThreadDirectoryError::Corrupt {
+            field: "idempotent_message",
+        });
+    }
+    // Current target authorization remains necessary, but no current connection/secret is
+    // reselected for an exact receipt. Historical definition and key references stay fixed.
+    crate::model_runtime::validate_target_v2(transaction, request).await?;
+    let dataset = model_transaction
+        .verify_current_dataset()
+        .await
+        .map_err(map_dataset_error)?;
+    crate::model_runtime::verify_v2_replay_snapshot(
+        transaction,
+        request,
+        &dataset,
+        decode(&row, "created_at")?,
+    )
+    .await?;
+    let message_sequence = checked_sequence(
+        decode::<Option<i64>>(&row, "message_seq")?.ok_or(ThreadDirectoryError::Corrupt {
+            field: "idempotent_message",
+        })?,
+        "idempotent_message",
+    )?;
+    let event_sequence = checked_sequence(
+        decode::<Option<i64>>(&row, "event_seq")?.ok_or(ThreadDirectoryError::Corrupt {
+            field: "idempotent_event",
+        })?,
+        "idempotent_event",
+    )?;
+    Ok(Some(ThreadRunStarted {
+        thread_id: command.thread_id.clone(),
+        run_id: command.run_id.clone(),
+        message_sequence,
+        event_sequence,
+        replayed: true,
+    }))
 }

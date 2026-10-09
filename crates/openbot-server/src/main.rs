@@ -101,6 +101,9 @@ type AgentAssembly = (Arc<dyn RunDispatchConsumer>, Option<BuiltInAgentRuntime>)
 
 struct BuiltInAgentAssemblyInput {
     pool: openbot_infra::db::pool::DatabasePool,
+    model_dataset_binding: Arc<openbot_infra::model_dataset::PostgresModelDatasetBinding>,
+    #[cfg(test)]
+    custom_model_dialer: Option<SafeDialer>,
     deployment: DeploymentId,
     tenant: TenantId,
     runtime: Arc<dyn RunRuntime>,
@@ -490,6 +493,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         app_url: server.app_url.clone(),
     })
     .await?;
+    if application_assembly
+        .model_dataset_binding
+        .enroll_original_registry(&artifact_datasets)
+        .is_err()
+    {
+        auth.close_request_bindings();
+        let _ = application_assembly
+            .application
+            .close_public_artifact_reads();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(reads) = &artifact_read_lifecycle {
+            reads.close();
+            let _ack = reads.drain().await;
+        }
+        application_assembly.shutdown().await;
+        policy_listener.stop().await;
+        pool.close();
+        return Err(startup_error("model_dataset_binding").into());
+    }
     if let Some(resolver) = &remember_session_resolver {
         resolver
             .install_custom_model_catalog_inventory(
@@ -537,6 +559,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?);
     let (run_consumer, built_in_agent) = build_built_in_agent(BuiltInAgentAssemblyInput {
         pool: pool.clone(),
+        model_dataset_binding: Arc::clone(&application_assembly.model_dataset_binding),
+        #[cfg(test)]
+        custom_model_dialer: None,
         deployment: deployment.clone(),
         tenant: tenant.clone(),
         runtime: run_runtime.clone(),
@@ -686,6 +711,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 fn build_built_in_agent(input: BuiltInAgentAssemblyInput) -> Result<AgentAssembly, Box<dyn Error>> {
     let BuiltInAgentAssemblyInput {
         pool,
+        model_dataset_binding,
+        #[cfg(test)]
+        custom_model_dialer,
         deployment,
         tenant,
         runtime,
@@ -763,15 +791,22 @@ fn build_built_in_agent(input: BuiltInAgentAssemblyInput) -> Result<AgentAssembl
         Arc::new(RemoteAguiProvider::new(remote_transport));
     // Personal model starts share the host's current egress policy and budgets, but obtain their
     // own current PG/Vault binding each time the outer retry wrapper invokes the router.
-    let custom_provider: Arc<dyn ProviderAdapter> = Arc::new(PostgresCustomModelProvider::new(
-        pool.clone(),
-        credential_vault.clone(),
-        deployment.clone(),
-        tenant.clone(),
-        SafeDialer::new(egress_policy),
-        SafeHttpBudget::new(64 * 1024 * 1024, Duration::from_secs(30))?,
-        budgets.stall_timeout,
-    )?);
+    #[cfg(test)]
+    let custom_model_dialer = custom_model_dialer.unwrap_or_else(|| SafeDialer::new(egress_policy));
+    #[cfg(not(test))]
+    let custom_model_dialer = SafeDialer::new(egress_policy);
+    let custom_provider: Arc<dyn ProviderAdapter> = Arc::new(
+        PostgresCustomModelProvider::new(
+            pool.clone(),
+            credential_vault.clone(),
+            deployment.clone(),
+            tenant.clone(),
+            custom_model_dialer,
+            SafeHttpBudget::new(64 * 1024 * 1024, Duration::from_secs(30))?,
+            budgets.stall_timeout,
+        )?
+        .with_model_dataset_binding(Arc::clone(&model_dataset_binding))?,
+    );
     let provider = Arc::new(RetryingProvider::new(
         Arc::new(
             ProviderRouter::new(
@@ -785,6 +820,7 @@ fn build_built_in_agent(input: BuiltInAgentAssemblyInput) -> Result<AgentAssembl
     )?);
     let context = Arc::new(
         PostgresAgentContextSource::new(pool, deployment, tenant, Some(budgets.max_output_tokens))?
+            .with_model_dataset_binding(model_dataset_binding)?
             .with_rate_cards(
                 package_rate_card,
                 managed.and_then(|(_, rate_card)| rate_card),
@@ -1113,6 +1149,10 @@ async fn shutdown_signal() {
 fn startup_error(code: &'static str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, code)
 }
+
+#[cfg(test)]
+#[path = "http/custom_model_v2_tests.rs"]
+mod custom_model_v2_tests;
 
 #[cfg(test)]
 mod tests {

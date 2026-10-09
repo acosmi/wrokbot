@@ -26,6 +26,7 @@ pub mod artifact_cleanup_schema;
 pub mod baseline;
 pub mod compat;
 pub mod custom_model_catalog_schema;
+pub mod custom_model_v2_schema;
 pub mod desktop_local;
 pub mod desktop_vault_canary;
 pub mod fresh;

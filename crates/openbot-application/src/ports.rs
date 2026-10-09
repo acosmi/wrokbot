@@ -11,8 +11,8 @@ use openbot_contracts::agent::{
 use openbot_contracts::audit::AuditPage;
 use openbot_contracts::auth::{AuthGeneration, Role};
 use openbot_contracts::command::{
-    BeginThreadRun, CancelThreadRun, ChannelDetail, ChannelSummary, ThreadHistory,
-    ThreadRunCancellation, ThreadRunStarted,
+    BeginThreadRun, BeginThreadRunV2, CancelThreadRun, ChannelDetail, ChannelSummary,
+    ThreadHistory, ThreadRunCancellation, ThreadRunStarted,
 };
 use openbot_contracts::error::{AppError, IdentityConflictReason};
 use openbot_contracts::ids::{ActorId, BotId, ChannelId, DeploymentId, TenantId, ThreadId};
@@ -616,6 +616,12 @@ pub enum ThreadDirectoryError {
     /// PostgreSQL commit 返回前连接中断，不能猜提交是否发生。
     #[error("thread_commit_unknown")]
     CommitUnknown,
+    /// 新 run 的 COMMIT 或既有 exact receipt 的 ROLLBACK 已 ACK，但超过原期限。
+    #[error("thread_acknowledged_after_deadline")]
+    AcknowledgedAfterDeadline,
+    /// 已核同 durable receipt，但本次只读 replay 没有及时关闭证明。
+    #[error("thread_replay_closure_unproven")]
+    ReplayClosureUnproven,
 }
 
 impl ThreadDirectoryError {
@@ -630,7 +636,9 @@ impl ThreadDirectoryError {
             Self::NotVisible => AppError::NotVisible,
             Self::LeaseConflict => AppError::LeaseConflict { holder: None },
             Self::RequestConflict => AppError::RequestConflict { resource: "run" },
-            Self::CommitUnknown => AppError::ReconciliationRequired { accepted: true },
+            Self::CommitUnknown | Self::AcknowledgedAfterDeadline | Self::ReplayClosureUnproven => {
+                AppError::ReconciliationRequired { accepted: true }
+            }
         }
     }
 }
@@ -648,6 +656,21 @@ pub struct BeginThreadRunRequest {
     pub actor: ActorId,
     /// 不含 scope/fencing/time/sequence 的调用输入。
     pub command: BeginThreadRun,
+}
+
+/// 原入口认证 scope 与 v2 选择输入；自由值不能替代当前数据库权限。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BeginThreadRunV2Request {
+    /// 入口实际认证代次。
+    pub auth_generation: AuthGeneration,
+    /// 入口实际 deployment。
+    pub deployment: DeploymentId,
+    /// 入口实际 tenant。
+    pub tenant: TenantId,
+    /// 入口实际 actor。
+    pub actor: ActorId,
+    /// 必需 v2 意图与原消息输入。
+    pub command: BeginThreadRunV2,
 }
 
 /// Authoritative scope combined with one durable cancellation candidate.
@@ -766,6 +789,14 @@ pub trait ThreadDirectory: Send + Sync {
     async fn begin_thread_run(
         &self,
         _request: BeginThreadRunRequest,
+    ) -> Result<ThreadRunStarted, ThreadDirectoryError> {
+        Err(ThreadDirectoryError::Unavailable)
+    }
+
+    /// 接受一次 v2 custom turn；未装配原 dataset factory 的实现保持关闭。
+    async fn begin_thread_run_v2(
+        &self,
+        _request: BeginThreadRunV2Request,
     ) -> Result<ThreadRunStarted, ThreadDirectoryError> {
         Err(ThreadDirectoryError::Unavailable)
     }

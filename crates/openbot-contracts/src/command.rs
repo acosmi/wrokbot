@@ -419,6 +419,8 @@ pub enum AppCommand {
     /// actor、tenant、deployment、fencing、时间与 sequence 均不在输入面；只能由权威
     /// `AuthContext` / PostgreSQL transaction 铸造。`run_id` 同时是幂等键。
     BeginThreadRun(BeginThreadRun),
+    /// 按完整 v2 选择意图接受一次 custom foreground turn。
+    BeginThreadRunV2(BeginThreadRunV2),
 
     /// Persist an actor-owned foreground-run cancellation request.
     ///
@@ -877,6 +879,58 @@ pub struct BeginThreadRunBody {
     /// Explicit skill selection; omitted/empty preserves the original no-skill request.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_skill_slugs: Vec<String>,
+}
+
+/// v2 foreground 输入；模型、凭据、scope 和 dataset 权限由原事务重新核验。
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BeginThreadRunV2 {
+    /// 必需的原 v2 选择意图；其值不授予使用权限。
+    pub model_selection: crate::versioned_model_selection::RunModelSelectionV2,
+    /// 原 thread 身份。
+    pub thread_id: ThreadId,
+    /// 调用方的 durable 幂等键。
+    pub run_id: RunId,
+    /// 目标 Bot，由数据库核其当前可见性。
+    pub bot_id: BotId,
+    /// 原 channel/direct anchor。
+    pub anchor: ThreadRunAnchor,
+    /// 原样保存的用户消息。
+    pub message: String,
+    /// 有序技能选择，省略表示空集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_skill_slugs: Vec<String>,
+}
+
+impl core::fmt::Debug for BeginThreadRunV2 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("BeginThreadRunV2([redacted])")
+    }
+}
+
+/// 同一 runs URI 的 v2 body；不接受 owner、dataset、endpoint 或 secret。
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BeginThreadRunV2Body {
+    /// 必需的完整 v2 选择意图。
+    pub model_selection: crate::versioned_model_selection::RunModelSelectionV2,
+    /// 调用方的 durable 幂等键。
+    pub run_id: RunId,
+    /// 原目标 Bot。
+    pub bot_id: BotId,
+    /// 原 channel/direct anchor。
+    pub anchor: ThreadRunAnchor,
+    /// 原样保存的用户消息。
+    pub message: String,
+    /// 有序技能选择，省略表示空集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_skill_slugs: Vec<String>,
+}
+
+impl core::fmt::Debug for BeginThreadRunV2Body {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("BeginThreadRunV2Body([redacted])")
+    }
 }
 
 /// thread/message/run/event/outbox 同事务提交后的 receipt。
