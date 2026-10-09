@@ -711,6 +711,11 @@ async fn n08_exact48_schema_and_observation_errors() {
             "ALTER TABLE public.sessions RENAME TO sessions_query_unavailable",
             Kind::ObservationUnknown,
         ),
+        (
+            4,
+            "ALTER TABLE public.users ALTER COLUMN auth_generation TYPE numeric USING auth_generation::numeric",
+            Kind::ObservationUnknown,
+        ),
     ] {
         harness::with_temp_database(&admin, &format!("ga_n08_{index}"), |cfg| async move {
             let f = Fixture::new(cfg, 2).await?;
@@ -718,6 +723,12 @@ async fn n08_exact48_schema_and_observation_errors() {
             let parent = CancellationToken::new();
             let metadata = f.metadata(parent.clone()).await?;
             execute(&f, sql).await?;
+            if index == 4 {
+                let client=f.pool.get().await.map_err(|e|e.to_string())?;
+                let observed=client.query_one("SELECT pg_typeof(auth_generation)::text AS kind,auth_generation::text AS raw,auth_generation FROM public.users WHERE id=$1",&[&ACTOR]).await.map_err(|e|e.to_string())?;
+                check(observed.get::<_,String>("kind")=="numeric" && observed.get::<_,String>("raw")=="7" && observed.try_get::<_,i64>("auth_generation").is_err(),"actual query succeeds with numeric7 while original i64 decoder fails")?;
+                eprintln!("GATEWAY_JOURNAL_DECODE actual_query_succeeded=true actual_type=numeric original_value=7 original_i64_decode_failed=true");
+            }
             let e = exact_error(
                 f.journal
                     .create_attempt(
