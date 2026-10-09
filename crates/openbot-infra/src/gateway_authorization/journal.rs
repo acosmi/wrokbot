@@ -601,19 +601,20 @@ impl GatewayAuthorizationJournal {
             journal: Arc::downgrade(self),
             runtime: self.runtime.clone(),
         };
-        let gate = self
-            .owner_gate(auth, &owner)
-            .map_err(|e| e.with_acks(Ack::Timely, Ack::Timely))?;
-        let observation = current::borrow_current(self, auth, &gate)
-            .await
-            .map_err(|e| e.with_acks(Ack::Timely, Ack::Timely))?;
-        if !observation.identity().same_binding(&owner.identity) {
-            return Err(Error::new(Kind::Refused).with_acks(Ack::Timely, Ack::Timely));
+        {
+            let gate = self
+                .owner_gate(auth, &owner)
+                .map_err(|e| e.with_acks(Ack::Timely, Ack::Timely))?;
+            let observation = current::borrow_current(self, auth, &gate)
+                .await
+                .map_err(|e| e.with_acks(Ack::Timely, Ack::Timely))?;
+            if !observation.identity().same_binding(&owner.identity) {
+                return Err(Error::new(Kind::Refused).with_acks(Ack::Timely, Ack::Timely));
+            }
+            gate.check()
+                .map_err(|e| e.with_acks(Ack::Timely, Ack::Timely))?;
+            drop(observation);
         }
-        gate.check()
-            .map_err(|e| e.with_acks(Ack::Timely, Ack::Timely))?;
-        drop(observation);
-        drop(gate);
         Ok(owner)
     }
     /// CAS/admit/audit/ACK/read back using the original whole prepared owner.
