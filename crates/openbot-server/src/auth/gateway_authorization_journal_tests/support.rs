@@ -13,7 +13,7 @@ use openbot_infra::gateway_transport::*;
 use openbot_infra::net::safe_http::{
     CidrAllowlist, DnsResolver, DnsUnavailable, EgressPolicy, SafeDialer,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     io::{BufRead as _, Read as _, Write as _},
     net::SocketAddr,
@@ -104,7 +104,7 @@ impl Fixture {
         );
         resolver
             .install_gateway_authorization_journal(&journal)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:?}"))?;
         Ok(Self {
             config,
             pool,
@@ -163,7 +163,7 @@ impl Fixture {
         );
         resolver
             .install_gateway_authorization_journal(journal, &self.pool)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:?}"))?;
         Ok(resolver)
     }
     pub(super) async fn metadata(

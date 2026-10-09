@@ -467,7 +467,7 @@ async fn n05_original_weak_enrollment_default_closed() {
         )?;
         resolver
             .install_gateway_authorization_journal(&journal)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:?}"))?;
         check(
             resolver
                 .install_gateway_authorization_journal(&journal)
@@ -559,11 +559,11 @@ async fn n05_original_weak_enrollment_default_closed() {
                 1,
                 Arc::new(DefaultGuard),
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:?}"))?;
         let attached = auth
             .clone()
             .with_verified_request_binding(binding)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:?}"))?;
         let target = ShapeTarget(&attached);
         check(
             matches!(
@@ -1113,7 +1113,7 @@ async fn n16_old_runtime_and_owner_lifetime() {
                 )?;
                 resolver
                     .install_gateway_authorization_journal(&journal)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| format!("{e:?}"))?;
                 let auth = resolver
                     .resolve(&parts(Some(COOKIE))?)
                     .await
