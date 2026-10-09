@@ -235,6 +235,87 @@ pub enum AuditFieldError {
     /// Endpoint audit data was not a canonical HTTP(S) origin.
     #[error("audit_field_invalid_origin")]
     InvalidOrigin,
+    /// A gateway attempt identifier was not a canonical lowercase UUIDv7.
+    #[error("audit_field_invalid_gateway_authorization_attempt_id")]
+    InvalidGatewayAuthorizationAttemptId,
+}
+
+/// Canonical UUIDv7 data for an existing authorization attempt, never a permission proof.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AuditGatewayAuthorizationAttemptId(String);
+
+impl AuditGatewayAuthorizationAttemptId {
+    /// Accept exactly the lowercase, hyphenated UUIDv7 representation.
+    ///
+    /// # Errors
+    /// Reject wrong length, separators, version, variant or noncanonical bytes without echoing.
+    pub fn new(value: impl Into<String>) -> Result<Self, AuditFieldError> {
+        let value = value.into();
+        let raw = value.as_bytes();
+        if raw.len() != 36
+            || raw.iter().enumerate().any(|(index, byte)| {
+                if matches!(index, 8 | 13 | 18 | 23) {
+                    *byte != b'-'
+                } else {
+                    !matches!(*byte, b'0'..=b'9' | b'a'..=b'f')
+                }
+            })
+            || raw[14] != b'7'
+            || !matches!(raw[19], b'8' | b'9' | b'a' | b'b')
+        {
+            return Err(AuditFieldError::InvalidGatewayAuthorizationAttemptId);
+        }
+        Ok(Self(value))
+    }
+
+    /// Borrow only the validated descriptive attempt identifier.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The journal phases accepted by the initial, unsent authorization path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditGatewayAuthorizationPhase {
+    /// Original attempt creation committed.
+    Created,
+    /// Original registration admission committed; no registration was dispatched.
+    RegistrationAdmitted,
+    /// The original live owner closed within its original budget.
+    Closed,
+}
+
+impl AuditGatewayAuthorizationPhase {
+    /// Exact durable phase spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::RegistrationAdmitted => "registration_admitted",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+/// The two controlled close reasons accepted by the original live initial owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditGatewayAuthorizationOutcome {
+    /// A controlled refusal while the original authority remained current.
+    Refused,
+    /// A dependency observation was not established; no later observation upgrades it.
+    DependencyUnknown,
+}
+
+impl AuditGatewayAuthorizationOutcome {
+    /// Exact durable outcome spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Refused => "refused",
+            Self::DependencyUnknown => "dependency_unknown",
+        }
+    }
 }
 
 /// 人工接管的三个阶段。
@@ -272,6 +353,14 @@ impl TakeoverPhase {
 /// `field_ledger_is_disjoint_from_upstream_sensitive_keys` 这条测试重新体检一遍。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuditFact {
+    /// The initial gateway authorization journal schema is fixed at integer one.
+    GatewayAuthorizationJournalSchema,
+    /// Existing original attempt identity; no client, token, redirect or content.
+    GatewayAuthorizationAttemptId(AuditGatewayAuthorizationAttemptId),
+    /// One of the three closed initial-path phases.
+    GatewayAuthorizationPhase(AuditGatewayAuthorizationPhase),
+    /// Explicit NULL for an open prefix, or one of the two controlled close outcomes.
+    GatewayAuthorizationOutcome(Option<AuditGatewayAuthorizationOutcome>),
     /// 被调用工具在 catalog 中的稳定名。
     ToolName(AuditIdentifier),
     /// Compiled component声明并被服务端复核的data-function稳定名。
@@ -416,6 +505,10 @@ impl AuditFact {
     #[must_use]
     pub const fn field(&self) -> &'static str {
         match self {
+            Self::GatewayAuthorizationJournalSchema => "journal_schema",
+            Self::GatewayAuthorizationAttemptId(_) => "attempt_id",
+            Self::GatewayAuthorizationPhase(_) => "phase",
+            Self::GatewayAuthorizationOutcome(_) => "outcome_code",
             Self::ToolName(_) => "tool_name",
             Self::ComponentFunction(_) => "function",
             Self::ComponentReads(_) => "reads",
@@ -481,6 +574,12 @@ impl AuditFact {
     /// 该事实的 JSON 值。
     fn to_json(&self) -> Value {
         match self {
+            Self::GatewayAuthorizationJournalSchema => Value::Number(1.into()),
+            Self::GatewayAuthorizationAttemptId(value) => Value::String(value.as_str().to_owned()),
+            Self::GatewayAuthorizationPhase(value) => Value::String(value.as_str().to_owned()),
+            Self::GatewayAuthorizationOutcome(value) => value.map_or(Value::Null, |outcome| {
+                Value::String(outcome.as_str().to_owned())
+            }),
             Self::ToolName(value)
             | Self::ComponentFunction(value)
             | Self::Bot(value)
@@ -578,6 +677,12 @@ impl AuditFact {
     fn write_canonical(&self, writer: &mut CanonicalWriter) {
         writer.str(self.field());
         match self {
+            Self::GatewayAuthorizationJournalSchema => writer.u64(1),
+            Self::GatewayAuthorizationAttemptId(value) => writer.str(value.as_str()),
+            Self::GatewayAuthorizationPhase(value) => writer.str(value.as_str()),
+            Self::GatewayAuthorizationOutcome(value) => {
+                writer.option_str(value.map(AuditGatewayAuthorizationOutcome::as_str));
+            }
             Self::ToolName(value)
             | Self::ComponentFunction(value)
             | Self::Bot(value)
@@ -732,6 +837,10 @@ pub const AUDIT_FIELD_LEDGER: &[&str] = &[
     "secret_input.purpose",
     "secret_input.target_field",
     "secret_input.value_len",
+    "journal_schema",
+    "attempt_id",
+    "phase",
+    "outcome_code",
 ];
 
 /// 一条审计事件的 payload：一组互不重键的 [`AuditFact`]。
@@ -944,9 +1053,126 @@ mod tests {
         }
     }
 
+    #[test]
+    fn gateway_authorization_attempt_id_is_canonical_v7() {
+        let valid = "019a0300-0000-7000-8abc-000000000003";
+        assert_eq!(
+            AuditGatewayAuthorizationAttemptId::new(valid)
+                .unwrap()
+                .as_str(),
+            valid
+        );
+        for invalid in [
+            "",
+            "secret-synthetic",
+            "019a0300-0000-7000-8ABC-000000000003",
+            "019a0300-0000-4000-8abc-000000000003",
+            "019a0300-0000-7000-7abc-000000000003",
+            "019a0300_0000-7000-8abc-000000000003",
+            "019a0300-0000-7000-8abc-000000000003 ",
+            " 019a0300-0000-7000-8abc-000000000003",
+            "019a0300-0000-7000-8abc-00000000000g",
+        ] {
+            let error = AuditGatewayAuthorizationAttemptId::new(invalid).unwrap_err();
+            assert_eq!(error, AuditFieldError::InvalidGatewayAuthorizationAttemptId);
+            assert_eq!(
+                error.to_string(),
+                "audit_field_invalid_gateway_authorization_attempt_id"
+            );
+        }
+        for variant in ['8', '9', 'a', 'b'] {
+            let mut value = valid.to_owned();
+            value.replace_range(19..20, &variant.to_string());
+            assert!(AuditGatewayAuthorizationAttemptId::new(value).is_ok());
+        }
+    }
+
+    #[test]
+    fn gateway_authorization_four_facts_are_typed() {
+        let id = "019a0300-0000-7000-8000-000000000003";
+        for (phase, expected) in [
+            (AuditGatewayAuthorizationPhase::Created, "created"),
+            (
+                AuditGatewayAuthorizationPhase::RegistrationAdmitted,
+                "registration_admitted",
+            ),
+            (AuditGatewayAuthorizationPhase::Closed, "closed"),
+        ] {
+            let payload = AuditPayload::from_facts([
+                AuditFact::GatewayAuthorizationJournalSchema,
+                AuditFact::GatewayAuthorizationAttemptId(
+                    AuditGatewayAuthorizationAttemptId::new(id).unwrap(),
+                ),
+                AuditFact::GatewayAuthorizationPhase(phase),
+                AuditFact::GatewayAuthorizationOutcome(None),
+            ])
+            .unwrap();
+            assert_eq!(payload.len(), 4);
+            assert_eq!(
+                payload.to_json(),
+                serde_json::json!({
+                    "journal_schema":1,"attempt_id":id,"phase":expected,"outcome_code":null
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_authorization_null_outcomes_and_duplicates() {
+        let values = [
+            None,
+            Some(AuditGatewayAuthorizationOutcome::Refused),
+            Some(AuditGatewayAuthorizationOutcome::DependencyUnknown),
+        ];
+        let expected = [
+            Value::Null,
+            Value::String("refused".to_owned()),
+            Value::String("dependency_unknown".to_owned()),
+        ];
+        let mut encodings = Vec::new();
+        for (outcome, json) in values.into_iter().zip(expected) {
+            let fact = AuditFact::GatewayAuthorizationOutcome(outcome);
+            let payload = AuditPayload::from_facts([fact.clone()]).unwrap();
+            assert_eq!(payload.to_json(), serde_json::json!({"outcome_code":json}));
+            let mut writer = CanonicalWriter::new("owned-gateway-audit-vector");
+            fact.write_canonical(&mut writer);
+            encodings.push(writer.finish());
+            assert!(matches!(
+                AuditPayload::from_facts([fact.clone(), fact]),
+                Err(AuditPayloadError::DuplicateField {
+                    field: "outcome_code"
+                })
+            ));
+        }
+        assert_ne!(encodings[0], encodings[1]);
+        assert_ne!(encodings[0], encodings[2]);
+        assert_ne!(encodings[1], encodings[2]);
+        for fact in [
+            AuditFact::GatewayAuthorizationJournalSchema,
+            AuditFact::GatewayAuthorizationAttemptId(
+                AuditGatewayAuthorizationAttemptId::new("019a0300-0000-7000-8000-000000000003")
+                    .unwrap(),
+            ),
+            AuditFact::GatewayAuthorizationPhase(AuditGatewayAuthorizationPhase::Closed),
+        ] {
+            let field = fact.field();
+            assert_eq!(
+                AuditPayload::from_facts([fact.clone(), fact]),
+                Err(AuditPayloadError::DuplicateField { field })
+            );
+        }
+    }
+
     /// 全部变体的样例 —— 新增变体必须同 PR 加进这里，否则下面两条台账测试会红。
     fn every_variant() -> Vec<AuditFact> {
         vec![
+            AuditFact::GatewayAuthorizationJournalSchema,
+            AuditFact::GatewayAuthorizationAttemptId(
+                AuditGatewayAuthorizationAttemptId::new("019a0300-0000-7000-8000-000000000003")
+                    .unwrap(),
+            ),
+            AuditFact::GatewayAuthorizationPhase(AuditGatewayAuthorizationPhase::Created),
+            AuditFact::GatewayAuthorizationOutcome(None),
             AuditFact::ToolName(identifier("browser.click")),
             AuditFact::ComponentFunction(identifier("recentRefusals")),
             AuditFact::ComponentReads(AuditLabel::new("audit_trail")),

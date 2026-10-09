@@ -67,6 +67,8 @@ pub enum Expectation {
     TlsProxySecret,
     /// A valid HTTPS public address without credentials, query or fragment.
     HttpsProxyPublicUrl,
+    /// Exactly 64 lowercase ASCII hex bytes from the explicit trusted journal startup setting.
+    GatewayAuthorizationInstallationId,
 }
 
 impl Expectation {
@@ -90,6 +92,9 @@ impl Expectation {
             Self::ProviderRateCard => "provider_rate_card",
             Self::TlsProxySecret => "tls_proxy_secret_64_lower_hex",
             Self::HttpsProxyPublicUrl => "https_proxy_public_url",
+            Self::GatewayAuthorizationInstallationId => {
+                "gateway_authorization_installation_id_64_lower_hex"
+            }
         }
     }
 }

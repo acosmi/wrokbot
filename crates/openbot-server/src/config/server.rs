@@ -199,6 +199,26 @@ pub struct ComputerConfig {
     pub action_policy: Option<ActionPolicy>,
 }
 
+/// Explicit trusted startup installation label; format validation grants no installation authority.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ConfiguredServerJournalInstallationId {
+    raw: String,
+}
+
+impl ConfiguredServerJournalInstallationId {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.raw
+    }
+}
+
+impl std::fmt::Debug for ConfiguredServerJournalInstallationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ConfiguredServerJournalInstallationId")
+            .field(&"<redacted>")
+            .finish()
+    }
+}
+
 /// Server 启动配置。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerConfig {
@@ -212,6 +232,8 @@ pub struct ServerConfig {
     /// 改它等于放弃对既有 thread 的 `owns` 判定，所以迁移 preflight 必须拒绝与旧库不一致
     /// 的值 —— 那是迁移工具的活，本模块只负责把值原样带出来。
     pub deployment_id: Option<String>,
+    /// Explicit canonical startup label; absence leaves the authorization journal unavailable.
+    pub gateway_authorization_installation_id: Option<ConfiguredServerJournalInstallationId>,
     /// 本部署对外的公共地址，无尾斜杠。
     ///
     /// **唯一**公共地址来源（v3 §15.4：它接替了上游那个 auth 专用的旧变量）。
@@ -295,6 +317,24 @@ impl ServerConfig {
             },
         };
 
+        let gateway_authorization_installation_id =
+            match env_map.get("OPENBOT_GATEWAY_AUTH_INSTALLATION_ID") {
+                None => None,
+                Some(raw)
+                    if raw.len() == 64
+                        && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) =>
+                {
+                    Some(ConfiguredServerJournalInstallationId { raw: raw.clone() })
+                }
+                Some(_) => {
+                    problems.push(ConfigProblem::Malformed {
+                        variable: "OPENBOT_GATEWAY_AUTH_INSTALLATION_ID",
+                        expectation: Expectation::GatewayAuthorizationInstallationId,
+                    });
+                    None
+                }
+            };
+
         let public_url = parse_optional_address(env_map, "OPENBOT_PUBLIC_URL", &mut problems);
         let tls_proxy_secret =
             super::transport::parse_tls_proxy_secret(env_map, public_url.as_ref(), &mut problems);
@@ -326,6 +366,7 @@ impl ServerConfig {
             port,
             deployment_environment,
             deployment_id: env::optional(env_map, "DEPLOYMENT_ID").map(str::to_owned),
+            gateway_authorization_installation_id,
             public_url,
             tls_proxy_secret,
             app_url,

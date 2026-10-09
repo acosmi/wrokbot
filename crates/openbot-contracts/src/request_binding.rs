@@ -244,6 +244,118 @@ pub trait CustomModelCatalogHostTarget: Send + Sync {
     fn matches_auth(&self, auth: &AuthContext) -> bool;
 }
 
+/// Original enrolled authorization journal target; implementing this port grants no authority.
+pub trait GatewayAuthorizationHostTarget: Send + Sync {
+    /// Compare the exact original enrolled journal authority Arc.
+    fn matches_authority(&self, authority: &Arc<()>) -> bool;
+    /// Compare all six original Auth facts and the original request binding.
+    fn matches_auth(&self, auth: &AuthContext) -> bool;
+}
+
+/// Session facts decoded by this journal's actual original transaction.
+#[derive(Clone, Copy)]
+pub struct GatewayAuthorizationSessionFacts {
+    /// Original immutable session creation time.
+    pub created_at: OffsetDateTime,
+    /// Current activity time without performing a touch.
+    pub updated_at: OffsetDateTime,
+    /// Current session expiry.
+    pub expires_at: OffsetDateTime,
+    /// Wall clock sampled at the original observation.
+    pub observed_wall: OffsetDateTime,
+    /// Monotonic clock from that same observation.
+    pub observed_monotonic: std::time::Instant,
+}
+
+/// Synchronous original Host lifetime witness; it owns no resolver lease or PG checkout.
+pub trait GatewayAuthorizationHostTailWitness: Send + Sync {
+    /// Recheck the original owner, issuer, session policy and absolute deadline.
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError>;
+}
+
+/// Lifetime policy borrowed from the real enrolled producer.
+pub trait GatewayAuthorizationHostTailFactory: Send + Sync {
+    /// Retain a witness for this operation's original decoded session facts.
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<GatewayAuthorizationSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn GatewayAuthorizationHostTailWitness>, HostRequestBindingError>;
+}
+
+/// Borrowed original Server Host identity and epoch, without keeping its owner alive.
+pub struct GatewayAuthorizationHostObservation<'a> {
+    kind: HostRequestBindingKind,
+    identity: HostRequestBindingIdentity,
+    epoch: Option<BorrowedServerSessionEpoch<'a>>,
+    factory: Box<dyn GatewayAuthorizationHostTailFactory + 'a>,
+}
+
+impl<'a> GatewayAuthorizationHostObservation<'a> {
+    /// Trusted producer construction; the journal still checks exact enrollment and Pool identity.
+    #[doc(hidden)]
+    pub fn from_trusted_host(
+        kind: HostRequestBindingKind,
+        identity: HostRequestBindingIdentity,
+        epoch: Option<BorrowedServerSessionEpoch<'a>>,
+        factory: Box<dyn GatewayAuthorizationHostTailFactory + 'a>,
+    ) -> Result<Self, HostRequestBindingError> {
+        if kind != identity.kind {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        match (kind, &identity.epoch, &epoch) {
+            (HostRequestBindingKind::ServerSession, Epoch::Session(original), Some(borrowed))
+                if original == borrowed.epoch => {}
+            (HostRequestBindingKind::ServerSingleUserOwner, Epoch::SingleUser, None) => {}
+            _ => return Err(HostRequestBindingError::NotCurrent),
+        }
+        Ok(Self {
+            kind,
+            identity,
+            epoch,
+            factory,
+        })
+    }
+
+    /// Closed original Host kind, without a current authorization conclusion.
+    #[must_use]
+    pub const fn kind(&self) -> HostRequestBindingKind {
+        self.kind
+    }
+
+    /// Original attachment for exact issuer and binding comparison.
+    #[must_use]
+    pub const fn identity(&self) -> &HostRequestBindingIdentity {
+        &self.identity
+    }
+
+    /// Reborrow the original issuer-owned epoch without exposing its bearer token.
+    #[must_use]
+    pub fn server_session_epoch(&self) -> Option<BorrowedServerSessionEpoch<'_>> {
+        self.epoch
+            .as_ref()
+            .map(|epoch| BorrowedServerSessionEpoch { epoch: epoch.epoch })
+    }
+
+    /// Session Hosts require their original SQL facts; SingleUser Hosts require None.
+    pub fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<GatewayAuthorizationSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn GatewayAuthorizationHostTailWitness>, HostRequestBindingError> {
+        if (self.kind == HostRequestBindingKind::ServerSession) != session.is_some() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        self.factory.witness(auth, session, deadline)
+    }
+}
+
 /// 原仓储最后一条实际 SQL 解码的 session 时钟事实；不是 session proof。
 #[derive(Clone, Copy)]
 pub struct CustomModelCatalogSessionFacts {
@@ -416,6 +528,16 @@ pub type ArtifactSaveReceiptCurrentCheck<'a> =
 
 /// 受信 Rust host 的当前验证 port；任意 Rust 实现不自动取得可信身份。
 pub trait HostRequestBindingGuard: Send + Sync {
+    /// Borrow an enrolled original Server authorization journal Host without database I/O.
+    fn borrow_gateway_authorization_host_before<'a>(
+        &'a self,
+        _auth: &'a AuthContext,
+        _target: &'a dyn GatewayAuthorizationHostTarget,
+        _deadline: std::time::Instant,
+    ) -> Result<GatewayAuthorizationHostObservation<'a>, HostRequestBindingError> {
+        Err(HostRequestBindingError::Unavailable)
+    }
+
     /// 原目录仓储的专用只读 Host 借用；未装配默认不可用。
     fn borrow_custom_model_catalog_host_before<'a>(
         &'a self,
@@ -708,6 +830,28 @@ pub struct VerifiedHostRequestBinding {
     guard: Arc<dyn HostRequestBindingGuard>,
 }
 impl VerifiedHostRequestBinding {
+    /// Check the same attachment before and after the real producer's synchronous borrowing.
+    pub fn borrow_gateway_authorization_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn GatewayAuthorizationHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<GatewayAuthorizationHostObservation<'a>, HostRequestBindingError> {
+        self.check_repository_host_attachment(auth, deadline)?;
+        if !target.matches_auth(auth) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let observation = self
+            .guard
+            .borrow_gateway_authorization_host_before(auth, target, deadline)?;
+        self.check_repository_host_attachment(auth, deadline)?;
+        if observation.kind() != self.kind() || !self.identity.same_binding(observation.identity())
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        Ok(observation)
+    }
+
     /// 原 attachment 前后核同，仅借用专用真实 producer，不执行数据库 I/O。
     pub fn borrow_custom_model_catalog_host_before<'a>(
         &'a self,

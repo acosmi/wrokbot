@@ -61,6 +61,11 @@ use openbot_contracts::request_binding::{
     CustomModelCatalogSessionFacts,
 };
 use openbot_contracts::request_binding::{
+    GatewayAuthorizationHostObservation, GatewayAuthorizationHostTailFactory,
+    GatewayAuthorizationHostTailWitness, GatewayAuthorizationHostTarget,
+    GatewayAuthorizationSessionFacts,
+};
+use openbot_contracts::request_binding::{
     HostRequestBindingError, HostRequestBindingGuard, HostRequestBindingKind,
     RememberPreferenceHostObservation, RememberPreferenceHostTailFactory,
     RememberPreferenceHostTailWitness, RememberPreferenceHostTarget,
@@ -82,6 +87,10 @@ use openbot_infra::runtime_capability_facts::{
     PostgresRuntimeCapabilityFacts, RuntimeCapabilityCollectorFactory,
     RuntimeCapabilityRevisionOwner,
 };
+use openbot_infra::{
+    GatewayAuthorizationJournal, GatewayAuthorizationJournalError,
+    GatewayAuthorizationJournalRuntimeOwner,
+};
 use std::sync::{Arc, Weak};
 use time::OffsetDateTime;
 use tracing::Span;
@@ -89,6 +98,36 @@ use tracing::Span;
 use crate::error::HttpError;
 use crate::http::ServerState;
 use crate::telemetry::ACTOR_ID_FIELD;
+
+/// Assemble the optional journal once from the original validated startup configuration and Pool.
+/// The private installation label is borrowed only inside this Server crate; absence performs no RNG or I/O.
+pub fn assemble_gateway_authorization_journal(
+    server: &crate::config::ServerConfig,
+    pool: openbot_infra::db::pool::DatabasePool,
+    deployment: DeploymentId,
+    tenant: TenantId,
+    audit_key: openbot_domain::vault::SecretBytes,
+) -> Result<
+    Option<(
+        Arc<GatewayAuthorizationJournalRuntimeOwner>,
+        Arc<GatewayAuthorizationJournal>,
+    )>,
+    GatewayAuthorizationJournalError,
+> {
+    let Some(installation) = server.gateway_authorization_installation_id.as_ref() else {
+        return Ok(None);
+    };
+    let runtime = Arc::new(GatewayAuthorizationJournalRuntimeOwner::new(
+        pool.clone(),
+        deployment.clone(),
+        tenant.clone(),
+        installation.as_str(),
+    )?);
+    let journal = Arc::new(GatewayAuthorizationJournal::new(
+        pool, deployment, tenant, audit_key, &runtime,
+    )?);
+    Ok(Some((runtime, journal)))
+}
 
 /// 把一次请求的认证材料解析成权威身份。
 ///
@@ -518,6 +557,7 @@ struct ServerSessionProbeState {
     capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
     remember_preferences: std::sync::OnceLock<Weak<PostgresRememberPreferenceRepository>>,
     custom_model_catalog_inventory: std::sync::OnceLock<Weak<PostgresCustomModelCatalogInventory>>,
+    gateway_authorization_journal: std::sync::OnceLock<Weak<GatewayAuthorizationJournal>>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     artifact_read_authority: std::sync::OnceLock<Weak<PostgresArtifactReadAuthority>>,
 }
@@ -593,6 +633,62 @@ impl HostRequestBindingGuard for ServerSessionCurrentGuard {
             binding.identity().clone(),
             Some(epoch),
             Box::new(ServerArtifactCleanupTailFactory {
+                probe: self.probe.clone(),
+                owner: self.owner.clone(),
+                issuer: self.issuer.clone(),
+                original: auth.clone(),
+                lifetime: probe.lifetime,
+                created_at: self.row.created_at,
+            }),
+        )
+    }
+    fn borrow_gateway_authorization_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn GatewayAuthorizationHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<GatewayAuthorizationHostObservation<'a>, HostRequestBindingError> {
+        if auth != &self.original || !self.owner.is_current() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let repository = probe
+            .gateway_authorization_journal
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !repository.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant)
+            || !repository.matches_host_target(target)
+            || !target.matches_auth(auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        let epoch = self
+            .issuer
+            .borrow_server_session_epoch(binding.identity())?;
+        if !epoch.matches_raw_row(
+            &self.row.id,
+            &self.row.user_id,
+            &self.row.token_column,
+            self.row.created_at,
+            self.row.issued_generation,
+        ) {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        GatewayAuthorizationHostObservation::from_trusted_host(
+            HostRequestBindingKind::ServerSession,
+            binding.identity().clone(),
+            Some(epoch),
+            Box::new(ServerGatewayAuthorizationTailFactory {
                 probe: self.probe.clone(),
                 owner: self.owner.clone(),
                 issuer: self.issuer.clone(),
@@ -1037,6 +1133,92 @@ impl ArtifactCleanupHostTailWitness for ServerArtifactCleanupTail {
 }
 
 #[derive(Clone)]
+struct ServerGatewayAuthorizationTailFactory {
+    probe: Weak<ServerSessionProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+    lifetime: SessionLifetimePolicy,
+    created_at: OffsetDateTime,
+}
+impl GatewayAuthorizationHostTailFactory for ServerGatewayAuthorizationTailFactory {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<GatewayAuthorizationSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn GatewayAuthorizationHostTailWitness>, HostRequestBindingError> {
+        let session = session.ok_or(HostRequestBindingError::NotCurrent)?;
+        if session.created_at != self.created_at {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let witness = ServerGatewayAuthorizationTail {
+            source: self.clone(),
+            session,
+        };
+        witness.verify_current(auth, deadline)?;
+        Ok(Box::new(witness))
+    }
+}
+struct ServerGatewayAuthorizationTail {
+    source: ServerGatewayAuthorizationTailFactory,
+    session: GatewayAuthorizationSessionFacts,
+}
+impl GatewayAuthorizationHostTailWitness for ServerGatewayAuthorizationTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        verify_repository_host_attachment(
+            &self.source.owner,
+            &self.source.issuer,
+            &self.source.original,
+            auth,
+            deadline,
+        )?;
+        let probe = self
+            .source
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        let journal = probe
+            .gateway_authorization_journal
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !journal.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant) {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let now = OffsetDateTime::now_utc();
+        if now < self.session.observed_wall
+            || std::time::Instant::now() < self.session.observed_monotonic
+            || now >= self.session.expires_at
+            || evaluate_session(
+                self.source.lifetime,
+                SessionState::rehydrate(
+                    self.session.created_at,
+                    self.session.updated_at,
+                    auth.auth_generation(),
+                ),
+                auth.auth_generation(),
+                now,
+            )
+            .is_err()
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        verify_repository_host_attachment(
+            &self.source.owner,
+            &self.source.issuer,
+            &self.source.original,
+            auth,
+            deadline,
+        )
+    }
+}
+
+#[derive(Clone)]
 struct ServerCustomModelCatalogTailFactory {
     probe: Weak<ServerSessionProbeState>,
     owner: RequestBindingOwnerObservation,
@@ -1389,6 +1571,26 @@ impl ServerSessionCurrentGuard {
 }
 
 impl PostgresSessionAuthResolver {
+    /// Install one journal against this exact original Session Host Pool and namespace.
+    pub fn install_gateway_authorization_journal(
+        &self,
+        journal: &Arc<GatewayAuthorizationJournal>,
+    ) -> Result<(), HostRequestBindingError> {
+        let owner = &self.binding_owner;
+        let probe = &owner.probe;
+        if !owner.issuer.observation().is_current()
+            || probe.gateway_authorization_journal.get().is_some()
+            || !journal.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        journal.enroll_host_issuer(&owner.issuer)?;
+        probe
+            .gateway_authorization_journal
+            .set(Arc::downgrade(journal))
+            .map_err(|_| HostRequestBindingError::Unavailable)
+    }
+
     /// Install one actual same-Pool inventory before serving any request.
     pub fn install_custom_model_catalog_inventory(
         &self,
@@ -1433,6 +1635,7 @@ impl PostgresSessionAuthResolver {
             capability_facts: std::sync::OnceLock::new(),
             remember_preferences: std::sync::OnceLock::new(),
             custom_model_catalog_inventory: std::sync::OnceLock::new(),
+            gateway_authorization_journal: std::sync::OnceLock::new(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             artifact_read_authority: std::sync::OnceLock::new(),
         });
@@ -1778,8 +1981,14 @@ struct SingleUserProbeState {
     capability_facts: std::sync::OnceLock<Weak<PostgresRuntimeCapabilityFacts>>,
     remember_preferences: std::sync::OnceLock<Weak<PostgresRememberPreferenceRepository>>,
     custom_model_catalog_inventory: std::sync::OnceLock<SingleUserCustomCatalogEnrollment>,
+    gateway_authorization_journal: std::sync::OnceLock<SingleUserGatewayAuthorizationEnrollment>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     artifact_read_authority: std::sync::OnceLock<Weak<PostgresArtifactReadAuthority>>,
+}
+
+struct SingleUserGatewayAuthorizationEnrollment {
+    journal: Weak<GatewayAuthorizationJournal>,
+    pool: openbot_infra::db::pool::DatabasePool,
 }
 
 struct SingleUserCustomCatalogEnrollment {
@@ -1859,6 +2068,61 @@ impl HostRequestBindingGuard for SingleUserCurrentGuard {
         })
     }
 
+    fn borrow_gateway_authorization_host_before<'a>(
+        &'a self,
+        auth: &'a AuthContext,
+        target: &'a dyn GatewayAuthorizationHostTarget,
+        deadline: std::time::Instant,
+    ) -> Result<GatewayAuthorizationHostObservation<'a>, HostRequestBindingError> {
+        if !self.owner.is_current() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        if probe.principal.auth_context() != auth {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let enrollment = probe
+            .gateway_authorization_journal
+            .get()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let repository = enrollment
+            .journal
+            .upgrade()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !probe.principal.matches_pool_scope(&enrollment.pool)
+            || !repository.matches_pool_scope(&enrollment.pool, auth.deployment(), auth.tenant())
+            || !repository.matches_host_target(target)
+            || !target.matches_auth(auth)
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
+        if binding.kind() != HostRequestBindingKind::ServerSingleUserOwner
+            || !self.issuer.owns_identity(binding.identity())
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let factory = SingleUserGatewayAuthorizationTail {
+            probe: self.probe.clone(),
+            owner: self.owner.clone(),
+            issuer: self.issuer.clone(),
+            original: auth.clone(),
+            observed_wall: OffsetDateTime::now_utc(),
+            observed_monotonic: std::time::Instant::now(),
+        };
+        factory.verify_current(auth, deadline)?;
+        GatewayAuthorizationHostObservation::from_trusted_host(
+            HostRequestBindingKind::ServerSingleUserOwner,
+            binding.identity().clone(),
+            None,
+            Box::new(factory),
+        )
+    }
     fn borrow_custom_model_catalog_host_before<'a>(
         &'a self,
         auth: &'a AuthContext,
@@ -2047,6 +2311,69 @@ impl ArtifactReadTailWitness for SingleUserArtifactReadTail {
 }
 
 #[derive(Clone)]
+struct SingleUserGatewayAuthorizationTail {
+    probe: Weak<SingleUserProbeState>,
+    owner: RequestBindingOwnerObservation,
+    issuer: RequestBindingIssuer,
+    original: AuthContext,
+    observed_wall: OffsetDateTime,
+    observed_monotonic: std::time::Instant,
+}
+impl GatewayAuthorizationHostTailFactory for SingleUserGatewayAuthorizationTail {
+    fn witness(
+        &self,
+        auth: &AuthContext,
+        session: Option<GatewayAuthorizationSessionFacts>,
+        deadline: std::time::Instant,
+    ) -> Result<Box<dyn GatewayAuthorizationHostTailWitness>, HostRequestBindingError> {
+        if session.is_some() {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        self.verify_current(auth, deadline)?;
+        Ok(Box::new(self.clone()))
+    }
+}
+impl GatewayAuthorizationHostTailWitness for SingleUserGatewayAuthorizationTail {
+    fn verify_current(
+        &self,
+        auth: &AuthContext,
+        deadline: std::time::Instant,
+    ) -> Result<(), HostRequestBindingError> {
+        verify_repository_host_attachment(
+            &self.owner,
+            &self.issuer,
+            &self.original,
+            auth,
+            deadline,
+        )?;
+        let probe = self
+            .probe
+            .upgrade()
+            .ok_or(HostRequestBindingError::NotCurrent)?;
+        if probe.principal.auth_context() != auth
+            || OffsetDateTime::now_utc() < self.observed_wall
+            || std::time::Instant::now() < self.observed_monotonic
+        {
+            return Err(HostRequestBindingError::NotCurrent);
+        }
+        let enrollment = probe
+            .gateway_authorization_journal
+            .get()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let repository = enrollment
+            .journal
+            .upgrade()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        if !probe.principal.matches_pool_scope(&enrollment.pool)
+            || !repository.matches_pool_scope(&enrollment.pool, auth.deployment(), auth.tenant())
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        verify_repository_host_attachment(&self.owner, &self.issuer, &self.original, auth, deadline)
+    }
+}
+
+#[derive(Clone)]
 struct SingleUserCustomModelCatalogTail {
     probe: Weak<SingleUserProbeState>,
     owner: RequestBindingOwnerObservation,
@@ -2165,6 +2492,35 @@ impl core::fmt::Debug for SingleUserAuthResolver {
 }
 
 impl SingleUserAuthResolver {
+    /// Enroll only the genuine principal and its original actual Pool once.
+    pub fn install_gateway_authorization_journal(
+        &self,
+        journal: &Arc<GatewayAuthorizationJournal>,
+        actual_pool: &openbot_infra::db::pool::DatabasePool,
+    ) -> Result<(), HostRequestBindingError> {
+        let owner = self
+            .binding_owner
+            .as_ref()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let original = owner.probe.principal.auth_context();
+        if !owner.issuer.observation().is_current()
+            || owner.probe.gateway_authorization_journal.get().is_some()
+            || !owner.probe.principal.matches_pool_scope(actual_pool)
+            || !journal.matches_pool_scope(actual_pool, original.deployment(), original.tenant())
+        {
+            return Err(HostRequestBindingError::Unavailable);
+        }
+        journal.enroll_host_issuer(&owner.issuer)?;
+        owner
+            .probe
+            .gateway_authorization_journal
+            .set(SingleUserGatewayAuthorizationEnrollment {
+                journal: Arc::downgrade(journal),
+                pool: actual_pool.clone(),
+            })
+            .map_err(|_| HostRequestBindingError::Unavailable)
+    }
+
     /// Only the verified principal and the original actual Pool can enroll this inventory.
     pub fn install_custom_model_catalog_inventory(
         &self,
@@ -2215,6 +2571,7 @@ impl SingleUserAuthResolver {
                     capability_facts: std::sync::OnceLock::new(),
                     remember_preferences: std::sync::OnceLock::new(),
                     custom_model_catalog_inventory: std::sync::OnceLock::new(),
+                    gateway_authorization_journal: std::sync::OnceLock::new(),
                     #[cfg(any(target_os = "macos", target_os = "linux"))]
                     artifact_read_authority: std::sync::OnceLock::new(),
                 }),
@@ -2631,3 +2988,6 @@ impl AuthResolver for FixedAuthResolver {
         self.outcome.clone()
     }
 }
+
+#[cfg(test)]
+mod gateway_authorization_journal_tests;
