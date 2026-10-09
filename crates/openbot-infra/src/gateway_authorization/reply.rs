@@ -42,7 +42,7 @@ pub(super) fn scope_valid(value: &str) -> bool {
     let mut ai = false;
     let mut account = false;
     for word in value
-        .split(|ch| matches!(ch, '\t' | '\n' | '\u{000c}' | '\r' | ' '))
+        .split(['\t', '\n', '\u{000c}', '\r', ' '])
         .filter(|word| !word.is_empty())
     {
         match word {
