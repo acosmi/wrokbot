@@ -1245,12 +1245,13 @@ enum TerminalStage {
     NewCommit,
     ExactReplayRollback,
     ClassifierRollback,
+    StartRollback,
 }
 impl TerminalStage {
     fn command(self) -> &'static [u8] {
         match self {
             Self::NewCommit => b"COMMIT\0",
-            Self::ExactReplayRollback | Self::ClassifierRollback => b"ROLLBACK\0",
+            Self::ExactReplayRollback | Self::ClassifierRollback | Self::StartRollback => b"ROLLBACK\0",
         }
     }
     fn sql_bits(self, sql: &[u8]) -> u8 {
@@ -1267,11 +1268,30 @@ impl TerminalStage {
                 u8::from(sql.contains("coalesce(m.content ? 'modelSelection',false) AS has_intent"))
                     | (u8::from(sql.contains("SELECT EXISTS(SELECT 1 FROM openbot_internal.run_model_selection_v2_snapshots WHERE run_id=$1)")) << 1)
             }
+            Self::StartRollback => {
+                // All three statements must occur in this original RC transaction.
+                // ContextCheck has no FOR SHARE secret query; replay/accept have no
+                // encrypted-value start query. Their ACKs cannot select this stage.
+                u8::from(
+                    sql.contains("SELECT s.*,r.created_at AS run_created_at,m.content AS input_content,")
+                        && sql.contains("JOIN openbot_internal.run_model_selection_v2_snapshots s"),
+                ) | (u8::from(
+                    sql.contains("SELECT s.encrypted_value FROM public.model_connection_secrets s")
+                        && sql.contains(" FOR SHARE OF s"),
+                ) << 1)
+                    | (u8::from(
+                        sql.contains("JOIN public.model_connections mc ON mc.id=$11")
+                            && sql.contains("JOIN public.model_connection_secrets ms ON ms.id=$13")
+                            && sql.contains("JOIN openbot_internal.artifact_dataset_bindings d")
+                            && sql.contains(") AS current"),
+                    ) << 2)
+            }
         }
     }
     fn complete_bits(self) -> u8 {
         match self {
             Self::NewCommit => 1,
+            Self::StartRollback => 7,
             _ => 3,
         }
     }
@@ -2171,6 +2191,370 @@ async fn v2_exact_durable_replay_original_rollback_ack_loss_is_closure_unproven(
         assert_eq!(original_business_image(&f, &req).await, committed);
         f.finish().await;
         proxy.stop().await;
+        Ok(())
+    })
+    .await;
+}
+
+
+// This single-request fixture is used only by the new start-rollback cases.
+// Existing TlsFixture and its historical abort_all tail are unchanged.
+#[derive(Default)]
+struct StartRollbackTlsObservation {
+    captures: Mutex<Vec<Capture>>,
+    accepted: AtomicUsize,
+    headers_written: AtomicUsize,
+    bodies_written: AtomicUsize,
+    shutdowns: AtomicUsize,
+    joined: AtomicUsize,
+}
+impl StartRollbackTlsObservation {
+    fn assert_headers_only(&self) {
+        assert_eq!(self.accepted.load(Ordering::SeqCst), 1);
+        let captures = self.captures.lock().unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].method, "POST");
+        assert_eq!(captures[0].path, "/v1/chat/completions");
+        assert_eq!(self.headers_written.load(Ordering::SeqCst), 1);
+        assert_eq!(self.bodies_written.load(Ordering::SeqCst), 0);
+    }
+    fn assert_normal_join(&self) {
+        assert_eq!(self.accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(self.captures.lock().unwrap().len(), 1);
+        assert_eq!(self.headers_written.load(Ordering::SeqCst), 1);
+        assert_eq!(self.bodies_written.load(Ordering::SeqCst), 1);
+        assert_eq!(self.shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(self.joined.load(Ordering::SeqCst), 1);
+    }
+}
+struct StartRollbackTlsFixture {
+    address: SocketAddr,
+    root: CertificateDer<'static>,
+    observed: Arc<StartRollbackTlsObservation>,
+    send_body: Arc<Semaphore>,
+    task: Option<JoinHandle<Result<(), String>>>,
+}
+impl StartRollbackTlsFixture {
+    async fn new() -> Self {
+        let root = CertificateDer::from(STANDARD.decode(TEST_CA_DER_BASE64).unwrap());
+        let leaf = CertificateDer::from(STANDARD.decode(TEST_LEAF_DER_BASE64).unwrap());
+        let key = PrivateKeyDer::try_from(STANDARD.decode(TEST_KEY_DER_BASE64).unwrap()).unwrap();
+        let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![leaf], key)
+        .unwrap();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let tls = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        assert!(![39025, 39027].contains(&address.port()));
+        let observed = Arc::new(StartRollbackTlsObservation::default());
+        let send_body = Arc::new(Semaphore::new(0));
+        let shared = observed.clone();
+        let release = send_body.clone();
+        let task = tokio::spawn(async move {
+            let (stream, _) = tokio::time::timeout(Duration::from_secs(8), listener.accept())
+                .await
+                .map_err(|_| "start TLS accept deadline")?
+                .map_err(|_| "start TLS accept")?;
+            shared.accepted.fetch_add(1, Ordering::SeqCst);
+            // One original request only. A retry is also detected independently
+            // by the forwarding adapter's actual call count below.
+            drop(listener);
+            let mut stream = tokio::time::timeout(Duration::from_secs(2), tls.accept(stream))
+                .await
+                .map_err(|_| "start TLS handshake deadline")?
+                .map_err(|_| "start TLS handshake")?;
+            let capture = tokio::time::timeout(Duration::from_secs(2), read_http(&mut stream))
+                .await
+                .map_err(|_| "start TLS request deadline")?
+                .ok_or("start TLS original request")?;
+            if capture.method != "POST" || capture.path != "/v1/chat/completions" {
+                return Err("start TLS original request route".into());
+            }
+            shared.captures.lock().unwrap().push(capture);
+            let body = chat_text();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            tokio::time::timeout(Duration::from_secs(2), async {
+                stream.write_all(headers.as_bytes()).await?;
+                stream.flush().await
+            })
+            .await
+            .map_err(|_| "start TLS headers deadline")?
+            .map_err(|_| "start TLS headers write")?;
+            shared.headers_written.fetch_add(1, Ordering::SeqCst);
+            tokio::time::timeout(Duration::from_secs(8), release.acquire())
+                .await
+                .map_err(|_| "start TLS body release deadline")?
+                .map_err(|_| "start TLS body release closed")?
+                .forget();
+            tokio::time::timeout(Duration::from_secs(2), stream.write_all(body.as_bytes()))
+                .await
+                .map_err(|_| "start TLS body deadline")?
+                .map_err(|_| "start TLS body write")?;
+            shared.bodies_written.fetch_add(1, Ordering::SeqCst);
+            tokio::time::timeout(Duration::from_secs(2), stream.shutdown())
+                .await
+                .map_err(|_| "start TLS shutdown deadline")?
+                .map_err(|_| "start TLS shutdown")?;
+            shared.shutdowns.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        Self {
+            address,
+            root,
+            observed,
+            send_body,
+            task: Some(task),
+        }
+    }
+    fn endpoint(&self) -> String {
+        format!("https://idp.test:{}/v1", self.address.port())
+    }
+    fn dialer(&self) -> SafeDialer {
+        SafeDialer::with_extra_roots(
+            EgressPolicy::new(CidrAllowlist::parse_exact(vec!["127.0.0.1/32"]).unwrap()),
+            Arc::new(LocalResolver {
+                address: self.address,
+                calls: AtomicUsize::new(0),
+                fail_after_first: false,
+            }),
+            [self.root.clone()],
+        )
+        .unwrap()
+    }
+    async fn finish(mut self) -> Arc<StartRollbackTlsObservation> {
+        self.observed.assert_headers_only();
+        self.send_body.add_permits(1);
+        let mut task = self.task.take().unwrap();
+        match tokio::time::timeout(Duration::from_secs(3), &mut task).await {
+            Ok(result) => result.unwrap().unwrap(),
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                eprintln!("CUSTOM_V2_START_TLS normal_join_unproven=true fallback_abort=true");
+                panic!("original start TLS task did not naturally join");
+            }
+        }
+        // Recorded only after the actual JoinHandle returned normal Ok(Ok(())).
+        self.observed.joined.fetch_add(1, Ordering::SeqCst);
+        self.observed.assert_normal_join();
+        eprintln!(
+            "CUSTOM_V2_START_TLS accepted={} headers_written={} bodies_written={} shutdowns={} naturally_joined={} listener_closed=true",
+            self.observed.accepted.load(Ordering::SeqCst),
+            self.observed.headers_written.load(Ordering::SeqCst),
+            self.observed.bodies_written.load(Ordering::SeqCst),
+            self.observed.shutdowns.load(Ordering::SeqCst),
+            self.observed.joined.load(Ordering::SeqCst),
+        );
+        self.observed.clone()
+    }
+}
+impl Drop for StartRollbackTlsFixture {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            eprintln!("CUSTOM_V2_START_TLS normal_join_unproven=true fallback_abort=true");
+            task.abort();
+        }
+    }
+}
+
+// The wrapper does no result substitution or artificial provider work. It
+// forwards every call to the same real configured custom adapter.
+struct ObservedOriginalStarts {
+    inner: Arc<dyn ProviderAdapter>,
+    calls: AtomicUsize,
+}
+#[async_trait]
+impl ProviderAdapter for ObservedOriginalStarts {
+    async fn start(
+        &self,
+        request: ProviderRequest,
+    ) -> Result<Box<dyn ProviderSession>, ProviderPortError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.start(request).await
+    }
+}
+
+async fn start_backend_absent_and_same_pool_context_positive(
+    f: &Fixture,
+    req: &BeginThreadRunV2Request,
+    expected: &ProviderRequest,
+    original_backend: usize,
+) {
+    assert!(!f.pool.is_closed());
+    assert_eq!(f.pool.status().max_size, 1);
+    let client = tokio::time::timeout(Duration::from_secs(3), f.pool.get())
+        .await
+        .unwrap()
+        .unwrap();
+    let successor_backend: i32 = client
+        .query_one("SELECT pg_backend_pid(),1 AS positive", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(successor_backend > 0);
+    assert_ne!(successor_backend as usize, original_backend);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let original_pid = i32::try_from(original_backend).unwrap();
+    loop {
+        let absent: bool = tokio::time::timeout(
+            deadline.saturating_duration_since(std::time::Instant::now()),
+            client.query_one(
+                "SELECT NOT EXISTS(SELECT 1 FROM pg_catalog.pg_stat_activity WHERE pid=$1) AS absent",
+                &[&original_pid],
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0);
+        if absent {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "original start backend absence deadline");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    drop(client);
+    let positive = tokio::time::timeout(Duration::from_secs(6), f.context().load(&lease(req)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(positive.route, expected.route);
+    assert!(!f.pool.is_closed());
+    eprintln!(
+        "CUSTOM_V2_START_SUCCESSOR original_backend_pid={} successor_backend_pid={} original_absent=true same_pool_open=true current_context_equal=true driver_individual_join=UNPROVEN",
+        original_backend, successor_backend,
+    );
+}
+
+async fn original_after_adapter_rollback_ack_case(config: DatabaseConfig, known_late: bool) {
+    use tracing::instrument::WithSubscriber;
+    let proxy = PgTerminalAckGate::new(&config, TerminalStage::StartRollback, false).await;
+    let f = Fixture::new_size(proxy.config.clone(), 1).await;
+    let tls = StartRollbackTlsFixture::new().await;
+    let (_, req, request) = f
+        .begin(
+            if known_late { 191 } else { 190 },
+            CustomModelProtocol::OpenaiChatCompletions,
+            &tls.endpoint(),
+            false,
+        )
+        .await;
+    assert_one_original_business_commit(&f, &req).await;
+    let committed = original_business_image(&f, &req).await;
+    let original = proxy.arm_original(&f).await;
+    let observed = Arc::new(ObservedOriginalStarts {
+        inner: Arc::new(f.adapter(tls.dialer(), Duration::from_secs(5))),
+        calls: AtomicUsize::new(0),
+    });
+    let retrying = retried(observed.clone());
+    let states = OriginalTransactionStates::default();
+    let mut future = Box::pin(retrying.start(request.clone()).with_subscriber(states.clone()));
+    tokio::select! {
+        _ = &mut future => panic!("original provider start ended before its actual rollback ACK was held"),
+        () = proxy.held() => {}
+    }
+    // The genuine adapter has received valid streaming headers and the original
+    // RC transaction already emitted its ROLLBACK. No SSE body was sent yet.
+    tls.observed.assert_headers_only();
+    assert_eq!(observed.calls.load(Ordering::SeqCst), 1);
+    assert!(!original.snapshot().retirement_requested);
+    assert!(!original.snapshot().connection_destroyed);
+    let held_at = std::time::Instant::now();
+    // Complete and join the owned TLS server while this SAME original provider
+    // future remains unpolled. Remote body write is not a consumed-SSE/effect ACK.
+    let tls_done = tls.finish().await;
+    if known_late {
+        // Entry's unchanged five-second absolute deadline was sampled before
+        // this real held instant. Leave the original future unpolled throughout.
+        tokio::time::sleep_until(tokio::time::Instant::from_std(
+            held_at + Duration::from_millis(5250),
+        ))
+        .await;
+        assert!(held_at.elapsed() >= Duration::from_millis(5250));
+    }
+    proxy.release_original_ack().await;
+    let result = tokio::time::timeout(Duration::from_secs(2), &mut future)
+        .await
+        .unwrap();
+    drop(future);
+    assert_eq!(observed.calls.load(Ordering::SeqCst), 1);
+    tls_done.assert_normal_join();
+    proxy.assert_target(1);
+    if known_late {
+        assert!(matches!(result, Err(ProviderPortError::CommitUnknown)));
+        // The state must come from the real production owner after its original
+        // rollback future consumed real C/Z and returned Ok. If a timeout wins
+        // or leaves RollbackUnproven, this exact assertion fails.
+        states.assert_only("RollbackAcknowledgedAfterDeadline");
+        original_retired_before_pool_close(&original).await;
+        proxy.state.armed.store(false, Ordering::SeqCst);
+        start_backend_absent_and_same_pool_context_positive(
+            &f,
+            &req,
+            &request,
+            proxy.state.original_backend_pid.load(Ordering::SeqCst),
+        )
+        .await;
+    } else {
+        // Successful transfer plus production's unchanged branch and captured
+        // C/Z establish timely ACK; no fake private timely enum is constructed.
+        let session = result.unwrap();
+        assert_eq!(events(session).await.last(), Some(&ProviderEvent::Completed));
+        assert!(states.states.lock().unwrap().is_empty());
+        assert!(!original.snapshot().retirement_requested);
+        assert!(!original.snapshot().connection_destroyed);
+        proxy.state.armed.store(false, Ordering::SeqCst);
+        let client = f.pool.get().await.unwrap();
+        let same_backend: i32 = client
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(same_backend as usize, proxy.state.original_backend_pid.load(Ordering::SeqCst));
+        drop(client);
+    }
+    assert_eq!(observed.calls.load(Ordering::SeqCst), 1);
+    assert_one_original_business_commit(&f, &req).await;
+    assert_eq!(original_business_image(&f, &req).await, committed);
+    eprintln!(
+        "CUSTOM_V2_START_ORIGINAL_ACK known_late={} original_attempts={} original_post_count={} original_pool_size_one=true held_elapsed_ms={}",
+        known_late,
+        observed.calls.load(Ordering::SeqCst),
+        tls_done.captures.lock().unwrap().len(),
+        held_at.elapsed().as_millis(),
+    );
+    drop(retrying);
+    drop(observed);
+    f.finish().await;
+    proxy.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly owned PG, single-request TLS and terminal relay; selected include-ignored only"]
+async fn v2_original_rollback_ack_after_adapter_timely_returns_session_and_reuses_original_client() {
+    let admin = harness::admin_config("v2_start_rollback_timely");
+    harness::with_temp_database(&admin, "v2startrollbacktimely", |config| async move {
+        original_after_adapter_rollback_ack_case(config, false).await;
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicitly owned PG, single-request TLS and terminal relay; selected include-ignored only"]
+async fn v2_original_rollback_ack_after_adapter_deadline_is_known_late_without_session_or_retry() {
+    let admin = harness::admin_config("v2_start_rollback_known_late");
+    harness::with_temp_database(&admin, "v2startrollbackknownlate", |config| async move {
+        original_after_adapter_rollback_ack_case(config, true).await;
         Ok(())
     })
     .await;
