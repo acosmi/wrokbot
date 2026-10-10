@@ -2021,7 +2021,7 @@ async fn r08_revocation_while_headers_pending_suppresses_handoff() {
         harness::with_temp_database(&admin,if runtime {"gr_r08_runtime"} else {"gr_r08_lease"},|cfg|async move {
             let f=Fixture::new(cfg,2).await?;f.configure(&json!({"hold_headers":true}))?;let auth=f.auth().await?;let receipt=admitted(&f,&auth).await?;let old=f.rows().await?.remove(0);let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
             tokio::select! { ()=f.wait_posts(1)=>{}, result=&mut call=>return Err(format!("ended before headers hold: {result:?}")) }
-            if runtime {f.runtime.as_ref().unwrap().close();} else {f.disarm_host();}f.release_headers()?;let error=refused(call.await)?;check(format!("{error:?}").contains("registered_write: NotAttempted"),"revoked current Host suppresses registered write")?;check(f.row(old.attempt_id).await?==old,"revoked held send cannot handoff owner")?;no_second_post(&f,1).await?;f.finish().await
+            if runtime {f.runtime.as_ref().unwrap().close();} else {f.disarm_host();}f.release_headers()?;let error=refused(call.await)?;check(error.registered_write_ack()==DispatchAck::NotAttempted,"revoked current Host suppresses registered write")?;check(f.row(old.attempt_id).await?==old,"revoked held send cannot handoff owner")?;no_second_post(&f,1).await?;f.finish().await
         }).await;
     }
     harness::with_temp_database(&admin,"gr_r08_db_tail",|cfg|async move {
