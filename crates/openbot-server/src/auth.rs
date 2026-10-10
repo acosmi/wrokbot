@@ -575,7 +575,10 @@ struct GatewayCallbackUrlSinkState {
 }
 
 impl GatewayCallbackUrlSink {
-    #[allow(dead_code, reason = "The production callback URL destination remains disabled")]
+    #[allow(
+        dead_code,
+        reason = "The production callback URL destination remains disabled"
+    )]
     fn new() -> Arc<Self> {
         Arc::new(Self {
             state: std::sync::Mutex::new(GatewayCallbackUrlSinkState {
@@ -585,9 +588,15 @@ impl GatewayCallbackUrlSink {
         })
     }
 
-    #[allow(dead_code, reason = "Only the owned synthetic destination consumes the URL")]
+    #[allow(
+        dead_code,
+        reason = "Only the owned synthetic destination consumes the URL"
+    )]
     fn take_url(&self) -> Result<zeroize::Zeroizing<String>, HostRequestBindingError> {
-        let mut state = self.state.try_lock().map_err(|_| HostRequestBindingError::Unavailable)?;
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
         if !state.offered {
             return Err(HostRequestBindingError::Unavailable);
         }
@@ -600,11 +609,17 @@ impl GatewayAuthorizationCallbackUrlReceiver for GatewayCallbackUrlSink {
         if url.len() > 2048 {
             return Err(HostRequestBindingError::Unavailable);
         }
-        let mut state = self.state.try_lock().map_err(|_| HostRequestBindingError::Unavailable)?;
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
         if state.offered {
             return Err(HostRequestBindingError::Unavailable);
         }
-        let owned = state.url.as_mut().ok_or(HostRequestBindingError::Unavailable)?;
+        let owned = state
+            .url
+            .as_mut()
+            .ok_or(HostRequestBindingError::Unavailable)?;
         owned.push_str(url);
         state.offered = true;
         Ok(())
@@ -643,7 +658,9 @@ impl ServerGatewayCallbackUrlPort {
         if auth != &self.original || !self.owner.is_current() || !target.matches_auth(auth) {
             return Err(HostRequestBindingError::NotCurrent);
         }
-        let binding = auth.request_binding().ok_or(HostRequestBindingError::Missing)?;
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
         if !self.issuer.owns_identity(binding.identity())
             || !self.identity.same_binding(binding.identity())
         {
@@ -651,8 +668,13 @@ impl ServerGatewayCallbackUrlPort {
         }
         match &self.source {
             ServerGatewayCallbackSource::Session(original_probe) => {
-                let probe = original_probe.upgrade().ok_or(HostRequestBindingError::NotCurrent)?;
-                let journal = probe.gateway_authorization_journal.get().and_then(Weak::upgrade)
+                let probe = original_probe
+                    .upgrade()
+                    .ok_or(HostRequestBindingError::NotCurrent)?;
+                let journal = probe
+                    .gateway_authorization_journal
+                    .get()
+                    .and_then(Weak::upgrade)
                     .ok_or(HostRequestBindingError::Unavailable)?;
                 if binding.kind() != HostRequestBindingKind::ServerSession
                     || !journal.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant)
@@ -660,23 +682,43 @@ impl ServerGatewayCallbackUrlPort {
                 {
                     return Err(HostRequestBindingError::NotCurrent);
                 }
-                self.issuer.borrow_server_session_epoch(binding.identity())?;
-                probe.callback_url_sink.get().cloned().ok_or(HostRequestBindingError::Unavailable)
+                self.issuer
+                    .borrow_server_session_epoch(binding.identity())?;
+                probe
+                    .callback_url_sink
+                    .get()
+                    .cloned()
+                    .ok_or(HostRequestBindingError::Unavailable)
             }
             ServerGatewayCallbackSource::SingleUser(original_probe) => {
-                let probe = original_probe.upgrade().ok_or(HostRequestBindingError::NotCurrent)?;
-                let enrollment = probe.gateway_authorization_journal.get()
+                let probe = original_probe
+                    .upgrade()
+                    .ok_or(HostRequestBindingError::NotCurrent)?;
+                let enrollment = probe
+                    .gateway_authorization_journal
+                    .get()
                     .ok_or(HostRequestBindingError::Unavailable)?;
-                let journal = enrollment.journal.upgrade().ok_or(HostRequestBindingError::Unavailable)?;
+                let journal = enrollment
+                    .journal
+                    .upgrade()
+                    .ok_or(HostRequestBindingError::Unavailable)?;
                 if binding.kind() != HostRequestBindingKind::ServerSingleUserOwner
                     || probe.principal.auth_context() != auth
                     || !probe.principal.matches_pool_scope(&enrollment.pool)
-                    || !journal.matches_pool_scope(&enrollment.pool, auth.deployment(), auth.tenant())
+                    || !journal.matches_pool_scope(
+                        &enrollment.pool,
+                        auth.deployment(),
+                        auth.tenant(),
+                    )
                     || !journal.matches_host_target(target)
                 {
                     return Err(HostRequestBindingError::NotCurrent);
                 }
-                probe.callback_url_sink.get().cloned().ok_or(HostRequestBindingError::Unavailable)
+                probe
+                    .callback_url_sink
+                    .get()
+                    .cloned()
+                    .ok_or(HostRequestBindingError::Unavailable)
             }
         }
     }
@@ -1713,14 +1755,20 @@ impl ServerSessionCurrentGuard {
 }
 
 impl PostgresSessionAuthResolver {
-    #[allow(dead_code, reason = "The production callback URL destination remains disabled")]
+    #[allow(
+        dead_code,
+        reason = "The production callback URL destination remains disabled"
+    )]
     fn install_gateway_callback_url_sink(
         &self,
         sink: Arc<GatewayCallbackUrlSink>,
     ) -> Result<(), HostRequestBindingError> {
         let owner = &self.binding_owner;
         let probe = &owner.probe;
-        let journal = probe.gateway_authorization_journal.get().and_then(Weak::upgrade)
+        let journal = probe
+            .gateway_authorization_journal
+            .get()
+            .and_then(Weak::upgrade)
             .ok_or(HostRequestBindingError::Unavailable)?;
         if !owner.issuer.observation().is_current()
             || probe.callback_url_sink.get().is_some()
@@ -1728,7 +1776,10 @@ impl PostgresSessionAuthResolver {
         {
             return Err(HostRequestBindingError::Unavailable);
         }
-        probe.callback_url_sink.set(sink).map_err(|_| HostRequestBindingError::Unavailable)?;
+        probe
+            .callback_url_sink
+            .set(sink)
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
         if !owner.issuer.observation().is_current()
             || !journal.matches_pool_scope(&probe.pool, &probe.deployment, &probe.tenant)
         {
@@ -2667,26 +2718,50 @@ impl core::fmt::Debug for SingleUserAuthResolver {
 }
 
 impl SingleUserAuthResolver {
-    #[allow(dead_code, reason = "The production callback URL destination remains disabled")]
+    #[allow(
+        dead_code,
+        reason = "The production callback URL destination remains disabled"
+    )]
     fn install_gateway_callback_url_sink(
         &self,
         sink: Arc<GatewayCallbackUrlSink>,
     ) -> Result<(), HostRequestBindingError> {
-        let owner = self.binding_owner.as_ref().ok_or(HostRequestBindingError::Unavailable)?;
-        let original = owner.probe.principal.auth_context();
-        let enrollment = owner.probe.gateway_authorization_journal.get()
+        let owner = self
+            .binding_owner
+            .as_ref()
             .ok_or(HostRequestBindingError::Unavailable)?;
-        let journal = enrollment.journal.upgrade().ok_or(HostRequestBindingError::Unavailable)?;
+        let original = owner.probe.principal.auth_context();
+        let enrollment = owner
+            .probe
+            .gateway_authorization_journal
+            .get()
+            .ok_or(HostRequestBindingError::Unavailable)?;
+        let journal = enrollment
+            .journal
+            .upgrade()
+            .ok_or(HostRequestBindingError::Unavailable)?;
         if !owner.issuer.observation().is_current()
             || owner.probe.callback_url_sink.get().is_some()
             || !owner.probe.principal.matches_pool_scope(&enrollment.pool)
-            || !journal.matches_pool_scope(&enrollment.pool, original.deployment(), original.tenant())
+            || !journal.matches_pool_scope(
+                &enrollment.pool,
+                original.deployment(),
+                original.tenant(),
+            )
         {
             return Err(HostRequestBindingError::Unavailable);
         }
-        owner.probe.callback_url_sink.set(sink).map_err(|_| HostRequestBindingError::Unavailable)?;
+        owner
+            .probe
+            .callback_url_sink
+            .set(sink)
+            .map_err(|_| HostRequestBindingError::Unavailable)?;
         if !owner.issuer.observation().is_current()
-            || !journal.matches_pool_scope(&enrollment.pool, original.deployment(), original.tenant())
+            || !journal.matches_pool_scope(
+                &enrollment.pool,
+                original.deployment(),
+                original.tenant(),
+            )
         {
             return Err(HostRequestBindingError::NotCurrent);
         }
@@ -2773,7 +2848,7 @@ impl SingleUserAuthResolver {
                     remember_preferences: std::sync::OnceLock::new(),
                     custom_model_catalog_inventory: std::sync::OnceLock::new(),
                     gateway_authorization_journal: std::sync::OnceLock::new(),
-            callback_url_sink: std::sync::OnceLock::new(),
+                    callback_url_sink: std::sync::OnceLock::new(),
                     #[cfg(any(target_os = "macos", target_os = "linux"))]
                     artifact_read_authority: std::sync::OnceLock::new(),
                 }),

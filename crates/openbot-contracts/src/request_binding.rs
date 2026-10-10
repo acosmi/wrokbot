@@ -432,7 +432,9 @@ impl<'a> GatewayAuthorizationHostObservation<'a> {
         if std::time::Instant::now() >= deadline {
             return Err(HostRequestBindingError::Unavailable);
         }
-        let binding = auth.request_binding().ok_or(HostRequestBindingError::Missing)?;
+        let binding = auth
+            .request_binding()
+            .ok_or(HostRequestBindingError::Missing)?;
         if !matches!(
             self.kind,
             HostRequestBindingKind::ServerSession | HostRequestBindingKind::ServerSingleUserOwner
@@ -457,7 +459,10 @@ impl<'a> GatewayAuthorizationHostObservation<'a> {
     ) -> Result<(), HostRequestBindingError> {
         self.check_callback_binding(auth, target, deadline)?;
         invocation.check(invocation.issuer, &self.identity)?;
-        let port = self.callback_port.as_ref().ok_or(HostRequestBindingError::Unavailable)?;
+        let port = self
+            .callback_port
+            .as_ref()
+            .ok_or(HostRequestBindingError::Unavailable)?;
         let result = port.handoff(auth, target, invocation, deadline);
         self.check_callback_binding(auth, target, deadline)?;
         result

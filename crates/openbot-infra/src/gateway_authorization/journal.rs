@@ -1012,8 +1012,15 @@ impl GatewayAuthorizationJournal {
         caller_deadline: std::time::Instant,
         factory: &crate::gateway_transport::GatewayTransportFactory,
     ) -> Result<GatewayAuthorizationCallbackWaitOwner, GatewayAuthorizationCallbackError> {
-        callback::start_callback(self, auth, metadata, original_parent, caller_deadline, factory)
-            .await
+        callback::start_callback(
+            self,
+            auth,
+            metadata,
+            original_parent,
+            caller_deadline,
+            factory,
+        )
+        .await
     }
     /// Consume the same whole callback owner once, without granting code dispatch.
     pub async fn wait_callback(
@@ -1030,22 +1037,33 @@ impl GatewayAuthorizationJournal {
     ) -> Result<OperationGate<'a>, Error> {
         self.check_scope(auth)?;
         let binding = &owner.binding;
-        let original = binding.journal.upgrade().ok_or_else(|| Error::new(Kind::Unavailable))?;
+        let original = binding
+            .journal
+            .upgrade()
+            .ok_or_else(|| Error::new(Kind::Unavailable))?;
         if !Arc::ptr_eq(self, &original)
             || !Weak::ptr_eq(&binding.runtime, &self.runtime)
             || !Arc::ptr_eq(&binding.flow.clock, &owner.reply.resources.clock)
         {
             return Err(Error::new(Kind::Refused));
         }
-        let attached = auth.request_binding().ok_or_else(|| Error::new(Kind::Refused))?;
-        let issuer = self.issuer.get().ok_or_else(|| Error::new(Kind::Unavailable))?;
+        let attached = auth
+            .request_binding()
+            .ok_or_else(|| Error::new(Kind::Refused))?;
+        let issuer = self
+            .issuer
+            .get()
+            .ok_or_else(|| Error::new(Kind::Unavailable))?;
         if !attached.identity().same_binding(&binding.identity)
             || !issuer.observation().is_current()
             || !issuer.owns_identity(&binding.identity)
         {
             return Err(Error::new(Kind::Refused));
         }
-        let runtime = self.runtime.upgrade().ok_or_else(|| Error::new(Kind::Unavailable))?;
+        let runtime = self
+            .runtime
+            .upgrade()
+            .ok_or_else(|| Error::new(Kind::Unavailable))?;
         let row = &binding.expected;
         if !runtime.matches_pool_scope(&self.pool, &self.deployment, &self.tenant)
             || row.attempt_id.get_version_num() != 7
@@ -1064,7 +1082,9 @@ impl GatewayAuthorizationJournal {
             || row.enrollment_id != Some(owner.reservation.id)
             || owner.reservation.id.get_version_num() != 7
             || row.registration_admitted_at.is_none()
-            || row.registration_admitted_at.is_some_and(|t| t < row.created_at || t > row.updated_at)
+            || row
+                .registration_admitted_at
+                .is_some_and(|t| t < row.created_at || t > row.updated_at)
             || row.code_admitted_at.is_some()
             || row.created_at != binding.flow.created_at
             || row.expires_at != binding.flow.expires_at
@@ -1077,7 +1097,12 @@ impl GatewayAuthorizationJournal {
         }
         drop(runtime);
         // The completed registration's 10s stage is historical; never check or renew it here.
-        let gate = OperationGate { journal: self, auth, flow: &binding.flow, initial: None };
+        let gate = OperationGate {
+            journal: self,
+            auth,
+            flow: &binding.flow,
+            initial: None,
+        };
         gate.check()?;
         Ok(gate)
     }

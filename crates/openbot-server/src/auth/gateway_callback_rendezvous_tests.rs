@@ -1,20 +1,32 @@
 //! Owned callback TCP, real Server Host, and independent PostgreSQL/TLS fixtures.
 use super::*;
+use fixture::{Fixture, PgTerminalAckGate, TerminalStage, harness};
 use openbot_infra::{
-    GatewayAuthorizationCallbackError, GatewayAuthorizationCallbackWaitOwner,
-    GatewayAuthorizationVerifiedCodeOwner, GatewayAuthorizationJournal,
-    GatewayAuthorizationJournalRuntimeOwner,
-    GatewayAuthorizationCancellationToken as CancellationToken,
-    GatewayAuthorizationJournalAck as Ack, CallbackStage, CallbackErrorKind,
+    CallbackErrorKind, CallbackStage, GatewayAuthorizationCallbackError,
+    GatewayAuthorizationCallbackWaitOwner,
+    GatewayAuthorizationCancellationToken as CancellationToken, GatewayAuthorizationJournal,
+    GatewayAuthorizationJournalAck as Ack, GatewayAuthorizationJournalRuntimeOwner,
+    GatewayAuthorizationVerifiedCodeOwner,
 };
 use serde_json::{Value, json};
-use std::{future::Future, pin::Pin, sync::Arc, time::{Duration, Instant}};
-use tokio::{io::{AsyncReadExt as _, AsyncWriteExt as _}, net::TcpStream};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::{
+    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    net::TcpStream,
+};
 use zeroize::Zeroizing;
-use fixture::{Fixture, PgTerminalAckGate, TerminalStage, harness};
 
 fn check(value: bool, message: &str) -> Result<(), String> {
-    if value { Ok(()) } else { Err(message.to_owned()) }
+    if value {
+        Ok(())
+    } else {
+        Err(message.to_owned())
+    }
 }
 struct CallbackInput {
     url: Zeroizing<String>,
@@ -28,73 +40,203 @@ impl CallbackInput {
         check(raw.len() <= 2048, "whole SDK URL bound")?;
         let url = url::Url::parse(&raw).map_err(|e| e.to_string())?;
         let fields: Vec<_> = url.query_pairs().collect();
-        let keys = ["response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "state", "scope"];
-        check(fields.len() == keys.len(), "exact SDK authorization key set")?;
-        for key in keys { check(fields.iter().filter(|(k,_)| k == key).count() == 1, "SDK key present once")?; }
-        let value = |key: &str| fields.iter().find(|(k,_)| k == key).unwrap().1.as_ref();
-        check(value("response_type") == "code" && value("client_id") == "owned-registration-client", "original SDK response/client")?;
-        check(value("scope") == "ai account" && value("code_challenge_method") == "S256", "fixed scopes and S256 method")?;
+        let keys = [
+            "response_type",
+            "client_id",
+            "redirect_uri",
+            "code_challenge",
+            "code_challenge_method",
+            "state",
+            "scope",
+        ];
+        check(
+            fields.len() == keys.len(),
+            "exact SDK authorization key set",
+        )?;
+        for key in keys {
+            check(
+                fields.iter().filter(|(k, _)| k == key).count() == 1,
+                "SDK key present once",
+            )?;
+        }
+        let value = |key: &str| fields.iter().find(|(k, _)| k == key).unwrap().1.as_ref();
+        check(
+            value("response_type") == "code" && value("client_id") == "owned-registration-client",
+            "original SDK response/client",
+        )?;
+        check(
+            value("scope") == "ai account" && value("code_challenge_method") == "S256",
+            "fixed scopes and S256 method",
+        )?;
         for key in ["state", "code_challenge"] {
-            check(value(key).len() == 43 && value(key).bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')), "reachable original PKCE field shape")?;
+            check(
+                value(key).len() == 43
+                    && value(key)
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')),
+                "reachable original PKCE field shape",
+            )?;
         }
         let state = Zeroizing::new(value("state").to_owned());
         let redirect = Zeroizing::new(value("redirect_uri").to_owned());
         let parsed = url::Url::parse(&redirect).map_err(|e| e.to_string())?;
-        check(parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1") && parsed.path() == "/callback" && parsed.query().is_none() && parsed.fragment().is_none(), "original ephemeral IPv4 redirect")?;
+        check(
+            parsed.scheme() == "http"
+                && parsed.host_str() == Some("127.0.0.1")
+                && parsed.path() == "/callback"
+                && parsed.query().is_none()
+                && parsed.fragment().is_none(),
+            "original ephemeral IPv4 redirect",
+        )?;
         let port = parsed.port().ok_or("original callback port missing")?;
         check(port != 0, "original callback port nonzero")?;
-        Ok(Self { url: raw, state, redirect, port })
+        Ok(Self {
+            url: raw,
+            state,
+            redirect,
+            port,
+        })
     }
-    fn query(&self, code: &str) -> String { format!("state={}&code={code}", &*self.state) }
+    fn query(&self, code: &str) -> String {
+        format!("state={}&code={code}", &*self.state)
+    }
     fn request(&self, query: &str) -> Vec<u8> {
-        format!("GET /callback?{query} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n", self.port).into_bytes()
+        format!(
+            "GET /callback?{query} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+            self.port
+        )
+        .into_bytes()
     }
 }
-async fn start_on(f: &Fixture, journal: &Arc<GatewayAuthorizationJournal>, auth: &AuthContext, sink: &GatewayCallbackUrlSink, parent: CancellationToken, deadline: Instant) -> Result<(GatewayAuthorizationCallbackWaitOwner, CallbackInput), String> {
+async fn start_on(
+    f: &Fixture,
+    journal: &Arc<GatewayAuthorizationJournal>,
+    auth: &AuthContext,
+    sink: &GatewayCallbackUrlSink,
+    parent: CancellationToken,
+    deadline: Instant,
+) -> Result<(GatewayAuthorizationCallbackWaitOwner, CallbackInput), String> {
     let metadata = f.metadata(parent.clone()).await?;
     let factory = f.factory(Some("/oauth/desktop/register"))?;
-    let owner = journal.start_callback(auth, metadata, parent, deadline, &factory).await.map_err(|e| e.to_string())?;
+    let owner = journal
+        .start_callback(auth, metadata, parent, deadline, &factory)
+        .await
+        .map_err(|e| e.to_string())?;
     let input = CallbackInput::from_sink(sink)?;
     let posts = f.posts()?;
-    check(posts.len() == 1 && posts[0]["path"] == "/oauth/desktop/register" && posts[0]["authorization"] == Value::Null, "one original registration POST, no bearer")?;
-    let body: Value = serde_json::from_str(posts[0]["body"].as_str().ok_or("registration body missing")?).map_err(|e| e.to_string())?;
-    check(body == json!({"client_name":"Wrok Bot","redirect_uris":[&*input.redirect],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}), "original SDK registration body echoes that same listener redirect")?;
+    check(
+        posts.len() == 1
+            && posts[0]["path"] == "/oauth/desktop/register"
+            && posts[0]["authorization"] == Value::Null,
+        "one original registration POST, no bearer",
+    )?;
+    let body: Value = serde_json::from_str(
+        posts[0]["body"]
+            .as_str()
+            .ok_or("registration body missing")?,
+    )
+    .map_err(|e| e.to_string())?;
+    check(
+        body == json!({"client_name":"Wrok Bot","redirect_uris":[&*input.redirect],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}),
+        "original SDK registration body echoes that same listener redirect",
+    )?;
     let rows = f.rows().await?;
-    check(rows.len() == 1 && rows[0].phase == "registered" && rows[0].client_id.as_deref() == Some("owned-registration-client") && rows[0].redirect_uri == *input.redirect && rows[0].enrollment_id.is_some() && rows[0].code_admitted_at.is_none() && rows[0].finished_at.is_none() && rows[0].outcome_code.is_none(), "whole registered row, no code admission or terminal write")?;
+    check(
+        rows.len() == 1
+            && rows[0].phase == "registered"
+            && rows[0].client_id.as_deref() == Some("owned-registration-client")
+            && rows[0].redirect_uri == *input.redirect
+            && rows[0].enrollment_id.is_some()
+            && rows[0].code_admitted_at.is_none()
+            && rows[0].finished_at.is_none()
+            && rows[0].outcome_code.is_none(),
+        "whole registered row, no code admission or terminal write",
+    )?;
     Ok((owner, input))
 }
-async fn start(f: &Fixture) -> Result<(AuthContext, GatewayAuthorizationCallbackWaitOwner, CallbackInput), String> {
+async fn start(
+    f: &Fixture,
+) -> Result<
+    (
+        AuthContext,
+        GatewayAuthorizationCallbackWaitOwner,
+        CallbackInput,
+    ),
+    String,
+> {
     let sink = GatewayCallbackUrlSink::new();
-    f.resolver.install_gateway_callback_url_sink(Arc::clone(&sink)).map_err(|e| format!("{e:?}"))?;
+    f.resolver
+        .install_gateway_callback_url_sink(Arc::clone(&sink))
+        .map_err(|e| format!("{e:?}"))?;
     let auth = f.auth().await?;
-    let (owner, input) = start_on(f, &f.journal, &auth, &sink, CancellationToken::new(), Instant::now() + Duration::from_secs(60)).await?;
+    let (owner, input) = start_on(
+        f,
+        &f.journal,
+        &auth,
+        &sink,
+        CancellationToken::new(),
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await?;
     Ok((auth, owner, input))
 }
 async fn exchange(port: u16, request: &[u8]) -> Result<Vec<u8>, String> {
     tokio::time::timeout(Duration::from_secs(12), async {
-        let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await.map_err(|e| e.to_string())?;
+        let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .map_err(|e| e.to_string())?;
         stream.write_all(request).await.map_err(|e| e.to_string())?;
         let mut response = Vec::with_capacity(512);
-        (&mut stream).take(4097).read_to_end(&mut response).await.map_err(|e| e.to_string())?;
+        (&mut stream)
+            .take(4097)
+            .read_to_end(&mut response)
+            .await
+            .map_err(|e| e.to_string())?;
         check(response.len() <= 4096, "finite static response bound")?;
         drop(stream);
         Ok(response)
-    }).await.map_err(|_| "owned TCP response timeout")?
+    })
+    .await
+    .map_err(|_| "owned TCP response timeout")?
 }
 fn response(raw: &[u8], status: u16, body: &[u8]) -> Result<(), String> {
-    let split = raw.windows(4).position(|v| v == b"\r\n\r\n").ok_or("static response framing missing")?;
-    let headers = std::str::from_utf8(&raw[..split]).map_err(|e| e.to_string())?.to_ascii_lowercase();
-    check(headers.starts_with(&format!("http/1.1 {status} ")) && &raw[split + 4..] == body, "independent literal status and response body")?;
-    check(headers.contains(&format!("\r\ncontent-length: {}", body.len())) && headers.contains("\r\ncontent-type: text/plain") && headers.contains("\r\nconnection: close") && headers.contains("\r\ncache-control: no-store"), "fixed response length/type/close/no-store")
+    let split = raw
+        .windows(4)
+        .position(|v| v == b"\r\n\r\n")
+        .ok_or("static response framing missing")?;
+    let headers = std::str::from_utf8(&raw[..split])
+        .map_err(|e| e.to_string())?
+        .to_ascii_lowercase();
+    check(
+        headers.starts_with(&format!("http/1.1 {status} ")) && &raw[split + 4..] == body,
+        "independent literal status and response body",
+    )?;
+    check(
+        headers.contains(&format!("\r\ncontent-length: {}", body.len()))
+            && headers.contains("\r\ncontent-type: text/plain")
+            && headers.contains("\r\nconnection: close")
+            && headers.contains("\r\ncache-control: no-store"),
+        "fixed response length/type/close/no-store",
+    )
 }
-type CallbackResult = Result<GatewayAuthorizationVerifiedCodeOwner, GatewayAuthorizationCallbackError>;
-async fn finish_code<F: Future<Output=CallbackResult>>(call: &mut Pin<Box<F>>, input: &CallbackInput, code: &str) -> Result<GatewayAuthorizationVerifiedCodeOwner, String> {
+type CallbackResult =
+    Result<GatewayAuthorizationVerifiedCodeOwner, GatewayAuthorizationCallbackError>;
+async fn finish_code<F: Future<Output = CallbackResult>>(
+    call: &mut Pin<Box<F>>,
+    input: &CallbackInput,
+    code: &str,
+) -> Result<GatewayAuthorizationVerifiedCodeOwner, String> {
     let bytes = input.request(&input.query(code));
     let (owner, peer) = tokio::join!(call, exchange(input.port, &bytes));
     response(&peer?, 200, b"Callback received.")?;
     owner.map_err(|e| e.to_string())
 }
-async fn finish_code_ack<F: Future<Output=CallbackResult>>(call: &mut Pin<Box<F>>, input: &CallbackInput, code: &str, relay: &PgTerminalAckGate) -> Result<GatewayAuthorizationVerifiedCodeOwner, String> {
+async fn finish_code_ack<F: Future<Output = CallbackResult>>(
+    call: &mut Pin<Box<F>>,
+    input: &CallbackInput,
+    code: &str,
+    relay: &PgTerminalAckGate,
+) -> Result<GatewayAuthorizationVerifiedCodeOwner, String> {
     let bytes = input.request(&input.query(code));
     let mut peer = Box::pin(exchange(input.port, &bytes));
     tokio::select! { biased;
@@ -109,7 +251,12 @@ async fn finish_code_ack<F: Future<Output=CallbackResult>>(call: &mut Pin<Box<F>
     relay.end_callback_sql_window(1);
     owner.map_err(|e| e.to_string())
 }
-async fn probe<F: Future<Output=CallbackResult>>(call: &mut Pin<Box<F>>, input: &CallbackInput, raw: &[u8], status: u16) -> Result<(), String> {
+async fn probe<F: Future<Output = CallbackResult>>(
+    call: &mut Pin<Box<F>>,
+    input: &CallbackInput,
+    raw: &[u8],
+    status: u16,
+) -> Result<(), String> {
     let peer = exchange(input.port, raw);
     tokio::pin!(peer);
     let bytes = tokio::select! {
@@ -118,14 +265,24 @@ async fn probe<F: Future<Output=CallbackResult>>(call: &mut Pin<Box<F>>, input: 
     };
     response(&bytes, status, b"")
 }
-async fn prebuffered_probe<F: Future<Output=CallbackResult>>(call: &mut Pin<Box<F>>, input: &CallbackInput, raw: &[u8]) -> Result<(), String> {
-    let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, input.port)).await.map_err(|e| e.to_string())?;
+async fn prebuffered_probe<F: Future<Output = CallbackResult>>(
+    call: &mut Pin<Box<F>>,
+    input: &CallbackInput,
+    raw: &[u8],
+) -> Result<(), String> {
+    let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, input.port))
+        .await
+        .map_err(|e| e.to_string())?;
     stream.write_all(raw).await.map_err(|e| e.to_string())?;
     // Write the entire finite request before repolling the same callback owner.
     // A resulting 400 is an actual observation; no future unread-byte claim.
     let peer = async {
         let mut response_bytes = Vec::with_capacity(512);
-        (&mut stream).take(4097).read_to_end(&mut response_bytes).await.map_err(|e| e.to_string())?;
+        (&mut stream)
+            .take(4097)
+            .read_to_end(&mut response_bytes)
+            .await
+            .map_err(|e| e.to_string())?;
         check(response_bytes.len() <= 4096, "finite owned probe reply")?;
         Ok::<_, String>(response_bytes)
     };
@@ -135,7 +292,9 @@ async fn prebuffered_probe<F: Future<Output=CallbackResult>>(call: &mut Pin<Box<
             value = &mut peer => value,
             value = &mut *call => Err(format!("framing probe consumed callback owner: {value:?}")),
         }
-    }).await.map_err(|_| "owned prebuffered probe timeout")??;
+    })
+    .await
+    .map_err(|_| "owned prebuffered probe timeout")??;
     response(&bytes, 400, b"")
 }
 async fn absent(port: u16) -> Result<(), String> {
@@ -170,17 +329,26 @@ async fn r01_listener_before_any_create() {
 async fn r02_session_whole_registered_handoff() {
     let admin = harness::admin_config("callback-r02");
     harness::with_temp_database(&admin, "cb_r02", |cfg| async move {
-        let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+        let relay =
+            PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
         let f = Fixture::new(relay.config.clone(), 1).await?;
         let (auth, wait, input) = start(&f).await?;
         let original = f.rows().await?.remove(0);
         relay.arm_original(&f).await;
         let mut call = Box::pin(f.journal.wait_callback(&auth, wait));
         let verified = finish_code_ack(&mut call, &input, "owned-session-code", &relay).await?;
-        check(f.row(original.attempt_id).await? == original && f.posts()?.len() == 1, "same original twenty facts/reservation; no callback write or resend")?;
-        drop(verified); drop(call); absent(input.port).await?;
-        f.finish().await?; relay.stop().await; Ok(())
-    }).await;
+        check(
+            f.row(original.attempt_id).await? == original && f.posts()?.len() == 1,
+            "same original twenty facts/reservation; no callback write or resend",
+        )?;
+        drop(verified);
+        drop(call);
+        absent(input.port).await?;
+        f.finish().await?;
+        relay.stop().await;
+        Ok(())
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -188,22 +356,54 @@ async fn r02_session_whole_registered_handoff() {
 async fn r03_singleuser_whole_registered_handoff() {
     let admin = harness::admin_config("callback-r03");
     harness::with_temp_database(&admin, "cb_r03", |cfg| async move {
-        let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+        let relay =
+            PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
         let f = Fixture::new(relay.config.clone(), 1).await?;
         let (runtime, journal) = f.fresh_pair()?;
         let single = f.single(&journal).await?;
         let sink = GatewayCallbackUrlSink::new();
-        single.install_gateway_callback_url_sink(Arc::clone(&sink)).map_err(|e| format!("{e:?}"))?;
-        let auth = single.resolve(&http::Request::builder().uri("/owned-callback").body(()).unwrap().into_parts().0).await.map_err(|e| e.to_string())?;
-        let (wait, input) = start_on(&f, &journal, &auth, &sink, CancellationToken::new(), Instant::now() + Duration::from_secs(60)).await?;
+        single
+            .install_gateway_callback_url_sink(Arc::clone(&sink))
+            .map_err(|e| format!("{e:?}"))?;
+        let auth = single
+            .resolve(
+                &http::Request::builder()
+                    .uri("/owned-callback")
+                    .body(())
+                    .unwrap()
+                    .into_parts()
+                    .0,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let (wait, input) = start_on(
+            &f,
+            &journal,
+            &auth,
+            &sink,
+            CancellationToken::new(),
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await?;
         let original = f.rows().await?.remove(0);
         relay.arm_original(&f).await;
         let mut call = Box::pin(journal.wait_callback(&auth, wait));
         let verified = finish_code_ack(&mut call, &input, "owned-single-user-code", &relay).await?;
-        check(original.owner_user_id == "dev-local-user" && f.row(original.attempt_id).await? == original, "genuine original SingleUser and unchanged whole row")?;
-        drop(verified); drop(call); absent(input.port).await?;
-        single.close_request_bindings(); runtime.close(); f.finish().await?; relay.stop().await; Ok(())
-    }).await;
+        check(
+            original.owner_user_id == "dev-local-user"
+                && f.row(original.attempt_id).await? == original,
+            "genuine original SingleUser and unchanged whole row",
+        )?;
+        drop(verified);
+        drop(call);
+        absent(input.port).await?;
+        single.close_request_bindings();
+        runtime.close();
+        f.finish().await?;
+        relay.stop().await;
+        Ok(())
+    })
+    .await;
     for (close_original, successor_generation) in [(false, false), (true, false), (false, true)] {
         harness::with_temp_database(&admin, "cb_r03_postowner", |cfg| async move {
             let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
@@ -320,19 +520,40 @@ async fn r04_sdk_pkce_url_and_original_echo() {
 async fn r05_state_probes_never_terminate() {
     let admin = harness::admin_config("callback-r05");
     harness::with_temp_database(&admin, "cb_r05", |cfg| async move {
-        let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+        let relay =
+            PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
         let f = Fixture::new(relay.config.clone(), 1).await?;
         let (auth, wait, input) = start(&f).await?;
         let original = f.rows().await?.remove(0);
         relay.arm_original(&f).await;
         let mut call = Box::pin(f.journal.wait_callback(&auth, wait));
-        for query in ["code=x".to_owned(), format!("state={}&code=x", "A".repeat(43)), "state=%GG&code=x".to_owned(), format!("state={}&error=access_denied", "B".repeat(43))] {
-            probe(&mut call, &input, &input.request(&query), 400).await?; relay.assert_idle();
+        for query in [
+            "code=x".to_owned(),
+            format!("state={}&code=x", "A".repeat(43)),
+            "state=%GG&code=x".to_owned(),
+            format!("state={}&error=access_denied", "B".repeat(43)),
+        ] {
+            probe(&mut call, &input, &input.request(&query), 400).await?;
+            relay.assert_idle();
         }
-        let owner = finish_code_ack(&mut call, &input, "same-original-state-after-probes", &relay).await?;
-        check(f.row(original.attempt_id).await? == original && f.posts()?.len() == 1, "probes did not close row, renew epoch, reserve again, or resend")?;
-        drop(owner); drop(call); f.finish().await?; relay.stop().await; Ok(())
-    }).await;
+        let owner = finish_code_ack(
+            &mut call,
+            &input,
+            "same-original-state-after-probes",
+            &relay,
+        )
+        .await?;
+        check(
+            f.row(original.attempt_id).await? == original && f.posts()?.len() == 1,
+            "probes did not close row, renew epoch, reserve again, or resend",
+        )?;
+        drop(owner);
+        drop(call);
+        f.finish().await?;
+        relay.stop().await;
+        Ok(())
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -340,19 +561,30 @@ async fn r05_state_probes_never_terminate() {
 async fn r06_query_reject_then_success() {
     let admin = harness::admin_config("callback-r06");
     harness::with_temp_database(&admin, "cb_r06", |cfg| async move {
-        let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+        let relay =
+            PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
         let f = Fixture::new(relay.config.clone(), 1).await?;
         let (auth, wait, input) = start(&f).await?;
         relay.arm_original(&f).await;
         let mut call = Box::pin(f.journal.wait_callback(&auth, wait));
         let base = format!("state={}", &*input.state);
-        for query in [format!("{base}&st%61te={}&code=x", &*input.state), format!("{base}&x=unknown&code=x"), format!("{base}&code=%GG"), format!("{base}&code=x&error=other"), format!("{base}&error=other&error_description=%C2%80")] {
-            probe(&mut call, &input, &input.request(&query), 400).await?; relay.assert_idle();
+        for query in [
+            format!("{base}&st%61te={}&code=x", &*input.state),
+            format!("{base}&x=unknown&code=x"),
+            format!("{base}&code=%GG"),
+            format!("{base}&code=x&error=other"),
+            format!("{base}&error=other&error_description=%C2%80"),
+        ] {
+            probe(&mut call, &input, &input.request(&query), 400).await?;
+            relay.assert_idle();
         }
         drop(finish_code_ack(&mut call, &input, "original-flow-still-valid", &relay).await?);
-        drop(call); check(f.posts()?.len() == 1, "no second registration").and(f.finish().await)?;
-        relay.stop().await; Ok(())
-    }).await;
+        drop(call);
+        check(f.posts()?.len() == 1, "no second registration").and(f.finish().await)?;
+        relay.stop().await;
+        Ok(())
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -360,23 +592,57 @@ async fn r06_query_reject_then_success() {
 async fn r07_http_host_and_framing_reject() {
     let admin = harness::admin_config("callback-r07");
     harness::with_temp_database(&admin, "cb_r07", |cfg| async move {
-        let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+        let relay =
+            PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
         let f = Fixture::new(relay.config.clone(), 1).await?;
         let (auth, wait, input) = start(&f).await?;
         relay.arm_original(&f).await;
         let mut call = Box::pin(f.journal.wait_callback(&auth, wait));
         let normal = String::from_utf8(input.request(&input.query("owned-code"))).unwrap();
         let host = format!("Host: 127.0.0.1:{}\r\n", input.port);
-        let mut requests = vec![normal.replace(&host, "Host: localhost:1\r\n").into_bytes(), normal.replace(&host, &format!("{host}{host}")).into_bytes(), normal.replace("\r\n\r\n", "\r\nTransfer-Encoding: identity\r\n\r\n").into_bytes(), normal.replace("\r\n\r\n", "\r\nContent-Length: 1\r\n\r\n").into_bytes(), normal.replace("\r\n\r\n", "\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n").into_bytes(), normal.replace("\r\n\r\n", "\r\n X: fold\r\n\r\n").into_bytes(), normal.replace("\r\n\r\n", "\r\nX: bare\n\r\n").into_bytes(), normal.replace("\r\n\r\n", &format!("\r\nX:{}\r\n\r\n", "a".repeat(8189))).into_bytes()];
+        let mut requests = vec![
+            normal.replace(&host, "Host: localhost:1\r\n").into_bytes(),
+            normal.replace(&host, &format!("{host}{host}")).into_bytes(),
+            normal
+                .replace("\r\n\r\n", "\r\nTransfer-Encoding: identity\r\n\r\n")
+                .into_bytes(),
+            normal
+                .replace("\r\n\r\n", "\r\nContent-Length: 1\r\n\r\n")
+                .into_bytes(),
+            normal
+                .replace(
+                    "\r\n\r\n",
+                    "\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
+                )
+                .into_bytes(),
+            normal
+                .replace("\r\n\r\n", "\r\n X: fold\r\n\r\n")
+                .into_bytes(),
+            normal.replace("\r\n\r\n", "\r\nX: bare\n\r\n").into_bytes(),
+            normal
+                .replace("\r\n\r\n", &format!("\r\nX:{}\r\n\r\n", "a".repeat(8189)))
+                .into_bytes(),
+        ];
         let mut obs_text = normal.replace("\r\n\r\n", "\r\nX: ").into_bytes();
         obs_text.extend_from_slice(b"\xff\r\n\r\n");
         requests.push(obs_text);
-        let mut body = normal.as_bytes().to_vec(); body.extend_from_slice(b"buffered-body"); requests.push(body);
-        let mut pipeline = normal.as_bytes().to_vec(); pipeline.extend_from_slice(normal.as_bytes()); requests.push(pipeline);
-        for raw in requests { prebuffered_probe(&mut call, &input, &raw).await?; relay.assert_idle(); }
+        let mut body = normal.as_bytes().to_vec();
+        body.extend_from_slice(b"buffered-body");
+        requests.push(body);
+        let mut pipeline = normal.as_bytes().to_vec();
+        pipeline.extend_from_slice(normal.as_bytes());
+        requests.push(pipeline);
+        for raw in requests {
+            prebuffered_probe(&mut call, &input, &raw).await?;
+            relay.assert_idle();
+        }
         drop(finish_code_ack(&mut call, &input, "original-after-http-probes", &relay).await?);
-        drop(call); f.finish().await?; relay.stop().await; Ok(())
-    }).await;
+        drop(call);
+        f.finish().await?;
+        relay.stop().await;
+        Ok(())
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -384,8 +650,10 @@ async fn r07_http_host_and_framing_reject() {
 async fn r08_max_code_percent_expansion() {
     let admin = harness::admin_config("callback-r08");
     // These literal byte counts/expansions precede setup and any actual parser.
-    let max_code = "%41".repeat(16_377); let too_long = "%41".repeat(16_378);
-    assert_eq!(max_code.len(), 49_131); assert_eq!(too_long.len(), 49_134);
+    let max_code = "%41".repeat(16_377);
+    let too_long = "%41".repeat(16_378);
+    assert_eq!(max_code.len(), 49_131);
+    assert_eq!(too_long.len(), 49_134);
     harness::with_temp_database(&admin, "cb_r08", |cfg| async move {
         let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
         let f = Fixture::new(relay.config.clone(), 1).await?;
@@ -405,25 +673,49 @@ async fn r08_max_code_percent_expansion() {
 #[ignore = "requires Root-frozen owned PostgreSQL and TLS runtimes"]
 async fn r09_matched_error_static_and_no_close() {
     let admin = harness::admin_config("callback-r09");
-    for (vendor, expected) in [("access_denied", CallbackErrorKind::AuthorizationDenied), ("other", CallbackErrorKind::AuthorizationRejected)] {
+    for (vendor, expected) in [
+        ("access_denied", CallbackErrorKind::AuthorizationDenied),
+        ("other", CallbackErrorKind::AuthorizationRejected),
+    ] {
         harness::with_temp_database(&admin, "cb_r09", |cfg| async move {
-            let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+            let relay =
+                PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false)
+                    .await;
             let f = Fixture::new(relay.config.clone(), 1).await?;
             let (auth, wait, input) = start(&f).await?;
             let original = f.rows().await?.remove(0);
             // Callback-only window begins after registration AND whole URL handoff.
             relay.arm_original(&f).await;
-            let bytes = input.request(&format!("state={}&error={vendor}&error_description=vendor-detail", &*input.state));
-            let (owner, raw) = tokio::join!(f.journal.wait_callback(&auth, wait), exchange(input.port, &bytes));
+            let bytes = input.request(&format!(
+                "state={}&error={vendor}&error_description=vendor-detail",
+                &*input.state
+            ));
+            let (owner, raw) = tokio::join!(
+                f.journal.wait_callback(&auth, wait),
+                exchange(input.port, &bytes)
+            );
             let error = owner.err().ok_or("matched denial returned Verified")?;
-            check(error.stage() == CallbackStage::Callback && error.kind() == expected && error.callback_readback_ack() == Ack::NotAttempted && error.journal_error().is_none() && error.registration_error().is_none(), "independent typed callback denial with no inherited ACK")?;
+            check(
+                error.stage() == CallbackStage::Callback
+                    && error.kind() == expected
+                    && error.callback_readback_ack() == Ack::NotAttempted
+                    && error.journal_error().is_none()
+                    && error.registration_error().is_none(),
+                "independent typed callback denial with no inherited ACK",
+            )?;
             response(&raw?, 200, b"Authorization was not completed.")?;
             relay.assert_idle();
             relay.end_callback_sql_window(0); // Subsequent row reads are outside this window.
             absent(input.port).await?;
-            check(f.row(original.attempt_id).await? == original && f.posts()?.len() == 1, "registered facts preserved; no ControlledClose or resend")?;
-            f.finish().await?; relay.stop().await; Ok(())
-        }).await;
+            check(
+                f.row(original.attempt_id).await? == original && f.posts()?.len() == 1,
+                "registered facts preserved; no ControlledClose or resend",
+            )?;
+            f.finish().await?;
+            relay.stop().await;
+            Ok(())
+        })
+        .await;
     }
 }
 
@@ -562,7 +854,6 @@ async fn r11_original_parent_cancel_and_caller_cap() {
     }
 }
 
-
 #[tokio::test]
 #[ignore = "requires Root-frozen owned PostgreSQL and TLS runtimes"]
 async fn r12_callback_after_completed_registration10s() {
@@ -639,63 +930,153 @@ async fn r14_foreign_oldruntime_and_duplicate_offer() {
     let admin = harness::admin_config("callback-r14");
     harness::with_temp_database(&admin, "cb_r14_none", |cfg| async move {
         let f = Fixture::new(cfg, 2).await?;
-        let auth = f.auth().await?; let parent = CancellationToken::new();
+        let auth = f.auth().await?;
+        let parent = CancellationToken::new();
         let metadata = f.metadata(parent.clone()).await?;
         let factory = f.factory(Some("/oauth/desktop/register"))?;
-        let value = f.journal.start_callback(&auth, metadata, parent, Instant::now() + Duration::from_secs(60), &factory).await;
+        let value = f
+            .journal
+            .start_callback(
+                &auth,
+                metadata,
+                parent,
+                Instant::now() + Duration::from_secs(60),
+                &factory,
+            )
+            .await;
         let error = value.err().ok_or("missing sink returned callback owner")?;
-        check(error.stage() == CallbackStage::Callback && error.kind() == CallbackErrorKind::Unavailable && error.callback_readback_ack() == Ack::NotAttempted, "missing sink refused only at callback handoff")?;
-        check(f.rows().await?.len() == 1 && f.rows().await?[0].phase == "registered" && f.posts()?.len() == 1, "old admission/registration preserved despite default no port destination")?;
+        check(
+            error.stage() == CallbackStage::Callback
+                && error.kind() == CallbackErrorKind::Unavailable
+                && error.callback_readback_ack() == Ack::NotAttempted,
+            "missing sink refused only at callback handoff",
+        )?;
+        check(
+            f.rows().await?.len() == 1
+                && f.rows().await?[0].phase == "registered"
+                && f.posts()?.len() == 1,
+            "old admission/registration preserved despite default no port destination",
+        )?;
         f.finish().await
-    }).await;
+    })
+    .await;
     harness::with_temp_database(&admin, "cb_r14_once", |cfg| async move {
         let f = Fixture::new(cfg, 2).await?;
         let sink = GatewayCallbackUrlSink::new();
-        f.resolver.install_gateway_callback_url_sink(Arc::clone(&sink)).map_err(|e| format!("{e:?}"))?;
-        check(f.resolver.install_gateway_callback_url_sink(GatewayCallbackUrlSink::new()).is_err(), "fixed slot cannot install twice")?;
+        f.resolver
+            .install_gateway_callback_url_sink(Arc::clone(&sink))
+            .map_err(|e| format!("{e:?}"))?;
+        check(
+            f.resolver
+                .install_gateway_callback_url_sink(GatewayCallbackUrlSink::new())
+                .is_err(),
+            "fixed slot cannot install twice",
+        )?;
         let auth = f.auth().await?;
-        let (wait, input) = start_on(&f, &f.journal, &auth, &sink, CancellationToken::new(), Instant::now() + Duration::from_secs(60)).await?;
-        check(sink.take_url().is_err() && sink.accept_url(&input.url).is_err(), "one whole take and permanent once offer")?;
+        let (wait, input) = start_on(
+            &f,
+            &f.journal,
+            &auth,
+            &sink,
+            CancellationToken::new(),
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await?;
+        check(
+            sink.take_url().is_err() && sink.accept_url(&input.url).is_err(),
+            "one whole take and permanent once offer",
+        )?;
         let original = f.rows().await?.remove(0);
         let network_before = f.network_point()?;
         let (_foreign_runtime, foreign_journal) = f.fresh_pair()?;
-        let error = foreign_journal.wait_callback(&auth, wait).await.err().ok_or("foreign journal returned Verified")?;
-        check(error.stage() == CallbackStage::Callback && error.kind() == CallbackErrorKind::Refused && error.callback_readback_ack() == Ack::NotAttempted, "foreign original issuer refused, no callback readback grant")?;
+        let error = foreign_journal
+            .wait_callback(&auth, wait)
+            .await
+            .err()
+            .ok_or("foreign journal returned Verified")?;
+        check(
+            error.stage() == CallbackStage::Callback
+                && error.kind() == CallbackErrorKind::Refused
+                && error.callback_readback_ack() == Ack::NotAttempted,
+            "foreign original issuer refused, no callback readback grant",
+        )?;
         absent(input.port).await?;
-        check(f.row(original.attempt_id).await? == original && f.network_point()? == network_before,
-            "foreign journal refusal preserves original full20 and network counts")?;
+        check(
+            f.row(original.attempt_id).await? == original && f.network_point()? == network_before,
+            "foreign journal refusal preserves original full20 and network counts",
+        )?;
         f.finish().await
-    }).await;
+    })
+    .await;
     harness::with_temp_database(&admin, "cb_r14_old", |cfg| async move {
         let mut f = Fixture::new(cfg, 2).await?;
         let (auth, wait, input) = start(&f).await?;
         let original = f.rows().await?.remove(0);
         let network_before = f.network_point()?;
         drop(f.runtime.take());
-        let error = f.journal.wait_callback(&auth, wait).await.err().ok_or("old runtime returned Verified")?;
-        check(error.stage() == CallbackStage::Callback && error.kind() == CallbackErrorKind::Unavailable && error.callback_readback_ack() == Ack::NotAttempted, "old weak runtime unavailable, no callback readback")?;
+        let error = f
+            .journal
+            .wait_callback(&auth, wait)
+            .await
+            .err()
+            .ok_or("old runtime returned Verified")?;
+        check(
+            error.stage() == CallbackStage::Callback
+                && error.kind() == CallbackErrorKind::Unavailable
+                && error.callback_readback_ack() == Ack::NotAttempted,
+            "old weak runtime unavailable, no callback readback",
+        )?;
         absent(input.port).await?;
-        check(f.row(original.attempt_id).await? == original && f.network_point()? == network_before,
-            "old weak runtime refusal preserves original full20 and network counts")?;
+        check(
+            f.row(original.attempt_id).await? == original && f.network_point()? == network_before,
+            "old weak runtime refusal preserves original full20 and network counts",
+        )?;
         f.finish().await
-    }).await;
+    })
+    .await;
 }
 
 use openbot_infra::GatewayAuthorizationJournalErrorKind as JournalKind;
 
 async fn no_callback_reply(peer: &mut TcpStream) -> Result<(), String> {
     let mut raw = Vec::with_capacity(512);
-    match tokio::time::timeout(Duration::from_secs(2), (&mut *peer).take(4097).read_to_end(&mut raw)).await {
-        Ok(Ok(_)) => check(raw.is_empty(), "no callback success/error response after RO refusal"),
-        Ok(Err(e)) if raw.is_empty() && matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe) => Ok(()),
+    match tokio::time::timeout(
+        Duration::from_secs(2),
+        (&mut *peer).take(4097).read_to_end(&mut raw),
+    )
+    .await
+    {
+        Ok(Ok(_)) => check(
+            raw.is_empty(),
+            "no callback success/error response after RO refusal",
+        ),
+        Ok(Err(e))
+            if raw.is_empty()
+                && matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                ) =>
+        {
+            Ok(())
+        }
         Ok(Err(e)) => Err(format!("owned callback tail: {e}")),
         Err(_) => Err("owned callback stream remained open after refusal".into()),
     }
 }
-fn callback_refusal(error: &GatewayAuthorizationCallbackError, kind: CallbackErrorKind, ack: Ack) -> Result<(), String> {
-    check(error.stage() == CallbackStage::Callback && error.kind() == kind
-        && error.callback_readback_ack() == ack && error.registration_error().is_none(),
-        "exact typed callback kind/stage/independent RO ACK")
+fn callback_refusal(
+    error: &GatewayAuthorizationCallbackError,
+    kind: CallbackErrorKind,
+    ack: Ack,
+) -> Result<(), String> {
+    check(
+        error.stage() == CallbackStage::Callback
+            && error.kind() == kind
+            && error.callback_readback_ack() == ack
+            && error.registration_error().is_none(),
+        "exact typed callback kind/stage/independent RO ACK",
+    )
 }
 
 #[tokio::test]
@@ -954,7 +1335,6 @@ async fn r16_callback_ro_ack_loss_late_tail() {
     }).await;
 }
 
-
 #[derive(Debug, serde::Serialize)]
 struct R10Socket {
     fd: u32,
@@ -973,14 +1353,28 @@ struct R10Inventory {
 fn r10_same_socket(a: &R10Socket, b: &R10Socket) -> bool {
     a.fd == b.fd && a.local == b.local && a.peer == b.peer
 }
-fn r10_inventory(raw: &[u8], pid: u32, port: u16, peers: &[u16; 5]) -> Result<R10Inventory, String> {
+fn r10_inventory(
+    raw: &[u8],
+    pid: u32,
+    port: u16,
+    peers: &[u16; 5],
+) -> Result<R10Inventory, String> {
     use std::collections::{BTreeMap, BTreeSet};
-    check(raw.ends_with(b"\0\n"), "r10 lsof field/set terminators incomplete")?;
+    check(
+        raw.ends_with(b"\0\n"),
+        "r10 lsof field/set terminators incomplete",
+    )?;
     let known: BTreeSet<_> = peers.iter().copied().collect();
-    check(known.len() == 5 && !known.contains(&0) && !known.contains(&port), "five distinct actual peer ports")?;
+    check(
+        known.len() == 5 && !known.contains(&0) && !known.contains(&port),
+        "five distinct actual peer ports",
+    )?;
     let mut sets = raw.split(|b| *b == b'\n').peekable();
     let process = sets.next().ok_or("r10 PID set missing")?;
-    check(process == format!("p{pid}\0").as_bytes(), "r10 exact own PID, no extra process fields")?;
+    check(
+        process == format!("p{pid}\0").as_bytes(),
+        "r10 exact own PID, no extra process fields",
+    )?;
     let callback = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, port);
     let mut listener = None;
     let mut servers = BTreeMap::new();
@@ -994,12 +1388,26 @@ fn r10_inventory(raw: &[u8], pid: u32, port: u16, peers: &[u16; 5]) -> Result<R1
         let body = set.strip_suffix(b"\0").ok_or("r10 file set missing NUL")?;
         let mut fields = body.split(|b| *b == 0);
         let first = fields.next().ok_or("r10 file FD missing")?;
-        let raw_fd = std::str::from_utf8(first.strip_prefix(b"f").ok_or("r10 file set must start f")?)
-            .map_err(|_| "r10 FD not ASCII")?.to_owned();
-        let digits = if raw_fd.as_bytes().last().is_some_and(|b| matches!(b, b'r' | b'w' | b'u')) {
+        let raw_fd = std::str::from_utf8(
+            first
+                .strip_prefix(b"f")
+                .ok_or("r10 file set must start f")?,
+        )
+        .map_err(|_| "r10 FD not ASCII")?
+        .to_owned();
+        let digits = if raw_fd
+            .as_bytes()
+            .last()
+            .is_some_and(|b| matches!(b, b'r' | b'w' | b'u'))
+        {
             &raw_fd[..raw_fd.len() - 1]
-        } else { &raw_fd };
-        check(!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()), "r10 nonnumeric/ambiguous FD")?;
+        } else {
+            &raw_fd
+        };
+        check(
+            !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
+            "r10 nonnumeric/ambiguous FD",
+        )?;
         let fd: u32 = digits.parse().map_err(|_| "r10 FD overflow")?;
         check(fds.insert(fd), "r10 duplicate original FD")?;
         let (mut kind, mut name, mut state) = (None, None, None);
@@ -1007,15 +1415,21 @@ fn r10_inventory(raw: &[u8], pid: u32, port: u16, peers: &[u16; 5]) -> Result<R1
         let mut tcp_keys = BTreeSet::new();
         for field in fields {
             let (&tag, value) = field.split_first().ok_or("r10 empty field")?;
-            check(value.iter().all(|b| b.is_ascii() && !b.is_ascii_control()), "r10 unexpected field bytes")?;
+            check(
+                value.iter().all(|b| b.is_ascii() && !b.is_ascii_control()),
+                "r10 unexpected field bytes",
+            )?;
             let value = std::str::from_utf8(value).map_err(|_| "r10 field decoding")?;
             match tag {
                 b't' => check(kind.replace(value).is_none(), "r10 duplicate type")?,
                 b'n' => check(name.replace(value).is_none(), "r10 duplicate endpoint")?,
                 b'T' => {
                     let (key, data) = value.split_once('=').ok_or("r10 TCP prefix missing")?;
-                    check(matches!(key, "ST" | "QR" | "QS" | "SO" | "SS" | "TF" | "WR" | "WW")
-                        && tcp_keys.insert(key), "r10 unknown/duplicate TCP item")?;
+                    check(
+                        matches!(key, "ST" | "QR" | "QS" | "SO" | "SS" | "TF" | "WR" | "WW")
+                            && tcp_keys.insert(key),
+                        "r10 unknown/duplicate TCP item",
+                    )?;
                     if key == "ST" {
                         check(!data.is_empty(), "r10 TCP state missing")?;
                         state = Some(data.to_owned());
@@ -1029,22 +1443,58 @@ fn r10_inventory(raw: &[u8], pid: u32, port: u16, peers: &[u16; 5]) -> Result<R1
         let state = state.ok_or("r10 original TST missing")?;
         let name = name.ok_or("r10 original numeric endpoints missing")?;
         let (local, peer) = if let Some((left, right)) = name.split_once("->") {
-            (left.parse::<std::net::SocketAddrV4>().map_err(|_| "r10 local endpoint")?,
-             Some(right.parse::<std::net::SocketAddrV4>().map_err(|_| "r10 peer endpoint")?))
-        } else { (name.parse::<std::net::SocketAddrV4>().map_err(|_| "r10 listener endpoint")?, None) };
-        let record = R10Socket { fd, raw_fd, local, peer, state, tcp_fields };
+            (
+                left.parse::<std::net::SocketAddrV4>()
+                    .map_err(|_| "r10 local endpoint")?,
+                Some(
+                    right
+                        .parse::<std::net::SocketAddrV4>()
+                        .map_err(|_| "r10 peer endpoint")?,
+                ),
+            )
+        } else {
+            (
+                name.parse::<std::net::SocketAddrV4>()
+                    .map_err(|_| "r10 listener endpoint")?,
+                None,
+            )
+        };
+        let record = R10Socket {
+            fd,
+            raw_fd,
+            local,
+            peer,
+            state,
+            tcp_fields,
+        };
         if record.state == "LISTEN" {
-            check(local == callback && peer.is_none() && listener.replace(record).is_none(), "r10 exact one listener")?;
+            check(
+                local == callback && peer.is_none() && listener.replace(record).is_none(),
+                "r10 exact one listener",
+            )?;
         } else if local == callback {
             let peer = peer.ok_or("r10 server peer missing")?;
-            check(*peer.ip() == std::net::Ipv4Addr::LOCALHOST && known.contains(&peer.port())
-                && servers.insert(peer.port(), record).is_none(), "r10 unknown/duplicate server peer")?;
+            check(
+                *peer.ip() == std::net::Ipv4Addr::LOCALHOST
+                    && known.contains(&peer.port())
+                    && servers.insert(peer.port(), record).is_none(),
+                "r10 unknown/duplicate server peer",
+            )?;
         } else {
-            check(*local.ip() == std::net::Ipv4Addr::LOCALHOST && known.contains(&local.port()) && peer == Some(callback)
-                && reverse_clients.insert(local.port(), record).is_none(), "r10 unknown/reverse client endpoint")?;
+            check(
+                *local.ip() == std::net::Ipv4Addr::LOCALHOST
+                    && known.contains(&local.port())
+                    && peer == Some(callback)
+                    && reverse_clients.insert(local.port(), record).is_none(),
+                "r10 unknown/reverse client endpoint",
+            )?;
         }
     }
-    Ok(R10Inventory { listener: listener.ok_or("r10 listener absent")?, servers, reverse_clients })
+    Ok(R10Inventory {
+        listener: listener.ok_or("r10 listener absent")?,
+        servers,
+        reverse_clients,
+    })
 }
 
 struct R10Child {
@@ -1056,45 +1506,101 @@ struct R10Child {
 impl Drop for R10Child {
     fn drop(&mut self) {
         if !self.tail_recorded {
-            eprintln!("R10_LSOF_DROP pid={:?} reaped={} pipe_close=UNKNOWN observer_acceptance=false", self.pid, self.reaped);
+            eprintln!(
+                "R10_LSOF_DROP pid={:?} reaped={} pipe_close=UNKNOWN observer_acceptance=false",
+                self.pid, self.reaped
+            );
         }
         // kill_on_drop is a last resort; it is never asserted to prove wait/reap.
     }
 }
 fn r10_stdout_fd(pipe: &tokio::process::ChildStdout) -> Option<i32> {
-    #[cfg(unix)] { use std::os::fd::AsRawFd as _; Some(pipe.as_raw_fd()) }
-    #[cfg(not(unix))] { let _ = pipe; None }
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd as _;
+        Some(pipe.as_raw_fd())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pipe;
+        None
+    }
 }
 fn r10_stderr_fd(pipe: &tokio::process::ChildStderr) -> Option<i32> {
-    #[cfg(unix)] { use std::os::fd::AsRawFd as _; Some(pipe.as_raw_fd()) }
-    #[cfg(not(unix))] { let _ = pipe; None }
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd as _;
+        Some(pipe.as_raw_fd())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pipe;
+        None
+    }
 }
-async fn r10_read_pipe<R: tokio::io::AsyncRead + Unpin>(pipe: &mut R, raw: &mut Vec<u8>, cap: usize) -> Result<(), String> {
+async fn r10_read_pipe<R: tokio::io::AsyncRead + Unpin>(
+    pipe: &mut R,
+    raw: &mut Vec<u8>,
+    cap: usize,
+) -> Result<(), String> {
     loop {
         let mut buffer = [0; 4096];
-        let n = pipe.read(&mut buffer).await.map_err(|e| format!("r10 own pipe read: {e}"))?;
-        if n == 0 { return Ok(()); }
+        let n = pipe
+            .read(&mut buffer)
+            .await
+            .map_err(|e| format!("r10 own pipe read: {e}"))?;
+        if n == 0 {
+            return Ok(());
+        }
         let left = (cap + 1).saturating_sub(raw.len());
         raw.extend_from_slice(&buffer[..n.min(left)]);
         check(raw.len() <= cap, "r10 own pipe truncated at original bound")?;
     }
 }
-async fn r10_lsof(port: u16, peers: [u16; 5], deadline: Instant, point: &str) -> Result<R10Inventory, String> {
+async fn r10_lsof(
+    port: u16,
+    peers: [u16; 5],
+    deadline: Instant,
+    point: &str,
+) -> Result<R10Inventory, String> {
     use std::process::Stdio;
-    check(Instant::now() < deadline, "r10 original observer cap already expired")?;
+    check(
+        Instant::now() < deadline,
+        "r10 original observer cap already expired",
+    )?;
     let pid = std::process::id();
-    let argv = ["-nP".to_owned(), "-a".to_owned(), "-p".to_owned(), pid.to_string(), format!("-i4TCP:{port}"), "-F0pftnT".to_owned()];
+    let argv = [
+        "-nP".to_owned(),
+        "-a".to_owned(),
+        "-p".to_owned(),
+        pid.to_string(),
+        format!("-i4TCP:{port}"),
+        "-F0pftnT".to_owned(),
+    ];
     let started = Instant::now();
-    let child = tokio::process::Command::new("/usr/sbin/lsof").args(&argv)
-        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true)
-        .spawn().map_err(|e| format!("r10 observer spawn UNPROVEN: {e}"))?;
+    let child = tokio::process::Command::new("/usr/sbin/lsof")
+        .args(&argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("r10 observer spawn UNPROVEN: {e}"))?;
     // Register the original successful spawn before any fallible metadata/read operation.
-    let mut owned = R10Child { pid: child.id(), child, reaped: false, tail_recorded: false };
+    let mut owned = R10Child {
+        pid: child.id(),
+        child,
+        reaped: false,
+        tail_recorded: false,
+    };
     let mut stdout = owned.child.stdout.take();
     let mut stderr = owned.child.stderr.take();
     let stdout_fd = stdout.as_ref().and_then(r10_stdout_fd);
     let stderr_fd = stderr.as_ref().and_then(r10_stderr_fd);
-    eprintln!("R10_LSOF_BORN {}", json!({"point":point,"PID":owned.pid,"argv":argv,"stdoutFD":stdout_fd,"stderrFD":stderr_fd}));
+    eprintln!(
+        "R10_LSOF_BORN {}",
+        json!({"point":point,"PID":owned.pid,"argv":argv,"stdoutFD":stdout_fd,"stderrFD":stderr_fd})
+    );
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let mut status = None;
     let mut faults = Vec::new();
@@ -1102,91 +1608,164 @@ async fn r10_lsof(port: u16, peers: [u16; 5], deadline: Instant, point: &str) ->
     let mut action_complete = false;
     if let (Some(out_pipe), Some(err_pipe)) = (stdout.as_mut(), stderr.as_mut()) {
         match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
-            tokio::join!(r10_read_pipe(out_pipe, &mut out, 65_536), r10_read_pipe(err_pipe, &mut err, 8_192), owned.child.wait())
-        }).await {
+            tokio::join!(
+                r10_read_pipe(out_pipe, &mut out, 65_536),
+                r10_read_pipe(err_pipe, &mut err, 8_192),
+                owned.child.wait()
+            )
+        })
+        .await
+        {
             Ok((a, b, waited)) => {
                 action_complete = a.is_ok() && b.is_ok();
-                if let Err(e) = a { faults.push(e); }
-                if let Err(e) = b { faults.push(e); }
+                if let Err(e) = a {
+                    faults.push(e);
+                }
+                if let Err(e) = b {
+                    faults.push(e);
+                }
                 match waited {
-                    Ok(s) => { status = Some(s); owned.reaped = true; }
+                    Ok(s) => {
+                        status = Some(s);
+                        owned.reaped = true;
+                    }
                     Err(e) => faults.push(format!("r10 original wait: {e}")),
                 }
             }
-            Err(_) => faults.push("r10 original observer cap expired; no snapshot acceptance".to_owned()),
+            Err(_) => {
+                faults.push("r10 original observer cap expired; no snapshot acceptance".to_owned())
+            }
         }
-    } else { faults.push("r10 original stdout/stderr pipe missing".to_owned()); }
+    } else {
+        faults.push("r10 original stdout/stderr pipe missing".to_owned());
+    }
     // All action branches close the two original pipe owners independently before cleanup wait.
     drop(stdout.take());
     drop(stderr.take());
     if !owned.reaped {
         match owned.child.try_wait() {
-            Ok(Some(s)) => { status = Some(s); owned.reaped = true; }
+            Ok(Some(s)) => {
+                status = Some(s);
+                owned.reaped = true;
+            }
             Ok(None) => {}
             Err(e) => faults.push(format!("r10 original try_wait: {e}")),
         }
         if !owned.reaped {
             killed = true;
-            if let Err(e) = owned.child.start_kill() { faults.push(format!("r10 own observer kill: {e}")); }
+            if let Err(e) = owned.child.start_kill() {
+                faults.push(format!("r10 own observer kill: {e}"));
+            }
             // Reap only within the same original observer cap; never extend it.
             // A requested kill or kill_on_drop is not natural0 or a reap proof.
             if Instant::now() < deadline {
-                match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), owned.child.wait()).await {
-                    Ok(Ok(s)) => { status = Some(s); owned.reaped = true; }
+                match tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    owned.child.wait(),
+                )
+                .await
+                {
+                    Ok(Ok(s)) => {
+                        status = Some(s);
+                        owned.reaped = true;
+                    }
                     Ok(Err(e)) => faults.push(format!("r10 own observer reap UNKNOWN: {e}")),
-                    Err(_) => faults.push("r10 original observer cap expired during reap; reap UNKNOWN".to_owned()),
+                    Err(_) => faults.push(
+                        "r10 original observer cap expired during reap; reap UNKNOWN".to_owned(),
+                    ),
                 }
             }
             if !owned.reaped {
                 match owned.child.try_wait() {
-                    Ok(Some(s)) => { status = Some(s); owned.reaped = true; }
-                    Ok(None) => faults.push("r10 original observer unreaped at original cap; reap UNKNOWN".to_owned()),
+                    Ok(Some(s)) => {
+                        status = Some(s);
+                        owned.reaped = true;
+                    }
+                    Ok(None) => faults.push(
+                        "r10 original observer unreaped at original cap; reap UNKNOWN".to_owned(),
+                    ),
                     Err(e) => faults.push(format!("r10 final original try_wait/reap UNKNOWN: {e}")),
                 }
             }
         }
     }
-    let accepted = owned.pid.is_some() && owned.reaped && action_complete && !killed && faults.is_empty()
-        && status.is_some_and(|s| s.success()) && err.is_empty();
+    let accepted = owned.pid.is_some()
+        && owned.reaped
+        && action_complete
+        && !killed
+        && faults.is_empty()
+        && status.is_some_and(|s| s.success())
+        && err.is_empty();
     owned.tail_recorded = true;
-    eprintln!("R10_LSOF_FINAL {}", json!({"point":point,"PID":owned.pid,"argv":argv,
+    eprintln!(
+        "R10_LSOF_FINAL {}",
+        json!({"point":point,"PID":owned.pid,"argv":argv,
         "elapsed_us":started.elapsed().as_micros(),"wait_status":status.map(|s|format!("{s:?}")),
         "native":status.and_then(|s|s.code()),"kill_requested":killed,"reaped":owned.reaped,
         "stdoutFD":stdout_fd,"stderrFD":stderr_fd,"stdout_owner_dropped":true,"stderr_owner_dropped":true,
-        "EBADF_verification":"NOT_CLAIMED","faults":faults,"stdout":out,"stderr":err,"original_child_IO_accepted":accepted}));
-    check(accepted, "r10 observer nonzero/timeout/diagnostic/closure UNKNOWN; inspect exact raw final")?;
+        "EBADF_verification":"NOT_CLAIMED","faults":faults,"stdout":out,"stderr":err,"original_child_IO_accepted":accepted})
+    );
+    check(
+        accepted,
+        "r10 observer nonzero/timeout/diagnostic/closure UNKNOWN; inspect exact raw final",
+    )?;
     let parsed = r10_inventory(&out, pid, port, &peers)?;
-    eprintln!("R10_LSOF_SNAPSHOT {}", json!({"point":point,"finite_snapshot_parsed":true,"inventory":parsed}));
+    eprintln!(
+        "R10_LSOF_SNAPSHOT {}",
+        json!({"point":point,"finite_snapshot_parsed":true,"inventory":parsed})
+    );
     Ok(parsed)
 }
 
 // Even an unexpected callback terminal cannot select-away an in-flight observer tail.
 async fn r10_drive<F, G, T>(call: &mut Pin<Box<F>>, operation: G) -> Result<T, String>
-where F: Future<Output = CallbackResult>, G: Future<Output = Result<T, String>> {
+where
+    F: Future<Output = CallbackResult>,
+    G: Future<Output = Result<T, String>>,
+{
     let mut operation = Box::pin(operation);
     let mut early = None;
     let result = std::future::poll_fn(|cx| {
         if early.is_none()
             && let std::task::Poll::Ready(value) = call.as_mut().poll(cx)
         {
-            early = Some(format!("r10 callback completed before observation: {value:?}"));
+            early = Some(format!(
+                "r10 callback completed before observation: {value:?}"
+            ));
         }
         operation.as_mut().poll(cx)
-    }).await;
-    if let Some(error) = early { return Err(error); }
+    })
+    .await;
+    if let Some(error) = early {
+        return Err(error);
+    }
     result
 }
-async fn r10_settle<F: Future<Output = CallbackResult>>(call: &mut Pin<Box<F>>) -> Result<(), String> {
-    r10_drive(call, async { tokio::time::sleep(Duration::from_millis(40)).await; Ok(()) }).await
+async fn r10_settle<F: Future<Output = CallbackResult>>(
+    call: &mut Pin<Box<F>>,
+) -> Result<(), String> {
+    r10_drive(call, async {
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        Ok(())
+    })
+    .await
 }
 async fn r10_peer_tail(mut peer: TcpStream, deadline: Instant) -> Result<Vec<u8>, String> {
     let mut raw = Vec::new();
-    let result = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline),
-        (&mut peer).take(4097).read_to_end(&mut raw)).await;
+    let result = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        (&mut peer).take(4097).read_to_end(&mut raw),
+    )
+    .await;
     drop(peer);
     match result {
         Ok(Ok(_)) => check(raw.len() <= 4096, "r10 response overflow")?,
-        Ok(Err(e)) if raw.is_empty() && matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe) => {}
+        Ok(Err(e))
+            if raw.is_empty()
+                && matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+                ) => {}
         Ok(Err(e)) => return Err(format!("r10 owned peer tail: {e}")),
         Err(_) => return Err("r10 original peer cap expired".into()),
     }
@@ -1277,7 +1856,6 @@ async fn r10_bounded_slow_and_concurrent_terminal() {
         result.and(cleanup)
     }).await;
 }
-
 
 mod fixture {
     //! Own callback test fixture; reused production assembly and original PG ACK relay. Setup discovery/registration remain separately attributed.
@@ -1961,22 +2539,40 @@ if fatal.is_set(): raise RuntimeError('owned handler failed')
 
     // Select only the original journal transaction on its real backend, never a v2 classifier.
     #[derive(Clone, Copy, Debug)]
-    pub(super) enum TerminalStage { RegisteredReadbackRollback }
+    pub(super) enum TerminalStage {
+        RegisteredReadbackRollback,
+    }
     impl TerminalStage {
-        fn command(self) -> &'static [u8] { b"ROLLBACK\0" }
-        fn sql_bits(self, sql: &[u8]) -> u8 {
-            let Ok(sql) = std::str::from_utf8(sql) else { return 0; };
-            let canonical = sql.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
-            let (marker, body) = if let Some(comment) = canonical.strip_prefix("/* ") {
-                let Some((marker, body)) = comment.split_once(" */") else { return 0; };
-                (Some(marker), body.trim_start())
-            } else { (None, canonical.as_str()) };
-            u8::from(marker == Some("gateway_authorization_exact_readback")
-                && body.starts_with("select ")
-                && body.contains("from openbot_internal.gateway_authorization_attempts")
-                && !body.contains("for update"))
+        fn command(self) -> &'static [u8] {
+            b"ROLLBACK\0"
         }
-        fn complete_bits(self) -> u8 { 1 }
+        fn sql_bits(self, sql: &[u8]) -> u8 {
+            let Ok(sql) = std::str::from_utf8(sql) else {
+                return 0;
+            };
+            let canonical = sql
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase();
+            let (marker, body) = if let Some(comment) = canonical.strip_prefix("/* ") {
+                let Some((marker, body)) = comment.split_once(" */") else {
+                    return 0;
+                };
+                (Some(marker), body.trim_start())
+            } else {
+                (None, canonical.as_str())
+            };
+            u8::from(
+                marker == Some("gateway_authorization_exact_readback")
+                    && body.starts_with("select ")
+                    && body.contains("from openbot_internal.gateway_authorization_attempts")
+                    && !body.contains("for update"),
+            )
+        }
+        fn complete_bits(self) -> u8 {
+            1
+        }
     }
 
     struct TerminalGateState {
@@ -2138,14 +2734,29 @@ if fatal.is_set(): raise RuntimeError('owned handler failed')
         }
         pub(super) fn end_callback_sql_window(&self, expected_begins: usize) {
             assert!(self.state.callback_sql_window.swap(false, Ordering::SeqCst));
-            assert_eq!(self.state.all_begins_after_arm.load(Ordering::SeqCst), expected_begins);
+            assert_eq!(
+                self.state.all_begins_after_arm.load(Ordering::SeqCst),
+                expected_begins
+            );
             let sql = self.state.all_sql_frames_after_arm.load(Ordering::SeqCst);
-            if expected_begins == 0 { assert_eq!(sql, 0); } else { assert!(sql > 0); }
-            eprintln!("CALLBACK_SQL_WINDOW_END original_backend={} actual_Q_P_E_frames={} actual_BEGIN={} window_excludes_setup_registration_and_later_verification=true", self.original_pid(), sql, expected_begins);
+            if expected_begins == 0 {
+                assert_eq!(sql, 0);
+            } else {
+                assert!(sql > 0);
+            }
+            eprintln!(
+                "CALLBACK_SQL_WINDOW_END original_backend={} actual_Q_P_E_frames={} actual_BEGIN={} window_excludes_setup_registration_and_later_verification=true",
+                self.original_pid(),
+                sql,
+                expected_begins
+            );
         }
         pub(super) fn assert_before_exact_refusal(&self) {
             assert_eq!(self.state.all_begins_after_arm.load(Ordering::SeqCst), 1);
-            assert_eq!(self.state.readonly_begins_after_arm.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                self.state.readonly_begins_after_arm.load(Ordering::SeqCst),
+                1
+            );
             assert_eq!(self.state.stage_seen.load(Ordering::SeqCst), 0);
             assert_eq!(self.state.begins.load(Ordering::SeqCst), 0);
             assert_eq!(self.state.command_acks.load(Ordering::SeqCst), 0);
@@ -2153,11 +2764,16 @@ if fatal.is_set(): raise RuntimeError('owned handler failed')
             assert_eq!(self.state.forwarded_acks.load(Ordering::SeqCst), 0);
             assert_eq!(self.state.selected_backend_pid.load(Ordering::SeqCst), 0);
             assert!(!self.state.claimed.load(Ordering::SeqCst));
-            eprintln!("CALLBACK_ORIGINAL_RO_ACTOR_SESSION_REFUSAL actual_RC_READ_ONLY_BEGIN=1 exact_row_stage=0 target_ACK=0; typed_error_retains_original_RO_terminal full20_not_reached=true");
+            eprintln!(
+                "CALLBACK_ORIGINAL_RO_ACTOR_SESSION_REFUSAL actual_RC_READ_ONLY_BEGIN=1 exact_row_stage=0 target_ACK=0; typed_error_retains_original_RO_terminal full20_not_reached=true"
+            );
         }
         pub(super) fn assert_idle(&self) {
             assert!(self.state.callback_sql_window.load(Ordering::SeqCst));
-            assert_eq!(self.state.all_sql_frames_after_arm.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                self.state.all_sql_frames_after_arm.load(Ordering::SeqCst),
+                0
+            );
             assert_eq!(self.state.all_begins_after_arm.load(Ordering::SeqCst), 0);
             assert_eq!(self.state.stage_seen.load(Ordering::SeqCst), 0);
             assert_eq!(self.state.command_acks.load(Ordering::SeqCst), 0);
@@ -2185,7 +2801,9 @@ if fatal.is_set(): raise RuntimeError('owned handler failed')
             assert_eq!(self.state.rollbacks.load(Ordering::SeqCst), 1);
         }
         pub(super) async fn stop(mut self) {
-            self.state.callback_sql_window.store(false, Ordering::SeqCst);
+            self.state
+                .callback_sql_window
+                .store(false, Ordering::SeqCst);
             self.state.armed.store(false, Ordering::SeqCst);
             if let Some(stop) = self.stop.take() {
                 let _ = stop.send(());
@@ -2289,13 +2907,24 @@ if fatal.is_set(): raise RuntimeError('owned handler failed')
             while let Some((tag, bytes)) = terminal_frame(&mut down_read).await? {
                 if client_state.callback_sql_window.load(Ordering::SeqCst) {
                     if matches!(tag, b'Q' | b'P' | b'E') {
-                        client_state.all_sql_frames_after_arm.fetch_add(1, Ordering::SeqCst);
+                        client_state
+                            .all_sql_frames_after_arm
+                            .fetch_add(1, Ordering::SeqCst);
                     }
-                    if tag == b'Q' && (bytes.starts_with(b"START TRANSACTION") || bytes.starts_with(b"BEGIN")) {
-                        client_state.all_begins_after_arm.fetch_add(1, Ordering::SeqCst);
-                        let sql = std::str::from_utf8(&bytes).map_err(|_| "callback measured BEGIN UTF8")?;
-                        if sql.contains("ISOLATION LEVEL READ COMMITTED") && sql.contains("READ ONLY") {
-                            client_state.readonly_begins_after_arm.fetch_add(1, Ordering::SeqCst);
+                    if tag == b'Q'
+                        && (bytes.starts_with(b"START TRANSACTION") || bytes.starts_with(b"BEGIN"))
+                    {
+                        client_state
+                            .all_begins_after_arm
+                            .fetch_add(1, Ordering::SeqCst);
+                        let sql = std::str::from_utf8(&bytes)
+                            .map_err(|_| "callback measured BEGIN UTF8")?;
+                        if sql.contains("ISOLATION LEVEL READ COMMITTED")
+                            && sql.contains("READ ONLY")
+                        {
+                            client_state
+                                .readonly_begins_after_arm
+                                .fetch_add(1, Ordering::SeqCst);
                         }
                     }
                 }
@@ -2317,9 +2946,7 @@ if fatal.is_set(): raise RuntimeError('owned handler failed')
                     if let Some(sql) = pg_statement(tag, &bytes) {
                         stage_bits |= client_state.stage.sql_bits(sql);
                         if stage_bits == client_state.stage.complete_bits() && !seen_stage {
-                            if !original_begin
-                                || !original_read_only
-                            {
+                            if !original_begin || !original_read_only {
                                 return Err(
                                     "terminal original business RC/read-only mode mismatch".into(),
                                 );
@@ -2489,4 +3116,3 @@ if fatal.is_set(): raise RuntimeError('owned handler failed')
         Ok(Some((tag, bytes)))
     }
 }
-
