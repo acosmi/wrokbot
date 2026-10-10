@@ -156,6 +156,8 @@ impl AuditEventType {
     /// A live original owner closed its attempt within the saved caller and flow budgets.
     pub const GATEWAY_AUTHORIZATION_ATTEMPT_CLOSED: Self =
         Self("gateway_authorization_attempt_closed");
+    /// The original registration reply was committed and read back before handoff.
+    pub const GATEWAY_AUTHORIZATION_REGISTERED: Self = Self("gateway_authorization_registered");
 
     /// 从字符串解析。**只接受 [`AUDIT_EVENT_TYPES`] 里的字面量。**
     ///
@@ -182,7 +184,7 @@ impl fmt::Display for AuditEventType {
     }
 }
 
-/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt/artifact/gateway 27 项。
+/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt/artifact/gateway 28 项。
 ///
 /// 顺序也照抄上游，方便逐行对拍。
 pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
@@ -270,6 +272,7 @@ pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
     AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CREATED,
     AuditEventType::GATEWAY_AUTHORIZATION_REGISTRATION_ADMITTED,
     AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CLOSED,
+    AuditEventType::GATEWAY_AUTHORIZATION_REGISTERED,
 ];
 
 /// 一条审计事件。
@@ -331,9 +334,9 @@ mod tests {
 
     #[test]
     fn catalog_is_upstream_fifty_seven_plus_twenty_seven_new_and_has_no_duplicates() {
-        assert_eq!(AUDIT_EVENT_TYPES.len(), 84);
+        assert_eq!(AUDIT_EVENT_TYPES.len(), 85);
         let unique: BTreeSet<&str> = AUDIT_EVENT_TYPES.iter().map(|t| t.0).collect();
-        assert_eq!(unique.len(), 84, "目录里有重复的事件类型");
+        assert_eq!(unique.len(), 85, "目录里有重复的事件类型");
     }
 
     #[test]
@@ -351,16 +354,30 @@ mod tests {
                 "gateway_authorization_attempt_closed",
                 AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CLOSED,
             ),
+            (
+                "gateway_authorization_registered",
+                AuditEventType::GATEWAY_AUTHORIZATION_REGISTERED,
+            ),
         ];
         for (value, event) in values {
             assert_eq!(AuditEventType::parse(value), Some(event));
             assert_eq!(event.as_str(), value);
         }
+        assert_eq!(AUDIT_EVENT_TYPES.len(), 85);
+        assert_eq!(
+            AUDIT_EVENT_TYPES
+                .iter()
+                .map(|t| t.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            85
+        );
         assert_eq!(&AUDIT_EVENT_TYPES[81..], &values.map(|(_, event)| event));
         for invalid in [
             "gateway_authorization_attempt_created ",
             "Gateway_authorization_attempt_created",
-            "gateway_authorization_registered",
+            "gateway_authorization_registered ",
+            "gateway_authorization_registered_unknown",
             "gateway_authorization_attempt_closed_unknown",
         ] {
             assert_eq!(AuditEventType::parse(invalid), None);
@@ -415,6 +432,7 @@ mod tests {
             AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CREATED,
             AuditEventType::GATEWAY_AUTHORIZATION_REGISTRATION_ADMITTED,
             AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CLOSED,
+            AuditEventType::GATEWAY_AUTHORIZATION_REGISTERED,
         ] {
             assert!(
                 AUDIT_EVENT_TYPES.contains(&constant),

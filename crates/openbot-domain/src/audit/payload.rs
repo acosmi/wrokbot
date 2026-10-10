@@ -275,7 +275,7 @@ impl AuditGatewayAuthorizationAttemptId {
     }
 }
 
-/// The journal phases accepted by the initial, unsent authorization path.
+/// The closed journal phases accepted by the original authorization owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditGatewayAuthorizationPhase {
     /// Original attempt creation committed.
@@ -284,6 +284,8 @@ pub enum AuditGatewayAuthorizationPhase {
     RegistrationAdmitted,
     /// The original live owner closed within its original budget.
     Closed,
+    /// The original registration reply was committed and exactly read back.
+    Registered,
 }
 
 impl AuditGatewayAuthorizationPhase {
@@ -294,6 +296,7 @@ impl AuditGatewayAuthorizationPhase {
             Self::Created => "created",
             Self::RegistrationAdmitted => "registration_admitted",
             Self::Closed => "closed",
+            Self::Registered => "registered",
         }
     }
 }
@@ -1097,6 +1100,7 @@ mod tests {
                 "registration_admitted",
             ),
             (AuditGatewayAuthorizationPhase::Closed, "closed"),
+            (AuditGatewayAuthorizationPhase::Registered, "registered"),
         ] {
             let payload = AuditPayload::from_facts([
                 AuditFact::GatewayAuthorizationJournalSchema,
@@ -1154,6 +1158,7 @@ mod tests {
                     .unwrap(),
             ),
             AuditFact::GatewayAuthorizationPhase(AuditGatewayAuthorizationPhase::Closed),
+            AuditFact::GatewayAuthorizationPhase(AuditGatewayAuthorizationPhase::Registered),
         ] {
             let field = fact.field();
             assert_eq!(

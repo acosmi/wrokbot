@@ -32,6 +32,7 @@ use zeroize::Zeroizing;
 
 mod authority_sql;
 mod current;
+mod registration;
 #[cfg(test)]
 mod tests;
 
@@ -229,6 +230,125 @@ pub struct ClosedAttemptReceipt {
     _private: (),
 }
 
+/// Whole registered result retaining the original reply and one reservation.
+pub struct RegisteredAttemptOwner {
+    reply: super::OwnedRegistrationReply,
+    binding: RegistrationDispatchBinding,
+    reservation: EnrollmentReservation,
+}
+struct RegistrationDispatchBinding {
+    flow: SavedFlow,
+    identity: HostRequestBindingIdentity,
+    expected: Row,
+    journal: Weak<GatewayAuthorizationJournal>,
+    runtime: Weak<GatewayAuthorizationJournalRuntimeOwner>,
+}
+struct EnrollmentReservation {
+    id: Uuid,
+}
+/// Closed registration-dispatch failure facts; classification grants no retry authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistrationDispatchKind {
+    /// The operation was refused before dispatch.
+    BeforeDispatchRefused,
+    /// The required registration-dispatch resource was unavailable.
+    Unavailable,
+    /// The original operation was cancelled.
+    Cancelled,
+    /// The original operation deadline was reached.
+    Deadline,
+    /// The registration request or reply framing was invalid.
+    FramingInvalid,
+    /// The registration response carried this rejected HTTP status.
+    HttpStatus(u16),
+    /// The registration result could not be proven.
+    RegistrationUnknown,
+    /// The original send-guard cleanup could not be proven.
+    CleanupUnknown,
+    /// The original registered write COMMIT acknowledgement was unknown.
+    CommitUnknown,
+    /// The original registered write COMMIT acknowledgement was late.
+    CommitAcknowledgedAfterDeadline,
+    /// The registered exact readback could not be proven.
+    ReadbackUnproven,
+    /// The original registered readback ROLLBACK acknowledgement was late.
+    RollbackAcknowledgedAfterDeadline,
+}
+/// Closed operation facts preserving the three original transaction terminals.
+pub struct RegistrationDispatchError {
+    kind: RegistrationDispatchKind,
+    transport: Option<crate::gateway_transport::GatewayAttemptSnapshot>,
+    send_guard_rollback: Ack,
+    registered_write: Ack,
+    registered_readback: Ack,
+}
+impl RegistrationDispatchError {
+    /// Closed failure classification; it is not permission to retry.
+    #[must_use]
+    pub const fn kind(&self) -> RegistrationDispatchKind {
+        self.kind
+    }
+    /// Original transport-minted facts, preserving absence of an observed snapshot.
+    #[must_use]
+    pub const fn transport_snapshot(
+        &self,
+    ) -> Option<crate::gateway_transport::GatewayAttemptSnapshot> {
+        self.transport
+    }
+    /// Original send-guard ROLLBACK acknowledgement fact.
+    #[must_use]
+    pub const fn send_guard_rollback_ack(&self) -> GatewayAuthorizationJournalAck {
+        self.send_guard_rollback
+    }
+    /// Original registered write COMMIT acknowledgement fact.
+    #[must_use]
+    pub const fn registered_write_ack(&self) -> GatewayAuthorizationJournalAck {
+        self.registered_write
+    }
+    /// Original registered readback ROLLBACK acknowledgement fact.
+    #[must_use]
+    pub const fn registered_readback_ack(&self) -> GatewayAuthorizationJournalAck {
+        self.registered_readback
+    }
+    fn new(kind: RegistrationDispatchKind) -> Self {
+        Self {
+            kind,
+            transport: None,
+            send_guard_rollback: Ack::NotAttempted,
+            registered_write: Ack::NotAttempted,
+            registered_readback: Ack::NotAttempted,
+        }
+    }
+}
+impl fmt::Debug for RegistrationDispatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegistrationDispatchError")
+            .field("kind", &self.kind)
+            .field("transport", &self.transport)
+            .field("send_guard_rollback", &self.send_guard_rollback)
+            .field("registered_write", &self.registered_write)
+            .field("registered_readback", &self.registered_readback)
+            .finish()
+    }
+}
+impl fmt::Display for RegistrationDispatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RegistrationDispatchError({:?})", self.kind)
+    }
+}
+impl std::error::Error for RegistrationDispatchError {}
+impl fmt::Debug for RegisteredAttemptOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Each retained resource has static redacted Debug; no identities or
+        // reply fields are exposed from this whole owner.
+        f.debug_struct("RegisteredAttemptOwner")
+            .field("reply", &self.reply)
+            .field("binding", &self.binding)
+            .field("reservation", &self.reservation)
+            .finish()
+    }
+}
+
 /// The two finite controlled-close reasons; expired/revoked cleanup is separate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlledCloseReason {
@@ -246,7 +366,7 @@ impl ControlledCloseReason {
     }
 }
 
-struct SavedFlow {
+pub(super) struct SavedFlow {
     clock: ClockOwner,
     start: ClockSample,
     original_parent: CancellationToken,
@@ -322,6 +442,26 @@ impl SavedFlow {
             return Err(Error::new(Kind::Deadline));
         }
         Ok(now)
+    }
+    pub(super) fn check_registration_reply(
+        &self,
+        initial: &InitialBudget,
+        clock: &ClockOwner,
+    ) -> Result<ClockSample, InitialError> {
+        if !Arc::ptr_eq(&self.clock, clock) {
+            return Err(InitialError::ProtocolInvalid(
+                super::ReplyInvalidReason::ReplyBinding,
+            ));
+        }
+        initial.check(clock)?;
+        self.check(Some(initial)).map_err(|error| match error.kind {
+            Kind::Cancelled => InitialError::Cancelled,
+            Kind::Deadline => InitialError::Deadline,
+            _ => InitialError::ProtocolInvalid(super::ReplyInvalidReason::ReplyBinding),
+        })
+    }
+    pub(super) fn registration_reply_cap(&self, initial: &InitialBudget) -> Instant {
+        self.cap(Some(initial))
     }
     fn cap(&self, initial: Option<&InitialBudget>) -> Instant {
         let cap = self.deadline.min(self.original_caller_deadline);
@@ -528,6 +668,15 @@ impl GatewayAuthorizationJournal {
             return Err(Error::new(Kind::Unavailable));
         }
         Ok(())
+    }
+    /// Consume one original admission receipt for one registration dispatch.
+    pub async fn register_admitted(
+        self: &Arc<Self>,
+        auth: &AuthContext,
+        receipt: RegistrationAdmissionReceipt,
+        factory: &crate::gateway_transport::GatewayTransportFactory,
+    ) -> Result<RegisteredAttemptOwner, RegistrationDispatchError> {
+        registration::dispatch_registration(self, auth, receipt, factory).await
     }
     /// Create/audit/ACK/read back before capturing the original registration request.
     pub async fn create_attempt(
@@ -745,6 +894,98 @@ impl GatewayAuthorizationJournal {
         gate.check()?;
         Ok(gate)
     }
+    fn registration_binding_gate<'a>(
+        self: &'a Arc<Self>,
+        auth: &'a AuthContext,
+        binding: &'a RegistrationDispatchBinding,
+        initial: &'a InitialBudget,
+        clock: &ClockOwner,
+    ) -> Result<OperationGate<'a>, Error> {
+        self.check_scope(auth)?;
+        let original = binding
+            .journal
+            .upgrade()
+            .ok_or_else(|| Error::new(Kind::Unavailable))?;
+        if !Arc::ptr_eq(self, &original)
+            || !Weak::ptr_eq(&binding.runtime, &self.runtime)
+            || !Arc::ptr_eq(&binding.flow.clock, clock)
+        {
+            return Err(Error::new(Kind::Refused));
+        }
+        let request_binding = auth
+            .request_binding()
+            .ok_or_else(|| Error::new(Kind::Refused))?;
+        if !request_binding.identity().same_binding(&binding.identity) {
+            return Err(Error::new(Kind::Refused));
+        }
+        let runtime = self
+            .runtime
+            .upgrade()
+            .ok_or_else(|| Error::new(Kind::Unavailable))?;
+        if binding.expected.installation_id != runtime.installation_id
+            || binding.expected.runtime_epoch != runtime.runtime_epoch
+            || binding.expected.deployment_id != self.deployment.as_str()
+            || binding.expected.tenant_id != self.tenant.as_str()
+            || binding.expected.owner_user_id != auth.actor().as_str()
+            || i64::try_from(auth.auth_generation().get()).ok()
+                != Some(binding.expected.auth_generation)
+            || binding.expected.created_at != binding.flow.created_at
+            || binding.expected.expires_at != binding.flow.expires_at
+            || binding.expected.journal_schema != 1
+        {
+            return Err(Error::new(Kind::Refused));
+        }
+        initial.check(clock).map_err(initial_error)?;
+        let gate = OperationGate {
+            journal: self,
+            auth,
+            flow: &binding.flow,
+            initial: Some(initial),
+        };
+        gate.check()?;
+        Ok(gate)
+    }
+    fn dispatched_gate<'a>(
+        self: &'a Arc<Self>,
+        auth: &'a AuthContext,
+        binding: &'a RegistrationDispatchBinding,
+        dispatched: &'a super::DispatchedInitialOwner,
+    ) -> Result<OperationGate<'a>, Error> {
+        // The parent whole-transfer path alone mints this witness. Keep the old
+        // captured-owner request.is_some() predicate unchanged above.
+        let _transfer = &dispatched.transfer;
+        if !dispatched.sdk_exit_child.is_cancelled() {
+            return Err(Error::new(Kind::Refused));
+        }
+        match &dispatched.witness {
+            InitialReplyWitness::Registration {
+                metadata,
+                original_redirect_uri,
+            } if metadata.sdk_metadata().issuer == binding.expected.issuer
+                && original_redirect_uri.as_str() == binding.expected.redirect_uri => {}
+            _ => return Err(Error::new(Kind::Refused)),
+        }
+        self.registration_binding_gate(auth, binding, &dispatched.budget, &dispatched.clock)
+    }
+    fn registered_reply_gate<'a>(
+        self: &'a Arc<Self>,
+        auth: &'a AuthContext,
+        binding: &'a RegistrationDispatchBinding,
+        reply: &'a super::OwnedRegistrationReply,
+    ) -> Result<OperationGate<'a>, Error> {
+        if reply.resources.metadata.sdk_metadata().issuer != binding.expected.issuer
+            || reply.original_redirect_uri.as_str() != binding.expected.redirect_uri
+            || !super::initial::valid_client_id(&reply.client_id)
+        {
+            return Err(Error::new(Kind::Refused));
+        }
+        self.registration_binding_gate(
+            auth,
+            binding,
+            &reply.resources.budget,
+            &reply.resources.clock,
+        )
+    }
     async fn write(
         self: &Arc<Self>,
         auth: &AuthContext,
@@ -853,6 +1094,33 @@ fn admitted_row(old: &Row, stamp: OffsetDateTime) -> Result<Row, Error> {
     next.updated_at = stamp;
     Ok(next)
 }
+fn registered_row(
+    old: &Row,
+    client_id: &str,
+    enrollment_id: Uuid,
+    stamp: OffsetDateTime,
+) -> Result<Row, Error> {
+    if old.phase != "registration_admitted"
+        || old.registration_admitted_at.is_none()
+        || old.client_id.is_some()
+        || old.enrollment_id.is_some()
+        || old.code_admitted_at.is_some()
+        || old.finished_at.is_some()
+        || old.outcome_code.is_some()
+        || !super::initial::valid_client_id(client_id)
+        || enrollment_id.get_version_num() != 7
+        || stamp < old.updated_at
+        || stamp >= old.expires_at
+    {
+        return Err(Error::new(Kind::Refused));
+    }
+    let mut next = old.clone();
+    next.phase = "registered".to_owned();
+    next.client_id = Some(client_id.to_owned());
+    next.enrollment_id = Some(enrollment_id);
+    next.updated_at = stamp;
+    Ok(next)
+}
 fn closed_row(old: &Row, template: &Row, stamp: OffsetDateTime) -> Result<Row, Error> {
     if !matches!(old.phase.as_str(), "created" | "registration_admitted")
         || (old.phase == "created" && old.registration_admitted_at.is_some())
@@ -890,6 +1158,8 @@ redacted!(
     CreatedAttemptOwner,
     RegistrationAdmissionReceipt,
     ClosedAttemptReceipt,
+    RegistrationDispatchBinding,
+    EnrollmentReservation,
     SavedFlow,
     OperationGate<'_>
 );
