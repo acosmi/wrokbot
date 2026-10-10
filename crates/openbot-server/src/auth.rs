@@ -2990,3 +2990,5 @@ impl AuthResolver for FixedAuthResolver {
 
 #[cfg(test)]
 mod gateway_authorization_journal_tests;
+#[cfg(test)]
+mod gateway_registration_dispatch_tests;

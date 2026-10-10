@@ -118,6 +118,19 @@ struct PreparedInitialOwner {
     sdk_exit_child: CancellationToken,
 }
 
+// Only the whole registration transfer constructs this non-replayable witness.
+struct RegistrationTransferWitness {
+    _private: (),
+}
+
+struct DispatchedInitialOwner {
+    witness: InitialReplyWitness,
+    budget: InitialBudget,
+    clock: ClockOwner,
+    sdk_exit_child: CancellationToken,
+    transfer: RegistrationTransferWitness,
+}
+
 #[allow(dead_code, reason = "Pending token consumption")]
 struct ParsedTokenFields {
     access_token: Zeroizing<String>,
@@ -233,6 +246,8 @@ redacted_debug! {
     OwnedTokenBinding => "OwnedTokenBinding([redacted])",
     InitialReplyWitness => "InitialReplyWitness([redacted])",
     PreparedInitialOwner => "PreparedInitialOwner([redacted])",
+    RegistrationTransferWitness => "RegistrationTransferWitness([redacted])",
+    DispatchedInitialOwner => "DispatchedInitialOwner([redacted])",
     ParsedTokenFields => "ParsedTokenFields([redacted])",
     CheckedExpiry => "CheckedExpiry([redacted])",
     ReplyResources => "ReplyResources([redacted])",
@@ -319,4 +334,57 @@ async fn consume_initial(
     response: acosmi::HttpResponse,
 ) -> Result<InitialReply, InitialError> {
     reply::consume_initial(prepared, response).await
+}
+
+// Consume the actual captured SDK request once, retaining every original owner.
+fn transfer_registration_request(
+    mut prepared: PreparedInitialOwner,
+) -> Result<(acosmi::HttpRequest, DispatchedInitialOwner), InitialError> {
+    if !prepared.sdk_exit_child.is_cancelled() {
+        return Err(InitialError::RequestMismatch);
+    }
+    let budget = prepared
+        .budget
+        .take()
+        .ok_or(InitialError::RequestMismatch)?;
+    budget.check(&prepared.clock)?;
+    let request = prepared
+        .request
+        .take()
+        .ok_or(InitialError::RequestMismatch)?;
+    let witness = prepared
+        .witness
+        .take()
+        .ok_or(InitialError::RequestMismatch)?;
+    let InitialReplyWitness::Registration {
+        metadata,
+        original_redirect_uri,
+    } = witness
+    else {
+        return Err(InitialError::RequestMismatch);
+    };
+
+    // Borrow the original validator through its existing kind, without cloning
+    // metadata or reconstructing any part of the owned HTTP request.
+    let kind = OwnedInitialKind::Registration(OwnedRegistrationInput {
+        metadata,
+        original_redirect_uri,
+    });
+    initial::validate_request(&request, &kind)?;
+    budget.check(&prepared.clock)?;
+    let OwnedInitialKind::Registration(registration) = kind else {
+        return Err(InitialError::RequestMismatch);
+    };
+    let dispatched = DispatchedInitialOwner {
+        witness: InitialReplyWitness::Registration {
+            metadata: registration.metadata,
+            original_redirect_uri: registration.original_redirect_uri,
+        },
+        budget,
+        clock: prepared.clock,
+        sdk_exit_child: prepared.sdk_exit_child,
+        transfer: RegistrationTransferWitness { _private: () },
+    };
+    dispatched.budget.check(&dispatched.clock)?;
+    Ok((request, dispatched))
 }
