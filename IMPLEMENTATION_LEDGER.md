@@ -1879,3 +1879,14 @@ Independent finite acceptance of the whole task passed with no confirmed P1/P2 f
 Scope remains 12 product files plus this ledger, reusing native migration 0048 without new dependencies, migrations, UI or SDK-source changes. Prior failures and diagnostics remain recorded. Current diagnostics include three LLVM stripping SIGABRT warnings, an existing unused import and 24 logfile-deprecation warnings. Individual production-driver and asynchronous drop joins remain unproven. The existing rollback-kind documentation comment remains unresolved; the three ACK slots distinguish the actual observations.
 
 Token exchange, callbacks/listeners, enrollment, account bridge, application integration, Ready, recovery and overall backend completion remain open. Publication review, exact-head merge and delivery remain pending.
+
+
+### V7-IMPL-029 — guarded SDK registration dispatch and typed ACK verification
+
+Candidate: `d175d89f972a4a71208263058794a772ce5130f3` (Source06).
+
+Registration consumes the original admitted request owner, checks the current Host and actor fences, and releases the send permit through the original rollback ACK before exposing response data. A successful bounded reply uses the reserved client/enrollment identifiers for one registered-row CAS and exact readback with typed audit facts. Dispatch failures retain a closed kind plus independent send-rollback, registered-write and readback ACKs. The current Server regression checks revocation while response headers are pending through the typed registered-write ACK getter.
+
+Validation: the current Source06 Server strict check, Server harness compile and SDK dependency guard passed. Runtime validation: all 18 current Server PG/TLS cases passed with one exact test per original process and no ignored cases. The exact Source06 product candidate passed independent finite acceptance. Original Source05 coverage comprises three unchanged compile phases and Infra6; original Source04 coverage comprises five compile phases and Domain4 compatibility. These remain attributed to their original candidates. The task denominator is 24 core cases plus four compatibility cases; they are not all new Source06 executions.
+
+Earlier holds/failures and LLVM strip/libtest diagnostics remain recorded; production individual driver joins remain unproven. Unknown/Late outcomes and documentation follow-ups remain open. Public scope is 12 product paths plus this ledger, with no new migration, dependency or UI change. SDK token exchange, callback/listener, enrollment consumption, Account/UI bridge, recovery and full Ready remain open. Publication, merge and delivery are pending.
