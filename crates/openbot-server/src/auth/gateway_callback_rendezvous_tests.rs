@@ -316,11 +316,19 @@ async fn r01_listener_before_any_create() {
     harness::with_temp_database(&admin, "cb_r01", |cfg| async move {
         let f = Fixture::new(cfg, 2).await?;
         let (_auth, wait, input) = start(&f).await?;
-        let stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, input.port)).await.map_err(|e| e.to_string())?;
-        check(stream.peer_addr().map_err(|e| e.to_string())?.port() == input.port, "positive original nonzero IPv4 listener")?;
-        drop(stream); drop(wait); absent(input.port).await?;
+        let stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, input.port))
+            .await
+            .map_err(|e| e.to_string())?;
+        check(
+            stream.peer_addr().map_err(|e| e.to_string())?.port() == input.port,
+            "positive original nonzero IPv4 listener",
+        )?;
+        drop(stream);
+        drop(wait);
+        absent(input.port).await?;
         f.finish().await
-    }).await;
+    })
+    .await;
     harness::with_temp_database(&admin, "cb_r01_bind_refusal", |cfg| async move {
         let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
         let f = match Fixture::new(relay.config.clone(), 1).await {
@@ -1499,7 +1507,10 @@ fn r10_inventory<const N: usize>(
         raw.ends_with(b"\0\n"),
         "r10 lsof field/set terminators incomplete",
     )?;
-    check(matches!(N, 1 | 5), "only original five-peer or owned one-peer observation")?;
+    check(
+        matches!(N, 1 | 5),
+        "only original five-peer or owned one-peer observation",
+    )?;
     let known: BTreeSet<_> = peers.iter().copied().collect();
     check(
         known.len() == N && !known.contains(&0) && !known.contains(&port),
@@ -1629,7 +1640,10 @@ fn r10_inventory<const N: usize>(
     let listener = if N == 5 {
         Some(listener.ok_or("r10 listener absent")?)
     } else {
-        check(listener.is_none(), "r16 matched callback listener must already be absent")?;
+        check(
+            listener.is_none(),
+            "r16 matched callback listener must already be absent",
+        )?;
         None
     };
     Ok(R10Inventory {

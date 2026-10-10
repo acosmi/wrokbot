@@ -1170,9 +1170,10 @@ pub(super) async fn wait_callback(
                         Poll::<Result<(), CallbackError>>::Pending
                     }) {
                         Ok(Some(result)) => result,
-                        Ok(None) => Poll::Ready(Err(
-                            CallbackError::new(CallbackErrorKind::Deadline).with_readback(ack)
-                        )),
+                        Ok(None) => Poll::Ready(Err(CallbackError::new(
+                            CallbackErrorKind::Deadline,
+                        )
+                        .with_readback(ack))),
                         Err(error) => Poll::Ready(Err(error.with_readback(ack))),
                     }
                 }
