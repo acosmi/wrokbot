@@ -168,18 +168,19 @@ pub use mcp_connections::{
 pub use ports::{
     AgentAdministration, AgentAdministrationError, AgentAdministrationScope, AgentDirectory,
     AgentReachability, AgentReadScope, AuditPageRequest, AuditReadError, AuditReader,
-    BeginThreadRunRequest, CancelThreadRunRequest, ChannelActivitySubscription,
-    ChannelAdministration, ChannelAdministrationError, ChannelCreateRequest, ChannelCreateScope,
-    ChannelReadScope, ChannelReader, ChannelRoutingBackend, ChannelRoutingBackendError,
-    CorrectMemoryRequest, MemoryAdministration, MemoryAdministrationError, MemoryControlRequest,
-    MemoryPageRequest, MutateMemoryRequest, NoAgentAdministration, NoAgentDirectory, NoAuditReader,
-    NoChannelAdministration, NoChannelRoutingBackend, NoMemoryAdministration,
-    NoPeopleAdministration, NoPolicyAdministration, NoThreadDirectory,
-    OwnedCredentialRetirementError, OwnedCredentialRetirer, PeopleAdministration,
-    PeoplePageRequest, PeoplePortError, PolicyAdministration, PolicyAdministrationError, PortError,
-    RecallMemoriesRequest, RememberMemoryRequest, RoutingAuditRecord, RunEffectReceiptsRequest,
-    RunReconciliationRequest, ThreadConversationRequest, ThreadDirectory, ThreadDirectoryError,
-    ThreadEventSubscription, ThreadHistoryRequest, UpdateMemoryControlRequest,
+    BeginThreadRunRequest, BeginThreadRunV2Request, CancelThreadRunRequest,
+    ChannelActivitySubscription, ChannelAdministration, ChannelAdministrationError,
+    ChannelCreateRequest, ChannelCreateScope, ChannelReadScope, ChannelReader,
+    ChannelRoutingBackend, ChannelRoutingBackendError, CorrectMemoryRequest, MemoryAdministration,
+    MemoryAdministrationError, MemoryControlRequest, MemoryPageRequest, MutateMemoryRequest,
+    NoAgentAdministration, NoAgentDirectory, NoAuditReader, NoChannelAdministration,
+    NoChannelRoutingBackend, NoMemoryAdministration, NoPeopleAdministration,
+    NoPolicyAdministration, NoThreadDirectory, OwnedCredentialRetirementError,
+    OwnedCredentialRetirer, PeopleAdministration, PeoplePageRequest, PeoplePortError,
+    PolicyAdministration, PolicyAdministrationError, PortError, RecallMemoriesRequest,
+    RememberMemoryRequest, RoutingAuditRecord, RunEffectReceiptsRequest, RunReconciliationRequest,
+    ThreadConversationRequest, ThreadDirectory, ThreadDirectoryError, ThreadEventSubscription,
+    ThreadHistoryRequest, UpdateMemoryControlRequest,
 };
 pub use provider::{
     AgentAudit, AgentAuditError, AgentAuditKind, AgentAuthorizationError, AgentAuthorizationSource,
@@ -195,7 +196,8 @@ pub use provider::{
     ProviderToolDefinition, ProviderUsage, RemoteAguiAuthorization, RemoteAguiEventStream,
     RemoteAguiRoute, RemoteAguiTransport, RemoteAguiTransportError, RemoteInterruptCoordinator,
     RemoteInterruptError, RemoteInterruptPending, RemoteInterruptPendingInput,
-    RemoteInterruptResolutionReceipt, RunModelBinding,
+    RemoteInterruptResolutionReceipt, RunModelBinding, RunModelCredentialPolicy,
+    RunModelDatasetInitialOrigin, RunModelDatasetSnapshot, RunModelV2Snapshot,
 };
 pub use run_cost_budget::{
     NoRunCostBudgetAdministration, RunCostBudgetAdministration, RunCostBudgetAdministrationError,
@@ -235,6 +237,7 @@ pub use ui_preferences::{
     NoUiPreferenceAdministration, UiPreferenceAdministration, UiPreferenceAdministrationError,
     get_ui_preferences, update_ui_preferences,
 };
+pub use use_cases::thread::begin_thread_run_v2;
 pub use use_cases::{
     DEFAULT_AUDIT_PAGE, DEFAULT_CHANNEL_PAGE, DEFAULT_MEMORY_PAGE, DEFAULT_PEOPLE_PAGE,
     MAX_AUDIT_PAGE, MAX_MEMORY_CONTENT_BYTES, MAX_MEMORY_QUERY_BYTES, MAX_MEMORY_TAG_BYTES,

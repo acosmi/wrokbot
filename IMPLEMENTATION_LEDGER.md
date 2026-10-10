@@ -1814,6 +1814,53 @@ Limits: Server body checks can reject after headers; allocation ownership is not
 
 The selected Agent profile panel now owns a browser cancellation signal through its original detail response decoding. Retiring that panel synchronously aborts a pending GET, while generation checks continue to reject stale updates. Retry deduplication, management permissions and the original detail reader used by NewChannel, Bot and Conversation remain unchanged. This change adds no backend endpoint or dependency; exact-candidate verification is recorded separately.
 
+
+2026-10-09 — V7-IMPL-025 finite product acceptance: ordinary trusted instances can consume a versioned custom model selection from the current database. Native 0047 persists the selected connection and catalog revisions in the durable run snapshot. Application, agent, HTTP and Desktop bindings construct the provider context and recheck the original dataset before each provider start or retry; stale selections detected by those checks are rejected before a provider request.
+
+The exact product candidate ceab5f7147cc03f6451cbfde5bc2e2d70f30a411, tree 8ce9bf27cee045a406975d3c3f25571b64056d35, passed 18 directed cases and one strict Infra check in three successful original execution sessions, with zero failed and zero ignored cases. These include real timely and late rollback acknowledgement regressions. A different author independently accepted the finite product scope. The unchanged scope retains 75 directed cases and six strict checks from the previous tested candidate; these are original-source results, not new executions. All 14 acceptance matrices and full typed schema checks were retained.
+
+The final publication candidate is composed separately with the latest main and this append-only public ledger entry. Delivery is not yet claimed by this product acceptance entry. SDK gateway, account bridge, general recovery and full model readiness remain open, as do individual production PG and HTTP driver join proofs. Earlier preparation failures, original warnings and the earlier Desktop native API UNKNOWN result retain their original records.
+
+
+2026-10-09 — V7-IMPL-026 finite SDK authorization-attempt journal foundation acceptance.
+
+Native 0048 adds the internal gateway authorization-attempt journal: 20 columns (14 required and six nullable), 19 constraints including 16 CHECK constraints, and two new indexes. Typed row conversion, redacted Debug output and complete schema observation retain original owners, full ACLs and four referential-integrity hooks. The current registry requires the exact 13–48 sequence; a named legacy-47 test entry preserves the exact 13–47 prefix. The desktop canary verifies the existing public-46 oracle and the complete journal at native 48.
+
+The exact product candidate 238539ca8ce0e4d1ccab5633dfae05a81c088709, tree 07fbb808aca08f21841aeae5e74b0f6c705d127a, passed six fresh directed phases: four strict Clippy checks and 19 unique tests (nine library cases and ten integration-harness cases), with zero failed and zero ignored cases. A different author independently accepted this finite product scope, including all six original full typed observations, both exact table ACL states, distinct and colliding owners, and whole public-46 equality before and after upgrade. All current phases ran anew on this candidate; earlier candidate results retain their original identities.
+
+History remains visible: the first owned-PostgreSQL attempt failed at preflight before Cargo ran; the second ten-case attempt produced two passes and eight failures during current-schema initialization. The new oracle includes an independently predicted four-character correction to two cast renderings from the pinned PostgreSQL deparser. Product SQL and strict comparison logic retain their previous bytes. Original libtest logfile deprecation and missing-LLVM debug-symbol stripping warnings remain recorded; compilation and tests completed. Earlier preparation failures and the original oracle seal also retain their records.
+
+The publication candidate and normal delivery are recorded separately; this entry claims finite product acceptance only. Journal data and schema establish no SDK sending, callback handling, account bridge, authorization scheduling, Host permission, recovery or model readiness. Individual production PG/HTTP driver joins remain unproven, and overall backend completion remains open.
+
+### V7-IMPL-027 — owned initial OAuth kernel
+
+Product candidate: `95553014c411b35d85b9a812fd175362fb685160`. A different author independently accepted this finite product scope; publication and merge are recorded separately.
+
+Adds a private kernel around the pinned SDK's registration and authorization-code helpers. It captures the complete original request, drops the owning helper future before transferring input ownership, and retains the original cancellation parent, clock and saved deadline. Replies have bounded headers/body and closed field sets; token expiry uses the original helper start. A continuous owner erases all six SDK token-set strings.
+
+Actual directed results: four strict checks passed; 40 unique tests passed, with 0 failed and 0 ignored. Another 477 tests were filtered out. The SDK dependency guard passed on its second attempt.
+
+Preserved history: the initial strict attempt failed on two lint findings. The first guard attempt failed because Python 3.9 lacked tomllib; selecting the existing Python 3.12.14 runtime resolved that environment failure without product changes. The Desktop and unit-test builds each reported rust-objcopy strip SIGABRT(6)/missing libLLVM.dylib; controlled Cargo and bound binary list/run commands exited 0.
+
+Host admission, dispatch, persistent send admission/acknowledgement, enrollment, SDK/bridge readiness and recovery remain open. Erasure evidence covers owned storage; allocator history, library copies and driver joins remain unproven.
+
+
+
+### V7-IMPL-028 — Server authorization journal lifecycle
+
+Product candidate: `46eae75aca1d65d266574bc171a8c98f2cf23c7d`. Independent ACTUAL acceptance of this finite task passed and was adopted. Publication, admin merge and delivery remain pending.
+
+Connects the authorization journal to the real Server session and single-user Hosts. After verified gateway metadata is read, a current Host can create an attempt, retain its whole captured registration request, admit registration using a full-row compare-and-swap, or close the original created/admitted attempt for a refusal or an unknown dependency outcome. Each write includes its typed audit event in the same transaction and requires the original commit acknowledgement and exact readback. Late and unknown acknowledgements retain their classifications.
+
+Startup binds one journal/runtime pair to the original Pool and deployment/tenant scope. Missing installation configuration leaves the journal unavailable; malformed configuration is rejected. Operations preserve current Host/actor, lifetime, cancellation and saved-budget checks. No migration or dependency is added.
+
+Current candidate validation: seven strict Clippy configurations and the SDK dependency guard passed; three test harnesses compiled; 28 unique directed cases passed across four runtime phases, with zero failed and zero ignored (Domain 4, Infra 6, Server pure 2, real Host/PostgreSQL 16). Filtered tests were not run. Four LLVM debug-strip warnings record nested `rust-objcopy` SIGABRT(6), and Server test compilation retains one existing unused-import warning. The controlling Cargo commands and directed runtimes returned zero; nested strip failures are retained, and individual production driver joins remain unproven. All four runtime invocations also emitted the libtest `--logfile` deprecation diagnostic. Earlier held or failed candidate/environment attempts remain recorded without passing credit.
+
+This finite scope ends at creation, registration admission and the two controlled close reasons. SDK registration/token dispatch, callbacks, enrollment, account bridge, readiness, recovery and overall backend completion remain open.
+
 2026-10-08 — UI5-P2 Conversation ModelPicker fixture Source preparation: the existing testkit-only, explicitly enabled synthetic ModelPicker fixture now includes one empty active channel for the owned public assistant. The existing authenticated channel-detail read can mount its Conversation model picker without creating a thread or run. The default fixture, model write rejection and production capability boundaries are unchanged. Targeted Rust 1.98 formatting of this fixture file completed without further byte changes. Directed tests, build checks, fixture Host build and browser acceptance for this change are NOTRUN.
 
 2026-10-08 — UI5-P4 Agent detail Retry and scope cancellation were delivered by PR #170, normally merged as 4b93e7e87efb7f9be1c670110604e7962e098104 from b31cd9e47efc357673923af6cb0054aefbfcd0e9 after finite independent acceptance. Full UI, production, native OS, PostgreSQL, visual oracle and pixel acceptance remain open.
+
+
+2026-10-10 — UI5-P2 Conversation ModelPicker is normally composed with main after backend PRs #171–#174. The explicit Memory/fixed read-only fixture retains its three Custom DTOs and unavailable write methods; production model readiness is not inferred. Directed checks and the mounted bilingual keyboard journey must be rerun on the exact composed candidate. Full UI, oracle, pixels and native/production dependencies remain open.

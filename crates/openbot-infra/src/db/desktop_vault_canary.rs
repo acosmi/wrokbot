@@ -649,6 +649,12 @@ pub async fn verify_pre_upgrade_layout(
                     InfraError::repository_invariant("custom_model_catalog_schema_invalid")
                 })?;
         }
+        if ledger.latest_version() >= native::NATIVE_0047_VERSION {
+            super::custom_model_v2_schema::verify(&client).await?;
+        }
+        if ledger.latest_version() >= native::NATIVE_0048_VERSION {
+            super::gateway_authorization_schema::verify(&client).await?;
+        }
         Ok(ValidatedDesktopVaultLayout {
             native_version: ledger.latest_version(),
         })
@@ -690,6 +696,10 @@ fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraErr
         //0045 adds only the internal saved-receipt completion guard.
         native::NATIVE_0045_VERSION => PUBLIC_0040,
         native::NATIVE_0046_VERSION => PUBLIC_0046,
+        //0047 adds only internal immutable V2 snapshots; public facts remain0046.
+        native::NATIVE_0047_VERSION => PUBLIC_0046,
+        //0048 adds only the internal attempt journal; the public oracle stays0046.
+        native::NATIVE_0048_VERSION => PUBLIC_0046,
         _ => {
             return Err(InfraError::repository_invariant(
                 "desktop_vault_native_schema_unregistered",
@@ -701,6 +711,20 @@ fn registered_public_schema(native_version: i32) -> Result<SchemaFacts, InfraErr
 }
 
 async fn verify_internal_shape(client: &tokio_postgres::Client) -> Result<(), InfraError> {
+    verify_internal_shape_on(client).await
+}
+
+/// Observe the original0032 shape on the model wrapper's original transaction only.
+#[cfg(feature = "server-runtime")]
+pub(crate) async fn verify_model_dataset_shape_in_transaction(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<(), InfraError> {
+    verify_internal_shape_on(tx).await
+}
+
+async fn verify_internal_shape_on<C: tokio_postgres::GenericClient + Sync>(
+    client: &C,
+) -> Result<(), InfraError> {
     let relation = client
         .query_opt(
             "SELECT c.relkind::text,c.relpersistence::text,c.relispartition,c.relrowsecurity,c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='openbot_internal' AND c.relname='desktop_vault_canaries'",

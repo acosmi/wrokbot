@@ -73,6 +73,7 @@ use crate::ui_preferences::{
     NoUiPreferenceAdministration, UiPreferenceAdministration, get_ui_preferences,
     update_ui_preferences,
 };
+use crate::use_cases::thread::begin_thread_run_v2;
 use crate::use_cases::{
     DEFAULT_HEARTBEAT_PERIOD, admin_status, begin_thread_run, cancel_thread_run,
     change_person_access, change_person_role, correct_memory, create_agent, create_channel,
@@ -896,6 +897,9 @@ where
             )),
             AppCommand::BeginThreadRun(command) => Ok(AppReply::ThreadRunStarted(
                 begin_thread_run(&self.threads, auth, command).await?,
+            )),
+            AppCommand::BeginThreadRunV2(command) => Ok(AppReply::ThreadRunStarted(
+                begin_thread_run_v2(&self.threads, auth, command).await?,
             )),
             AppCommand::CancelThreadRun(command) => Ok(AppReply::ThreadRunCancellation(
                 cancel_thread_run(&self.threads, auth, command).await?,

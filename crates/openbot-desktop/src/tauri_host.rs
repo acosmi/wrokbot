@@ -34,10 +34,12 @@ use openbot_contracts::agent::{
 };
 use openbot_contracts::auth::AuthContext;
 use openbot_contracts::budget::RunCostBudgetPreference;
+#[cfg(test)]
+use openbot_contracts::command::BeginThreadRunBody;
 use openbot_contracts::command::{
-    AppCommand, AppReply, BeginThreadRun, BeginThreadRunBody, CancelThreadRun,
-    ChannelDetailResponse, CreateChannelRequest, MAX_THREAD_MESSAGE_BYTES, RouteChannelRequest,
-    SubscriptionRequest, ThreadRunCancellationState,
+    AppCommand, AppReply, BeginThreadRun, BeginThreadRunV2, CancelThreadRun, ChannelDetailResponse,
+    CreateChannelRequest, MAX_THREAD_MESSAGE_BYTES, RouteChannelRequest, SubscriptionRequest,
+    ThreadRunCancellationState,
 };
 use openbot_contracts::components::{
     ComponentAgentGrantRequest, ComponentCatalogueRequest, ComponentDecisionRequest,
@@ -2693,26 +2695,37 @@ impl DesktopTauriProtocol {
                 .await
             }
             (ThreadRoute::Runs { .. }, &Method::POST) => {
-                let body = match parse_sensitive_body::<BeginThreadRunBody>(
-                    &mut request,
-                    CHANNEL_THREAD_BODY_MAX_BYTES,
-                ) {
-                    Ok(body) => body,
-                    Err(error) => return sensitive_body_error_response(error),
+                let body =
+                    match parse_sensitive_begin_body(&mut request, CHANNEL_THREAD_BODY_MAX_BYTES) {
+                        Ok(body) => body,
+                        Err(error) => return sensitive_body_error_response(error),
+                    };
+                use openbot_contracts::begin_thread_run_wire::DecodedBeginThreadRunBody;
+                let command = match body {
+                    DecodedBeginThreadRunBody::Legacy(body) => {
+                        AppCommand::BeginThreadRun(BeginThreadRun {
+                            model_selection: body.model_selection,
+                            selected_skill_slugs: body.selected_skill_slugs,
+                            thread_id,
+                            run_id: body.run_id,
+                            bot_id: body.bot_id,
+                            anchor: body.anchor,
+                            message: body.message,
+                        })
+                    }
+                    DecodedBeginThreadRunBody::V2(body) => {
+                        AppCommand::BeginThreadRunV2(BeginThreadRunV2 {
+                            model_selection: body.model_selection,
+                            selected_skill_slugs: body.selected_skill_slugs,
+                            thread_id,
+                            run_id: body.run_id,
+                            bot_id: body.bot_id,
+                            anchor: body.anchor,
+                            message: body.message,
+                        })
+                    }
                 };
-                self.thread_command(
-                    authority.auth,
-                    AppCommand::BeginThreadRun(BeginThreadRun {
-                        model_selection: body.model_selection,
-                        selected_skill_slugs: body.selected_skill_slugs,
-                        thread_id,
-                        run_id: body.run_id,
-                        bot_id: body.bot_id,
-                        anchor: body.anchor,
-                        message: body.message,
-                    }),
-                )
-                .await
+                self.thread_command(authority.auth, command).await
             }
             (ThreadRoute::Cancel { raw_run_id, .. }, &Method::POST)
                 if request.body().is_empty() =>
@@ -3827,6 +3840,22 @@ fn agent_body_error_response(error: AgentBodyError) -> Response<Vec<u8>> {
     }
 }
 
+fn parse_sensitive_begin_body(
+    request: &mut Request<Vec<u8>>,
+    maximum: usize,
+) -> Result<openbot_contracts::begin_thread_run_wire::DecodedBeginThreadRunBody, SensitiveBodyError>
+{
+    if request.body().len() > maximum {
+        request.body_mut().fill(0);
+        return Err(SensitiveBodyError::TooLarge);
+    }
+    // The decoder returns owned DTOs; every borrowed RawValue/span has ended before zeroing.
+    let parsed =
+        openbot_contracts::begin_thread_run_wire::decode_begin_thread_run_body(request.body());
+    request.body_mut().fill(0);
+    parsed.map_err(|_| SensitiveBodyError::Malformed)
+}
+
 fn parse_sensitive_body<T: DeserializeOwned>(
     request: &mut Request<Vec<u8>>,
     maximum: usize,
@@ -4143,6 +4172,10 @@ mod runtime_capabilities_local_tests;
 #[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
 #[path = "tauri_host/approval_preference_local_tests.rs"]
 mod approval_preference_local_tests;
+
+#[cfg(all(test, feature = "desktop-local-runtime", target_os = "macos"))]
+#[path = "tauri_host/custom_model_v2_tests.rs"]
+mod custom_model_v2_tests;
 
 #[cfg(test)]
 mod tests {

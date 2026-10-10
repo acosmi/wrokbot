@@ -147,6 +147,16 @@ impl AuditEventType {
     /// Catalog refresh suspended a stale/missing/changed MCP grant.
     pub const MCP_TOOL_SUSPENDED_MISSING: Self = Self("mcp.tool_suspended_missing");
 
+    /// An initial gateway authorization attempt was committed with its original audit.
+    pub const GATEWAY_AUTHORIZATION_ATTEMPT_CREATED: Self =
+        Self("gateway_authorization_attempt_created");
+    /// The original created attempt was admitted for registration; this is no send receipt.
+    pub const GATEWAY_AUTHORIZATION_REGISTRATION_ADMITTED: Self =
+        Self("gateway_authorization_registration_admitted");
+    /// A live original owner closed its attempt within the saved caller and flow budgets.
+    pub const GATEWAY_AUTHORIZATION_ATTEMPT_CLOSED: Self =
+        Self("gateway_authorization_attempt_closed");
+
     /// 从字符串解析。**只接受 [`AUDIT_EVENT_TYPES`] 里的字面量。**
     ///
     /// 返回 `Option` 而不是"不认识就原样收下"：一个拼错的事件类型会让所有按类型筛选的
@@ -172,7 +182,7 @@ impl fmt::Display for AuditEventType {
     }
 }
 
-/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt/artifact 24 项。
+/// 事件类型全集：上游 57 项 + 本项目新增 deadline/budget/memory/catalog/approval/component/interrupt/artifact/gateway 27 项。
 ///
 /// 顺序也照抄上游，方便逐行对拍。
 pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
@@ -257,6 +267,9 @@ pub const AUDIT_EVENT_TYPES: &[AuditEventType] = &[
     AuditEventType("bot.deleted"),
     AuditEventType("bot.callback_token_issued"),
     AuditEventType("bot.callback_token_revoked"),
+    AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CREATED,
+    AuditEventType::GATEWAY_AUTHORIZATION_REGISTRATION_ADMITTED,
+    AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CLOSED,
 ];
 
 /// 一条审计事件。
@@ -317,10 +330,41 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn catalog_is_upstream_fifty_seven_plus_twenty_four_new_and_has_no_duplicates() {
-        assert_eq!(AUDIT_EVENT_TYPES.len(), 81);
+    fn catalog_is_upstream_fifty_seven_plus_twenty_seven_new_and_has_no_duplicates() {
+        assert_eq!(AUDIT_EVENT_TYPES.len(), 84);
         let unique: BTreeSet<&str> = AUDIT_EVENT_TYPES.iter().map(|t| t.0).collect();
-        assert_eq!(unique.len(), 81, "目录里有重复的事件类型");
+        assert_eq!(unique.len(), 84, "目录里有重复的事件类型");
+    }
+
+    #[test]
+    fn gateway_authorization_catalog_is_closed() {
+        let values = [
+            (
+                "gateway_authorization_attempt_created",
+                AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CREATED,
+            ),
+            (
+                "gateway_authorization_registration_admitted",
+                AuditEventType::GATEWAY_AUTHORIZATION_REGISTRATION_ADMITTED,
+            ),
+            (
+                "gateway_authorization_attempt_closed",
+                AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CLOSED,
+            ),
+        ];
+        for (value, event) in values {
+            assert_eq!(AuditEventType::parse(value), Some(event));
+            assert_eq!(event.as_str(), value);
+        }
+        assert_eq!(&AUDIT_EVENT_TYPES[81..], &values.map(|(_, event)| event));
+        for invalid in [
+            "gateway_authorization_attempt_created ",
+            "Gateway_authorization_attempt_created",
+            "gateway_authorization_registered",
+            "gateway_authorization_attempt_closed_unknown",
+        ] {
+            assert_eq!(AuditEventType::parse(invalid), None);
+        }
     }
 
     #[test]
@@ -368,6 +412,9 @@ mod tests {
             AuditEventType::MCP_CALL_REJECTED,
             AuditEventType::MCP_CALL_SUCCEEDED,
             AuditEventType::MCP_CALL_FAILED,
+            AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CREATED,
+            AuditEventType::GATEWAY_AUTHORIZATION_REGISTRATION_ADMITTED,
+            AuditEventType::GATEWAY_AUTHORIZATION_ATTEMPT_CLOSED,
         ] {
             assert!(
                 AUDIT_EVENT_TYPES.contains(&constant),
