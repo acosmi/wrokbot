@@ -527,12 +527,12 @@ async fn p01_one_request_transfer_and_second_execute_refused() {
                     }
                     _ => body["client_name"] = serde_json::json!("replacement-client"),
                 }
-                request.body = Bytes::from(serde_json::to_vec(&body).unwrap());
+                request.body = serde_json::to_vec(&body).unwrap();
             }
             14 => request.context.purpose = acosmi::HttpPurpose::OAuthToken,
             15 => request.context.response_mode = acosmi::HttpResponseMode::Streaming,
             16 => request.context.timeout = Duration::from_secs(29),
-            _ => request.body = Bytes::from_static(b"{}"),
+            _ => request.body = b"{}".to_vec(),
         }
         assert!(
             matches!(
