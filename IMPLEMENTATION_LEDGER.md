@@ -1843,3 +1843,17 @@ Actual directed results: four strict checks passed; 40 unique tests passed, with
 Preserved history: the initial strict attempt failed on two lint findings. The first guard attempt failed because Python 3.9 lacked tomllib; selecting the existing Python 3.12.14 runtime resolved that environment failure without product changes. The Desktop and unit-test builds each reported rust-objcopy strip SIGABRT(6)/missing libLLVM.dylib; controlled Cargo and bound binary list/run commands exited 0.
 
 Host admission, dispatch, persistent send admission/acknowledgement, enrollment, SDK/bridge readiness and recovery remain open. Erasure evidence covers owned storage; allocator history, library copies and driver joins remain unproven.
+
+
+
+### V7-IMPL-028 — Server authorization journal lifecycle
+
+Product candidate: `46eae75aca1d65d266574bc171a8c98f2cf23c7d`. Independent ACTUAL acceptance of this finite task passed and was adopted. Publication, admin merge and delivery remain pending.
+
+Connects the authorization journal to the real Server session and single-user Hosts. After verified gateway metadata is read, a current Host can create an attempt, retain its whole captured registration request, admit registration using a full-row compare-and-swap, or close the original created/admitted attempt for a refusal or an unknown dependency outcome. Each write includes its typed audit event in the same transaction and requires the original commit acknowledgement and exact readback. Late and unknown acknowledgements retain their classifications.
+
+Startup binds one journal/runtime pair to the original Pool and deployment/tenant scope. Missing installation configuration leaves the journal unavailable; malformed configuration is rejected. Operations preserve current Host/actor, lifetime, cancellation and saved-budget checks. No migration or dependency is added.
+
+Current candidate validation: seven strict Clippy configurations and the SDK dependency guard passed; three test harnesses compiled; 28 unique directed cases passed across four runtime phases, with zero failed and zero ignored (Domain 4, Infra 6, Server pure 2, real Host/PostgreSQL 16). Filtered tests were not run. Four LLVM debug-strip warnings record nested `rust-objcopy` SIGABRT(6), and Server test compilation retains one existing unused-import warning. The controlling Cargo commands and directed runtimes returned zero; nested strip failures are retained, and individual production driver joins remain unproven. All four runtime invocations also emitted the libtest `--logfile` deprecation diagnostic. Earlier held or failed candidate/environment attempts remain recorded without passing credit.
+
+This finite scope ends at creation, registration admission and the two controlled close reasons. SDK registration/token dispatch, callbacks, enrollment, account bridge, readiness, recovery and overall backend completion remain open.
