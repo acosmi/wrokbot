@@ -319,8 +319,107 @@ async fn r01_listener_before_any_create() {
         let stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, input.port)).await.map_err(|e| e.to_string())?;
         check(stream.peer_addr().map_err(|e| e.to_string())?.port() == input.port, "positive original nonzero IPv4 listener")?;
         drop(stream); drop(wait); absent(input.port).await?;
-        eprintln!("CALLBACK_BIND_REFUSAL UNPROVEN no lawful deterministic ephemeral-refusal fixture; bind-before-create ordering is separately reviewed CODE");
         f.finish().await
+    }).await;
+    harness::with_temp_database(&admin, "cb_r01_bind_refusal", |cfg| async move {
+        let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+        let f = match Fixture::new(relay.config.clone(), 1).await {
+            Ok(f) => f,
+            Err(error) => {
+                relay.stop().await;
+                return Err(error);
+            }
+        };
+        let parent = CancellationToken::new();
+        // This original cap covers all negative controls and the direct product
+        // call. The private launcher changes only this exact r01 child's limit.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let result = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+            let sink = GatewayCallbackUrlSink::new();
+            f.resolver.install_gateway_callback_url_sink(Arc::clone(&sink)).map_err(|e| format!("{e:?}"))?;
+            let auth = f.auth().await?;
+            auth.request_binding().ok_or("r01 genuine Host binding absent")?
+                .verify_current_before(&auth, deadline).await.map_err(|e| format!("r01 genuine current-positive control: {e:?}"))?;
+            let metadata = f.metadata(parent.clone()).await?;
+            let factory = f.factory(Some("/oauth/desktop/register"))?;
+            let rows_before = f.rows().await?;
+            let audits_before = f.audits().await?;
+            let network_before = f.network_point()?;
+            let posts_before = f.posts()?;
+            check(rows_before.is_empty() && audits_before.is_empty() && posts_before.is_empty()
+                && sink.take_url().is_err(), "separate owned negative fixture has no attempts/audits/registration POST/URL before controls")?;
+            // arm's own backend query and every real auth/metadata/TLS/pool
+            // control precede this callback-only SQL measurement window.
+            relay.arm_original(&f).await;
+            check(!parent.is_cancelled() && Instant::now() < deadline, "original negative parent/cap remains current before FD controls")?;
+            let sentinel_path = std::env::temp_dir().join(format!("wrokbot-owned-callback-r01-sentinel-{}", std::process::id()));
+            let sentinel = std::fs::OpenOptions::new().read(true).write(true).create_new(true)
+                .open(&sentinel_path).map_err(|e| format!("owned r01 sentinel create_new: {e}"))?;
+            // Unlink only our successfully create_new'd file while retaining
+            // its owned File. Every exit then releases its last handles by Drop.
+            std::fs::remove_file(&sentinel_path).map_err(|e| format!("owned r01 sentinel unlink: {e}"))?;
+            let mut fillers = Vec::with_capacity(512);
+            let mut exhaustion_errno = None;
+            for _ in 0..512 {
+                match sentinel.try_clone() {
+                    Ok(file) => fillers.push(file),
+                    Err(error) => {
+                        exhaustion_errno = error.raw_os_error();
+                        break;
+                    }
+                }
+            }
+            check(exhaustion_errno == Some(24), "bounded owned try_clone must reach original EMFILE24; another errno or no refusal earns no credit")?;
+            let held_fillers = fillers.len();
+            let control_errno = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
+                Ok(listener) => {
+                    drop(listener);
+                    None
+                }
+                Err(error) => error.raw_os_error(),
+            };
+            check(control_errno == Some(24), "real direct IPv4 ephemeral listener control must fail with original EMFILE24 while own fillers stay held")?;
+            check(!parent.is_cancelled() && Instant::now() < deadline, "same original negative parent/cap before direct product bind")?;
+            // Do not call start()/start_on(): all genuine inputs are already
+            // prepared. Both control and original product retain all fillers.
+            let original = f.journal.start_callback(&auth, metadata, parent.clone(), deadline, &factory).await;
+            drop(fillers);
+            drop(sentinel);
+            let error = match original {
+                Ok(wait) => {
+                    drop(wait);
+                    return Err("original callback unexpectedly returned Wait under actual owned FD exhaustion".into());
+                }
+                Err(error) => error,
+            };
+            check(error.stage() == CallbackStage::Create
+                && error.kind() == CallbackErrorKind::Journal(JournalKind::Unavailable)
+                && error.registration_error().is_none()
+                && error.callback_readback_ack() == Ack::NotAttempted,
+                "exact original bind refusal Create/Journal(Unavailable), no registration or callback RO ACK")?;
+            let journal_error = error.journal_error().ok_or("original bind refusal journal error reference absent")?;
+            check(journal_error.kind() == JournalKind::Unavailable
+                && journal_error.write_ack() == Ack::NotAttempted
+                && journal_error.readback_ack() == Ack::NotAttempted,
+                "original bind refusal preserves independent NotAttempted journal write/readback facts")?;
+            relay.assert_idle();
+            relay.end_callback_sql_window(0);
+            check(f.rows().await? == rows_before && f.audits().await? == audits_before
+                && f.network_point()? == network_before && f.posts()? == posts_before
+                && sink.take_url().is_err(),
+                "bind refusal precedes every create/row/reservation/audit/QPE/BEGIN/registration POST/URL; whole owned baseline unchanged")?;
+            eprintln!("CALLBACK_BIND_REFUSAL owned_filler_handles={held_fillers} bound=512 actual_try_clone_errno=24 actual_direct_IPv4_bind_errno=24 fillers_held_through_original_product=true original_stage=Create original_kind=Journal_Unavailable journal_write_ACK=NotAttempted journal_readback_ACK=NotAttempted callback_RO_ACK=NotAttempted callback_QPE=0 callback_BEGIN=0 create_row_audit_reservation_delta=0 registration_POST_delta=0 URL=none Wait=none Verified=none; other_J55_debts_not_claimed=true");
+            Ok::<(), String>(())
+        }).await.map_err(|_| "same original r01 caller cap ended; owned FD resources dropped, bind refusal unproven".to_owned()).and_then(|result| result);
+        // Failure also releases all inner owned Files before original fixture
+        // and relay tails. Preserve both product/control and cleanup failures.
+        let cleanup = f.finish().await;
+        relay.stop().await;
+        match (result, cleanup) {
+            (Err(error), Err(tail)) => Err(format!("{error}; original owned fixture cleanup: {tail}")),
+            (Err(error), _) => Err(error),
+            (Ok(()), tail) => tail,
+        }
     }).await;
 }
 
