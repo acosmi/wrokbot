@@ -99,6 +99,11 @@ use crate::error::HttpError;
 use crate::http::ServerState;
 use crate::telemetry::ACTOR_ID_FIELD;
 
+type GatewayAuthorizationJournalAssembly = (
+    Arc<GatewayAuthorizationJournalRuntimeOwner>,
+    Arc<GatewayAuthorizationJournal>,
+);
+
 /// Assemble the optional journal once from the original validated startup configuration and Pool.
 /// The private installation label is borrowed only inside this Server crate; absence performs no RNG or I/O.
 pub fn assemble_gateway_authorization_journal(
@@ -107,13 +112,7 @@ pub fn assemble_gateway_authorization_journal(
     deployment: DeploymentId,
     tenant: TenantId,
     audit_key: openbot_domain::vault::SecretBytes,
-) -> Result<
-    Option<(
-        Arc<GatewayAuthorizationJournalRuntimeOwner>,
-        Arc<GatewayAuthorizationJournal>,
-    )>,
-    GatewayAuthorizationJournalError,
-> {
+) -> Result<Option<GatewayAuthorizationJournalAssembly>, GatewayAuthorizationJournalError> {
     let Some(installation) = server.gateway_authorization_installation_id.as_ref() else {
         return Ok(None);
     };
