@@ -2,10 +2,12 @@
 use super::*;
 use openbot_infra::db::pool::ConnectionObservation;
 use openbot_infra::db::tables::gateway_authorization_attempts::Row;
+use openbot_infra::gateway_transport::GatewayFailure as DispatchTransportFailure;
 use openbot_infra::{
     GatewayAuthorizationCancellationToken as CancellationToken, GatewayAuthorizationJournal,
-    GatewayAuthorizationJournalRuntimeOwner, RegisteredAttemptOwner, RegistrationAdmissionReceipt,
-    RegistrationDispatchError,
+    GatewayAuthorizationJournalAck as DispatchAck, GatewayAuthorizationJournalRuntimeOwner,
+    RegisteredAttemptOwner, RegistrationAdmissionReceipt, RegistrationDispatchError,
+    RegistrationDispatchKind as DispatchKind,
 };
 use serde_json::{Value, json};
 use std::{
@@ -34,27 +36,26 @@ fn refused(
         Ok(_) => Err("registration unexpectedly returned a success owner".into()),
     }
 }
-fn kind(error: &RegistrationDispatchError, expected: &str) -> Result<(), String> {
+fn kind(error: &RegistrationDispatchError, expected: DispatchKind) -> Result<(), String> {
     check(
-        error.to_string() == format!("RegistrationDispatchError({expected})"),
-        &format!("closed dispatch kind expected {expected}, got {error:?}"),
+        error.kind() == expected,
+        &format!("closed dispatch kind expected {expected:?}, got {error:?}"),
     )
 }
 fn ack(
     error: &RegistrationDispatchError,
-    send: &str,
-    write: &str,
-    read: &str,
+    send: DispatchAck,
+    write: DispatchAck,
+    read: DispatchAck,
 ) -> Result<(), String> {
-    let text = format!("{error:?}");
-    for (field, value) in [
-        ("send_guard_rollback", send),
-        ("registered_write", write),
-        ("registered_readback", read),
+    for (field, actual, expected) in [
+        ("send_guard_rollback", error.send_guard_rollback_ack(), send),
+        ("registered_write", error.registered_write_ack(), write),
+        ("registered_readback", error.registered_readback_ack(), read),
     ] {
         check(
-            text.contains(&format!("{field}: {value}")),
-            &format!("original {field} must remain {value}: {text}"),
+            actual == expected,
+            &format!("original {field} must remain {expected:?}: {error:?}"),
         )?;
     }
     Ok(())
@@ -65,17 +66,19 @@ fn sent_facts(
     status: Option<u16>,
     released: bool,
 ) -> Result<(), String> {
-    let text = format!("{error:?}");
+    let facts = error
+        .transport_snapshot()
+        .ok_or_else(|| "actual transport snapshot is absent".to_owned())?;
     check(
-        text.contains(&format!("may_have_sent: {may_send}")),
+        facts.may_have_sent() == may_send,
         "actual transport entry fact",
     )?;
     check(
-        text.contains(&format!("response_status: {status:?}")),
+        facts.response_status() == status,
         "actual numeric response fact",
     )?;
     check(
-        text.contains(&format!("permit_released: {released}")),
+        facts.permit_released() == released,
         "actual transport permit release fact",
     )
 }
@@ -83,15 +86,17 @@ fn sent_facts(
 fn body_facts(
     error: &RegistrationDispatchError,
     complete: bool,
-    failure: &str,
+    failure: Option<DispatchTransportFailure>,
 ) -> Result<(), String> {
-    let text = format!("{error:?}");
+    let facts = error
+        .transport_snapshot()
+        .ok_or_else(|| "actual transport snapshot is absent".to_owned())?;
     check(
-        text.contains(&format!("complete: {complete}")),
+        facts.complete() == complete,
         "actual transport EOF completion fact",
     )?;
     check(
-        text.contains(&format!("failure: {failure}")),
+        facts.failure() == failure,
         "actual transport failure history excludes unrelated body/network failure",
     )
 }
@@ -1781,7 +1786,7 @@ async fn r03_actual_sdk_whole_request_drop_child_original_parent() {
         let receipt=admit_on(&f,&f.journal,&auth,parent.clone(),Duration::from_secs(60)).await?;check(!parent.is_cancelled(),"real SDK helper exits without cancelling original parent")?;
         let old=f.rows().await?.remove(0);let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
         tokio::select! { ()=f.wait_posts(1)=>{}, result=&mut call=>return Err(format!("dispatch ended before owned headers hold: {result:?}")) }
-        wire(&f.posts()?[0])?;parent.cancel();let error=refused(call.await)?;kind(&error,"Cancelled")?;ack(&error,"Unknown","NotAttempted","NotAttempted")?;sent_facts(&error,true,None,false)?;
+        wire(&f.posts()?[0])?;parent.cancel();let error=refused(call.await)?;kind(&error,DispatchKind::Cancelled)?;ack(&error,DispatchAck::Unknown,DispatchAck::NotAttempted,DispatchAck::NotAttempted)?;sent_facts(&error,true,None,false)?;
         check(f.row(old.attempt_id).await?==old,"cancelled original parent cannot yield registered successor")?;no_second_post(&f,1).await?;f.finish().await
     }).await;
 }
@@ -1799,8 +1804,13 @@ async fn r04_bad_registration_shape_endpoint_headers_zero_connection() {
         let baseline = f.network_point()?;
         let factory = f.factory(None)?;
         let error = refused(f.journal.register_admitted(&auth, receipt, &factory).await)?;
-        kind(&error, "FramingInvalid")?;
-        ack(&error, "NotAttempted", "NotAttempted", "NotAttempted")?;
+        kind(&error, DispatchKind::FramingInvalid)?;
+        ack(
+            &error,
+            DispatchAck::NotAttempted,
+            DispatchAck::NotAttempted,
+            DispatchAck::NotAttempted,
+        )?;
         sent_facts(&error, false, None, false)?;
         check(
             f.network_point()? == baseline,
@@ -1833,8 +1843,13 @@ async fn r05_original_metadata_factory_drift_zero_connection() {
         let baseline = f.network_point()?;
         let factory = f.factory(Some("/oauth/desktop/changed-register"))?;
         let error = refused(f.journal.register_admitted(&auth, receipt, &factory).await)?;
-        kind(&error, "FramingInvalid")?;
-        ack(&error, "NotAttempted", "NotAttempted", "NotAttempted")?;
+        kind(&error, DispatchKind::FramingInvalid)?;
+        ack(
+            &error,
+            DispatchAck::NotAttempted,
+            DispatchAck::NotAttempted,
+            DispatchAck::NotAttempted,
+        )?;
         sent_facts(&error, false, None, false)?;
         check(
             f.network_point()? == baseline,
@@ -1889,16 +1904,20 @@ async fn r06_current_actor_host_revoked_before_dispatch_zero_send() {
             kind(
                 &error,
                 if vector == 4 {
-                    "Unavailable"
+                    DispatchKind::Unavailable
                 } else {
-                    "BeforeDispatchRefused"
+                    DispatchKind::BeforeDispatchRefused
                 },
             )?;
             ack(
                 &error,
-                if vector < 3 { "Timely" } else { "NotAttempted" },
-                "NotAttempted",
-                "NotAttempted",
+                if vector < 3 {
+                    DispatchAck::Timely
+                } else {
+                    DispatchAck::NotAttempted
+                },
+                DispatchAck::NotAttempted,
+                DispatchAck::NotAttempted,
             )?;
             check(
                 f.network_point()? == baseline,
@@ -1958,7 +1977,7 @@ async fn r06_current_actor_host_revoked_before_dispatch_zero_send() {
                 .register_admitted(&replacement, receipt, &factory)
                 .await,
         )?;
-        kind(&error, "BeforeDispatchRefused")?;
+        kind(&error, DispatchKind::BeforeDispatchRefused)?;
         check(
             f.network_point()? == baseline,
             "default/synthetic Desktop binding cannot send original Server receipt",
@@ -2009,7 +2028,7 @@ async fn r08_revocation_while_headers_pending_suppresses_handoff() {
         let relay=PgTerminalAckGate::new(&cfg,TerminalStage::SendGuardRollback,false).await;let f=Fixture::new(relay.config.clone(),1).await?;let auth=f.auth().await?;let receipt=admitted(&f,&auth).await?;let old=f.rows().await?.remove(0);relay.arm_original(&f).await;let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
         tokio::select! { ()=relay.held()=>{}, result=&mut call=>return Err(format!("missing original send ACK hold: {result:?}")) }
         let direct=f.direct().await?;let client=direct.get().await.map_err(|e|e.to_string())?;client.batch_execute("UPDATE public.users SET auth_generation=8 WHERE id='owned-journal-owner'").await.map_err(|e|e.to_string())?;drop(client);relay.release_original_ack().await;
-        let error=refused(call.await)?;kind(&error,"RegistrationUnknown")?;ack(&error,"Timely","Timely","NotAttempted")?;check(f.row(old.attempt_id).await?==old,"post-release DB revocation refuses successor")?;relay.assert_target(1);direct.close();f.finish().await?;relay.stop().await;Ok(())
+        let error=refused(call.await)?;kind(&error,DispatchKind::RegistrationUnknown)?;ack(&error,DispatchAck::Timely,DispatchAck::Timely,DispatchAck::NotAttempted)?;check(f.row(old.attempt_id).await?==old,"post-release DB revocation refuses successor")?;relay.assert_target(1);direct.close();f.finish().await?;relay.stop().await;Ok(())
     }).await;
 }
 #[tokio::test]
@@ -2034,7 +2053,7 @@ async fn r10_permit_late_or_lost_rollback_unknown_no_reply() {
             let relay=PgTerminalAckGate::new(&cfg,TerminalStage::SendGuardRollback,discard).await;let f=Fixture::new(relay.config.clone(),1).await?;let auth=f.auth().await?;let receipt=admit_on(&f,&f.journal,&auth,CancellationToken::new(),Duration::from_secs(3)).await?;let old=f.rows().await?.remove(0);let original=relay.arm_original(&f).await;let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
             tokio::select! { biased; ()=relay.held()=>{}, result=&mut call=>return Err(format!("original rollback ACK never held: {result:?}")) }
             if !discard {tokio::time::sleep(Duration::from_millis(3200)).await;relay.release_original_ack().await;}
-            let error=refused(call.await)?;kind(&error,if discard {"CleanupUnknown"} else {"RollbackAcknowledgedAfterDeadline"})?;ack(&error,if discard {"Unknown"} else {"Late"},"NotAttempted","NotAttempted")?;sent_facts(&error,true,Some(200),false)?;
+            let error=refused(call.await)?;kind(&error,if discard {DispatchKind::CleanupUnknown} else {DispatchKind::RollbackAcknowledgedAfterDeadline})?;ack(&error,if discard {DispatchAck::Unknown} else {DispatchAck::Late},DispatchAck::NotAttempted,DispatchAck::NotAttempted)?;sent_facts(&error,true,Some(200),false)?;
             check(f.row(old.attempt_id).await?==old,"late/lost original rollback ACK does not expose reply or register")?;no_second_post(&f,1).await?;relay.assert_target(usize::from(!discard));retired(&f,&original,relay.original_pid()).await?;f.finish().await?;relay.stop().await;Ok(())
         }).await;
     }
@@ -2053,7 +2072,12 @@ async fn r10_permit_late_or_lost_rollback_unknown_no_reply() {
             .await
             .map_err(|_| "local runner orphan after real request end/permit Drop")?,
         )?;
-        ack(&error, "Timely", "NotAttempted", "NotAttempted")?;
+        ack(
+            &error,
+            DispatchAck::Timely,
+            DispatchAck::NotAttempted,
+            DispatchAck::NotAttempted,
+        )?;
         sent_facts(&error, true, None, false)?;
         check(
             f.row(old.attempt_id).await? == old,
@@ -2080,7 +2104,7 @@ async fn r11_same_parent_caps_during_send_release_body_no_retry() {
             tokio::select! { ()=relay.held()=>{}, result=&mut call=>return Err(format!("body scenario missed original send rollback: {result:?}")) }
             relay.release_original_ack().await;check(tokio::time::timeout(Duration::from_millis(100),&mut call).await.is_err(),"actual reader remains pending after true release ACK")?;
             if cancel {parent.cancel();}
-            let error=refused(call.await)?;kind(&error,if cancel {"Cancelled"} else {"Deadline"})?;ack(&error,"Timely","NotAttempted","NotAttempted")?;sent_facts(&error,true,Some(200),true)?;
+            let error=refused(call.await)?;kind(&error,if cancel {DispatchKind::Cancelled} else {DispatchKind::Deadline})?;ack(&error,DispatchAck::Timely,DispatchAck::NotAttempted,DispatchAck::NotAttempted)?;sent_facts(&error,true,Some(200),true)?;
             check(f.row(old.attempt_id).await?==old,"original parent/caller cap does not renew during body")?;no_second_post(&f,1).await?;relay.assert_target(1);f.finish().await?;relay.stop().await;Ok(())
         }).await;
     }
@@ -2093,8 +2117,13 @@ async fn r11_same_parent_caps_during_send_release_body_no_retry() {
         tokio::time::sleep(Duration::from_millis(10200)).await;
         let factory = f.factory(Some("/oauth/desktop/register"))?;
         let error = refused(f.journal.register_admitted(&auth, receipt, &factory).await)?;
-        kind(&error, "Deadline")?;
-        ack(&error, "NotAttempted", "NotAttempted", "NotAttempted")?;
+        kind(&error, DispatchKind::Deadline)?;
+        ack(
+            &error,
+            DispatchAck::NotAttempted,
+            DispatchAck::NotAttempted,
+            DispatchAck::NotAttempted,
+        )?;
         check(
             f.network_point()? == baseline,
             "original captured ten-second ceiling never restarts at dispatch",
@@ -2115,7 +2144,7 @@ async fn r12_non_success_or_invalid_success_reply_no_sdk_decode() {
         harness::with_temp_database(&admin,&format!("gr_r12_{status}"),|cfg|async move {
             let f=Fixture::new(cfg,2).await?;f.configure(&json!({"status":status,"hold_body":true,"raw":"{\"vendor_secret\":\"owned-error-body-must-not-be-decoded\"}"}))?;let auth=f.auth().await?;let receipt=admitted(&f,&auth).await?;let old=f.rows().await?.remove(0);let factory=f.factory(Some("/oauth/desktop/register"))?;
             let error=refused(tokio::time::timeout(Duration::from_secs(3),f.journal.register_admitted(&auth,receipt,&factory)).await.map_err(|_|"non-success response incorrectly waited for owned error body")?)?;
-            kind(&error,&format!("HttpStatus({status})"))?;ack(&error,"Timely","NotAttempted","NotAttempted")?;sent_facts(&error,true,Some(status),true)?;check(!format!("{error:?}").contains("vendor_secret"),"numeric failure contains no vendor body")?;
+            kind(&error,DispatchKind::HttpStatus(status))?;ack(&error,DispatchAck::Timely,DispatchAck::NotAttempted,DispatchAck::NotAttempted)?;sent_facts(&error,true,Some(status),true)?;check(!format!("{error:?}").contains("vendor_secret"),"numeric failure contains no vendor body")?;
             check(f.events()?.iter().all(|v|v["event"]!="body_sent"),"caller returns while peer error body is still withheld")?;check(f.row(old.attempt_id).await?==old,"non-success keeps admitted uncertainty")?;no_second_post(&f,1).await?;f.finish().await
         }).await;
     }
@@ -2134,10 +2163,15 @@ async fn r12_non_success_or_invalid_success_reply_no_sdk_decode() {
             let old = f.rows().await?.remove(0);
             let factory = f.factory(Some("/oauth/desktop/register"))?;
             let error = refused(f.journal.register_admitted(&auth, receipt, &factory).await)?;
-            kind(&error, "RegistrationUnknown")?;
-            ack(&error, "Timely", "NotAttempted", "NotAttempted")?;
+            kind(&error, DispatchKind::RegistrationUnknown)?;
+            ack(
+                &error,
+                DispatchAck::Timely,
+                DispatchAck::NotAttempted,
+                DispatchAck::NotAttempted,
+            )?;
             sent_facts(&error, true, Some(200), true)?;
-            body_facts(&error, true, "None")?;
+            body_facts(&error, true, None)?;
             owned_response(&f, &configuration, true).await?;
             check(
                 f.row(old.attempt_id).await? == old,
@@ -2182,20 +2216,27 @@ async fn r13_header_body_limits_secret_keys_and_owner_drop() {
             let old = f.rows().await?.remove(0);
             let factory = f.factory(Some("/oauth/desktop/register"))?;
             let error = refused(f.journal.register_admitted(&auth, receipt, &factory).await)?;
-            kind(&error, "RegistrationUnknown")?;
-            ack(&error, "Timely", "NotAttempted", "NotAttempted")?;
+            kind(&error, DispatchKind::RegistrationUnknown)?;
+            ack(
+                &error,
+                DispatchAck::Timely,
+                DispatchAck::NotAttempted,
+                DispatchAck::NotAttempted,
+            )?;
             if index == 3 {
                 // The original SafeHttp rejects known Content-Length=65537 before it returns
                 // headers to GatewayTransport. This proves its existing 64KiB pre-return cap,
                 // without claiming that the reply cursor consumed an oversized body.
                 sent_facts(&error, true, None, false)?;
-                body_facts(&error, false, "Some(Body)")?;
+                body_facts(&error, false, Some(DispatchTransportFailure::Body))?;
             } else {
                 sent_facts(&error, true, Some(200), true)?;
                 match index {
-                    0 | 1 => body_facts(&error, false, "Some(Cancelled)")?,
-                    2 | 8 | 9 => body_facts(&error, false, "Some(Rejected)")?,
-                    4..=7 => body_facts(&error, true, "None")?,
+                    0 | 1 => body_facts(&error, false, Some(DispatchTransportFailure::Cancelled))?,
+                    2 | 8 | 9 => {
+                        body_facts(&error, false, Some(DispatchTransportFailure::Rejected))?
+                    }
+                    4..=7 => body_facts(&error, true, None)?,
                     _ => return Err("unregistered owned response vector".into()),
                 }
             }
@@ -2255,7 +2296,7 @@ async fn r14_registered_original_reservation_fullrow_cas() {
         let relay=PgTerminalAckGate::new(&cfg,TerminalStage::SendGuardRollback,false).await;let f=Fixture::new(relay.config.clone(),1).await?;let auth=f.auth().await?;let receipt=admitted(&f,&auth).await?;let old=f.rows().await?.remove(0);relay.arm_original(&f).await;let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
         tokio::select! { ()=relay.held()=>{}, result=&mut call=>return Err(format!("fullrow drift missed original send ACK hold: {result:?}")) }
         let direct=f.direct().await?;let client=direct.get().await.map_err(|e|e.to_string())?;let changed=client.execute("UPDATE openbot_internal.gateway_authorization_attempts SET updated_at=updated_at+interval '1 microsecond' WHERE attempt_id=$1",&[&old.attempt_id]).await.map_err(|e|e.to_string())?;check(changed==1,"actual owned admitted-row drift committed after send lock release")?;drop(client);relay.release_original_ack().await;
-        let error=refused(call.await)?;kind(&error,"RegistrationUnknown")?;ack(&error,"Timely","Timely","NotAttempted")?;let observed=f.row(old.attempt_id).await?;check(observed.phase=="registration_admitted" && observed.client_id.is_none() && observed.enrollment_id.is_none() && observed.updated_at==old.updated_at+time::Duration::microseconds(1),"full20 comparison refuses to overwrite drift or mint a durable reservation")?;no_second_post(&f,1).await?;relay.assert_target(1);direct.close();f.finish().await?;relay.stop().await;Ok(())
+        let error=refused(call.await)?;kind(&error,DispatchKind::RegistrationUnknown)?;ack(&error,DispatchAck::Timely,DispatchAck::Timely,DispatchAck::NotAttempted)?;let observed=f.row(old.attempt_id).await?;check(observed.phase=="registration_admitted" && observed.client_id.is_none() && observed.enrollment_id.is_none() && observed.updated_at==old.updated_at+time::Duration::microseconds(1),"full20 comparison refuses to overwrite drift or mint a durable reservation")?;no_second_post(&f,1).await?;relay.assert_target(1);direct.close();f.finish().await?;relay.stop().await;Ok(())
     }).await;
 }
 #[tokio::test]
@@ -2264,7 +2305,7 @@ async fn r15_registered_audit_failure_rolls_back_without_resend() {
     let admin = harness::admin_config("registration-r15");
     harness::with_temp_database(&admin,"gr_r15",|cfg|async move {
         let f=Fixture::new(cfg,2).await?;let auth=f.auth().await?;let receipt=admitted(&f,&auth).await?;let old=f.rows().await?.remove(0);execute(&f,"ALTER TABLE public.audit_events ADD CONSTRAINT owned_registration_audit_reject CHECK(event_type <> 'gateway_authorization_registered')").await?;let factory=f.factory(Some("/oauth/desktop/register"))?;
-        let error=refused(f.journal.register_admitted(&auth,receipt,&factory).await)?;ack(&error,"Timely","Timely","NotAttempted")?;sent_facts(&error,true,Some(200),true)?;check(f.row(old.attempt_id).await?==old,"real registered audit failure rolls back successor")?;check(f.audits().await?.len()==2,"actual failed registered audit does not persist")?;check(!format!("{error:?}").contains("owned_registration_audit_reject"),"raw SQL/PG error not exposed")?;no_second_post(&f,1).await?;f.finish().await
+        let error=refused(f.journal.register_admitted(&auth,receipt,&factory).await)?;ack(&error,DispatchAck::Timely,DispatchAck::Timely,DispatchAck::NotAttempted)?;sent_facts(&error,true,Some(200),true)?;check(f.row(old.attempt_id).await?==old,"real registered audit failure rolls back successor")?;check(f.audits().await?.len()==2,"actual failed registered audit does not persist")?;check(!format!("{error:?}").contains("owned_registration_audit_reject"),"raw SQL/PG error not exposed")?;no_second_post(&f,1).await?;f.finish().await
     }).await;
 }
 #[tokio::test]
@@ -2276,8 +2317,8 @@ async fn r16_registered_commit_late_or_lost_preserves_send_unknown() {
             let relay=PgTerminalAckGate::new(&cfg,TerminalStage::RegisteredCommit,discard).await;let f=Fixture::new(relay.config.clone(),1).await?;let auth=f.auth().await?;let receipt=admit_on(&f,&f.journal,&auth,CancellationToken::new(),Duration::from_secs(3)).await?;let old=f.rows().await?.remove(0);let original=relay.arm_original(&f).await;let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
             tokio::select! { biased; ()=relay.held()=>{}, result=&mut call=>return Err(format!("registered original commit ACK was not held: {result:?}")) }
             if !discard {tokio::time::sleep(Duration::from_millis(3200)).await;relay.release_original_ack().await;}
-            let error=refused(call.await)?;kind(&error,if discard {"CommitUnknown"} else {"CommitAcknowledgedAfterDeadline"})?;ack(&error,"Timely",if discard {"Unknown"} else {"Late"},"NotAttempted")?;sent_facts(&error,true,Some(200),true)?;
-            let next=f.row(old.attempt_id).await?;registered(&old,&next,&f,ACTOR)?;registered_audit(&f,old.attempt_id).await?;ack(&error,"Timely",if discard {"Unknown"} else {"Late"},"NotAttempted")?;no_second_post(&f,1).await?;relay.assert_target(usize::from(!discard));retired(&f,&original,relay.original_pid()).await?;f.finish().await?;relay.stop().await;Ok(())
+            let error=refused(call.await)?;kind(&error,if discard {DispatchKind::CommitUnknown} else {DispatchKind::CommitAcknowledgedAfterDeadline})?;ack(&error,DispatchAck::Timely,if discard {DispatchAck::Unknown} else {DispatchAck::Late},DispatchAck::NotAttempted)?;sent_facts(&error,true,Some(200),true)?;
+            let next=f.row(old.attempt_id).await?;registered(&old,&next,&f,ACTOR)?;registered_audit(&f,old.attempt_id).await?;ack(&error,DispatchAck::Timely,if discard {DispatchAck::Unknown} else {DispatchAck::Late},DispatchAck::NotAttempted)?;no_second_post(&f,1).await?;relay.assert_target(usize::from(!discard));retired(&f,&original,relay.original_pid()).await?;f.finish().await?;relay.stop().await;Ok(())
         }).await;
     }
 }
@@ -2290,20 +2331,20 @@ async fn r17_registered_readback_tail_rollback_unknown_no_owner() {
             let relay=PgTerminalAckGate::new(&cfg,TerminalStage::RegisteredReadbackRollback,discard).await;let f=Fixture::new(relay.config.clone(),1).await?;let auth=f.auth().await?;let receipt=admit_on(&f,&f.journal,&auth,CancellationToken::new(),Duration::from_secs(3)).await?;let old=f.rows().await?.remove(0);let original=relay.arm_original(&f).await;let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
             tokio::select! { biased; ()=relay.held()=>{}, result=&mut call=>return Err(format!("registered original RO rollback ACK not held: {result:?}")) }
             if !discard {tokio::time::sleep(Duration::from_millis(3200)).await;relay.release_original_ack().await;}
-            let error=refused(call.await)?;kind(&error,if discard {"ReadbackUnproven"} else {"RollbackAcknowledgedAfterDeadline"})?;ack(&error,"Timely","Timely",if discard {"Unknown"} else {"Late"})?;sent_facts(&error,true,Some(200),true)?;
-            registered(&old,&f.row(old.attempt_id).await?,&f,ACTOR)?;ack(&error,"Timely","Timely",if discard {"Unknown"} else {"Late"})?;no_second_post(&f,1).await?;relay.assert_target(usize::from(!discard));retired(&f,&original,relay.original_pid()).await?;f.finish().await?;relay.stop().await;Ok(())
+            let error=refused(call.await)?;kind(&error,if discard {DispatchKind::ReadbackUnproven} else {DispatchKind::RollbackAcknowledgedAfterDeadline})?;ack(&error,DispatchAck::Timely,DispatchAck::Timely,if discard {DispatchAck::Unknown} else {DispatchAck::Late})?;sent_facts(&error,true,Some(200),true)?;
+            registered(&old,&f.row(old.attempt_id).await?,&f,ACTOR)?;ack(&error,DispatchAck::Timely,DispatchAck::Timely,if discard {DispatchAck::Unknown} else {DispatchAck::Late})?;no_second_post(&f,1).await?;relay.assert_target(usize::from(!discard));retired(&f,&original,relay.original_pid()).await?;f.finish().await?;relay.stop().await;Ok(())
         }).await;
     }
     harness::with_temp_database(&admin,"gr_r17_full20_readback",|cfg|async move {
         let relay=PgTerminalAckGate::new(&cfg,TerminalStage::RegisteredCommit,false).await;let f=Fixture::new(relay.config.clone(),1).await?;let auth=f.auth().await?;let receipt=admitted(&f,&auth).await?;let old=f.rows().await?.remove(0);relay.arm_original(&f).await;let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
         tokio::select! { ()=relay.held()=>{}, result=&mut call=>return Err(format!("readback drift missed registered COMMIT ACK: {result:?}")) }
         let direct=f.direct().await?;let client=direct.get().await.map_err(|e|e.to_string())?;client.execute("UPDATE openbot_internal.gateway_authorization_attempts SET updated_at=updated_at+interval '1 microsecond' WHERE attempt_id=$1",&[&old.attempt_id]).await.map_err(|e|e.to_string())?;drop(client);relay.release_original_ack().await;
-        let error=refused(call.await)?;kind(&error,"ReadbackUnproven")?;ack(&error,"Timely","Timely","Timely")?;no_second_post(&f,1).await?;relay.assert_target(1);direct.close();f.finish().await?;relay.stop().await;Ok(())
+        let error=refused(call.await)?;kind(&error,DispatchKind::ReadbackUnproven)?;ack(&error,DispatchAck::Timely,DispatchAck::Timely,DispatchAck::Timely)?;no_second_post(&f,1).await?;relay.assert_target(1);direct.close();f.finish().await?;relay.stop().await;Ok(())
     }).await;
     harness::with_temp_database(&admin,"gr_r17_host_tail",|cfg|async move {
         let relay=PgTerminalAckGate::new(&cfg,TerminalStage::RegisteredReadbackRollback,false).await;let f=Fixture::new(relay.config.clone(),1).await?;let auth=f.auth().await?;let receipt=admitted(&f,&auth).await?;relay.arm_original(&f).await;let factory=f.factory(Some("/oauth/desktop/register"))?;let mut call=Box::pin(f.journal.register_admitted(&auth,receipt,&factory));
         tokio::select! { ()=relay.held()=>{}, result=&mut call=>return Err(format!("host tail missed original readback ACK: {result:?}")) }
-        f.disarm_host();relay.release_original_ack().await;let error=refused(call.await)?;ack(&error,"Timely","Timely","Timely")?;no_second_post(&f,1).await?;relay.assert_target(1);f.finish().await?;relay.stop().await;Ok(())
+        f.disarm_host();relay.release_original_ack().await;let error=refused(call.await)?;ack(&error,DispatchAck::Timely,DispatchAck::Timely,DispatchAck::Timely)?;no_second_post(&f,1).await?;relay.assert_target(1);f.finish().await?;relay.stop().await;Ok(())
     }).await;
 }
 #[tokio::test]
@@ -2345,8 +2386,13 @@ async fn r18_two_operations_drop_old_runtime_no_resume_or_resend() {
                         .register_admitted(&old_auth, old_receipt, &factory)
                         .await,
                 )?;
-                kind(&error, "Unavailable")?;
-                ack(&error, "NotAttempted", "NotAttempted", "NotAttempted")?;
+                kind(&error, DispatchKind::Unavailable)?;
+                ack(
+                    &error,
+                    DispatchAck::NotAttempted,
+                    DispatchAck::NotAttempted,
+                    DispatchAck::NotAttempted,
+                )?;
                 check(
                     f.network_point()? == baseline,
                     "old runtime Weak cannot dispatch or replay consumed receipt",

@@ -246,19 +246,32 @@ struct RegistrationDispatchBinding {
 struct EnrollmentReservation {
     id: Uuid,
 }
+/// Closed registration-dispatch failure facts; classification grants no retry authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RegistrationDispatchKind {
+pub enum RegistrationDispatchKind {
+    /// The operation was refused before dispatch.
     BeforeDispatchRefused,
+    /// The required registration-dispatch resource was unavailable.
     Unavailable,
+    /// The original operation was cancelled.
     Cancelled,
+    /// The original operation deadline was reached.
     Deadline,
+    /// The registration request or reply framing was invalid.
     FramingInvalid,
+    /// The registration response carried this rejected HTTP status.
     HttpStatus(u16),
+    /// The registration result could not be proven.
     RegistrationUnknown,
+    /// The original send-guard cleanup could not be proven.
     CleanupUnknown,
+    /// The original registered write COMMIT acknowledgement was unknown.
     CommitUnknown,
+    /// The original registered write COMMIT acknowledgement was late.
     CommitAcknowledgedAfterDeadline,
+    /// The registered exact readback could not be proven.
     ReadbackUnproven,
+    /// The original registered readback ROLLBACK acknowledgement was late.
     RollbackAcknowledgedAfterDeadline,
 }
 /// Closed operation facts preserving the three original transaction terminals.
@@ -270,6 +283,33 @@ pub struct RegistrationDispatchError {
     registered_readback: Ack,
 }
 impl RegistrationDispatchError {
+    /// Closed failure classification; it is not permission to retry.
+    #[must_use]
+    pub const fn kind(&self) -> RegistrationDispatchKind {
+        self.kind
+    }
+    /// Original transport-minted facts, preserving absence of an observed snapshot.
+    #[must_use]
+    pub const fn transport_snapshot(
+        &self,
+    ) -> Option<crate::gateway_transport::GatewayAttemptSnapshot> {
+        self.transport
+    }
+    /// Original send-guard ROLLBACK acknowledgement fact.
+    #[must_use]
+    pub const fn send_guard_rollback_ack(&self) -> GatewayAuthorizationJournalAck {
+        self.send_guard_rollback
+    }
+    /// Original registered write COMMIT acknowledgement fact.
+    #[must_use]
+    pub const fn registered_write_ack(&self) -> GatewayAuthorizationJournalAck {
+        self.registered_write
+    }
+    /// Original registered readback ROLLBACK acknowledgement fact.
+    #[must_use]
+    pub const fn registered_readback_ack(&self) -> GatewayAuthorizationJournalAck {
+        self.registered_readback
+    }
     fn new(kind: RegistrationDispatchKind) -> Self {
         Self {
             kind,
