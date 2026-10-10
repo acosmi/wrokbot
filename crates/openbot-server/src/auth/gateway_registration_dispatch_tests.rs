@@ -132,7 +132,8 @@ async fn owned_response(f: &Fixture, configuration: &Value, full_body: bool) -> 
     check(
         sent[0]["status"] == 200
             && sent[0]["headers"] == headers
-            && sent[0]["body_bytes"].as_u64() == Some(raw.len() as u64),
+            && sent[0]["body_bytes"].as_u64() == Some(raw.len() as u64)
+            && sent[0]["content_length"] == raw.len().to_string(),
         "actual owned response status/configured headers/declared exact body size",
     )?;
     let tail: Vec<_> = events
@@ -1072,7 +1073,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         for name,value in headers: self.send_header(name,value)
         self.send_header('Content-Length',str(len(data))); self.send_header('Connection','close'); self.end_headers(); self.wfile.flush()
-        record('events.jsonl',{'event':'headers_sent','method':self.command,'status':status,'headers':headers,'body_bytes':len(data)})
+        record('events.jsonl',{'event':'headers_sent','method':self.command,'status':status,'headers':headers,'body_bytes':len(data),'content_length':str(len(data))})
         return data
     def do_GET(self):
         self.connection.settimeout(6)
@@ -2183,14 +2184,22 @@ async fn r13_header_body_limits_secret_keys_and_owner_drop() {
             let error = refused(f.journal.register_admitted(&auth, receipt, &factory).await)?;
             kind(&error, "RegistrationUnknown")?;
             ack(&error, "Timely", "NotAttempted", "NotAttempted")?;
-            sent_facts(&error, true, Some(200), true)?;
-            match index {
-                0 | 1 | 3 => body_facts(&error, false, "Some(Cancelled)")?,
-                2 | 8 | 9 => body_facts(&error, false, "Some(Rejected)")?,
-                4..=7 => body_facts(&error, true, "None")?,
-                _ => return Err("unregistered owned response vector".into()),
+            if index == 3 {
+                // The original SafeHttp rejects known Content-Length=65537 before it returns
+                // headers to GatewayTransport. This proves its existing 64KiB pre-return cap,
+                // without claiming that the reply cursor consumed an oversized body.
+                sent_facts(&error, true, None, false)?;
+                body_facts(&error, false, "Some(Body)")?;
+            } else {
+                sent_facts(&error, true, Some(200), true)?;
+                match index {
+                    0 | 1 => body_facts(&error, false, "Some(Cancelled)")?,
+                    2 | 8 | 9 => body_facts(&error, false, "Some(Rejected)")?,
+                    4..=7 => body_facts(&error, true, "None")?,
+                    _ => return Err("unregistered owned response vector".into()),
+                }
             }
-            owned_response(&f, &configuration, matches!(index, 3..=7)).await?;
+            owned_response(&f, &configuration, matches!(index, 4..=7)).await?;
             check(
                 !format!("{error:?}").contains("owned-secret"),
                 "bounded failure does not retain secret body values",
