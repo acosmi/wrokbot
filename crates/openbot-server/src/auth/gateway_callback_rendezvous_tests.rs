@@ -1372,29 +1372,38 @@ async fn r16_callback_ro_ack_loss_late_tail() {
         let sink = GatewayCallbackUrlSink::new();
         f.resolver.install_gateway_callback_url_sink(Arc::clone(&sink)).map_err(|e| format!("{e:?}"))?;
         let auth = f.auth().await?;
+        let parent = CancellationToken::new();
         let deadline = Instant::now() + Duration::from_secs(60);
-        let (wait, input) = start_on(&f, &f.journal, &auth, &sink, CancellationToken::new(), deadline).await?;
+        let (wait, input) = start_on(&f, &f.journal, &auth, &sink, parent.clone(), deadline).await?;
         let old = f.rows().await?.remove(0);
         let audits_before = f.audits().await?;
+        let posts_before = f.posts()?;
         relay.arm_original(&f).await;
+        // Taken once before connect/accept; this conservative observation cap is
+        // no later than the original accepted connection's ten-second cap.
+        let proof_cap = (Instant::now() + Duration::from_secs(10)).min(deadline);
         let mut peer = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, input.port)).await.map_err(|e| e.to_string())?;
+        let peer_port = peer.local_addr().map_err(|e| e.to_string())?.port();
         peer.write_all(&input.request(&input.query("owned-completed-ro-response-host"))).await.map_err(|e| e.to_string())?;
         let mut call = Box::pin(f.journal.wait_callback(&auth, wait));
         tokio::select! { biased;
             () = relay.held() => {},
             value = &mut call => return Err(format!("completed-RO response missed original ACK: {value:?}")),
         }
+        // Listener/other slots were dropped before the real RO. Do not poll the
+        // business call while its original accepted server socket is observed.
+        let before = r10_lsof(input.port, [peer_port], proof_cap, "r16-A-heldRO-server-owned").await?;
+        check(before.listener.is_none() && before.servers.len() == 1 && before.reverse_clients.len() == 1,
+            "r16 exact original server/client pair and no listener before RO ACK")?;
+        let original_server = before.servers.get(&peer_port).ok_or("r16 original server tuple missing")?;
+        let original_client = before.reverse_clients.get(&peer_port).ok_or("r16 original retained peer tuple missing")?;
         relay.release_original_ack().await;
-        // Exactly one original business poll; readiness or partial write cannot
-        // be repaired by manufacturing a second poll or a new caller cap.
+        // First single business poll reaches the unchanged write->Pending path.
         match std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx))).await {
             std::task::Poll::Pending => {},
-            std::task::Poll::Ready(value) => return Err(format!("completed-RO response boundary was not Pending: {value:?}")),
+            std::task::Poll::Ready(value) => return Err(format!("completed-RO write boundary was not Pending: {value:?}")),
         }
-        // Leave business unpolled while the independent own peer reads the
-        // handwritten complete static response. Actual200 proves readback_exact
-        // already returned successfully and the original response stage wrote.
-        let raw = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+        let raw = tokio::time::timeout_at(tokio::time::Instant::from_std(proof_cap), async {
             let mut raw = Vec::with_capacity(4096);
             loop {
                 check(raw.len() < 4096, "completed-RO response header bound")?;
@@ -1408,13 +1417,38 @@ async fn r16_callback_ro_ack_loss_late_tail() {
             raw.extend_from_slice(&body);
             response(&raw, 200, b"Callback received.")?;
             Ok::<_, String>(raw)
-        }).await.map_err(|_| "single poll did not establish actual completed-RO response before original cap")??;
-        check(!raw.is_empty() && Instant::now() < deadline, "original completed-RO response and unchanged caller cap")?;
-        f.disarm_host(); // Close the same genuine original resolver after the proven write.
+        }).await.map_err(|_| "first single poll did not establish full static200 before original proof cap")??;
+        check(!raw.is_empty() && !parent.is_cancelled() && Instant::now() < proof_cap,
+            "original parent/cap still current after full static200")?;
+        // The unchanged response now flushes/shuts down and drops its stream.
+        // The new delivery phase yields once. Ready or another unproved boundary
+        // is a failure; no additional poll or sleep repairs this observation.
+        match std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx))).await {
+            std::task::Poll::Pending => {},
+            std::task::Poll::Ready(value) => return Err(format!("post-shutdown delivery boundary was not Pending: {value:?}")),
+        }
+        let mut byte = [0_u8; 1];
+        let read = tokio::time::timeout_at(tokio::time::Instant::from_std(proof_cap), peer.read(&mut byte))
+            .await.map_err(|_| "original proof cap ended before graceful response EOF")?
+            .map_err(|e| format!("original peer graceful response EOF: {e}"))?;
+        check(read == 0, "original retained peer must observe graceful EOF without extra response bytes")?;
+        // Business remains unpolled and the original peer owner remains alive.
+        // Observe the complete original server tuple, not a reusable FD number.
+        let after = r10_lsof(input.port, [peer_port], proof_cap, "r16-B-after-shutdown-drop-unpolled").await?;
+        check(after.listener.is_none() && after.servers.is_empty() && after.reverse_clients.len() == 1
+            && !after.servers.values().any(|socket| r10_same_socket(socket, original_server))
+            && r10_same_socket(after.reverse_clients.get(&peer_port).ok_or("r16 retained peer tuple missing after EOF")?, original_client),
+            "finite original server FD/endpoint tuple absent; same original peer tuple retained")?;
+        check(!parent.is_cancelled() && Instant::now() < proof_cap,
+            "unchanged original parent and conservative connection cap before final delivery revoke")?;
+        f.disarm_host();
+        // Third single original poll enters FinalDelivery itself after the real
+        // shutdown/drop interval. This proves stage refusal, not cancellation
+        // inside its second synchronous current check.
         let error = match std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx))).await {
             std::task::Poll::Ready(Err(error)) => error,
-            std::task::Poll::Ready(Ok(_)) => return Err("closed completed-RO response Host returned Verified".into()),
-            std::task::Poll::Pending => return Err("closed completed-RO response Host stayed Pending".into()),
+            std::task::Poll::Ready(Ok(_)) => return Err("closed post-shutdown original Host returned Verified".into()),
+            std::task::Poll::Pending => return Err("closed post-shutdown original Host stayed Pending".into()),
         };
         callback_refusal(&error, CallbackErrorKind::Refused, Ack::Timely)?;
         let current_error = error.journal_error().ok_or("original synchronous Host current error missing")?;
@@ -1422,14 +1456,16 @@ async fn r16_callback_ro_ack_loss_late_tail() {
             && current_error.write_ack() == Ack::NotAttempted && current_error.readback_ack() == Ack::NotAttempted
             && error.registration_error().is_none(),
             "fresh synchronous current refusal has no journal ACK; independent completed callback RO remains Timely")?;
-        drop(call);
-        no_callback_reply(&mut peer).await?; // Literal response already consumed; only finite empty tail remains.
-        drop(peer); absent(input.port).await?;
+        drop(call); drop(peer); absent(input.port).await?;
         relay.assert_target(1); relay.end_callback_sql_window(1);
-        check(f.row(old.attempt_id).await? == old && f.audits().await? == audits_before && f.posts()?.len() == 1,
-            "completed-RO response Host refusal preserves full20/reservation and zero write/close/retry")?;
+        check(f.row(old.attempt_id).await? == old && f.audits().await? == audits_before && f.posts()? == posts_before,
+            "post-shutdown Host refusal preserves full20/audit/reservation and original POST")?;
+        {
+            let state = sink.state.try_lock().map_err(|_| "original URL sink observation unavailable")?;
+            check(state.offered && state.url.is_none(), "original one-shot URL remains offered and consumed")?;
+        }
         callback_refusal(&error, CallbackErrorKind::Refused, Ack::Timely)?;
-        eprintln!("CALLBACK_COMPLETED_RO_RESPONSE_HOST_REVOKE original_RO_ACK=Timely readback_exact_success_return=true independent_literal_static200=true response_write_pending=true same_original_Host_closed=true no_Verified=true; exact_post_shutdown_final_current_tail=UNPROVEN");
+        eprintln!("CALLBACK_POST_SHUTDOWN_FINALDELIVERY_HOST_REVOKE original_RO_ACK=Timely independent_literal_static200=true graceful_EOF=true finite_original_server_FD_endpoint_tuple_absent=true original_peer_tuple_retained=true business_unpolled_between_second_and_third=true same_original_Host_closed=true no_Verified=true; numeric_FD_EBADF_continuous_identity_sync_flush_shutdown_interiors=UNPROVEN");
         f.finish().await?; relay.stop().await; Ok(())
     }).await;
 }
@@ -1445,28 +1481,29 @@ struct R10Socket {
 }
 #[derive(Debug, serde::Serialize)]
 struct R10Inventory {
-    listener: R10Socket,
+    listener: Option<R10Socket>,
     servers: std::collections::BTreeMap<u16, R10Socket>,
     reverse_clients: std::collections::BTreeMap<u16, R10Socket>,
 }
 fn r10_same_socket(a: &R10Socket, b: &R10Socket) -> bool {
     a.fd == b.fd && a.local == b.local && a.peer == b.peer
 }
-fn r10_inventory(
+fn r10_inventory<const N: usize>(
     raw: &[u8],
     pid: u32,
     port: u16,
-    peers: &[u16; 5],
+    peers: &[u16; N],
 ) -> Result<R10Inventory, String> {
     use std::collections::{BTreeMap, BTreeSet};
     check(
         raw.ends_with(b"\0\n"),
         "r10 lsof field/set terminators incomplete",
     )?;
+    check(matches!(N, 1 | 5), "only original five-peer or owned one-peer observation")?;
     let known: BTreeSet<_> = peers.iter().copied().collect();
     check(
-        known.len() == 5 && !known.contains(&0) && !known.contains(&port),
-        "five distinct actual peer ports",
+        known.len() == N && !known.contains(&0) && !known.contains(&port),
+        "exact distinct actual peer ports",
     )?;
     let mut sets = raw.split(|b| *b == b'\n').peekable();
     let process = sets.next().ok_or("r10 PID set missing")?;
@@ -1589,8 +1626,14 @@ fn r10_inventory(
             )?;
         }
     }
+    let listener = if N == 5 {
+        Some(listener.ok_or("r10 listener absent")?)
+    } else {
+        check(listener.is_none(), "r16 matched callback listener must already be absent")?;
+        None
+    };
     Ok(R10Inventory {
-        listener: listener.ok_or("r10 listener absent")?,
+        listener,
         servers,
         reverse_clients,
     })
@@ -1656,9 +1699,9 @@ async fn r10_read_pipe<R: tokio::io::AsyncRead + Unpin>(
         check(raw.len() <= cap, "r10 own pipe truncated at original bound")?;
     }
 }
-async fn r10_lsof(
+async fn r10_lsof<const N: usize>(
     port: u16,
-    peers: [u16; 5],
+    peers: [u16; N],
     deadline: Instant,
     point: &str,
 ) -> Result<R10Inventory, String> {

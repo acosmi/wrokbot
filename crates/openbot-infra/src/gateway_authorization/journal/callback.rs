@@ -1155,11 +1155,55 @@ pub(super) async fn wait_callback(
             // Only the original RO returned successfully; no callback write has occurred.
             let ack = Ack::Timely;
             finish_response(journal, auth, &registered, stream, cap, RESPONSE_CODE, ack).await?;
-            let final_sample = current_sync(journal, auth, &registered)
-                .map_err(|error| error.with_readback(ack))?;
-            if final_sample.mono >= cap {
-                return Err(CallbackError::new(CallbackErrorKind::Deadline).with_readback(ack));
+            enum CodeCompletion {
+                YieldAfterStreamDrop,
+                FinalDelivery,
             }
+            let mut completion = CodeCompletion::YieldAfterStreamDrop;
+            poll_fn(|cx| match completion {
+                CodeCompletion::YieldAfterStreamDrop => {
+                    // The original stream has been shut down and dropped. This
+                    // one bounded wake stays inside the original current bookends.
+                    match checked_poll(journal, auth, &registered, Some(cap), || {
+                        completion = CodeCompletion::FinalDelivery;
+                        cx.waker().wake_by_ref();
+                        Poll::<Result<(), CallbackError>>::Pending
+                    }) {
+                        Ok(Some(result)) => result,
+                        Ok(None) => Poll::Ready(Err(
+                            CallbackError::new(CallbackErrorKind::Deadline).with_readback(ack)
+                        )),
+                        Err(error) => Poll::Ready(Err(error.with_readback(ack))),
+                    }
+                }
+                CodeCompletion::FinalDelivery => {
+                    // Both fresh checks belong to this resumed delivery phase.
+                    // The armed original owner is not moved on this provisional decision.
+                    let before = match current_sync(journal, auth, &registered) {
+                        Ok(sample) => sample,
+                        Err(error) => return Poll::Ready(Err(error.with_readback(ack))),
+                    };
+                    if before.mono >= cap {
+                        return Poll::Ready(Err(
+                            CallbackError::new(CallbackErrorKind::Deadline).with_readback(ack)
+                        ));
+                    }
+                    let delivery = Ok(());
+                    let after = match current_sync(journal, auth, &registered) {
+                        Ok(sample) => sample,
+                        Err(error) => return Poll::Ready(Err(error.with_readback(ack))),
+                    };
+                    if after.mono >= cap {
+                        return Poll::Ready(Err(
+                            CallbackError::new(CallbackErrorKind::Deadline).with_readback(ack)
+                        ));
+                    }
+                    // This postcheck is authoritative; there is no later await,
+                    // wake or I/O before the original whole-owner move.
+                    Poll::Ready(delivery)
+                }
+            })
+            .await?;
             let CallbackPkceMaterial {
                 state,
                 verifier,
