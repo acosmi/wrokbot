@@ -204,6 +204,72 @@ async fn r03_singleuser_whole_registered_handoff() {
         drop(verified); drop(call); absent(input.port).await?;
         single.close_request_bindings(); runtime.close(); f.finish().await?; relay.stop().await; Ok(())
     }).await;
+    for close_original in [false, true] {
+        harness::with_temp_database(&admin, "cb_r03_postowner", |cfg| async move {
+            let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+            let f = Fixture::new(relay.config.clone(), 1).await?;
+            let parent = CancellationToken::new();
+            // This single original cap covers A start and all later B setup,
+            // resolve and genuine current controls; no new now+5s verifier.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let (runtime_a, journal_a) = f.fresh_pair()?;
+            let sink_a = GatewayCallbackUrlSink::new();
+            let (single_a, auth_a, wait_a, input) = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+                let single_a = f.single(&journal_a).await?;
+                single_a.install_gateway_callback_url_sink(Arc::clone(&sink_a)).map_err(|e| format!("{e:?}"))?;
+                let auth_a = single_a.resolve(&http::Request::builder().uri("/owned-callback").body(()).map_err(|e| e.to_string())?.into_parts().0).await.map_err(|e| e.to_string())?;
+                let (wait_a, input) = start_on(&f, &journal_a, &auth_a, &sink_a, parent.clone(), deadline).await?;
+                Ok::<_, String>((single_a, auth_a, wait_a, input))
+            }).await.map_err(|_| "original caller cap ended during original SingleUser A start")??;
+            // Wait_A and its consumed SDK URL exist before the real B owner is
+            // constructed. Separate fixtures provide separate by-value Waits.
+            let (runtime_b, journal_b, single_b, auth_b) = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+                if close_original {
+                    single_a.close_request_bindings();
+                } else {
+                    auth_a.request_binding().ok_or("original SingleUser A binding absent")?
+                        .verify_current_before(&auth_a, deadline).await.map_err(|e| format!("original A current control: {e:?}"))?;
+                }
+                // The normal issuer OnceLock belongs to each own journal. B
+                // never replaces A's issuer, runtime, journal or original Wait.
+                let (runtime_b, journal_b) = f.fresh_pair()?;
+                let single_b = f.single(&journal_b).await?;
+                let auth_b = single_b.resolve(&http::Request::builder().uri("/owned-callback").body(()).map_err(|e| e.to_string())?.into_parts().0).await.map_err(|e| e.to_string())?;
+                auth_b.request_binding().ok_or("posterior SingleUser B binding absent")?
+                    .verify_current_before(&auth_b, deadline).await.map_err(|e| format!("genuine posterior B current control: {e:?}"))?;
+                Ok::<_, String>((runtime_b, journal_b, single_b, auth_b))
+            }).await.map_err(|_| "same original caller cap ended during posterior B setup/current control")??;
+            check(Instant::now() < deadline, "genuine posterior B control completed inside original caller cap")?;
+            let original = f.rows().await?.remove(0);
+            let audits_before = f.audits().await?;
+            let network_before = f.network_point()?;
+            check(original.owner_user_id == "dev-local-user" && f.posts()?.len() == 1
+                && sink_a.take_url().is_err(), "same original SingleUser row and exactly one already consumed SDK URL/POST")?;
+            // All A/B setup and canonical current-control SQL is outside this
+            // callback-only measurement window, including arm's own PID query.
+            relay.arm_original(&f).await;
+            check(Instant::now() < deadline, "original A Wait refusal starts inside the same original caller cap")?;
+            let error = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), journal_a.wait_callback(&auth_b, wait_a))
+                .await.map_err(|_| "same original caller cap ended during original A Wait refusal")?
+                .err().ok_or("posterior SingleUser B inherited original A Wait as Verified")?;
+            callback_refusal(&error, CallbackErrorKind::Refused, Ack::NotAttempted)?;
+            let current_error = error.journal_error().ok_or("original A/B full-binding refusal reference missing")?;
+            check(current_error.kind() == JournalKind::Refused
+                && current_error.write_ack() == Ack::NotAttempted && current_error.readback_ack() == Ack::NotAttempted
+                && error.registration_error().is_none(), "fresh exact original binding refusal has no journal or registration ACK")?;
+            relay.assert_idle();
+            relay.end_callback_sql_window(0);
+            absent(input.port).await?;
+            check(f.row(original.attempt_id).await? == original && f.audits().await? == audits_before
+                && f.network_point()? == network_before && f.posts()?.len() == 1 && sink_a.take_url().is_err(),
+                "posterior-owner refusal preserves full20/audit/reservation and one consumed URL/POST; no callback dispatch or ControlledClose")?;
+            eprintln!("CALLBACK_SINGLEUSER_POSTERIOR_OWNER original_A_closed={close_original} B_created_after_original_Wait=true genuine_B_current_before_original_cap=true callback_RO_ACK=NotAttempted callback_SQL=0 no_Verified=true; future_clock_issued_lease=UNPROVEN finite_owned_listener_absence_only=true");
+            single_b.close_request_bindings(); runtime_b.close();
+            single_a.close_request_bindings(); runtime_a.close();
+            drop(auth_b); drop(journal_b); drop(auth_a); drop(journal_a);
+            f.finish().await?; relay.stop().await; Ok(())
+        }).await;
+    }
 }
 
 #[tokio::test]
@@ -797,6 +863,72 @@ async fn r16_callback_ro_ack_loss_late_tail() {
         eprintln!("CALLBACK_RO_CURRENT_TAIL original_rollback_ACK=Timely original_host_tail=Refused readback_exact_success_return=false response_stage_not_entered=true; completed_RO_final_response_tail=UNPROVEN");
         f.finish().await?; relay.stop().await;
         Ok(())
+    }).await;
+    harness::with_temp_database(&admin, "cb_r16_done_ro_host", |cfg| async move {
+        let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
+        let f = Fixture::new(relay.config.clone(), 1).await?;
+        let sink = GatewayCallbackUrlSink::new();
+        f.resolver.install_gateway_callback_url_sink(Arc::clone(&sink)).map_err(|e| format!("{e:?}"))?;
+        let auth = f.auth().await?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let (wait, input) = start_on(&f, &f.journal, &auth, &sink, CancellationToken::new(), deadline).await?;
+        let old = f.rows().await?.remove(0);
+        let audits_before = f.audits().await?;
+        relay.arm_original(&f).await;
+        let mut peer = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, input.port)).await.map_err(|e| e.to_string())?;
+        peer.write_all(&input.request(&input.query("owned-completed-ro-response-host"))).await.map_err(|e| e.to_string())?;
+        let mut call = Box::pin(f.journal.wait_callback(&auth, wait));
+        tokio::select! { biased;
+            () = relay.held() => {},
+            value = &mut call => return Err(format!("completed-RO response missed original ACK: {value:?}")),
+        }
+        relay.release_original_ack().await;
+        // Exactly one original business poll; readiness or partial write cannot
+        // be repaired by manufacturing a second poll or a new caller cap.
+        match std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx))).await {
+            std::task::Poll::Pending => {},
+            std::task::Poll::Ready(value) => return Err(format!("completed-RO response boundary was not Pending: {value:?}")),
+        }
+        // Leave business unpolled while the independent own peer reads the
+        // handwritten complete static response. Actual200 proves readback_exact
+        // already returned successfully and the original response stage wrote.
+        let raw = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+            let mut raw = Vec::with_capacity(4096);
+            loop {
+                check(raw.len() < 4096, "completed-RO response header bound")?;
+                let mut byte = [0_u8; 1];
+                peer.read_exact(&mut byte).await.map_err(|e| format!("completed-RO own header: {e}"))?;
+                raw.push(byte[0]);
+                if raw.ends_with(b"\r\n\r\n") { break; }
+            }
+            let mut body = [0_u8; 18];
+            peer.read_exact(&mut body).await.map_err(|e| format!("completed-RO own literal body: {e}"))?;
+            raw.extend_from_slice(&body);
+            response(&raw, 200, b"Callback received.")?;
+            Ok::<_, String>(raw)
+        }).await.map_err(|_| "single poll did not establish actual completed-RO response before original cap")??;
+        check(!raw.is_empty() && Instant::now() < deadline, "original completed-RO response and unchanged caller cap")?;
+        f.disarm_host(); // Close the same genuine original resolver after the proven write.
+        let error = match std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx))).await {
+            std::task::Poll::Ready(Err(error)) => error,
+            std::task::Poll::Ready(Ok(_)) => return Err("closed completed-RO response Host returned Verified".into()),
+            std::task::Poll::Pending => return Err("closed completed-RO response Host stayed Pending".into()),
+        };
+        callback_refusal(&error, CallbackErrorKind::Refused, Ack::Timely)?;
+        let current_error = error.journal_error().ok_or("original synchronous Host current error missing")?;
+        check(current_error.kind() == JournalKind::Refused
+            && current_error.write_ack() == Ack::NotAttempted && current_error.readback_ack() == Ack::NotAttempted
+            && error.registration_error().is_none(),
+            "fresh synchronous current refusal has no journal ACK; independent completed callback RO remains Timely")?;
+        drop(call);
+        no_callback_reply(&mut peer).await?; // Literal response already consumed; only finite empty tail remains.
+        drop(peer); absent(input.port).await?;
+        relay.assert_target(1); relay.end_callback_sql_window(1);
+        check(f.row(old.attempt_id).await? == old && f.audits().await? == audits_before && f.posts()?.len() == 1,
+            "completed-RO response Host refusal preserves full20/reservation and zero write/close/retry")?;
+        callback_refusal(&error, CallbackErrorKind::Refused, Ack::Timely)?;
+        eprintln!("CALLBACK_COMPLETED_RO_RESPONSE_HOST_REVOKE original_RO_ACK=Timely readback_exact_success_return=true independent_literal_static200=true response_write_pending=true same_original_Host_closed=true no_Verified=true; exact_post_shutdown_final_current_tail=UNPROVEN");
+        f.finish().await?; relay.stop().await; Ok(())
     }).await;
 }
 
