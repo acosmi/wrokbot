@@ -1,7 +1,5 @@
 //! Owned initial OAuth data and response resources.
-//! This private kernel has no dispatch or enrollment consumer yet.
-// Remove this module-local allowance when its first consumer is registered.
-#![allow(dead_code)]
+//! The registration journal retains the whole initial owner without dispatch.
 
 use crate::gateway_account::GatewayDesktopMetadata;
 use chrono::{DateTime, Utc};
@@ -10,10 +8,14 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
+#[allow(dead_code, reason = "Pending code-grant consumption")]
 mod initial;
+pub(crate) mod journal;
+#[allow(dead_code, reason = "Pending reply consumption")]
 mod reply;
 #[cfg(test)]
 mod tests;
+#[allow(dead_code, reason = "Pending token consumption")]
 mod tokens;
 
 type ClockOwner = Arc<dyn InitialClock + Send + Sync + 'static>;
@@ -51,6 +53,7 @@ struct OwnedInitialInput {
 
 enum OwnedInitialKind {
     Registration(OwnedRegistrationInput),
+    #[allow(dead_code, reason = "Pending code-grant consumption")]
     Code(OwnedCodeInput),
 }
 
@@ -59,6 +62,7 @@ struct OwnedRegistrationInput {
     original_redirect_uri: Zeroizing<String>,
 }
 
+#[allow(dead_code, reason = "Pending code-grant consumption")]
 struct OwnedCodeInput {
     metadata: GatewayDesktopMetadata,
     client_id: Zeroizing<String>,
@@ -81,15 +85,18 @@ impl InitialBudget {
     }
 }
 
+#[allow(dead_code, reason = "Pending code-grant consumption")]
 struct CodeTokenStart {
     original: ClockSample,
 }
 
+#[allow(dead_code, reason = "Pending token consumption")]
 struct OwnedTokenBinding {
     client_id: Zeroizing<String>,
     server_url: Zeroizing<String>,
 }
 
+#[allow(dead_code, reason = "Pending code-grant and reply consumption")]
 enum InitialReplyWitness {
     Registration {
         metadata: GatewayDesktopMetadata,
@@ -111,6 +118,7 @@ struct PreparedInitialOwner {
     sdk_exit_child: CancellationToken,
 }
 
+#[allow(dead_code, reason = "Pending token consumption")]
 struct ParsedTokenFields {
     access_token: Zeroizing<String>,
     token_type: Zeroizing<String>,
@@ -119,6 +127,7 @@ struct ParsedTokenFields {
     expires_in: NonZeroI64,
 }
 
+#[allow(dead_code, reason = "Pending token consumption")]
 struct CheckedExpiry {
     original_start: ClockSample,
     wall_expiry: DateTime<Utc>,
@@ -126,24 +135,28 @@ struct CheckedExpiry {
     encoded_wall_expiry: DateTime<Utc>,
 }
 
+#[allow(dead_code, reason = "Pending reply and token consumption")]
 struct ReplyResources {
     metadata: GatewayDesktopMetadata,
     budget: InitialBudget,
     clock: ClockOwner,
 }
 
+#[allow(dead_code, reason = "Pending reply consumption")]
 struct OwnedRegistrationReply {
     client_id: Zeroizing<String>,
     original_redirect_uri: Zeroizing<String>,
     resources: ReplyResources,
 }
 
+#[allow(dead_code, reason = "Pending token consumption")]
 struct TokenSetGuard {
     sdk: acosmi::TokenSet,
     expiry: CheckedExpiry,
     resources: ReplyResources,
 }
 
+#[allow(dead_code, reason = "Pending reply and token consumption")]
 enum InitialReply {
     Registration(OwnedRegistrationReply),
     Tokens(TokenSetGuard),
@@ -151,16 +164,20 @@ enum InitialReply {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InitialError {
+    #[allow(dead_code, reason = "Pending reply consumption")]
     ProtocolInvalid(ReplyInvalidReason),
+    #[allow(dead_code, reason = "Pending reply consumption")]
     HttpStatus(u16),
     Cancelled,
     Deadline,
     ProducerEnded,
     RequestMismatch,
+    #[allow(dead_code, reason = "Pending reply consumption")]
     BodyTransport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code, reason = "Pending reply and token consumption")]
 enum ReplyInvalidReason {
     JsonSyntax,
     UnknownKey,
@@ -272,6 +289,7 @@ fn owned_registration_input(
     initial::owned_registration_input(metadata, original_redirect_uri)
 }
 
+#[allow(dead_code, reason = "Pending code-grant consumption")]
 fn owned_code_input(
     metadata: GatewayDesktopMetadata,
     client_id: Zeroizing<String>,
@@ -295,6 +313,7 @@ async fn prepare_initial(
     initial::prepare_initial(input, original_parent_budget).await
 }
 
+#[allow(dead_code, reason = "Pending reply and token consumption")]
 async fn consume_initial(
     prepared: PreparedInitialOwner,
     response: acosmi::HttpResponse,

@@ -315,6 +315,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
     };
 
+    // The original optional startup label never comes from a request or a second environment read.
+    // The composition root strongly retains this one runtime and journal; request owners retain Weak.
+    let gateway_authorization_journal =
+        openbot_server::auth::assemble_gateway_authorization_journal(
+            &server,
+            pool.clone(),
+            deployment.clone(),
+            tenant.clone(),
+            SecretBytes::new(audit_key.expose().to_vec()),
+        )
+        .map_err(|_| startup_error("gateway_authorization_journal_unavailable"))?;
+    if let Some((_, journal)) = &gateway_authorization_journal {
+        if let Some(resolver) = &remember_session_resolver {
+            resolver
+                .install_gateway_authorization_journal(journal)
+                .map_err(|_| startup_error("gateway_authorization_host_unavailable"))?;
+        } else if let Some(resolver) = &remember_single_user_resolver {
+            resolver
+                .install_gateway_authorization_journal(journal, &pool)
+                .map_err(|_| startup_error("gateway_authorization_host_unavailable"))?;
+        } else {
+            return Err(startup_error("gateway_authorization_host_unavailable").into());
+        }
+    }
+
     // This is the exact supervised application Pool, not a second connection pool
     // assembled from matching labels. Construction validates configuration only;
     // every repository operation proves current storage and authorization itself.
@@ -659,6 +684,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .with_graceful_shutdown({
         let shutdown_auth = Arc::clone(&auth_owner);
+        let shutdown_gateway_authorization_runtime = gateway_authorization_journal
+            .as_ref()
+            .map(|(runtime, _)| Arc::clone(runtime));
         let shutdown_application = Arc::clone(&artifact_read_application);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let shutdown_artifact_reads = artifact_read_lifecycle.clone();
@@ -666,6 +694,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             shutdown_signal().await;
             // Revoke current observations before axum waits for in-flight requests to drain.
             shutdown_auth.close_request_bindings();
+            if let Some(runtime) = &shutdown_gateway_authorization_runtime {
+                runtime.close();
+            }
             if let Err(error) = shutdown_application.close_public_artifact_reads() {
                 tracing::warn!(
                     error.code = error.code().as_str(),
@@ -681,6 +712,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await;
     // A serving error or normal completion also closes the owner before other resources stop.
     auth_owner.close_request_bindings();
+    if let Some((runtime, _)) = &gateway_authorization_journal {
+        runtime.close();
+    }
     if let Err(error) = artifact_read_application.close_public_artifact_reads() {
         tracing::warn!(
             error.code = error.code().as_str(),
@@ -703,6 +737,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     mcp_revocation_reconciler.stop().await;
     policy_listener.stop().await;
     drop(artifact_datasets);
+    drop(gateway_authorization_journal);
     serve_result?;
     pool.close();
     Ok(())

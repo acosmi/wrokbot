@@ -135,6 +135,15 @@ pub mod gateway_authority;
 #[cfg(feature = "server-runtime")]
 mod gateway_authorization;
 #[cfg(feature = "server-runtime")]
+pub use gateway_authorization::journal::{
+    ClosedAttemptReceipt, ControlledCloseReason, CreatedAttemptOwner, GatewayAuthorizationJournal,
+    GatewayAuthorizationJournalAck, GatewayAuthorizationJournalError,
+    GatewayAuthorizationJournalErrorKind, GatewayAuthorizationJournalRuntimeOwner,
+    RegistrationAdmissionReceipt,
+};
+#[cfg(feature = "server-runtime")]
+pub use tokio_util::sync::CancellationToken as GatewayAuthorizationCancellationToken;
+#[cfg(feature = "server-runtime")]
 pub mod gateway_transport;
 #[cfg(feature = "server-runtime")]
 pub mod google_drive;

@@ -1261,6 +1261,56 @@ pub(crate) async fn validate_custom_model_v2_in_transaction(
     super::custom_model_v2_schema::verify_in_transaction(tx).await?;
     super::gateway_authorization_schema::verify_in_transaction(tx).await
 }
+/// Exact original 0013--0048 ledger and journal schema on the same transaction.
+/// This observer never checks out a client or migrates, repairs or closes a transaction.
+#[cfg(feature = "server-runtime")]
+pub(crate) async fn validate_gateway_authorization_journal_in_transaction(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<(), InfraError> {
+    let invalid =
+        || InfraError::repository_invariant("gateway_authorization_journal_native_prefix_invalid");
+    let limit = NATIVE_MIGRATION_COUNT
+        .checked_add(1)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(invalid)?;
+    let rows = tx
+        .query(
+            "SELECT version,name,checksum FROM openbot_internal.schema_migrations ORDER BY version,name,checksum LIMIT $1",
+            &[&limit],
+        )
+        .await
+        .map_err(|source| InfraError::query("核验原事务授权 journal native 前缀", source))?;
+    if NATIVE_MIGRATION_COUNT != 36 || rows.len() != NATIVE_MIGRATION_COUNT {
+        return Err(invalid());
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let version: i32 = row
+            .try_get("version")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "version", source))?;
+        let name: String = row
+            .try_get("name")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "name", source))?;
+        let checksum: String = row
+            .try_get("checksum")
+            .map_err(|source| RowDecodeError::column(LEDGER_ROW_LABEL, "checksum", source))?;
+        let expected = MIGRATIONS.get(index).ok_or_else(invalid)?;
+        let contiguous = NATIVE_0013_VERSION
+            .checked_add(i32::try_from(index).map_err(|_| invalid())?)
+            .ok_or_else(invalid)?;
+        if version != contiguous
+            || expected.version != contiguous
+            || name != expected.name
+            || checksum != Sha256Digest::of(expected.sql.as_bytes()).to_hex()
+        {
+            return Err(invalid());
+        }
+    }
+    if MIGRATIONS.last().map(|migration| migration.version) != Some(NATIVE_0048_VERSION) {
+        return Err(invalid());
+    }
+    super::gateway_authorization_schema::verify_in_transaction(tx).await
+}
+
 /// Only the explicit original migration target47 may use this exact historical prefix.
 /// Ordinary runtime V2 consumers always use the complete current48 entry above.
 async fn validate_custom_model_v2_legacy_0047_in_transaction(
