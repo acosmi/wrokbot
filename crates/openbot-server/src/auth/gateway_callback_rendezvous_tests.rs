@@ -204,7 +204,7 @@ async fn r03_singleuser_whole_registered_handoff() {
         drop(verified); drop(call); absent(input.port).await?;
         single.close_request_bindings(); runtime.close(); f.finish().await?; relay.stop().await; Ok(())
     }).await;
-    for close_original in [false, true] {
+    for (close_original, successor_generation) in [(false, false), (true, false), (false, true)] {
         harness::with_temp_database(&admin, "cb_r03_postowner", |cfg| async move {
             let relay = PgTerminalAckGate::new(&cfg, TerminalStage::RegisteredReadbackRollback, false).await;
             let f = Fixture::new(relay.config.clone(), 1).await?;
@@ -230,6 +230,20 @@ async fn r03_singleuser_whole_registered_handoff() {
                     auth_a.request_binding().ok_or("original SingleUser A binding absent")?
                         .verify_current_before(&auth_a, deadline).await.map_err(|e| format!("original A current control: {e:?}"))?;
                 }
+                if successor_generation {
+                    // A and its by-value Wait already came from the genuine
+                    // canonical generation7 principal. Advance only this owned
+                    // test user, outside the callback SQL measurement window.
+                    check(auth_a.auth_generation().get() == 7, "original SingleUser A genuinely holds canonical generation7")?;
+                    let control = f.pool.get().await.map_err(|e| e.to_string())?;
+                    let changed = control.execute(
+                        "UPDATE public.users SET auth_generation=8 WHERE id=$1 AND email=$2 AND auth_generation=7",
+                        &[&openbot_infra::auth::single_user::SINGLE_USER_ACTOR_ID,
+                          &openbot_infra::auth::single_user::SINGLE_USER_EMAIL],
+                    ).await.map_err(|e| e.to_string())?;
+                    check(changed == 1, "one owned canonical SingleUser generation7 to generation8 update")?;
+                    drop(control);
+                }
                 // The normal issuer OnceLock belongs to each own journal. B
                 // never replaces A's issuer, runtime, journal or original Wait.
                 let (runtime_b, journal_b) = f.fresh_pair()?;
@@ -237,6 +251,11 @@ async fn r03_singleuser_whole_registered_handoff() {
                 let auth_b = single_b.resolve(&http::Request::builder().uri("/owned-callback").body(()).map_err(|e| e.to_string())?.into_parts().0).await.map_err(|e| e.to_string())?;
                 auth_b.request_binding().ok_or("posterior SingleUser B binding absent")?
                     .verify_current_before(&auth_b, deadline).await.map_err(|e| format!("genuine posterior B current control: {e:?}"))?;
+                if successor_generation {
+                    check(auth_a.auth_generation().get() == 7 && auth_b.auth_generation().get() == 8
+                        && auth_a.actor() == auth_b.actor(),
+                        "original generation7 A and real canonical generation8 B; original A snapshot never upgraded")?;
+                }
                 Ok::<_, String>((runtime_b, journal_b, single_b, auth_b))
             }).await.map_err(|_| "same original caller cap ended during posterior B setup/current control")??;
             check(Instant::now() < deadline, "genuine posterior B control completed inside original caller cap")?;
@@ -264,6 +283,9 @@ async fn r03_singleuser_whole_registered_handoff() {
                 && f.network_point()? == network_before && f.posts()?.len() == 1 && sink_a.take_url().is_err(),
                 "posterior-owner refusal preserves full20/audit/reservation and one consumed URL/POST; no callback dispatch or ControlledClose")?;
             eprintln!("CALLBACK_SINGLEUSER_POSTERIOR_OWNER original_A_closed={close_original} B_created_after_original_Wait=true genuine_B_current_before_original_cap=true callback_RO_ACK=NotAttempted callback_SQL=0 no_Verified=true; future_clock_issued_lease=UNPROVEN finite_owned_listener_absence_only=true");
+            if successor_generation {
+                eprintln!("CALLBACK_SINGLEUSER_SUCCESSOR_GENERATION original_A_auth_generation=7 actual_B_auth_generation=8 original_Wait_A_preserved=true genuine_B_current_before_same_original_cap=true callback_FreshSomeRefused=true callback_RO_ACK=NotAttempted journal_write_ACK=NotAttempted journal_readback_ACK=NotAttempted callback_SQL=0 no_Verified=true; future_wall_clock_issuance=NOT_CLAIMED finite_owned_listener_absence_only=true");
+            }
             single_b.close_request_bindings(); runtime_b.close();
             single_a.close_request_bindings(); runtime_a.close();
             drop(auth_b); drop(journal_b); drop(auth_a); drop(journal_a);
