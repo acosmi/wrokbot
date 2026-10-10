@@ -1864,3 +1864,6 @@ This finite scope ends at creation, registration admission and the two controlle
 
 
 2026-10-10 — UI5-P2 Conversation ModelPicker is normally composed with main after backend PRs #171–#174. The explicit Memory/fixed read-only fixture retains its three Custom DTOs and unavailable write methods; production model readiness is not inferred. Directed checks and the mounted bilingual keyboard journey must be rerun on the exact composed candidate. Full UI, oracle, pixels and native/production dependencies remain open.
+
+
+2026-10-10T08:44:18.342941+00:00 UI5-P2: locally composes the already independently accepted five-file formatting maintenance commit to continue exact-candidate compiler feedback. The corrected Rust 1.98 tool path passes the workspace formatting check; the first missing cargo-fmt discovery failure is retained. The maintenance has not entered remote main, so this is a local test candidate and publication remains gated on actual main integration and independent directed acceptance. Earlier ten focused passes and workspace-format failure keep their original candidate attribution. No new backend behavior, dependency or full UI acceptance is claimed.
