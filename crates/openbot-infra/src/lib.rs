@@ -139,7 +139,8 @@ pub use gateway_authorization::journal::{
     ClosedAttemptReceipt, ControlledCloseReason, CreatedAttemptOwner, GatewayAuthorizationJournal,
     GatewayAuthorizationJournalAck, GatewayAuthorizationJournalError,
     GatewayAuthorizationJournalErrorKind, GatewayAuthorizationJournalRuntimeOwner,
-    RegistrationAdmissionReceipt,
+    RegisteredAttemptOwner, RegistrationAdmissionReceipt, RegistrationDispatchError,
+    RegistrationDispatchKind,
 };
 #[cfg(feature = "server-runtime")]
 pub use tokio_util::sync::CancellationToken as GatewayAuthorizationCancellationToken;
