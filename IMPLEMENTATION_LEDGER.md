@@ -1891,6 +1891,11 @@ Validation: the current Source06 Server strict check, Server harness compile and
 
 Earlier holds/failures and LLVM strip/libtest diagnostics remain recorded; production individual driver joins remain unproven. Unknown/Late outcomes and documentation follow-ups remain open. Public scope is 12 product paths plus this ledger, with no new migration, dependency or UI change. SDK token exchange, callback/listener, enrollment consumption, Account/UI bridge, recovery and full Ready remain open. Publication, merge and delivery are pending.
 
+
+### V7-MAINT-FMT-001 — five backend Rust files
+
+2026-10-10: The independently reviewed formatting changes cover 17 registered regions in five backend Rust files (15 unified diff hunks). The original review contains 17 focused format checks on the earlier base; those results retain that identity. This maintenance candidate uses actual main 30dd25dd8aac8f52d97c47edd925e5865d2152b9 after Task029 / PR #175 delivery, preserves every other main tree object, and appends only this execution fact to the public ledger. Five complete stdin/stdout Rust 1.98 format comparisons on the composed candidate and independent publication review are required before publication. The change has no runtime capability credit; backend work and its remaining tasks continue.
+
 2026-10-08 — UI5-P2 Conversation ModelPicker fixture Source preparation: the existing testkit-only, explicitly enabled synthetic ModelPicker fixture now includes one empty active channel for the owned public assistant. The existing authenticated channel-detail read can mount its Conversation model picker without creating a thread or run. The default fixture, model write rejection and production capability boundaries are unchanged. Targeted Rust 1.98 formatting of this fixture file completed without further byte changes. Directed tests, build checks, fixture Host build and browser acceptance for this change are NOTRUN.
 
 2026-10-08 — UI5-P4 Agent detail Retry and scope cancellation were delivered by PR #170, normally merged as 4b93e7e87efb7f9be1c670110604e7962e098104 from b31cd9e47efc357673923af6cb0054aefbfcd0e9 after finite independent acceptance. Full UI, production, native OS, PostgreSQL, visual oracle and pixel acceptance remain open.
