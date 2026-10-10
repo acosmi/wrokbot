@@ -136,6 +136,8 @@ pub mod gateway_authority;
 mod gateway_authorization;
 #[cfg(feature = "server-runtime")]
 pub use gateway_authorization::journal::{
+    CallbackErrorKind, CallbackStage, GatewayAuthorizationCallbackError,
+    GatewayAuthorizationCallbackWaitOwner, GatewayAuthorizationVerifiedCodeOwner,
     ClosedAttemptReceipt, ControlledCloseReason, CreatedAttemptOwner, GatewayAuthorizationJournal,
     GatewayAuthorizationJournalAck, GatewayAuthorizationJournalError,
     GatewayAuthorizationJournalErrorKind, GatewayAuthorizationJournalRuntimeOwner,
