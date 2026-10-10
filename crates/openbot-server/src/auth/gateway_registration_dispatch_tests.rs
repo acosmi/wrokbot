@@ -79,6 +79,107 @@ fn sent_facts(
         "actual transport permit release fact",
     )
 }
+// These facts are minted by the original transport, separate from the journal ACKs.
+fn body_facts(
+    error: &RegistrationDispatchError,
+    complete: bool,
+    failure: &str,
+) -> Result<(), String> {
+    let text = format!("{error:?}");
+    check(
+        text.contains(&format!("complete: {complete}")),
+        "actual transport EOF completion fact",
+    )?;
+    check(
+        text.contains(&format!("failure: {failure}")),
+        "actual transport failure history excludes unrelated body/network failure",
+    )
+}
+async fn owned_response(f: &Fixture, configuration: &Value, full_body: bool) -> Result<(), String> {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if f.response_finished()? {
+                return Ok::<(), String>(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .map_err(|_| "owned response did not finish within its finite proof budget")??;
+    let events = f.events()?;
+    check(
+        events
+            .iter()
+            .all(|v| v["event"] != "unexpected_handler_error"),
+        "owned handler failure cannot earn rejection credit",
+    )?;
+    let raw = configuration
+        .get("raw")
+        .and_then(Value::as_str)
+        .unwrap_or("{\"client_id\":\"owned-registration-client\"}");
+    let headers = configuration
+        .get("headers")
+        .cloned()
+        .unwrap_or_else(|| json!([["Content-Type", "application/json"]]));
+    let sent: Vec<_> = events
+        .iter()
+        .filter(|v| v["event"] == "headers_sent" && v["method"] == "POST")
+        .collect();
+    check(
+        sent.len() == 1,
+        "one actual owned POST response header write",
+    )?;
+    check(
+        sent[0]["status"] == 200
+            && sent[0]["headers"] == headers
+            && sent[0]["body_bytes"].as_u64() == Some(raw.len() as u64),
+        "actual owned response status/configured headers/declared exact body size",
+    )?;
+    let tail: Vec<_> = events
+        .iter()
+        .filter(|v| v["event"] == "response_finished" && v["method"] == "POST")
+        .collect();
+    check(tail.len() == 1, "one normal owned response completion")?;
+    let bodies: Vec<_> = events
+        .iter()
+        .filter(|v| v["event"] == "body_sent" && v["method"] == "POST")
+        .collect();
+    let closed: Vec<_> = events
+        .iter()
+        .filter(|v| v["event"] == "peer_closed" && v["method"] == "POST")
+        .collect();
+    if tail[0]["outcome"] == "body_sent" {
+        check(
+            bodies.len() == 1 && closed.is_empty(),
+            "owned body completed without peer close",
+        )?;
+        let hex: String = raw
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        check(
+            bodies[0]["bytes"].as_u64() == Some(raw.len() as u64) && bodies[0]["body_hex"] == hex,
+            "owned peer actually wrote and flushed all exact configured response bytes",
+        )?;
+    } else {
+        check(
+            !full_body
+                && tail[0]["outcome"] == "peer_closed"
+                && bodies.is_empty()
+                && closed.len() == 1,
+            "only causally allowed early peer close, never missing full-body/EOF proof",
+        )?;
+        check(
+            matches!(
+                closed[0]["kind"].as_str(),
+                Some("BrokenPipeError" | "ConnectionResetError" | "SSLEOFError")
+            ),
+            "peer-close evidence has an explicitly allowed closed kind",
+        )?;
+    }
+    Ok(())
+}
 async fn admit_on(
     f: &Fixture,
     journal: &Arc<GatewayAuthorizationJournal>,
@@ -530,6 +631,14 @@ mod fixture {
             }
             Ok(values)
         }
+        pub(super) fn response_finished(&self) -> Result<bool, String> {
+            let root = &self.tls.as_ref().ok_or("owned TLS absent")?.root;
+            if root.join("unexpected-handler-error").exists() {
+                return Err("owned handler failed before response proof".into());
+            }
+            // Published only after complete event writes, so a partial JSON append cannot pass.
+            Ok(root.join("response-finished").exists())
+        }
         pub(super) fn events(&self) -> Result<Vec<Value>, String> {
             self.records("events.jsonl")
         }
@@ -882,7 +991,7 @@ mod fixture {
                 .join()
                 .map_err(|_| "owned TLS stdout reader panicked")??;
             let stopped: Value = serde_json::from_slice(&tail).map_err(|e| e.to_string())?;
-            if stopped["stopped"] != true {
+            if stopped["stopped"] != true || stopped["fatal"] != false {
                 return Err("owned TLS stop output missing".to_owned());
             }
             let count = self.captures()?.len();
@@ -940,7 +1049,7 @@ root=pathlib.Path(sys.argv[1]); os.umask(0o077)
 ca,leaf,key=[base64.b64decode(x,validate=True) for x in sys.argv[2:5]]
 def pem(kind,data): return ('-----BEGIN '+kind+'-----\n'+base64.encodebytes(data).decode()+'-----END '+kind+'-----\n')
 (root/'leaf.pem').write_text(pem('CERTIFICATE',leaf)); (root/'key.pem').write_text(pem('PRIVATE KEY',key))
-stop=threading.Event(); count=0; connections=0
+stop=threading.Event(); fatal=threading.Event(); count=0; connections=0
 def record(file,data):
     path=root/file
     if path.exists() and path.stat().st_size>1048576: raise RuntimeError('owned capture byte budget')
@@ -963,7 +1072,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         for name,value in headers: self.send_header(name,value)
         self.send_header('Content-Length',str(len(data))); self.send_header('Connection','close'); self.end_headers(); self.wfile.flush()
-        record('events.jsonl',{'event':'headers_sent','method':self.command,'status':status})
+        record('events.jsonl',{'event':'headers_sent','method':self.command,'status':status,'headers':headers,'body_bytes':len(data)})
         return data
     def do_GET(self):
         self.connection.settimeout(6)
@@ -990,16 +1099,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if len(data)>131072: raise RuntimeError('owned response byte bound')
         headers=config.get('headers',[['Content-Type','application/json']])
         if len(headers)>128 or any(len(n)+len(v)>16384 for n,v in headers): raise RuntimeError('owned header budget')
+        outcome='stopped'
         try:
             self.send_owned(config.get('status',200),headers,data)
             if config.get('hold_body'): wait_owned('release_body')
             if not stop.is_set():
-                self.wfile.write(data); self.wfile.flush(); record('events.jsonl',{'event':'body_sent','method':'POST','bytes':len(data)})
-        except (BrokenPipeError,ConnectionResetError,ssl.SSLEOFError):
-            record('events.jsonl',{'event':'peer_closed','method':'POST'})
+                self.wfile.write(data); self.wfile.flush(); record('events.jsonl',{'event':'body_sent','method':'POST','bytes':len(data),'body_hex':data.hex()}); outcome='body_sent'
+        except (BrokenPipeError,ConnectionResetError,ssl.SSLEOFError) as closed:
+            record('events.jsonl',{'event':'peer_closed','method':'POST','kind':type(closed).__name__}); outcome='peer_closed'
         self.close_connection=True
+        record('events.jsonl',{'event':'response_finished','method':'POST','outcome':outcome})
+        (root/'response-finished').write_bytes(b'owned')
 context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.load_cert_chain(root/'leaf.pem',root/'key.pem')
 class Server(http.server.HTTPServer):
+    def handle_error(self,request,client_address):
+        # BaseServer must not swallow an unexpected owned handler failure into exit zero.
+        fatal.set(); stop.set()
+        (root/'unexpected-handler-error').write_bytes(b'UnexpectedHandler')
+        record('events.jsonl',{'event':'unexpected_handler_error','failure':'UnexpectedHandler'})
     def get_request(self):
         global connections
         raw,address=self.socket.accept(); raw.settimeout(3); connections+=1
@@ -1012,8 +1129,9 @@ print(json.dumps({'port':server.server_port,'ca':list(ca)}),flush=True)
 try:
     while not stop.is_set(): server.handle_request()
 finally: server.server_close(); stop.set(); thread.join(timeout=2)
+print(json.dumps({'stopped':not fatal.is_set(),'fatal':fatal.is_set(),'requests':count,'connections':connections}),flush=True)
 if thread.is_alive(): raise RuntimeError('owned stop reader did not join')
-print(json.dumps({'stopped':True,'requests':count,'connections':connections}),flush=True)
+if fatal.is_set(): raise RuntimeError('owned handler failed')
 "#;
 
     // Existing repository non-production W7 CA/leaf/key, SAN=idp.test. Never installed in OS trust.
@@ -2008,7 +2126,8 @@ async fn r12_non_success_or_invalid_success_reply_no_sdk_decode() {
     ] {
         harness::with_temp_database(&admin, "gr_r12_invalid200", |cfg| async move {
             let f = Fixture::new(cfg, 2).await?;
-            f.configure(&json!({"raw":raw}))?;
+            let configuration = json!({"raw":raw});
+            f.configure(&configuration)?;
             let auth = f.auth().await?;
             let receipt = admitted(&f, &auth).await?;
             let old = f.rows().await?.remove(0);
@@ -2016,6 +2135,9 @@ async fn r12_non_success_or_invalid_success_reply_no_sdk_decode() {
             let error = refused(f.journal.register_admitted(&auth, receipt, &factory).await)?;
             kind(&error, "RegistrationUnknown")?;
             ack(&error, "Timely", "NotAttempted", "NotAttempted")?;
+            sent_facts(&error, true, Some(200), true)?;
+            body_facts(&error, true, "None")?;
+            owned_response(&f, &configuration, true).await?;
             check(
                 f.row(old.attempt_id).await? == old,
                 "invalid success bytes do not run SDK decoder or register",
@@ -2059,7 +2181,16 @@ async fn r13_header_body_limits_secret_keys_and_owner_drop() {
             let old = f.rows().await?.remove(0);
             let factory = f.factory(Some("/oauth/desktop/register"))?;
             let error = refused(f.journal.register_admitted(&auth, receipt, &factory).await)?;
+            kind(&error, "RegistrationUnknown")?;
             ack(&error, "Timely", "NotAttempted", "NotAttempted")?;
+            sent_facts(&error, true, Some(200), true)?;
+            match index {
+                0 | 1 | 3 => body_facts(&error, false, "Some(Cancelled)")?,
+                2 | 8 | 9 => body_facts(&error, false, "Some(Rejected)")?,
+                4..=7 => body_facts(&error, true, "None")?,
+                _ => return Err("unregistered owned response vector".into()),
+            }
+            owned_response(&f, &configuration, matches!(index, 3..=7)).await?;
             check(
                 !format!("{error:?}").contains("owned-secret"),
                 "bounded failure does not retain secret body values",
