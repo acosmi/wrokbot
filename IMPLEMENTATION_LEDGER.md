@@ -1868,3 +1868,14 @@ Adds a registration-dispatch API to the existing Server Host and authorization-a
 The two request-body assignments in directed test fixtures now use the SDK's Vec body type. Current runtime coverage is 24 new core cases (Infra 6 and Server Host/PostgreSQL 18), plus four current Domain compatibility cases reported separately. Earlier resource refusal and compilation failure, and original compiler or nested-tool diagnostics, retain their recorded results; they provide no current runtime credit. Individual production driver joins remain unproven.
 
 Scope is 12 product files and this public ledger entry, reusing the native-48 journal without a migration, dependency, UI or SDK-source change. Authorization-code/token sending, callbacks/listeners, enrollment, account bridge, application/UI integration, readiness, recovery and overall backend completion remain open.
+
+
+### V7-IMPL-029 - SDK registration dispatch and typed outcome facts
+
+Product candidate: `b7a6e798f816365ff480451f4c982f90d149ce82`. A current admitted Server operation transfers the whole original SDK registration request once through the gated transport. The original Host/actor checks, cancellation and deadlines stay attached. After headers, bounded reply consumption follows the original send-fence rollback acknowledgement. The registered successor uses the complete journal row comparison, typed audit, commit acknowledgement and exact readback. Public errors expose five existing facts directly: dispatch kind, optional transport snapshot, and separate send-guard rollback, registered-write and registered-readback acknowledgements. Late, unknown and dropped operations retain their outcomes without automatic retry.
+
+Independent finite acceptance of the whole task passed with no confirmed P1/P2 findings. Fresh Source05 validation passed three affected strict checks, the SDK dependency guard, two harness compilations and 24 unique core cases (Infra 6 and Server Host/PostgreSQL 18), with 0 failed and 0 ignored. Five unchanged compile stages and four Domain compatibility cases retain their Source04 results; those four cases were not rerun on Source05.
+
+Scope remains 12 product files plus this ledger, reusing native migration 0048 without new dependencies, migrations, UI or SDK-source changes. Prior failures and diagnostics remain recorded. Current diagnostics include three LLVM stripping SIGABRT warnings, an existing unused import and 24 logfile-deprecation warnings. Individual production-driver and asynchronous drop joins remain unproven. The existing rollback-kind documentation comment remains unresolved; the three ACK slots distinguish the actual observations.
+
+Token exchange, callbacks/listeners, enrollment, account bridge, application integration, Ready, recovery and overall backend completion remain open. Publication review, exact-head merge and delivery remain pending.
