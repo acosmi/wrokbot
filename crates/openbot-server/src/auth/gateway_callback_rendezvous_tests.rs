@@ -1943,7 +1943,10 @@ impl R10CancelOnControlledWake {
         use std::sync::atomic::Ordering;
         if std::thread::current().id() == self.poll_thread
             && self.active.load(Ordering::SeqCst)
-            && self.armed.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+            && self
+                .armed
+                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
         {
             // Disarm before cancellation: the original cancelled future can
             // synchronously wake this same wrapper again.
