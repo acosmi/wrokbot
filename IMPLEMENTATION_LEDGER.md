@@ -2243,3 +2243,45 @@ V7-IMPL-044 / PR #223: The native PostgreSQL maintenance toolchain completed its
 The affected Desktop libtest was compiled again and both declaration lists were checked on c1111646 (117 total, 6 ignored). Five other native test units, covering eight scenarios including streamed-WAL restore and restart, retain their original successful executions and independently reviewed source applicability. Sixteen ordinary directed tests and trusted-consumer verification likewise retain their separately qualified original evidence. These are distinct evidence roles, not six fresh native executions on the final candidate.
 
 This delivery is limited to the maintenance toolchain prerequisite. Complete application capture, sealed backup and restore activation remain unfinished. Earlier failures, administrative unknown outcomes and the two-file strict legacy scope hold remain recorded; source authentication does not establish platform signing or production release acceptance. Full CI and manual Actions were not run.
+
+
+V7-IMPL-045 — Draft capture candidate; not delivered.
+
+Adds the normal-exit capture pipeline, bounded material collection and an independent authenticated, encrypted PostgreSQL carrier. The implementation retains original worker handles, stage acknowledgements, key and data readbacks, and checked filesystem and secret accounting.
+
+Current directed tests passed: 18 Desktop resource/control tests, 13 carrier tests and 30 archive regression tests. Independent execution review of all three suites is recorded separately. The archive tests reuse the current Infra test executable without another build. These results do not establish normal application capture or recovery.
+
+Remaining work includes password-copy bounds for subscription lifetimes, the full SQL shared-buffer allocation bound, typed-canary zeroization and normal capture/replay/restore acceptance. This candidate remains Draft; merge and complete-backend acceptance are pending. Full CI and manual Actions were not run.
+
+Project websites: [wrokbot.com](https://wrokbot.com) (primary) and [grokbot.si](https://grokbot.si).
+
+
+### V7-IMPL-045: current main documentation integration
+
+The active PR224 candidate incorporates main be598bb18f23f7f37a2fef677afd2cd233c6f8da (PR225), retaining its AI employee / digital teammate positioning and the bilingual README badges and official links: wrokbot.com is primary; grokbot.si is the additional website.
+
+This integration changes the README files and this fact entry. Backend source is unchanged. The existing directed 18 Desktop, 13 Infra, and 30 Archive results remain attributed to their original C55 inputs; these 61 checks do not establish acceptance of later repair candidates, normal capture, recovery, or a complete release. No compilation or runtime validation was repeated for this documentation integration.
+
+
+### V7-IMPL-045: shared capture resources and owned secret buffers
+
+This repair candidate shares capture configuration, accounts for SQL wire backing before allocation, and wipes owned canary text when it is released. The pinned debug capture fixture now follows the normal application shutdown path.
+
+The 13-file repair has independent source review. Current-candidate builds, directed test execution, normal capture and request-replay acceptance are pending. Earlier test results retain their original inputs; restore acceptance remains a separate following task.
+
+
+UTC 2026-10-23 — Normal capture request replay preflight repair (PR #224). The original Closed-history scanner now authenticates every operation and final held/named identity before matching the exact reviewed request. A completed request continues the existing unarmed startup before capture secret retention or arm. Its original finite profile is moved only into the existing read-only sidecar history check and retired on success or error; request, capture book and capture authority remain absent. Orphan, incomplete and uncertain histories keep their existing refusal. The original 18-selector scope includes owned-FD match, mismatch and missing-Closed cases inside an existing selector. Independent source review closed the focused startup defect. Compilation, current runtime checks and real normal capture remain pending; prior failures and evidence retain their original inputs.
+
+
+### 2026-10-22 — V7-IMPL-045 / PR #224 targeted validation input repair
+
+The current Desktop library compiled and listed all 18 selected tests. Its runtime result was 17 passed and one ProfileInvalid before the unknown-layout assertion. Only the test fixture's two explicit secret-memory ceilings are adjusted to admit the retained structure quote; production validation and all assertions remain unchanged. The same candidate's Infra library compiled, listed 13 selected carrier tests, and passed all 13 with the original process waits completed. The prior Desktop failure remains recorded; the repaired candidate still requires its own Desktop rerun and the normal capture/closing acceptance. Archive regressions and whole-task delivery remain pending.
+
+
+2026-10-23T03:39:47.000984+00:00 V7-IMPL-045: bound both existing self-owned normal-capture fixture digest literals to the reviewed explicit profile with two104-byte key-medium readback frames. The exact two-literal source change passed independent finite source/data review; all fixture guards and ordinary paths are unchanged. The earlier17PASS/1FAIL Desktop result retains its original candidate, and the corrected current Desktop and real normal-capture acceptance remain pending. The original Infra13 result is13PASS under its unchanged source graph; Archive30 list is exact30, while its run was refused before child startup by a busy shared resource. This remains the same complete capture PR; no full-task or restore delivery is claimed.
+
+
+2026-10-23T05:02:05.914760+00:00 V7-IMPL-045: exact3e54 Desktop18 and Archive30 executions passed18/18 and30/30 with real original waits and shared resource leases; the unchanged Infra13 graph retains its original13PASS evidence. The real non-test launcher built successfully, but its sole normal launch rejected the Postgres software bundle before runtime initialization; the app-data root was not created. This is Unknown, with no Ready/Closed or complete-delivery claim. Independent review accepted the directed executions and preserved the normal failure. Added one bounded debug-only static error tag inside the existing verified-capture release error mapping to identify that rejection; all validation, success and error-return behavior remains unchanged. The source diagnostic passed independent review; its new-candidate build and normal observation remain pending in this same PR.
+
+
+2026-10-23T11:27:45.164996+00:00 V7-IMPL-045 / PR #224: follow-up source analysis localized the earlier launcher refusal to its missing compiled maintenance-bundle binding before bundle opening. With that binding corrected, the later normal launch rejected the explicit resource profile before PostgreSQL spawn and left a partial test installation. The next fixed fresh fixture admits the required 17 proxy slots; retired fixture pins now fail before the ordinary secret-store fallback. Independent finite DATA and source reviews passed. This candidate still requires its own launcher build and normal capture/closing acceptance. Prior successful checks and failed launches retain their original input attribution; no complete task, restore or release acceptance is claimed.
